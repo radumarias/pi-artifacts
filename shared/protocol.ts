@@ -181,6 +181,8 @@ export type ChatClientMessage = { type: "prompt"; text: string } | { type: "abor
 export type ChatServerMessage =
   | { type: "events"; events: unknown[] }
   | { type: "people"; people: ChatPeopleView }
+  /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
+  | { type: "removed" }
   | { type: "error"; message: string };
 
 /** The close code of a chat socket whose user is not (or no longer) in the chat: the app stops reconnecting. */

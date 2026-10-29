@@ -325,12 +325,14 @@ export class ChatAgent extends DurableObject<Env> {
   /** Join by an invite's secret; the chat then shows in the new member's sidebar, under `title` from the owner's index. */
   async acceptInvite(secret: string, person: Person, title: string): Promise<ChatRefusal | null> {
     if (person.uid === this.uid) return refuse(403, "This is your own chat.");
-    // The sidebar entry first: once the invite is used up, a member without one could not reach the chat.
+    const refused = await this.members.check(secret, person);
+    if (refused) return refuse(403, refused.error);
+    // The sidebar entry before the invite is used up: a member without one could not reach the chat.
     const index = this.#index(person.uid);
     await index.addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
     const failed = await this.members.accept(secret, person);
     if (failed) {
-      // Not a member (accept lets members through): the entry goes again. Should that fail too, admit removes it.
+      // Used by someone else meanwhile: the entry goes again. Should that fail too, admit removes it.
       await index.removeSharedChat(this.chatId, this.uid).catch(() => {});
       return refuse(403, failed.error);
     }
@@ -501,6 +503,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
       if (this.#person(ws)?.uid !== uid) continue;
       void this.#detach(ws);
+      send(ws, { type: "removed" });
       close(ws, SOCKET_NOT_A_MEMBER, "Removed from the chat");
     }
   }

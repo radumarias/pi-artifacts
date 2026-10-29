@@ -48,6 +48,17 @@ describe("ChatMembers", () => {
     expect(members.has("bob")).toBe(false);
   });
 
+  it("checks an invite without using it up", async () => {
+    const members = new ChatMembers(memorySql());
+    const { secret } = await invited(members);
+    expect(await members.check("0".repeat(64), ann, T0)).toEqual({ error: expect.any(String) });
+    expect(await members.check(secret, ann, T0 + INVITE_TTL_MS)).toEqual({ error: expect.any(String) });
+    expect(await members.check(secret, ann, T0)).toBeNull();
+    expect(members.has("ann")).toBe(false);
+    expect(await members.accept(secret, ann, T0)).toBeNull();
+    expect(await members.check(secret, bob, T0)).toEqual({ error: expect.stringContaining("already used") });
+  });
+
   it("keeps the invite when someone already in the chat opens it", async () => {
     const members = new ChatMembers(memorySql());
     const first = await invited(members);

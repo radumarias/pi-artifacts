@@ -122,6 +122,19 @@ export class ChatMembers {
     return this.#sql.exec("DELETE FROM chat_invites WHERE id = ?", id).rowsWritten > 0;
   }
 
+  /** What accept would answer now, without using the invite up. */
+  async check(secret: string, person: Person, now = Date.now()): Promise<{ error: string } | null> {
+    const secretHash = await sha256Hex(secret);
+    return this.has(person.uid) ? null : this.#refusal(secretHash, now);
+  }
+
+  /** Why an invite cannot be used by someone not yet in the chat, or null when it can. */
+  #refusal(secretHash: string, now: number): { error: string } | null {
+    const row = this.#sql.exec("SELECT expires_at FROM chat_invites WHERE secret_hash = ?", secretHash).toArray()[0];
+    if (!row || (row.expires_at as number) <= now) return { error: "This invite link has expired or was already used. Ask for a new one." };
+    return this.#full();
+  }
+
   /**
    * Use an invite: `person` becomes a member and the invite is gone. Someone
    * already in the chat keeps the invite unused, so it can still go to whoever
@@ -131,10 +144,8 @@ export class ChatMembers {
     const secretHash = await sha256Hex(secret);
     // After the await: nothing below awaits, so the check and the change happen in one step of the object.
     if (this.has(person.uid)) return null;
-    const row = this.#sql.exec("SELECT expires_at FROM chat_invites WHERE secret_hash = ?", secretHash).toArray()[0];
-    if (!row || (row.expires_at as number) <= now) return { error: "This invite link has expired or was already used. Ask for a new one." };
-    const full = this.#full();
-    if (full) return full;
+    const refused = this.#refusal(secretHash, now);
+    if (refused) return refused;
     this.#sql.exec("DELETE FROM chat_invites WHERE secret_hash = ?", secretHash);
     this.#sql.exec("INSERT INTO chat_members (uid, name, joined_at) VALUES (?, ?, ?)", person.uid, person.name, now);
     return null;

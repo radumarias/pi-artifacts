@@ -122,6 +122,13 @@ export function useChat(chatId: string) {
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
+    // Not in the chat: stop for good.
+    const stop = () => {
+      closed = true;
+      setGone(true);
+      dispatch({ type: "error", message: "You are not in this chat." });
+    };
+
     const open = () => {
       const ws = new WebSocket(api.chatSocketUrl(chatId));
       socket.current = ws;
@@ -133,17 +140,15 @@ export function useChat(chatId: string) {
         const message = JSON.parse(event.data) as ChatServerMessage;
         if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[] });
         else if (message.type === "people") setPeople(message.people);
-        else dispatch({ type: "error", message: message.message });
+        else if (message.type === "removed") {
+          stop();
+          ws.close();
+        } else dispatch({ type: "error", message: message.message });
       };
       ws.onclose = (event) => {
         setConnected(false);
         if (closed) return;
-        if (event.code === SOCKET_NOT_A_MEMBER) {
-          closed = true;
-          setGone(true);
-          dispatch({ type: "error", message: "You are not in this chat." });
-          return;
-        }
+        if (event.code === SOCKET_NOT_A_MEMBER) return stop();
         timer = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 15_000));
       };
     };
