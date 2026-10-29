@@ -6,11 +6,14 @@ export interface Picked {
   path: string;
 }
 
-/** Files from a file input; a folder input names each with its path inside the folder. Hidden files inside a folder are left out. */
+/**
+ * Files from a file input; a folder input names each with its path inside the folder. Hidden files inside a folder are
+ * left out, but not the folder the user picked, whatever its name (as with a drop).
+ */
 export function fromInput(list: FileList | null): Picked[] {
   return [...(list ?? [])]
     .map((file) => ({ file, path: file.webkitRelativePath || file.name }))
-    .filter(({ file, path }) => !(file.webkitRelativePath && isHidden(path)))
+    .filter(({ file, path }) => !(file.webkitRelativePath && isHidden(path.split("/").slice(1).join("/"))))
     .slice(0, MAX_LISTED);
 }
 

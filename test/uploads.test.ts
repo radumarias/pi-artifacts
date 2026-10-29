@@ -48,6 +48,15 @@ describe("upload helpers", () => {
     expect(freePath("uploads/v1.2/README", new Set(["uploads/v1.2/README"]))).toBe("uploads/v1.2/README-2");
   });
 
+  it("numbers a name at its longest without growing it past what uploadPath keeps", () => {
+    for (const given of [`${"a".repeat(116)}.csv`, `${"x".repeat(60)}/${"y".repeat(60)}/${"z".repeat(66)}.csv`]) {
+      const path = uploadPath(given)!;
+      const free = freePath(path, new Set([path]));
+      expect(free).toMatch(/-2\.csv$/);
+      expect(uploadPath(free.slice("uploads/".length))).toBe(free);
+    }
+  });
+
   it("splits files into requests the Worker accepts", () => {
     const many = Array.from({ length: MAX_FILES_PER_UPLOAD + 1 }, () => ({ size: 1 }));
     expect(uploadBatches(many, (f) => f.size).map((b) => b.length)).toEqual([MAX_FILES_PER_UPLOAD, 1]);
@@ -106,6 +115,11 @@ describe("resolveRef", () => {
   it("expands a folder to every file in it", () => {
     expect(resolveRef(files, "reports/q4")).toEqual(["uploads/reports/q4/sales.csv", "uploads/reports/q4/notes.md"]);
     expect(resolveRef(files, "uploads/reports/")).toHaveLength(3);
+  });
+
+  it("takes a folder's full path even when another folder ends the same way", () => {
+    const entry = (path: string): FileEntry => ({ path, size: 1, uploaded: new Date(0) });
+    expect(resolveRef([entry("out/a.csv"), entry("uploads/out/b.csv")], "out")).toEqual(["out/a.csv"]);
   });
 
   it("names one file as a list of one", () => {

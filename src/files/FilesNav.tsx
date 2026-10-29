@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { freePath, MAX_FILE_BYTES, UPLOADS, uploadBatches, uploadPath } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
@@ -14,7 +14,9 @@ export interface UploadStatus {
 /** Upload picked files in as many requests as the Worker needs, saying how far along it is. */
 export function useUploads(onUploaded: () => void): { status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> } {
   const [status, setStatus] = useState<UploadStatus | null>(null);
-  const upload = useCallback(
+  // One upload at a time: a drop during an upload (the pickers are disabled, drops are not) waits its turn.
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const run = useCallback(
     async (picked: Picked[]) => {
       const files: Picked[] = [];
       const large: string[] = [];
@@ -51,6 +53,7 @@ export function useUploads(onUploaded: () => void): { status: UploadStatus | nul
     },
     [onUploaded],
   );
+  const upload = useCallback((picked: Picked[]) => (queue.current = queue.current.catch(() => {}).then(() => run(picked))), [run]);
   return { status, upload };
 }
 
