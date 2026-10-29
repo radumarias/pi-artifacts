@@ -1,5 +1,4 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEventStream } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
@@ -17,7 +16,7 @@ import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
-import { checkModelChoice } from "./models.ts";
+import { checkModelChoice, defaultModelChoice } from "./models.ts";
 import { mcpAuthStore } from "./users.ts";
 
 const SOCKET_TAG = "chat";
@@ -71,7 +70,7 @@ export class ChatAgent extends DurableObject<Env> {
       return pi;
     },
     // What a new chat starts on before its user has picked a model.
-    defaults: { model: this.ai(this.env.MODEL), thinkingLevel: this.env.THINKING_LEVEL as ModelThinkingLevel },
+    defaults: this.#defaults(defaultModelChoice(this.env.MODEL, this.env.THINKING_LEVEL)),
   });
   readonly sockets = new ChatSockets({
     events: () => this.harness.session().events(),
@@ -138,6 +137,10 @@ export class ChatAgent extends DurableObject<Env> {
     }
   }
 
+  #defaults({ model, thinkingLevel }: ModelChoice) {
+    return { model: this.ai(model), thinkingLevel };
+  }
+
   #agentChange({ model, thinkingLevel }: ModelChoice): AgentChange {
     const routed = this.ai(model);
     return { model: { provider: routed.provider, modelId: routed.id }, thinkingLevel };
@@ -149,7 +152,9 @@ export class ChatAgent extends DurableObject<Env> {
     if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
     const conversation = await (await this.harness.pi()).conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT);
     if (!conversation) throw new Error("The chat's conversation is missing.");
-    await Promise.all([conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT), this.#directory.setModelChoice(choice)]);
+    await conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT);
+    // The chat has changed by now, so a failure to remember the pick for new chats is logged, not reported as a failed change.
+    await this.#directory.setModelChoice(choice).catch((error: unknown) => console.error("model:", errorMessage(error)));
   }
 
   /**

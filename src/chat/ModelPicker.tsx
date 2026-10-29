@@ -20,9 +20,19 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
   const [models, setModels] = useState<ModelInfo[]>([]);
   useEffect(() => {
     let live = true;
-    loadCatalog().then((list) => live && setModels(list), () => {});
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    // A failed load is forgotten by loadCatalog, so try again until the choices arrive.
+    const load = () =>
+      loadCatalog().then(
+        (list) => live && setModels(list),
+        () => {
+          if (live) retry = setTimeout(load, 10_000);
+        },
+      );
+    load();
     return () => {
       live = false;
+      clearTimeout(retry);
     };
   }, []);
   const groups = useMemo(() => Object.entries(VENDORS).map(([vendor, label]) => ({ label, models: models.filter((entry) => entry.vendor === vendor) })), [models]);
@@ -31,8 +41,8 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
   const current = models.find((entry) => entry.id === model);
   return (
     <div className="model-picker">
-      {/* Coming from a model that does not reason, ask for no effort: the chat picks the new model's usual one. */}
-      <select aria-label="Model" value={model} disabled={disabled} onChange={(e) => onChange(e.target.value, current?.efforts.length ? thinkingLevel : undefined)}>
+      {/* Coming from a listed model that does not reason, ask for no effort: the chat picks the new model's usual one. */}
+      <select aria-label="Model" value={model} disabled={disabled} onChange={(e) => onChange(e.target.value, current && !current.efforts.length ? undefined : thinkingLevel)}>
         {/* A deployment's default can be a model the picker does not list. */}
         {!current && <option value={model}>{model}</option>}
         {groups.map(
@@ -50,7 +60,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
       </select>
       {current && current.efforts.length > 0 && thinkingLevel && (
         <select aria-label="Effort" value={thinkingLevel} disabled={disabled} onChange={(e) => onChange(model, e.target.value)}>
-          {!current.efforts.includes(thinkingLevel as ModelThinkingLevel) && <option value={thinkingLevel}>{thinkingLevel}</option>}
+          {!current.efforts.includes(thinkingLevel as ModelThinkingLevel) && <option value={thinkingLevel}>{EFFORT_LABELS[thinkingLevel as ModelThinkingLevel] ?? thinkingLevel} effort</option>}
           {current.efforts.map((level) => (
             <option key={level} value={level}>
               {EFFORT_LABELS[level]} effort

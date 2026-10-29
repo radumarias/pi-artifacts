@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkModelChoice, modelCatalog } from "../worker/models.ts";
+import { checkModelChoice, defaultModelChoice, modelCatalog } from "../worker/models.ts";
 
 // The real catalog, as the Worker builds it from pi-ai.
 const models = modelCatalog();
@@ -49,5 +49,13 @@ describe("model choice", () => {
     expect(checkModelChoice({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" })).toBeNull();
     expect(checkModelChoice({ model: "anthropic/claude-opus-5-5" })).toBeNull();
     expect(checkModelChoice({ model: 42 })).toBeNull();
+  });
+});
+
+describe("default model", () => {
+  it("checks the deployment's default like a pick when listed, and keeps an unlisted one as configured", () => {
+    expect(defaultModelChoice("anthropic/claude-opus-5.5", "off")).toEqual({ model: "anthropic/claude-opus-5.5", thinkingLevel: "low" });
+    expect(defaultModelChoice("anthropic/claude-opus-5.5", "high")).toEqual({ model: "anthropic/claude-opus-5.5", thinkingLevel: "high" });
+    expect(defaultModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "high")).toEqual({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", thinkingLevel: "high" });
   });
 });

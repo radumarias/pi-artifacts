@@ -51,7 +51,7 @@ function metadataOf(model: Model<Api>, vendor: string): Model<Api> {
  * (by version, then by price, so a family's largest model leads), then the Workers AI models above, in their order.
  */
 export function chatModels(models: readonly Model<Api>[]): ModelEntry[] {
-  const listed = models.filter((model) => (vendorOf(model.id) === "workers-ai" ? WORKERS_AI_MODELS.includes(model.id) : vendorOf(model.id) in VENDORS));
+  const listed = models.filter((model) => (vendorOf(model.id) === "workers-ai" ? WORKERS_AI_MODELS.includes(model.id) : Object.hasOwn(VENDORS, vendorOf(model.id))));
   listed.sort(
     (a, b) =>
       VENDOR_ORDER.indexOf(vendorOf(a.id)) - VENDOR_ORDER.indexOf(vendorOf(b.id)) ||
@@ -67,9 +67,12 @@ export function chatModels(models: readonly Model<Api>[]): ModelEntry[] {
   });
 }
 
-/** The first version number in a model id: anthropic/claude-opus-5.5 → 5.5, openai/gpt-4o → 4. */
+/**
+ * The first version number in a model id: anthropic/claude-opus-5.5 → 5.5, openai/gpt-4o → 4. A minor version has one
+ * or two digits, so a dated snapshot (gpt-4-0613, gpt-5-2025-08-07) is not read as 4.0613 or 5.2025.
+ */
 function version(id: string): number {
-  const match = id.slice(id.indexOf("/") + 1).match(/\d+(?:[.-]\d+)?/);
+  const match = id.slice(id.indexOf("/") + 1).match(/\d+(?:[.-]\d{1,2}(?!\d))?/);
   return match ? Number(match[0].replace("-", ".")) : 0;
 }
 
@@ -95,4 +98,13 @@ export function checkModelChoice(input: { model?: unknown; thinkingLevel?: unkno
   const level = input.thinkingLevel;
   const wanted = typeof level === "string" && Object.hasOwn(EFFORT_LABELS, level) ? (level as ModelThinkingLevel) : "medium";
   return { model: entry.info.id, thinkingLevel: entry.info.efforts.length ? clampThinkingLevel(entry.metadata, wanted) : "off" };
+}
+
+/**
+ * The deployment's default (`MODEL` at `THINKING_LEVEL`), checked like a pick when the picker lists the model, so a
+ * level the model rejects (Claude 5.5 takes no "off") moves to one it takes. A model the picker does not list is used
+ * as configured.
+ */
+export function defaultModelChoice(model: string, thinkingLevel: string): ModelChoice {
+  return checkModelChoice({ model, thinkingLevel }) ?? { model, thinkingLevel: thinkingLevel as ModelThinkingLevel };
 }
