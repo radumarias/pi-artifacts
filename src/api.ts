@@ -1,4 +1,4 @@
-import type { SkillInfo, SkillInput } from "../shared/skills.ts";
+import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
 
 export type { ArtifactSummary };
@@ -57,9 +57,10 @@ export const api = {
   /** Save one of the user's skills, from its fields or from a SKILL.md file's text. */
   saveSkill: (skill: (SkillInput | { markdown: string }) & { enabled?: boolean }) => request<SkillInfo>("/api/skills", post(skill)),
   /** `updatedAt` is the version the user read; the server refuses to turn on a skill that changed since. */
-  setSkillEnabled: (name: string, enabled: boolean, updatedAt?: number) => request<SkillInfo>(`/api/skills/${name}`, send("PATCH", { enabled, updatedAt })),
-  deleteSkill: (name: string) => request<object>(`/api/skills/${name}`, { method: "DELETE" }),
-  skillMarkdownUrl: (name: string) => `/api/skills/${name}/SKILL.md`,
+  setSkillEnabled: (skill: SkillInfo, enabled: boolean) =>
+    request<SkillInfo>(skillPath(skill), send("PATCH", { enabled, updatedAt: skill.updatedAt || undefined })),
+  deleteSkill: (skill: SkillInfo) => request<object>(skillPath(skill), { method: "DELETE" }),
+  skillMarkdownUrl: (skill: SkillInfo) => `${skillPath(skill)}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),
   upload: (file: File) => {
     const form = new FormData();

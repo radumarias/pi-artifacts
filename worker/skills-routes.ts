@@ -6,9 +6,12 @@ import type { UserDirectory } from "./users.ts";
  * The skills of a verified user (`directory` is their UserDirectory), which apply in all their chats:
  *   GET    /api/skills                    built-in and own skills
  *   POST   /api/skills                    save one: {name, description, instructions, tools, enabled?} or {markdown, enabled?}
- *   PATCH  /api/skills/:name              {enabled, updatedAt?}: turn one on or off, built-in ones included
+ *   PATCH  /api/skills/:name              {enabled, updatedAt?}: turn one of the user's own on or off
  *   DELETE /api/skills/:name              delete one of the user's own
- *   GET    /api/skills/:name/SKILL.md     one skill as a SKILL.md file
+ *   GET    /api/skills/:name/SKILL.md     one of the user's own as a SKILL.md file
+ *   PATCH  /api/skills/builtin/:name      {enabled}: turn a built-in skill on or off
+ *   GET    /api/skills/builtin/:name/SKILL.md
+ * Built-in and user skills have separate paths (see skillPath), so a name can be both.
  * Returns null for any other path.
  */
 export async function skillsRoute(request: Request, directory: DurableObjectStub<UserDirectory>): Promise<Response | null> {
@@ -27,12 +30,12 @@ export async function skillsRoute(request: Request, directory: DurableObjectStub
     if (!body || typeof body !== "object") return Response.json({ error: "Expected a skill as JSON." }, { status: 400 });
     return answer(await directory.saveSkill(body, "user", body.enabled !== false));
   }
-  const one = path.match(/^\/api\/skills\/([a-z0-9-]+)(\/SKILL\.md)?$/);
-  if (!one || !SKILL_NAME_PATTERN.test(one[1])) return null;
-  const name = one[1];
-  if (one[2]) {
+  const one = path.match(/^\/api\/skills\/(builtin\/)?([a-z0-9-]+)(\/SKILL\.md)?$/);
+  if (!one || !SKILL_NAME_PATTERN.test(one[2])) return null;
+  const [builtin, name, file] = [Boolean(one[1]), one[2], Boolean(one[3])];
+  if (file) {
     if (method !== "GET") return null;
-    const skill = await directory.getSkill(name);
+    const skill = await (builtin ? directory.getBuiltinSkill(name) : directory.getSkill(name));
     if (!skill) return Response.json({ error: `No skill named "${name}".` }, { status: 404 });
     return new Response(formatSkillFile(skill), {
       headers: { "content-type": "text/markdown; charset=utf-8", "content-disposition": `attachment; filename="${name}.SKILL.md"` },
@@ -44,8 +47,8 @@ export async function skillsRoute(request: Request, directory: DurableObjectStub
     if (typeof body?.enabled !== "boolean" || (seen !== undefined && typeof seen !== "number")) {
       return Response.json({ error: "Expected {enabled: true | false, updatedAt?: number}." }, { status: 400 });
     }
-    return answer(await directory.setSkillEnabled(name, body.enabled, seen));
+    return answer(await (builtin ? directory.setBuiltinSkillEnabled(name, body.enabled) : directory.setSkillEnabled(name, body.enabled, seen)));
   }
-  if (method === "DELETE") return answer(await directory.deleteSkill(name));
+  if (method === "DELETE" && !builtin) return answer(await directory.deleteSkill(name));
   return null;
 }

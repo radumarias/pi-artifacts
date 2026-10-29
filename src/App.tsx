@@ -248,7 +248,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
                 navigate("/skills");
               }}
             >
-              {(skills ?? []).filter((s) => s.enabled).length} on, {skills?.length ?? 0} in all
+              {(skills ?? []).filter((s) => s.enabled && !s.replaced).length} on, {skills?.length ?? 0} in all
               {proposed > 0 && <small> · {proposed} to review</small>}
             </a>
           </nav>
