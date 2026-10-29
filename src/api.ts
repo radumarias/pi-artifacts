@@ -1,3 +1,4 @@
+import type { SkillInfo, SkillInput } from "../shared/skills.ts";
 import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
 
 export type { ArtifactSummary };
@@ -51,6 +52,13 @@ export const api = {
     if (proxied && typeof proxied.ok === "boolean") return proxied;
     throw new Error(`The proxy answered ${response.status}`);
   },
+  skills: () => request<SkillInfo[]>("/api/skills"),
+  /** Save one of the user's skills, from its fields or from a SKILL.md file's text. */
+  saveSkill: (skill: (SkillInput | { markdown: string }) & { enabled?: boolean }) => request<SkillInfo>("/api/skills", post(skill)),
+  setSkillEnabled: (name: string, enabled: boolean) =>
+    request<SkillInfo>(`/api/skills/${name}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) }),
+  deleteSkill: (name: string) => request<object>(`/api/skills/${name}`, { method: "DELETE" }),
+  skillMarkdownUrl: (name: string) => `/api/skills/${name}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),
   upload: (file: File) => {
     const form = new FormData();

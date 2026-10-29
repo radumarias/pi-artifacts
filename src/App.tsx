@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import type { ChatSummary } from "../shared/protocol.ts";
+import type { SkillInfo } from "../shared/skills.ts";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatView, type PublishedArtifact } from "./chat/ChatView.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { ResizeHandle, useStoredState } from "./layout.tsx";
+import { SkillsView } from "./skills/SkillsView.tsx";
 
 function usePath(): [string, (path: string) => void] {
   const [path, setPath] = useState(location.pathname);
@@ -51,6 +53,7 @@ export function App() {
       uid={me.uid}
       label={me.email ?? me.uid}
       chatId={chatId}
+      showSkills={path === "/skills"}
       navigate={navigate}
       onSignOut={async () => {
         if (me.auth === "access") {
@@ -114,6 +117,8 @@ interface WorkspaceProps {
   /** What the sidebar shows for the signed-in user: their email, or the demo name. */
   label: string;
   chatId: string | undefined;
+  /** The skills page in place of a chat. */
+  showSkills: boolean;
   navigate: (path: string) => void;
   onSignOut: () => void;
 }
@@ -125,10 +130,11 @@ const RAIL_WIDTH = 52;
 const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
-function Workspace({ uid, label, chatId, navigate, onSignOut }: WorkspaceProps) {
+function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: WorkspaceProps) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [files, setFiles] = useState<FileInfo[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [preview, setPreview] = useState<PublishedArtifact | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
@@ -140,9 +146,13 @@ function Workspace({ uid, label, chatId, navigate, onSignOut }: WorkspaceProps) 
     api.chats().then(setChats, () => {});
     api.artifacts().then(setArtifacts, () => {});
     api.files().then(setFiles, () => {});
+    api.skills().then(setSkills, () => {});
   }, []);
   useEffect(refresh, [refresh]);
   useEffect(() => setPreview(null), [chatId]);
+
+  // Skills the agent proposed in a chat wait, off, for the user to review.
+  const proposed = skills.filter((s) => s.origin === "agent" && !s.enabled).length;
 
   const newChat = async () => {
     const chat = await api.createChat();
@@ -217,6 +227,20 @@ function Workspace({ uid, label, chatId, navigate, onSignOut }: WorkspaceProps) 
               </a>
             ))}
           </nav>
+          <h3>Skills</h3>
+          <nav>
+            <a
+              href="/skills"
+              className={showSkills ? "active" : ""}
+              onClick={(e) => {
+                e.preventDefault();
+                navigate("/skills");
+              }}
+            >
+              {skills.filter((s) => s.enabled).length} on, {skills.length} in all
+              {proposed > 0 && <small> · {proposed} to review</small>}
+            </a>
+          </nav>
           <h3>Files</h3>
           <nav>
             {files.map((f) => (
@@ -247,7 +271,11 @@ function Workspace({ uid, label, chatId, navigate, onSignOut }: WorkspaceProps) 
         disabled={collapsed}
       />
       <main className="main" ref={chatRef}>
-        {chatId ? (
+        {showSkills ? (
+          <ErrorBoundary what="skills">
+            <SkillsView onChange={refresh} />
+          </ErrorBoundary>
+        ) : chatId ? (
           <ErrorBoundary key={chatId} what="this chat">
             <ChatView chatId={chatId} onArtifact={onArtifact} onActivity={refresh} />
           </ErrorBoundary>

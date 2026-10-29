@@ -3,6 +3,7 @@ import { exports } from "cloudflare:workers";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
 import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type ToolInfo } from "../../shared/protocol.ts";
+import { MAX_SKILL_DESCRIPTION, type SkillInfo, type SkillInput } from "../../shared/skills.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
@@ -17,6 +18,8 @@ export interface ChatScope {
   /** This chat's user's files: scoped to the uid and encrypted with that user's key. */
   files: () => Promise<UserFiles>;
   onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
+  /** Save a skill for the user, turned off until they turn it on. */
+  proposeSkill(skill: SkillInput): Promise<SkillInfo | { error: string }>;
 }
 
 const MAX_TOOL_TEXT = 16_000;
@@ -321,6 +324,32 @@ export function artifactExtension(scope: ChatScope): Extension {
           if (before === null || after === null) throw new Error(`Artifact ${meta.id} has versions 1 to ${meta.latest}.`);
           const patch = createTwoFilesPatch(`v${from}/index.html`, `v${to}/index.html`, before, after, undefined, undefined, { context: 3 });
           return { output: text(clip(patch)) };
+        },
+      }),
+    ],
+  });
+}
+
+export function skillsExtension(scope: ChatScope): Extension {
+  return defineExtension({
+    name: "skill-proposals",
+    tools: [
+      defineTool({
+        name: "skill_propose",
+        description:
+          "Save a reusable way of working as one of the user's skills, when the user asks for that (\"save this as a skill\", \"remember how to do this\"). " +
+          "It is saved turned off; the user reviews and turns it on under Skills in the sidebar, and from then on it is offered in all their chats. " +
+          "Write the instructions as steps and guardrails that work in a new chat, without this conversation's specifics unless they are the point.",
+        parameters: Type.Object({
+          name: Type.String({ description: 'Lowercase words joined by hyphens, e.g. "weekly-report".' }),
+          description: Type.String({ description: `When to use the skill, in one or two sentences starting "Use when". Up to ${MAX_SKILL_DESCRIPTION} characters.` }),
+          instructions: Type.String({ description: "Markdown: the steps, then the guardrails." }),
+          tools: Type.Optional(Type.Array(Type.String(), { description: "The agent tool names the skill works with." })),
+        }),
+        execute: async (args) => {
+          const saved = await scope.proposeSkill({ name: args.name, description: args.description, instructions: args.instructions, tools: args.tools ?? [] });
+          if ("error" in saved) throw new Error(`Not saved: ${saved.error}`);
+          return { output: text(`Saved the skill "${saved.name}", turned off. Tell the user to review it and turn it on under Skills in the sidebar.`) };
         },
       }),
     ],
