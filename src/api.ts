@@ -1,3 +1,4 @@
+import type { ModelInfo } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
 
@@ -48,6 +49,7 @@ export const api = {
   removeMember: (chatId: string, uid: string) => request<object>(`/api/chats/${chatId}/members/${uid}`, { method: "DELETE" }),
   acceptInvite: (token: string) => request<{ chatId: string }>("/api/invites/accept", post({ token })),
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
+  models: () => request<ModelInfo[]>("/api/models"),
   artifact: (id: string) => request<ArtifactView>(`/api/artifacts/${id}`),
   artifactTools: (id: string, version: number) => request<DeclaredTool[]>(`/api/artifacts/${id}/tools?version=${version}`),
   cloneAccess: (id: string) => request<CloneAccess>(`/api/artifacts/${id}/clone`, post({})),

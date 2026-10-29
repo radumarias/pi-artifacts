@@ -175,7 +175,11 @@ export interface ChatMessageData extends Person {
 }
 
 /** Browser → ChatAgent over the chat WebSocket. */
-export type ChatClientMessage = { type: "prompt"; text: string } | { type: "abort" };
+export type ChatClientMessage =
+  | { type: "prompt"; text: string }
+  | { type: "abort" }
+  // Run the chat on another model or effort (shared/models.ts). The change reaches every socket as pi's agent_changed.
+  | { type: "model"; model: string; thinkingLevel?: string };
 
 /** ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change. */
 export type ChatServerMessage =

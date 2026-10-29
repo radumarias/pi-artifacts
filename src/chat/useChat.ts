@@ -1,6 +1,6 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { AgentEvent, EntryRecord } from "@earendil-works/pi-durable";
-import { useEffect, useReducer, useRef, useState } from "react";
+import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { AgentEvent, AgentState, EntryRecord } from "@earendil-works/pi-durable";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
@@ -17,11 +17,18 @@ export interface ChatState {
   tools: RunningTool[];
   busy: boolean;
   error?: string;
+  /** The model and effort the chat runs on, from pi's agent state. */
+  model?: string;
+  thinkingLevel?: ModelThinkingLevel;
 }
 
 const initial: ChatState = { entries: [], tools: [], busy: false };
 
 type Action = { type: "events"; events: AgentEvent[] } | { type: "error"; message?: string } | { type: "reset" };
+
+function withAgent(state: ChatState, agent: AgentState | undefined): ChatState {
+  return { ...state, model: agent?.model?.modelId, thinkingLevel: agent?.thinkingLevel };
+}
 
 function addEntry(entries: EntryRecord[], entry: EntryRecord): EntryRecord[] {
   return entries.some((e) => e.id === entry.id) ? entries : [...entries, entry];
@@ -35,7 +42,10 @@ export function reduce(state: ChatState, action: Action): ChatState {
   for (const event of action.events) {
     switch (event.type) {
       case "snapshot":
-        next = { entries: [...event.entries], partial: event.generation?.message, tools: [], busy: event.run !== undefined };
+        next = withAgent({ entries: [...event.entries], partial: event.generation?.message, tools: [], busy: event.run !== undefined }, event.agent);
+        break;
+      case "agent_changed":
+        next = withAgent(next, event.agent);
         break;
       case "run_start":
         next = { ...next, busy: true, error: undefined };
@@ -160,11 +170,13 @@ export function useChat(chatId: string) {
     };
   }, [chatId]);
 
-  const send = (message: ChatClientMessage) => {
+  const send = useCallback((message: ChatClientMessage) => {
     if (socket.current?.readyState !== WebSocket.OPEN) return false;
     socket.current.send(JSON.stringify(message));
     return true;
-  };
+  }, []);
+  // Stable, so the memoized model picker skips the re-render on every streamed token.
+  const setModel = useCallback((model: string, thinkingLevel?: ModelThinkingLevel) => send({ type: "model", model, thinkingLevel }), [send]);
 
   return {
     state,
@@ -174,5 +186,6 @@ export function useChat(chatId: string) {
     gone,
     prompt: (text: string) => send({ type: "prompt", text }),
     abort: () => send({ type: "abort" }),
+    setModel,
   };
 }

@@ -7,6 +7,7 @@ import { filesRoute } from "./files-routes.ts";
 import { json } from "./http.ts";
 import { chatRoute } from "./chat-routes.ts";
 import { mcpRoute } from "./mcp-routes.ts";
+import { modelCatalog } from "./models.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
@@ -137,6 +138,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/chats" && method === "GET") return json(await directory.listChats());
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());
+  // The model picker's choices. They change only with a deploy.
+  if (path === "/api/models" && method === "GET") return json(modelCatalog(), 200, { "cache-control": "private, max-age=3600" });
 
   const skills = await skillsRoute(request, directory);
   if (skills) return skills;

@@ -1,4 +1,5 @@
 import { DurableObject, exports } from "cloudflare:workers";
+import type { ModelChoice } from "../shared/models.ts";
 import type { ArtifactSummary, ChatSummary } from "../shared/protocol.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
@@ -22,7 +23,7 @@ type SkillRow = {
 };
 
 /**
- * One per user: the index of their chats, the chats others shared with them, their artifacts and skills.
+ * One per user: the index of their chats, the chats others shared with them, their artifacts, skills and model.
  * The chats themselves live in ChatAgent objects, which decide who may open them.
  */
 export class UserDirectory extends DurableObject<Env> {
@@ -250,6 +251,15 @@ export class UserDirectory extends DurableObject<Env> {
   deleteSkill(name: string): SkillResult | null {
     const deleted = this.ctx.storage.sql.exec("DELETE FROM skills WHERE name = ?", name).rowsWritten;
     return deleted ? null : { error: `No skill named "${name}".` };
+  }
+
+  /** The model and effort the user last picked in any chat: what their new chats start on. Checked by the chat that reads it. */
+  modelChoice(): ModelChoice | null {
+    return this.ctx.storage.kv.get<ModelChoice>("model") ?? null;
+  }
+
+  setModelChoice(choice: ModelChoice): void {
+    this.ctx.storage.kv.put("model", choice);
   }
 }
 

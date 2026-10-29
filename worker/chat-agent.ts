@@ -1,5 +1,6 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { createRegistry, Harness, type AgentEventStream } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEventStream } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -23,6 +24,7 @@ import {
   type ProxyRequest,
   type ProxyResponse,
 } from "../shared/protocol.ts";
+import type { ModelChoice } from "../shared/models.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
@@ -35,6 +37,7 @@ import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
+import { checkModelChoice, defaultModelChoice } from "./models.ts";
 import { mcpAuthStore } from "./users.ts";
 
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
@@ -88,13 +91,24 @@ export class ChatAgent extends DurableObject<Env> {
   readonly ai = createAI({ binding: this.env.AI, gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
   readonly registry = createRegistry();
   readonly harness = new PiHarness({
-    harness: ({ storage, context, onWake }) => {
+    harness: async ({ storage, context, onWake }) => {
       const models = createModels();
       models.setProvider(this.ai.provider);
-      return Harness.open(storage, { models, registry: this.registry, onWake }, context);
+      const pi = await Harness.open(storage, { models, registry: this.registry, onWake }, context);
+      try {
+        // A new chat starts on the model its user last picked; PiHarness then finds the root and leaves it as it is.
+        if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
+          const choice = await this.#savedModel();
+          if (choice) await pi.root(context, { agent: this.#agentChange(choice) });
+        }
+      } catch (error) {
+        await pi.close(context).catch(() => {});
+        throw error;
+      }
+      return pi;
     },
-    // Current Claude models reject pi's "off" (thinking: disabled), so new chats think at medium effort.
-    defaults: { model: this.ai(this.env.MODEL), thinkingLevel: "medium" },
+    // What a new chat starts on before its user has picked a model.
+    defaults: this.#defaults(defaultModelChoice(this.env.MODEL, this.env.THINKING_LEVEL)),
   });
   readonly members = new ChatMembers(this.ctx.storage.sql);
   readonly sockets = new ChatSockets({
@@ -103,6 +117,7 @@ export class ChatAgent extends DurableObject<Env> {
     peopleFor: (uid) => this.peopleFor(uid),
     prompt: (text, author) => this.prompt(text, author),
     abort: (by) => this.abort(by),
+    setModel: (input, by) => this.setModel(input, by),
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets);
 
@@ -160,6 +175,41 @@ export class ChatAgent extends DurableObject<Env> {
   onStart(): void {
     void this.refreshMcpTools();
     void this.refreshSkills();
+  }
+
+  /** The user's last pick, checked again: the list of models can change between deploys. On a failure, the deployment's default. */
+  async #savedModel(): Promise<ModelChoice | null> {
+    try {
+      const saved = await this.#directory.modelChoice();
+      return saved && checkModelChoice(saved);
+    } catch (error) {
+      console.error("model:", errorMessage(error));
+      return null;
+    }
+  }
+
+  #defaults({ model, thinkingLevel }: ModelChoice) {
+    return { model: this.ai(model), thinkingLevel };
+  }
+
+  #agentChange({ model, thinkingLevel }: ModelChoice): AgentChange {
+    const routed = this.ai(model);
+    return { model: { provider: routed.provider, modelId: routed.id }, thinkingLevel };
+  }
+
+  /**
+   * Run this chat on another model or effort, from its next model request on, for everyone in it. It also becomes the
+   * default for new chats of whoever picked it, owner or member.
+   */
+  async setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void> {
+    this.#requireInChat(by);
+    const choice = checkModelChoice(input);
+    if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
+    // PiHarness has made the root conversation by the time pi() resolves.
+    const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
+    await conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT);
+    // The chat has changed by now, so a failure to remember the pick for new chats is logged, not reported as a failed change.
+    await this.#index(by.uid).setModelChoice(choice).catch((error: unknown) => console.error("model:", errorMessage(error)));
   }
 
   /**
@@ -459,6 +509,7 @@ interface ChatSession {
   peopleFor(uid: string): ChatPeopleView;
   prompt(text: string, author: Person): Promise<void>;
   abort(by: Person): Promise<void>;
+  setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
 }
 
 /** A chat socket's hibernation attachment: whose socket it is. */
@@ -544,6 +595,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     try {
       if (message.type === "prompt" && message.text.trim()) await this.#chat.prompt(message.text.slice(0, 20_000), person);
       else if (message.type === "abort") await this.#chat.abort(person);
+      else if (message.type === "model") await this.#chat.setModel(message, person);
     } catch (error) {
       send(ws, { type: "error", message: errorMessage(error) });
     }
