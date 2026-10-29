@@ -183,10 +183,17 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
     [loadArtifacts],
   );
 
-  const upload = async (file: File | undefined) => {
+  const upload = async (input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    // Cleared, so picking the same file again (after changing it) uploads it again.
+    input.value = "";
     if (!file) return;
-    await api.upload(file);
-    loadFiles();
+    try {
+      await api.upload(file);
+      loadFiles();
+    } catch (e) {
+      alert(`Could not upload ${file.name}: ${errorMessage(e)}`);
+    }
   };
 
   return (
@@ -265,7 +272,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
             ))}
             <label className="upload">
               Upload a file
-              <input type="file" hidden onChange={(e) => upload(e.target.files?.[0])} />
+              <input type="file" hidden onChange={(e) => void upload(e.target)} />
             </label>
           </nav>
           <footer>

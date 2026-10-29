@@ -137,17 +137,25 @@ export class ChatAgent extends DurableObject<Env> {
     const catalog = new Map<string, ServerCatalog>();
     const unavailable = new Map<string, string>();
     // Servers are independent: list them all at once, so a slow one delays the prompt by its own time only.
-    await Promise.all(
-      this.hub.servers().map(async (server) => {
+    const servers = this.hub.servers();
+    const listed = await Promise.all(
+      servers.map(async (server): Promise<ServerCatalog | { reason: string }> => {
         try {
           const [tools, instructions] = await Promise.all([this.hub.tools(server.name), this.hub.instructions(server.name)]);
-          catalog.set(server.name, { tools, instructions });
+          return { tools, instructions };
         } catch (error) {
-          unavailable.set(server.name, error instanceof McpFailure ? error.error.message : errorMessage(error));
+          return { reason: error instanceof McpFailure ? error.error.message : errorMessage(error) };
         }
       }),
     );
-    const installed = JSON.stringify([[...catalog.keys()], [...unavailable.keys()]]);
+    // In the configured order, whichever server answered first, so the tools and the prompt stay the same between refreshes.
+    servers.forEach((server, i) => {
+      const entry = listed[i];
+      if ("reason" in entry) unavailable.set(server.name, entry.reason);
+      else catalog.set(server.name, entry);
+    });
+    // Everything the extension is built from: a server's new tool list, or a new reason it is unavailable, reinstalls it.
+    const installed = JSON.stringify([[...catalog], [...unavailable]]);
     if (installed !== this.#mcpInstalled) {
       this.registry.install(mcpExtension(this.hub, catalog, unavailable));
       this.#mcpInstalled = installed;

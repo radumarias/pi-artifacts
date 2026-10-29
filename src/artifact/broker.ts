@@ -152,8 +152,11 @@ export class ArtifactBroker {
     const stale = !group.last || this.#o.now() - group.last.storedAt >= this.#staleMs(group);
     if (group.last) this.#deliverTo(message.watchId, { type: "data", result: withCache(group.last.result, group.last.storedAt, stale) });
     if (group.denied) return this.#deliverTo(message.watchId, { type: "error", error: group.denied });
-    if (stale && !group.inflight) void this.#fetch(group);
-    else this.#schedule(group);
+    if (stale && !group.inflight) return void this.#fetch(group);
+    // This subscriber may poll sooner than the group does, or be the first of it to poll at all.
+    const polling = this.#interval(group);
+    if (polling !== undefined && group.last) group.nextAt = Math.min(group.nextAt ?? Infinity, group.last.storedAt + polling);
+    this.#schedule(group);
   }
 
   #unwatch(watchId: number): void {

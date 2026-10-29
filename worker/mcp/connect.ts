@@ -1,9 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import type { ToolInfo } from "../../shared/protocol.ts";
+import { errorMessage } from "../../shared/util.ts";
 import { McpFailure, type McpConnection, type RawToolResult } from "./hub.ts";
 import { signInPath } from "./oauth.ts";
 import type { McpServerConfig } from "./servers.ts";
@@ -17,6 +18,25 @@ const CALL_TIMEOUT_MS = 60_000;
  */
 export function signInRequired(server: string): McpFailure {
   return new McpFailure({ code: "auth_required", server, message: `Not signed in to ${server}. To sign in, open ${signInPath(server)} in this app, then ask again.` });
+}
+
+/**
+ * What a failed tool call is reported as. The hub sends a call that failed with anything but an McpFailure
+ * again on a fresh connection, so only a call the server surely did not run passes through as it is: one
+ * whose HTTP request the server refused (a 4xx, such as 404 for an expired session), or a sign-in failure.
+ * Anything else may have run (a write tool must not run twice) or is the server's own answer.
+ */
+function callFailure(server: string, tool: string, error: unknown): unknown {
+  if (error instanceof McpFailure) return error;
+  if (error instanceof StreamableHTTPError && error.code !== undefined && error.code >= 400 && error.code < 500) return error;
+  if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
+    return new McpFailure({ code: "server_unavailable", server, message: `${server} did not answer ${tool} within ${CALL_TIMEOUT_MS / 1000} s.` });
+  }
+  if (error instanceof McpError && error.code !== ErrorCode.ConnectionClosed) {
+    // A JSON-RPC error the server answered with: the call reached it, and the connection is fine.
+    return new McpFailure({ code: "tool_error", server, message: error.message });
+  }
+  return new McpFailure({ code: "server_unavailable", server, retryable: true, message: `${server} did not finish ${tool}: ${errorMessage(error)}` });
 }
 
 /**
@@ -67,11 +87,7 @@ export async function connectStreamableHttp(server: McpServerConfig, authProvide
         );
         return result as RawToolResult;
       } catch (error) {
-        // The server got the call and may have run it: report it, never send it again (the hub retries other failures).
-        if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
-          throw new McpFailure({ code: "server_unavailable", server: server.name, message: `${server.name} did not answer ${name} within ${CALL_TIMEOUT_MS / 1000} s.` });
-        }
-        throw error;
+        throw callFailure(server.name, name, error);
       }
     },
     close: () => client.close(),

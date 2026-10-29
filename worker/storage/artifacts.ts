@@ -88,7 +88,7 @@ export class ArtifactStore {
     let meta: ArtifactMeta;
     let createdToken: string | undefined;
     if (input.id) {
-      const existing = (await this.#readRepoMeta(input.id)) ?? (await this.#importFromCache(input.id));
+      const existing = (await this.#readRepoMeta(input.id)) ?? (await this.#importFromCache(input.id, input.ownerUid, input.chatId));
       if (!existing) throw new Error(`No artifact ${input.id}.`);
       if (!isOwnedBy(existing, input.ownerUid, input.chatId)) {
         throw new Error(`Artifact ${input.id} belongs to another chat; publish a new artifact instead.`);
@@ -143,12 +143,15 @@ export class ArtifactStore {
 
   /**
    * An artifact published before repos existed has only its R2 copy. Replay
-   * its versions into a new repo, one commit each, before adding to it.
+   * its versions into a new repo, one commit each, before adding to it. Only
+   * for the chat that owns it: anyone else's is returned untouched, for the
+   * caller to refuse.
    */
-  async #importFromCache(id: string): Promise<ArtifactMeta | null> {
+  async #importFromCache(id: string, ownerUid: string, chatId: string): Promise<ArtifactMeta | null> {
     const cached = await this.#cache.get(metaKey(id));
     if (!cached) return null;
     const legacy = (await cached.json()) as ArtifactMeta;
+    if (!isOwnedBy(legacy, ownerUid, chatId)) return legacy;
     // A repo without artifact.json on main holds nothing yet (an import that
     // stopped before its first push): start it again.
     await this.#repos.delete(repoName(id)).catch(() => false);
