@@ -27,7 +27,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-const post = (body: unknown): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const send = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const post = (body: unknown) => send("POST", body);
 
 export const api = {
   /** The signed-in user, or null with the Worker's auth mode when nobody is. */
@@ -55,8 +56,7 @@ export const api = {
   skills: () => request<SkillInfo[]>("/api/skills"),
   /** Save one of the user's skills, from its fields or from a SKILL.md file's text. */
   saveSkill: (skill: (SkillInput | { markdown: string }) & { enabled?: boolean }) => request<SkillInfo>("/api/skills", post(skill)),
-  setSkillEnabled: (name: string, enabled: boolean) =>
-    request<SkillInfo>(`/api/skills/${name}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) }),
+  setSkillEnabled: (name: string, enabled: boolean) => request<SkillInfo>(`/api/skills/${name}`, send("PATCH", { enabled })),
   deleteSkill: (name: string) => request<object>(`/api/skills/${name}`, { method: "DELETE" }),
   skillMarkdownUrl: (name: string) => `/api/skills/${name}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),

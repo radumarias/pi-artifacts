@@ -7,7 +7,7 @@ import { DurableObject, exports } from "cloudflare:workers";
 import { isOwnedBy, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
-import { skillSource, skillsFingerprint } from "./agent/skills.ts";
+import { skillSource } from "./agent/skills.ts";
 import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
 import { Storage, type UserFiles } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
@@ -66,7 +66,7 @@ export class ChatAgent extends DurableObject<Env> {
   #mcpInstalled = "";
   #files: Promise<UserFiles> | undefined;
   #skillsRefresh: Promise<void> | undefined;
-  /** The enabled skills the agent has now, so a refresh reinstalls only on a change. */
+  /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -114,11 +114,11 @@ export class ChatAgent extends DurableObject<Env> {
    */
   refreshSkills(): Promise<void> {
     this.#skillsRefresh ??= (async () => {
-      const list = await exports.UserDirectory.getByName(this.uid).listSkills();
-      const fingerprint = skillsFingerprint(list);
-      if (fingerprint === this.#skillsInstalled) return;
-      this.registry.install(await skills([skillSource(list)]));
-      this.#skillsInstalled = fingerprint;
+      const directory = exports.UserDirectory.getByName(this.uid);
+      const version = await directory.skillsVersion();
+      if (version === this.#skillsInstalled) return;
+      this.registry.install(await skills([skillSource(await directory.listSkills(), version)]));
+      this.#skillsInstalled = version;
     })().finally(() => {
       this.#skillsRefresh = undefined;
     });

@@ -134,7 +134,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [files, setFiles] = useState<FileInfo[]>([]);
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
   const [preview, setPreview] = useState<PublishedArtifact | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
@@ -142,17 +142,21 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [chatWidth, setChatWidth] = useStoredState<number | null>("layout.chatWidth", null);
   const chatRef = useRef<HTMLElement>(null);
 
+  const loadSkills = useCallback(() => {
+    api.skills().then(setSkills, () => {});
+  }, []);
   const refresh = useCallback(() => {
     api.chats().then(setChats, () => {});
     api.artifacts().then(setArtifacts, () => {});
     api.files().then(setFiles, () => {});
-    api.skills().then(setSkills, () => {});
-  }, []);
+    // The agent may have proposed a skill.
+    loadSkills();
+  }, [loadSkills]);
   useEffect(refresh, [refresh]);
   useEffect(() => setPreview(null), [chatId]);
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
-  const proposed = skills.filter((s) => s.origin === "agent" && !s.enabled).length;
+  const proposed = (skills ?? []).filter((s) => s.origin === "agent" && !s.enabled).length;
 
   const newChat = async () => {
     const chat = await api.createChat();
@@ -237,7 +241,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
                 navigate("/skills");
               }}
             >
-              {skills.filter((s) => s.enabled).length} on, {skills.length} in all
+              {(skills ?? []).filter((s) => s.enabled).length} on, {skills?.length ?? 0} in all
               {proposed > 0 && <small> · {proposed} to review</small>}
             </a>
           </nav>
@@ -273,7 +277,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       <main className="main" ref={chatRef}>
         {showSkills ? (
           <ErrorBoundary what="skills">
-            <SkillsView onChange={refresh} />
+            <SkillsView skills={skills} reload={loadSkills} />
           </ErrorBoundary>
         ) : chatId ? (
           <ErrorBoundary key={chatId} what="this chat">

@@ -3,7 +3,7 @@ import { exports } from "cloudflare:workers";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
 import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type ToolInfo } from "../../shared/protocol.ts";
-import { MAX_SKILL_DESCRIPTION, type SkillInfo, type SkillInput } from "../../shared/skills.ts";
+import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
@@ -19,7 +19,7 @@ export interface ChatScope {
   files: () => Promise<UserFiles>;
   onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
   /** Save a skill for the user, turned off until they turn it on. */
-  proposeSkill(skill: SkillInput): Promise<SkillInfo | { error: string }>;
+  proposeSkill(skill: SkillInput): Promise<SkillResult>;
 }
 
 const MAX_TOOL_TEXT = 16_000;
