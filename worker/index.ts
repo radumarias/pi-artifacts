@@ -154,7 +154,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const file = form.get("file");
     if (!(file instanceof File)) return json({ error: "Expected a file field" }, 400);
     if (file.size > MAX_UPLOAD_BYTES) return json({ error: "Files are limited to 10 MB" }, 413);
-    const name = file.name.replace(/[^\w .-]/g, "_").replace(/^[.\s]+/, "").slice(0, 120) || "upload";
+    const name = file.name.replace(/[^\w .-]/g, "_").replace(/^[.\s]+/, "").slice(0, 120).trimEnd() || "upload";
     const files = await storage.userFiles(uid);
     await files.put(`uploads/${name}`, file.stream(), file.type || undefined);
     return json({ path: `uploads/${name}` });

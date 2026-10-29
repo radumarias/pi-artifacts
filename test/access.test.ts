@@ -78,4 +78,19 @@ describe("verifyAccessJwt", () => {
     await verifyAccessJwt(await sign(rotated.privateKey, good, { alg: "RS256", kid: "new" }), config);
     expect(fetches).toBe(2);
   });
+
+  it("refetches for unknown keys at most once a minute", async () => {
+    const { privateKey, jwk } = await keyPair("k1");
+    let fetches = 0;
+    let now = NOW;
+    const config = { teamDomain: TEAM, aud: AUD, now: () => now, fetchKeys: async () => (fetches++, [jwk]) };
+    await verifyAccessJwt(await sign(privateKey, good), config);
+    const unknown = await sign(privateKey, good, { alg: "RS256", kid: "nope" });
+    await expect(verifyAccessJwt(unknown, config)).rejects.toThrow("Unknown signing key.");
+    await expect(verifyAccessJwt(unknown, config)).rejects.toThrow("Unknown signing key.");
+    expect(fetches).toBe(2);
+    now += 60_000;
+    await expect(verifyAccessJwt(unknown, config)).rejects.toThrow("Unknown signing key.");
+    expect(fetches).toBe(3);
+  });
 });

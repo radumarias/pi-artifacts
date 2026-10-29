@@ -152,10 +152,18 @@ const SANDBOX_FILES =
 async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
   const inputs: SandboxFile[] = [];
+  const names = new Map<string, string>();
   for (const path of paths ?? []) {
+    // Inputs land side by side in ./files/, so two paths with the same file name would overwrite each other.
+    const name = path.split("/").pop()!;
+    const other = names.get(name);
+    if (other !== undefined) throw new Error(`"${other}" and "${path}" would both be ./files/${name}; pass them in separate runs.`);
+    names.set(name, path);
+  }
+  for (const [name, path] of names) {
     const object = await files.get(path);
     if (!object) throw new Error(`No file "${path}".`);
-    inputs.push({ name: path.split("/").pop()!, bytes: await object.arrayBuffer() });
+    inputs.push({ name, bytes: await object.arrayBuffer() });
   }
   const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
   const saved = [];
