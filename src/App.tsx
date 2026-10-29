@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
 import type { ChatSummary, PublishedDetails } from "../shared/protocol.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
@@ -6,6 +6,8 @@ import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import { FilesNav, useUploads } from "./files/FilesNav.tsx";
+import { carriesFiles, fromDrop } from "./files/pick.ts";
 import { ResizeHandle, useStoredState } from "./layout.tsx";
 import { SkillsView } from "./skills/SkillsView.tsx";
 
@@ -183,22 +185,35 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
     [loadArtifacts],
   );
 
-  const upload = async (input: HTMLInputElement) => {
-    const file = input.files?.[0];
-    // Cleared, so picking the same file again (after changing it) uploads it again.
-    input.value = "";
-    if (!file) return;
-    try {
-      await api.upload(file);
-      loadFiles();
-    } catch (e) {
-      alert(`Could not upload ${file.name}: ${errorMessage(e)}`);
-    }
+  const { status: uploadStatus, upload } = useUploads(loadFiles);
+  // Files dragged over the app: counted, since entering a child element leaves its parent first.
+  const [dragging, setDragging] = useState(0);
+  const dropHandlers = {
+    onDragEnter: (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      setDragging((n) => n + 1);
+    },
+    onDragOver: (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (carriesFiles(e.dataTransfer)) setDragging((n) => Math.max(0, n - 1));
+    },
+    onDrop: (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      setDragging(0);
+      void fromDrop(e.dataTransfer).then((picked) => (picked.length ? upload(picked) : undefined));
+    },
   };
 
   return (
     <div
-      className={preview ? "workspace with-preview" : "workspace"}
+      className={["workspace", preview && "with-preview", dragging > 0 && "dragging"].filter(Boolean).join(" ")}
+      {...dropHandlers}
       style={
         {
           "--sidebar-w": `${collapsed ? RAIL_WIDTH : sidebarWidth}px`,
@@ -264,17 +279,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
             </a>
           </nav>
           <h3>Files</h3>
-          <nav>
-            {files.map((f) => (
-              <span key={f.path} title={`${f.size} bytes`}>
-                {f.path}
-              </span>
-            ))}
-            <label className="upload">
-              Upload a file
-              <input type="file" hidden onChange={(e) => void upload(e.target)} />
-            </label>
-          </nav>
+          <FilesNav files={files} status={uploadStatus} upload={upload} />
           <footer>
             <span title={label}>{label}</span>
             <button type="button" onClick={onSignOut}>
@@ -318,6 +323,11 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           onResize={setChatWidth}
           onReset={() => setChatWidth(null)}
         />
+      )}
+      {dragging > 0 && (
+        <div className="drop-target" aria-hidden>
+          Drop files or folders to upload them
+        </div>
       )}
       {preview && (
         <ErrorBoundary key={preview.artifactId} what="the preview">

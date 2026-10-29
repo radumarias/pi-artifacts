@@ -8,7 +8,7 @@ import { isOwnedBy, isReadOnly, manifestOf, type ArtifactManifest, type ChatClie
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
-import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
+import { artifactExtension, filesExtension, filesIndexExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
@@ -71,6 +71,8 @@ export class ChatAgent extends DurableObject<Env> {
   #mcpInstalled = "";
   /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
+  /** The user's files as the agent's prompt lists them, so a refresh reinstalls the list only on a change. */
+  #filesInstalled: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -129,6 +131,23 @@ export class ChatAgent extends DurableObject<Env> {
   });
 
   /**
+   * Show the agent the user's files, newest first, so a file the user names in
+   * a message maps to its path. Runs before every prompt, so files uploaded
+   * since are in it. Never rejects: on a failure the agent keeps the list it has.
+   */
+  readonly refreshFiles = singleFlight(async () => {
+    try {
+      const entries = await (await this.scope.files()).list();
+      const version = JSON.stringify(entries.map((e) => [e.path, e.size, +e.uploaded]));
+      if (version === this.#filesInstalled) return;
+      this.registry.install(filesIndexExtension(entries));
+      this.#filesInstalled = version;
+    } catch (error) {
+      console.error("files:", errorMessage(error));
+    }
+  });
+
+  /**
    * List each MCP server's tools and install them as agent tools. Runs before
    * every prompt: tool lists are cached, and a server the user has signed in
    * to since (or whose sign-in expired) joins or leaves then.
@@ -172,7 +191,7 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   async prompt(text: string): Promise<void> {
-    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills()]);
+    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills(), this.refreshFiles()]);
     await this.harness.submit(text);
     // touchChat only names a chat that is still called "New chat", so the first prompt names it.
     await this.#directory.touchChat(this.chatId, text);

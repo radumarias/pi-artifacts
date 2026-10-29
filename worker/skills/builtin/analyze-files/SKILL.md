@@ -5,9 +5,9 @@ allowed-tools: files_list files_read run_python run_bash artifact_publish
 ---
 Work from the file itself, never from what its name suggests.
 
-1. Find the file with files_list. If several could match, ask which one, naming them.
+1. Find the file in the list of the user's files in your prompt, or with files_list. A name or the end of a path is enough for the file tools when only one file matches; if several could match, ask which one, naming them.
 2. Look before you compute: read the first lines with files_read, or print `df.head()`, `df.dtypes` and the row count with run_python. Say what the columns are in one line if the user has not described them.
-3. Compute with run_python (pandas and numpy are installed). Pass the file in `files`; it lands in ./files/. Write anything the user should keep, such as a cleaned CSV or a summary JSON, to ./out/, which saves to their files under out/.
+3. Compute with run_python (pandas and numpy are installed). Pass the files or a folder in `files`; each lands in ./files/ in its folders, without the leading uploads/ (the tool result lists where). Write anything the user should keep, such as a cleaned CSV or a summary JSON, to ./out/, which saves to their files under out/.
 4. Report results with their units and the number of rows they cover. Round sensibly and say so when you dropped rows (blank, unparseable, duplicates) and how many.
 
 Guardrails:
