@@ -87,7 +87,10 @@ async function route(request: Request, env: Env): Promise<Response> {
       const name = await artifactChat(storage, id);
       if (!name) return json({ error: "No such artifact" }, 404);
       const chat = exports.ChatAgent.getByName(name);
-      if (artifact[2] === "/tools") return json(await chat.artifactTools(id, Number(url.searchParams.get("version"))));
+      if (artifact[2] === "/tools") {
+        const tools = await chat.artifactTools(id, Number(url.searchParams.get("version")));
+        return Array.isArray(tools) ? json(tools) : json({ error: "No such artifact version." }, 404);
+      }
       const body = await request.json<ProxyRequest>();
       if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
         return json({ ok: false, error: { code: "bad_request", message: "Expected {version, mode, server, tool, input}." } }, 400);

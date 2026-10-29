@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import type { ToolInfo } from "../../shared/protocol.ts";
 import { McpFailure, type McpConnection, type RawToolResult } from "./hub.ts";
@@ -60,10 +61,18 @@ export async function connectStreamableHttp(server: McpServerConfig, authProvide
       return tools;
     },
     async callTool(name, args) {
-      const result = await signedIn(() =>
-        client.callTool({ name, arguments: (args ?? {}) as Record<string, unknown> }, undefined, { timeout: CALL_TIMEOUT_MS }),
-      );
-      return result as RawToolResult;
+      try {
+        const result = await signedIn(() =>
+          client.callTool({ name, arguments: (args ?? {}) as Record<string, unknown> }, undefined, { timeout: CALL_TIMEOUT_MS }),
+        );
+        return result as RawToolResult;
+      } catch (error) {
+        // The server got the call and may have run it: report it, never send it again (the hub retries other failures).
+        if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
+          throw new McpFailure({ code: "server_unavailable", server: server.name, message: `${server.name} did not answer ${name} within ${CALL_TIMEOUT_MS / 1000} s.` });
+        }
+        throw error;
+      }
     },
     close: () => client.close(),
   };

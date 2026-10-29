@@ -317,8 +317,9 @@ What it does not cover:
 - **The local R2 simulator ignores SSE-C.** In `AUTH_MODE=demo` a fixed demo key stands in for the master key, and
   files are stored unencrypted. A deployed Worker without `FILES_MASTER_KEY` refuses all file access.
 
-Artifact pages are served from the app's own origin inside an opaque-origin sandbox. That is enough to keep them away
-from the app's cookies and storage. A production deployment should still serve `/u/*` from a separate domain, as
+Artifact pages are served from the app's own origin inside an opaque-origin sandbox: the viewer frames them with
+`sandbox`, and their CSP carries a `sandbox` directive too, so a page opened directly or as a popup is just as
+isolated. That is enough to keep them away from the app's cookies and storage. A production deployment should still serve `/u/*` from a separate domain, as
 claude.ai uses `*.claudeusercontent.com`.
 
 ## Limits and what's next

@@ -48,6 +48,8 @@ export class McpOAuthClient implements OAuthClientProvider {
   readonly #server: string;
   readonly #redirectUrl: string;
   readonly #interactive: boolean;
+  /** The tokens this client last read or saved: the ones a failed refresh was about. */
+  #readTokens: OAuthTokens | undefined;
 
   constructor(store: McpAuthStore, server: string, options: { redirectUrl: string; interactive: boolean }) {
     this.#store = store;
@@ -86,10 +88,12 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    return (await this.#store.get()).tokens;
+    this.#readTokens = (await this.#store.get()).tokens;
+    return this.#readTokens;
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
+    this.#readTokens = tokens;
     await this.#patch({ tokens });
   }
 
@@ -112,7 +116,9 @@ export class McpOAuthClient implements OAuthClientProvider {
     if (scope === "all") return this.#store.put({});
     const record = await this.#store.get();
     if (scope === "client") delete record.client;
-    if (scope === "tokens") delete record.tokens;
+    // Every chat of the user shares these tokens. When another chat has refreshed them since this one read them, the
+    // rejected refresh token was the old one: keep the new tokens rather than signing the user out.
+    if (scope === "tokens" && sameTokens(record.tokens, this.#readTokens)) delete record.tokens;
     if (scope === "verifier") delete record.verifier;
     await this.#store.put(record);
   }
@@ -120,6 +126,10 @@ export class McpOAuthClient implements OAuthClientProvider {
   async #patch(patch: Partial<McpAuthRecord>): Promise<void> {
     await this.#store.put({ ...(await this.#store.get()), ...patch });
   }
+}
+
+function sameTokens(a: OAuthTokens | undefined, b: OAuthTokens | undefined): boolean {
+  return a?.access_token === b?.access_token && a?.refresh_token === b?.refresh_token;
 }
 
 /**

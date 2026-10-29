@@ -1,4 +1,4 @@
-import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, ProxyRequest, ProxyResponse, ToolInfo } from "../shared/protocol.ts";
+import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
 
 export type { ArtifactSummary };
 
@@ -42,7 +42,7 @@ export const api = {
   createChat: () => request<ChatSummary>("/api/chats", { method: "POST" }),
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
   artifact: (id: string) => request<ArtifactView>(`/api/artifacts/${id}`),
-  artifactTools: (id: string, version: number) => request<ToolInfo[]>(`/api/artifacts/${id}/tools?version=${version}`),
+  artifactTools: (id: string, version: number) => request<DeclaredTool[]>(`/api/artifacts/${id}/tools?version=${version}`),
   cloneAccess: (id: string) => request<CloneAccess>(`/api/artifacts/${id}/clone`, post({})),
   /** Resolves with the Worker's ProxyResponse, errors included; rejects only when the request itself fails. */
   proxy: async (id: string, call: ProxyRequest): Promise<ProxyResponse> => {
