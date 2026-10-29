@@ -9,16 +9,5 @@ export function json(body: unknown, status = 200, headers: Record<string, string
  */
 export async function readJson<T>(request: Request): Promise<T | null> {
   if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? "")) return null;
-  return request.json<T>().catch(() => null);
-}
-
-/**
- * A WebSocket upgrade answered by a socket that closes at once with `code`. A refused upgrade (a plain 4xx) reaches
- * the browser only as an anonymous close; a close code tells the app to stop reconnecting.
- */
-export function closedSocket(code: number, reason: string): Response {
-  const pair = new WebSocketPair();
-  pair[1].accept();
-  pair[1].close(code, reason);
-  return new Response(null, { status: 101, webSocket: pair[0] });
+  return (request.json() as Promise<T>).catch(() => null);
 }

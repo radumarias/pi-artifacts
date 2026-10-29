@@ -7,6 +7,9 @@ import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
+import { formatBytes, listSome } from "../../shared/util.ts";
+import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
+import type { FileEntry } from "../storage/user-files.ts";
 import { normalisePath, PathError, type ArtifactStore, type UserFiles } from "../storage/index.ts";
 
 /** What the tools need from the chat they run in. */
@@ -97,31 +100,76 @@ export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, u
   });
 }
 
+/** `path` as a stored path, or undefined when it cannot be one ("data/", a name with characters paths do not allow). */
+function literalPath(path: string): string | undefined {
+  try {
+    return normalisePath(path);
+  } catch (error) {
+    if (error instanceof PathError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The stored paths `refs` name, from one listing of the user's files (see
+ * resolveRef). The listing stops at MAX_LISTED files, so a ref it cannot
+ * match is still tried as a path as it is: reading that path, if it is not
+ * there either, throws `missing(path)`, which says why the ref matched nothing.
+ */
+async function findFiles(files: UserFiles, refs: readonly string[], resolve: (entries: FileEntry[], ref: string) => string[]) {
+  const entries = await files.list();
+  const paths = new Set<string>();
+  const unmatched = new Map<string, FileRefError>();
+  for (const ref of new Set(refs)) {
+    try {
+      for (const path of resolve(entries, ref)) paths.add(path);
+    } catch (error) {
+      const literal = literalPath(ref);
+      if (!(error instanceof FileRefError) || literal === undefined) throw error;
+      paths.add(literal);
+      unmatched.set(literal, error);
+    }
+  }
+  return { entries, paths: [...paths], missing: (path: string) => unmatched.get(path) ?? new Error(`No file "${path}".`) };
+}
+
 export function filesExtension(scope: ChatScope): Extension {
   return defineExtension({
     name: "files",
     tools: [
       defineTool({
         name: "files_list",
-        description: "List the user's files (uploads and files your scripts saved), with sizes.",
-        parameters: Type.Object({ folder: Type.Optional(Type.String({ description: "Only files in this folder, e.g. uploads." })) }),
+        description: "List the user's files (uploads, kept in their folders under uploads/, and files your scripts saved), with sizes.",
+        parameters: Type.Object({ folder: Type.Optional(Type.String({ description: "Only files in this folder, e.g. uploads or uploads/reports." })) }),
         replay: "safe",
         execute: async (args) => {
           const entries = await (await scope.files()).list(args.folder ?? "");
-          const lines = entries.map((e) => `${e.path}\t${e.size} bytes`);
-          return { output: text(lines.length ? lines.join("\n") : "No files.") };
+          const lines = entries.map((e) => `${e.path}\t${formatBytes(e.size)}`);
+          return { output: text(clip(lines.length ? lines.join("\n") : "No files.")) };
         },
       }),
       defineTool({
         name: "files_read",
-        description: `Read one of the user's files as UTF-8 text (the first ${MAX_TOOL_TEXT.toLocaleString("en")} characters).`,
+        description:
+          `Read one of the user's files as UTF-8 text (the first ${MAX_TOOL_TEXT.toLocaleString("en")} characters). ` +
+          "Takes its path, or its name or the end of its path when only one file matches.",
         parameters: Type.Object({ path: Type.String() }),
         replay: "safe",
         execute: async (args) => {
+          const files = await scope.files();
           // Only what clip() can show: at most 4 bytes per character.
-          const object = await (await scope.files()).get(args.path, { offset: 0, length: MAX_TOOL_TEXT * 4 });
-          if (!object) throw new Error(`No file "${args.path}".`);
-          return { output: text(clip(await object.text())) };
+          const range = { offset: 0, length: MAX_TOOL_TEXT * 4 };
+          // A stored path names itself (resolveFile would pick it too): read it without listing every file first.
+          let path = literalPath(args.path);
+          let object = path === undefined ? null : await files.get(path, range);
+          if (!object) {
+            const found = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref)]);
+            path = found.paths[0];
+            object = await files.get(path, range);
+            if (!object) throw found.missing(path);
+          }
+          const content = clip(await object.text());
+          return { output: text(path === args.path ? content : `${path}:\n${content}`) };
         },
       }),
       defineTool({
@@ -137,33 +185,52 @@ export function filesExtension(scope: ChatScope): Extension {
   });
 }
 
+/** The prompt's list of the user's files (see filesIndex), installed again whenever it changes. */
+export function filesIndexExtension(index: string): Extension {
+  return defineExtension({ name: "files-index", sections: [section("user_files", () => index)] });
+}
+
 const SANDBOX_FILES =
-  "Files you name are copied from the user's files into ./files/; anything written to ./out/ (top level, not subfolders) is saved back to the user's files under out/. " +
+  "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
+  "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/report.csv is ./files/out/report.csv). " +
+  "Anything written to ./out/ (top level, not subfolders) is saved back to the user's files under out/. " +
   "Each run starts with fresh ./files and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
   "Returns exit code, stdout and stderr.";
+
+/** The files `refs` name, read, keyed by where they go under ./files/ (see sandboxLayout). */
+async function sandboxInputs(files: UserFiles, refs: readonly string[]): Promise<SandboxFile[]> {
+  if (refs.length === 0) return [];
+  const { entries, paths, missing } = await findFiles(files, refs, resolveRef);
+  const layout = sandboxLayout(paths);
+  const sizes = new Map(entries.map((e) => [e.path, e.size]));
+  const listedBytes = paths.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
+  if (listedBytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(listedBytes));
+  const fetched = await Promise.allSettled([...layout].map(async ([name, path]) => ({ name, path, object: await files.get(path) })));
+  const objects = fetched.flatMap((result) => (result.status === "fulfilled" && result.value.object ? [{ name: result.value.name, object: result.value.object }] : []));
+  // Paths past the end of the listing had no size above.
+  const bytes = objects.reduce((sum, { object }) => sum + object.size, 0);
+  const failed = fetched.find((result) => result.status === "rejected" || !result.value.object);
+  if (failed || bytes > MAX_SANDBOX_BYTES) {
+    // Nothing is read on a failure: let go of the bodies already opened.
+    await Promise.all(objects.map(({ object }) => object.body.cancel()));
+    if (failed?.status === "rejected") throw failed.reason;
+    throw failed ? missing(failed.value.path) : new Error(tooMuch(bytes));
+  }
+  return Promise.all(objects.map(async ({ name, object }) => ({ name, bytes: await object.arrayBuffer() })));
+}
+
+function tooMuch(bytes: number): string {
+  return `Those files hold ${formatBytes(bytes)}; one run takes at most ${formatBytes(MAX_SANDBOX_BYTES)}. Pass fewer.`;
+}
 
 /**
  * Copy the named user files in, run in this chat's sandbox, save ./out back to
  * the user's files. The files go through the user's UserFiles, so they are
  * decrypted on the way in and encrypted with the user's key on the way out.
  */
-async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
+async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
-  const names = new Map<string, string>();
-  for (const path of new Set((paths ?? []).map((p) => normalisePath(p)))) {
-    // Inputs land side by side in ./files/, so two paths with the same file name would overwrite each other.
-    const name = path.split("/").pop()!;
-    const other = names.get(name);
-    if (other !== undefined) throw new Error(`"${other}" and "${path}" would both be ./files/${name}; pass them in separate runs.`);
-    names.set(name, path);
-  }
-  const inputs: SandboxFile[] = await Promise.all(
-    [...names].map(async ([name, path]) => {
-      const object = await files.get(path);
-      if (!object) throw new Error(`No file "${path}".`);
-      return { name, bytes: await object.arrayBuffer() };
-    }),
-  );
+  const inputs = await sandboxInputs(files, refs ?? []);
   const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
   const toSave = new Map<string, ArrayBuffer>();
   const skipped = [];
@@ -181,6 +248,7 @@ async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: 
   }
   const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
   const report = [
+    inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,
     `exit code ${result.exitCode}`,
     `stdout:\n${result.stdout}`,
     result.stderr && `stderr:\n${result.stderr}`,
@@ -190,7 +258,11 @@ async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: 
   return { output: text(clip(report.filter(Boolean).join("\n\n"))), isError: result.exitCode !== 0 };
 }
 
-const inputFiles = Type.Optional(Type.Array(Type.String(), { description: "Paths of the user's files to copy in." }));
+const inputFiles = Type.Optional(
+  Type.Array(Type.String(), {
+    description: "The user's files to copy in: paths, a file's name or the end of its path when only one file matches, or a folder for every file in it.",
+  }),
+);
 
 export function sandboxExtension(scope: ChatScope): Extension {
   return defineExtension({

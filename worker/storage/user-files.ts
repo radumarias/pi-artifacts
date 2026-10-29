@@ -1,3 +1,4 @@
+import { MAX_LISTED } from "../../shared/uploads.ts";
 import { normalisePath } from "./paths.ts";
 
 export interface FileEntry {
@@ -33,7 +34,7 @@ export class UserFiles {
       const page = await this.#bucket.list({ prefix, cursor, limit: 500 });
       for (const o of page.objects) entries.push({ path: o.key.slice(this.#prefix.length), size: o.size, uploaded: o.uploaded });
       cursor = page.truncated ? page.cursor : undefined;
-    } while (cursor && entries.length < 2_000);
+    } while (cursor && entries.length < MAX_LISTED);
     return entries;
   }
 

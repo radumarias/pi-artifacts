@@ -38,6 +38,9 @@
     "worker/auth/access.ts",
     "worker/members.ts",
     "worker/agent/skills.ts",
+    "worker/agent/file-refs.ts",
+    "worker/files-routes.ts",
+    "worker/http.ts",
     "worker/skills/index.ts",
     "worker/raw.d.ts"
   ]

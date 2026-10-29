@@ -41,3 +41,16 @@ export function singleFlight<T>(fn: () => Promise<T>): () => Promise<T> {
       running = undefined;
     }));
 }
+
+/** A size people read: "512 B", "2.0 KB", "10.0 MB". */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** The first `max` items joined with ", ", then how many more there are: "a, b and 3 more". */
+export function listSome(items: readonly string[], max: number): string {
+  const shown = items.slice(0, max).join(", ");
+  return items.length > max ? `${shown} and ${items.length - max} more` : shown;
+}

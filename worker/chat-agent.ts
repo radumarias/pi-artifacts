@@ -24,10 +24,10 @@ import {
   type ProxyResponse,
 } from "../shared/protocol.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
-import { closedSocket } from "./http.ts";
+import { filesIndex } from "./agent/file-refs.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
-import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
+import { artifactExtension, filesExtension, filesIndexExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
@@ -110,6 +110,8 @@ export class ChatAgent extends DurableObject<Env> {
   #mcpInstalled = "";
   /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
+  /** The agent's prompt's list of the user's files, so a refresh reinstalls it only on a change. */
+  #filesInstalled: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -165,6 +167,22 @@ export class ChatAgent extends DurableObject<Env> {
       this.#skillsInstalled = version;
     } catch (error) {
       console.error("skills:", errorMessage(error));
+    }
+  });
+
+  /**
+   * Show the agent the user's files, newest first, so a file the user names in
+   * a message maps to its path. Runs before every prompt, so files uploaded
+   * since are in it. Never rejects: on a failure the agent keeps the list it has.
+   */
+  readonly refreshFiles = singleFlight(async () => {
+    try {
+      const index = filesIndex(await (await this.scope.files()).list());
+      if (index === this.#filesInstalled) return;
+      this.registry.install(filesIndexExtension(index));
+      this.#filesInstalled = index;
+    } catch (error) {
+      console.error("files:", errorMessage(error));
     }
   });
 
@@ -251,7 +269,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async prompt(text: string, author: Person): Promise<void> {
     if (!this.isInChat(author.uid)) throw new Error("You are no longer in this chat.");
-    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills()]);
+    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills(), this.refreshFiles()]);
     await this.harness.submit(this.members.has() ? `${author.name}: ${text}` : text, {
       entry: { kind: CHAT_MESSAGE_KIND, data: { uid: author.uid, name: author.name, text } satisfies ChatMessageData },
     });
@@ -518,6 +536,17 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     this.#streams.delete(ws);
     if (stream) await (await stream.catch(() => undefined))?.stop();
   }
+}
+
+/**
+ * A WebSocket upgrade answered by a socket that closes at once with `code`. A refused upgrade (a plain 4xx) reaches
+ * the browser only as an anonymous close; a close code tells the app to stop reconnecting.
+ */
+export function closedSocket(code: number, reason: string): Response {
+  const pair = new WebSocketPair();
+  pair[1].accept();
+  pair[1].close(code, reason);
+  return new Response(null, { status: 101, webSocket: pair[0] });
 }
 
 function close(ws: WebSocket, code: number, reason: string): void {

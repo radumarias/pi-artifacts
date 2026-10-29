@@ -1,7 +1,7 @@
 import { exports } from "cloudflare:workers";
 import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type CreatedInvite, type Person } from "../shared/protocol.ts";
-import { chatAgentName, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
-import { closedSocket, json, readJson } from "./http.ts";
+import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
+import { json, readJson } from "./http.ts";
 import { parseInviteToken } from "./members.ts";
 import type { UserDirectory } from "./users.ts";
 
