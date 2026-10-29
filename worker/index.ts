@@ -1,7 +1,7 @@
 import { exports } from "cloudflare:workers";
 import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
-import { artifactResponse } from "./artifacts/serve.ts";
+import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { mcpRoute } from "./mcp-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
@@ -74,8 +74,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   // The artifact page itself, framed by the viewer.
   const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)$/);
   if (page && method === "GET") {
-    const html = ID_PATTERN.test(page[1]) ? await storage.artifacts.readHtml(page[1], Number(page[2])) : null;
-    return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html);
+    if (!ID_PATTERN.test(page[1])) return new Response("Not found", { status: 404 });
+    const etag = artifactETag(page[1], Number(page[2]));
+    const cached = notModified(request, etag);
+    if (cached) return cached;
+    const html = await storage.artifacts.readHtml(page[1], Number(page[2]));
+    return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html, etag);
   }
 
   // Artifact metadata and the MCP proxy.

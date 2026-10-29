@@ -45,14 +45,39 @@ export function renderArtifact(html: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${runtime}</head><body>${html}</body></html>`;
 }
 
-export function artifactResponse(html: string): Response {
-  return new Response(renderArtifact(html), {
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "content-security-policy": ARTIFACT_CSP,
-      "x-content-type-options": "nosniff",
-      "referrer-policy": "no-referrer",
-      "cache-control": "private, max-age=0",
-    },
-  });
+/** FNV-1a: a cheap, stable fingerprint, not a security measure. */
+function fingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+  return (hash >>> 0).toString(36);
+}
+
+// What a served page is made of besides its version: the runtime inlined into it and the policy it runs under.
+const BUILD = fingerprint(RUNTIME + ARTIFACT_CSP);
+
+/**
+ * A version's page never changes, but the runtime inlined into it changes
+ * with a deploy, so the ETag names both. The browser revalidates on every
+ * view, and a repeat view costs a 304: no R2 read, no body.
+ */
+export function artifactETag(id: string, version: number): string {
+  return `"${id}-v${version}-${BUILD}"`;
+}
+
+const PAGE_HEADERS = {
+  "content-security-policy": ARTIFACT_CSP,
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "cache-control": "private, no-cache",
+};
+
+/** 304 when the browser already holds this exact page. */
+export function notModified(request: Request, etag: string): Response | undefined {
+  const sent = request.headers.get("if-none-match");
+  if (!sent || !sent.split(",").some((tag) => tag.trim().replace(/^W\//, "") === etag)) return undefined;
+  return new Response(null, { status: 304, headers: { ...PAGE_HEADERS, etag } });
+}
+
+export function artifactResponse(html: string, etag: string): Response {
+  return new Response(renderArtifact(html), { headers: { ...PAGE_HEADERS, "content-type": "text/html; charset=utf-8", etag } });
 }
