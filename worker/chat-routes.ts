@@ -23,10 +23,9 @@ export async function chatRoute(request: Request, directory: DurableObjectStub<U
   if (url.pathname === "/api/invites/accept" && method === "POST") {
     const token = parseInviteToken((await readJson<{ token?: unknown }>(request))?.token);
     // Checked against the owner's index first, so a made-up token never wakes a chat object.
-    if (!token || !(await exports.UserDirectory.getByName(token.ownerUid).hasChat(token.chatId))) {
-      return json({ error: "This invite link is not valid." }, 404);
-    }
-    const refused = await exports.ChatAgent.getByName(chatAgentName(token.ownerUid, token.chatId)).acceptInvite(token.secret, person);
+    const title = token && (await exports.UserDirectory.getByName(token.ownerUid).chatTitle(token.chatId));
+    if (!token || !title) return json({ error: "This invite link is not valid." }, 404);
+    const refused = await exports.ChatAgent.getByName(chatAgentName(token.ownerUid, token.chatId)).acceptInvite(token.secret, person, title);
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 

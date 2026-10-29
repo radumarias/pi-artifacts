@@ -111,10 +111,12 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** Bump a chat to the top. A chat still called "New chat" is named after the prompt, so the first prompt names it. Returns its title. */
   touchChat(id: string, prompt: string): string {
-    this.ctx.storage.sql.exec("UPDATE chats SET updated_at = ? WHERE id = ?", Date.now(), id);
     const title = prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat";
-    this.ctx.storage.sql.exec("UPDATE chats SET title = ? WHERE id = ? AND title = 'New chat'", title, id);
-    return this.chatTitle(id) ?? title;
+    return (
+      this.ctx.storage.sql
+        .exec<{ title: string }>("UPDATE chats SET updated_at = ?, title = CASE title WHEN 'New chat' THEN ? ELSE title END WHERE id = ? RETURNING title", Date.now(), title, id)
+        .toArray()[0]?.title ?? title
+    );
   }
 
   chatTitle(id: string): string | null {

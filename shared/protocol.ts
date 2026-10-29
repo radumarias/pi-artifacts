@@ -167,12 +167,10 @@ export interface CreatedInvite extends ChatInvite {
 /**
  * The transcript entry each prompt is placed as, instead of pi's `pi.user`, so a shared
  * chat shows who wrote what. The model gets the text as a user message, prefixed with the
- * author's name.
+ * author's name once the chat has members.
  */
 export const CHAT_MESSAGE_KIND = "chat.message";
-export interface ChatMessageData {
-  uid: string;
-  name: string;
+export interface ChatMessageData extends Person {
   text: string;
 }
 

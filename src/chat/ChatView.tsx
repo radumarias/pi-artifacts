@@ -14,6 +14,8 @@ interface Props {
   /** Called with the newest artifact this chat published, on load and on every publish. */
   onArtifact: (artifact: PublishedDetails) => void;
   onActivity: () => void;
+  /** Called when the user is no longer in this chat (removed, or it is gone): its sidebar entry went too. */
+  onGone: () => void;
   /** Called once the user left this chat. */
   onLeft: () => void;
 }
@@ -26,7 +28,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
-export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
+export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }: Props) {
   const { state, connected, people, gone, prompt, abort } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
@@ -53,10 +55,9 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     wasBusy.current = state.busy;
   }, [state.busy, onActivity]);
 
-  // No longer in the chat (removed, or it is gone): the sidebar entry went too, so reload it.
   useEffect(() => {
-    if (gone) onActivity();
-  }, [gone, onActivity]);
+    if (gone) onGone();
+  }, [gone, onGone]);
 
   useEffect(() => {
     const latest = state.entries.map(published).filter(Boolean).pop();
@@ -84,7 +85,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     submit();
   };
 
-  const ownerName = people && people.owner.uid !== uid ? people.owner.name : undefined;
+  const isOwner = people?.owner.uid === uid;
+  const ownerName = people && !isOwner ? people.owner.name : undefined;
   const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid).map((person) => person.name).join(", ") : "";
   return (
     <section className="chat">
@@ -94,11 +96,11 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
         </span>
         {people && (
           <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
-            {people.owner.uid === uid ? "Share" : "People"}
+            {isOwner ? "Share" : "People"}
           </button>
         )}
       </header>
-      {sharing && people && <SharePanel chatId={chatId} uid={uid} people={people} onLeft={onLeft} />}
+      {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} />}
       <div className="messages" ref={list} onScroll={onScroll}>
         {state.entries.length === 0 && !state.busy && (
           <div className="empty-chat">

@@ -6,16 +6,16 @@ import { api } from "../api.ts";
 interface Props {
   chatId: string;
   uid: string;
+  isOwner: boolean;
   /** Who is in the chat and, for its owner, the open invites: live from the chat's socket. */
   people: ChatPeopleView;
   onLeft: () => void;
 }
 
 /** The chat's people. Its owner invites by link and removes members; a member can leave. */
-export function SharePanel({ chatId, uid, people, onLeft }: Props) {
+export function SharePanel({ chatId, uid, isOwner, people, onLeft }: Props) {
   const [created, setCreated] = useState<CreatedInvite | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const isOwner = people.owner.uid === uid;
   // Once the link is used or revoked, its invite leaves the open list: stop offering a dead link.
   const shown = created && people.invites?.some((open) => open.id === created.id) ? created : null;
 

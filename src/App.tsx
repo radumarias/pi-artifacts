@@ -347,6 +347,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               uid={uid}
               onArtifact={onArtifact}
               onActivity={refresh}
+              onGone={loadChats}
               onLeft={() => {
                 loadChats();
                 navigate("/");

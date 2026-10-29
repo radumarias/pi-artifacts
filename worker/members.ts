@@ -2,7 +2,7 @@ import { ID_PATTERN, UID_PATTERN, type ChatInvite, type Person } from "../shared
 import { randomHex, sha256Hex } from "../shared/util.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
-export const MAX_MEMBERS = 20;
+const MAX_MEMBERS = 20;
 export const MAX_OPEN_INVITES = 20;
 
 /** The part of a Durable Object's SQL API the tables here need; the tests put node:sqlite behind it. */
@@ -11,7 +11,7 @@ export interface Sql {
 }
 
 /** An invite link's token: the chat it opens and a secret the chat keeps only the hash of. */
-export interface InviteToken {
+interface InviteToken {
   ownerUid: string;
   chatId: string;
   secret: string;
@@ -71,10 +71,12 @@ export class ChatMembers {
       .map((row) => ({ uid: row.uid as string, name: row.name as string }));
   }
 
-  /** Whether `uid` is a member; without one, whether the chat has any. */
-  has(uid?: string): boolean {
-    const query = uid === undefined ? "SELECT 1 FROM chat_members LIMIT 1" : "SELECT 1 FROM chat_members WHERE uid = ?";
-    return this.#sql.exec(query, ...(uid === undefined ? [] : [uid])).toArray().length > 0;
+  has(uid: string): boolean {
+    return this.#sql.exec("SELECT 1 FROM chat_members WHERE uid = ?", uid).toArray().length > 0;
+  }
+
+  hasAny(): boolean {
+    return this.#count("chat_members") > 0;
   }
 
   /** A member's name changes when they sign in with another email for the same uid; keep the one they last used. */
@@ -94,9 +96,14 @@ export class ChatMembers {
     return this.#sql.exec("DELETE FROM chat_members WHERE uid = ?", uid).rowsWritten > 0;
   }
 
-  /** The invites still open, oldest first. Expired ones are forgotten here. */
-  invites(now = Date.now()): ChatInvite[] {
+  /** Forget expired invites. */
+  #prune(now: number): void {
     this.#sql.exec("DELETE FROM chat_invites WHERE expires_at <= ?", now);
+  }
+
+  /** The invites still open, oldest first. */
+  invites(now = Date.now()): ChatInvite[] {
+    this.#prune(now);
     return this.#sql
       .exec("SELECT id, created_at, expires_at FROM chat_invites ORDER BY created_at")
       .toArray()
@@ -108,7 +115,7 @@ export class ChatMembers {
     const secret = randomHex(32);
     const secretHash = await sha256Hex(secret);
     // After the await, as in accept: the checks and the insert happen in one step of the object.
-    this.#sql.exec("DELETE FROM chat_invites WHERE expires_at <= ?", now);
+    this.#prune(now);
     if (this.#count("chat_invites") >= MAX_OPEN_INVITES) return { error: `This chat has ${MAX_OPEN_INVITES} open invites; revoke one first.` };
     const full = this.#full();
     if (full) return full;

@@ -51,6 +51,7 @@ const OWNER = "chat-sockets";
 /** Set by the Worker on a chat socket's upgrade request, from the verified identity; never taken from the browser. */
 export const PERSON_HEADER = "x-pi-person";
 const MAX_STALE_MS = 24 * 60 * 60_000;
+const MEMBERS_TOUCH_MS = 60_000;
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
 export function chatAgentName(uid: string, chatId: string): string {
@@ -112,6 +113,8 @@ export class ChatAgent extends DurableObject<Env> {
   #skillsInstalled: string | undefined;
   /** The agent's prompt's list of the user's files, so a refresh reinstalls it only on a change. */
   #filesInstalled: string | undefined;
+  /** When members' sidebars were last bumped, and with which title. */
+  #membersTouched = { title: "", at: 0 };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -234,6 +237,11 @@ export class ChatAgent extends DurableObject<Env> {
     return uid === this.uid || this.members.has(uid);
   }
 
+  /** For what a socket sends: its person may have been removed since it opened. */
+  #requireInChat(person: Person): void {
+    if (!this.isInChat(person.uid)) throw new Error("You are no longer in this chat.");
+  }
+
   /**
    * Let a verified person's socket in, if they are in the chat, and keep the name they last
    * signed in with: the others see it, and the model reads it. A member's sidebar entry for a
@@ -268,18 +276,24 @@ export class ChatAgent extends DurableObject<Env> {
    * While a run is going, it waits in pi's inbox and is answered next.
    */
   async prompt(text: string, author: Person): Promise<void> {
-    if (!this.isInChat(author.uid)) throw new Error("You are no longer in this chat.");
+    this.#requireInChat(author);
     await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills(), this.refreshFiles()]);
-    await this.harness.submit(this.members.has() ? `${author.name}: ${text}` : text, {
+    await this.harness.submit(this.members.hasAny() ? `${author.name}: ${text}` : text, {
       entry: { kind: CHAT_MESSAGE_KIND, data: { uid: author.uid, name: author.name, text } satisfies ChatMessageData },
     });
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     void this.#touchIndexes(text).catch((error) => console.error("chat index:", errorMessage(error)));
   }
 
-  /** Move the chat up in everyone's sidebar. touchChat only names a chat still called "New chat", so the first prompt names it. */
+  /**
+   * Move the chat up in everyone's sidebar. touchChat only names a chat still called "New chat", so the first prompt names it.
+   * Members' sidebars get a new title at once, but in a busy chat are bumped at most once a minute: each is another object.
+   */
   async #touchIndexes(text: string): Promise<void> {
     const title = await this.#directory.touchChat(this.chatId, text);
+    const now = Date.now();
+    if (title === this.#membersTouched.title && now - this.#membersTouched.at < MEMBERS_TOUCH_MS) return;
+    this.#membersTouched = { title, at: now };
     await Promise.allSettled(this.members.list().map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title)));
   }
 
@@ -304,13 +318,12 @@ export class ChatAgent extends DurableObject<Env> {
     return null;
   }
 
-  /** Join by an invite's secret; the chat then shows in the new member's sidebar. */
-  async acceptInvite(secret: string, person: Person): Promise<ChatRefusal | null> {
+  /** Join by an invite's secret; the chat then shows in the new member's sidebar, under `title` from the owner's index. */
+  async acceptInvite(secret: string, person: Person, title: string): Promise<ChatRefusal | null> {
     if (person.uid === this.uid) return refuse(403, "This is your own chat.");
     const failed = await this.members.accept(secret, person);
     if (failed) return refuse(403, failed.error);
     this.sockets.broadcastPeople();
-    const title = (await this.#directory.chatTitle(this.chatId)) ?? "Shared chat";
     await this.#index(person.uid).addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
     return null;
   }
@@ -332,7 +345,7 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   async abort(by: Person): Promise<void> {
-    if (!this.isInChat(by.uid)) throw new Error("You are no longer in this chat.");
+    this.#requireInChat(by);
     await this.harness.abort();
   }
 
