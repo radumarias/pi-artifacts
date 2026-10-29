@@ -1,12 +1,13 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentEventStream } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEventStream } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
 import { isOwnedBy, isReadOnly, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
-import type { ModelChoice, ThinkingLevel } from "../shared/models.ts";
+import type { ModelChoice } from "../shared/models.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
@@ -16,14 +17,12 @@ import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
-import { checkModelChoice, modelCatalog } from "./models.ts";
+import { checkModelChoice } from "./models.ts";
 import { mcpAuthStore } from "./users.ts";
 
 const SOCKET_TAG = "chat";
 const OWNER = { owner: "chat-sockets" } as const;
 const MAX_STALE_MS = 24 * 60 * 60_000;
-/** Set once a chat's model is settled: its user's default applied, or the chat already under way. */
-const MODEL_SETTLED = "model-settled";
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
 export function chatAgentName(uid: string, chatId: string): string {
@@ -55,19 +54,30 @@ export class ChatAgent extends DurableObject<Env> {
   readonly ai = createAI({ binding: this.env.AI, gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
   readonly registry = createRegistry();
   readonly harness = new PiHarness({
-    harness: ({ storage, context, onWake }) => {
+    harness: async ({ storage, context, onWake }) => {
       const models = createModels();
       models.setProvider(this.ai.provider);
-      return Harness.open(storage, { models, registry: this.registry, onWake }, context);
+      const pi = await Harness.open(storage, { models, registry: this.registry, onWake }, context);
+      try {
+        // A new chat starts on the model its user last picked; PiHarness then finds the root and leaves it as it is.
+        if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
+          const choice = await this.#savedModel();
+          if (choice) await pi.root(context, { agent: this.#agentChange(choice) });
+        }
+      } catch (error) {
+        await pi.close(context).catch(() => {});
+        throw error;
+      }
+      return pi;
     },
-    // A user who has picked a model before starts new chats on that instead (settleModel).
-    defaults: { model: this.ai(this.env.MODEL), thinkingLevel: this.env.THINKING_LEVEL as ThinkingLevel },
+    // What a new chat starts on before its user has picked a model.
+    defaults: { model: this.ai(this.env.MODEL), thinkingLevel: this.env.THINKING_LEVEL as ModelThinkingLevel },
   });
   readonly sockets = new ChatSockets({
     events: () => this.harness.session().events(),
     prompt: (text) => this.prompt(text),
     abort: () => this.abort(),
-    setModel: (choice) => this.setModel(choice),
+    setModel: (input) => this.setModel(input),
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets);
 
@@ -115,47 +125,31 @@ export class ChatAgent extends DurableObject<Env> {
   onStart(): void {
     void this.refreshMcpTools();
     void this.refreshSkills();
-    void this.settleModel();
   }
 
-  /**
-   * Start a chat that has no messages yet on the model and effort its user last picked, once. A chat already under way
-   * keeps the model it runs on. Never rejects: on a failure the chat runs on the deployment's default.
-   */
-  readonly settleModel = singleFlight(async () => {
+  /** The user's last pick, checked again: the list of models can change between deploys. On a failure, the deployment's default. */
+  async #savedModel(): Promise<ModelChoice | null> {
     try {
-      if (await this.ctx.storage.get(MODEL_SETTLED)) return;
-      if ((await this.harness.messages()).length === 0) {
-        const saved = await this.#directory.modelChoice();
-        const choice = saved && checkModelChoice(this.#models, saved);
-        if (choice) await this.#configureModel(choice);
-      }
-      await this.ctx.storage.put(MODEL_SETTLED, true);
+      const saved = await this.#directory.modelChoice();
+      return saved && checkModelChoice(saved);
     } catch (error) {
       console.error("model:", errorMessage(error));
+      return null;
     }
-  });
+  }
 
-  /** The models a chat can pick: Anthropic's and OpenAI's through AI Gateway, and a few Workers AI ones. */
-  get #models() {
-    return modelCatalog(() => this.ai.provider);
+  #agentChange({ model, thinkingLevel }: ModelChoice): AgentChange {
+    const routed = this.ai(model);
+    return { model: { provider: routed.provider, modelId: routed.id }, thinkingLevel };
   }
 
   /** Run this chat on another model or effort, from its next model request on; it also becomes the user's default for new chats. */
   async setModel(input: { model?: unknown; thinkingLevel?: unknown }): Promise<void> {
-    const choice = checkModelChoice(this.#models, input);
+    const choice = checkModelChoice(input);
     if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
-    // Settle first, so the user's default cannot land on top of this choice.
-    await this.settleModel();
-    await this.#configureModel(choice);
-    await this.#directory.setModelChoice(choice);
-  }
-
-  async #configureModel({ model, thinkingLevel }: ModelChoice): Promise<void> {
-    const routed = this.ai(model);
     const conversation = await (await this.harness.pi()).conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT);
     if (!conversation) throw new Error("The chat's conversation is missing.");
-    await conversation.configure({ model: { provider: routed.provider, modelId: routed.id }, thinkingLevel }, BACKGROUND_CONTEXT);
+    await Promise.all([conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT), this.#directory.setModelChoice(choice)]);
   }
 
   /**
@@ -219,7 +213,7 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   async prompt(text: string): Promise<void> {
-    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills(), this.settleModel()]);
+    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills()]);
     await this.harness.submit(text);
     // touchChat only names a chat that is still called "New chat", so the first prompt names it.
     await this.#directory.touchChat(this.chatId, text);
@@ -307,7 +301,7 @@ interface ChatSession {
   events(): Promise<AgentEventStream>;
   prompt(text: string): Promise<void>;
   abort(): Promise<void>;
-  setModel(choice: { model: string; thinkingLevel?: string }): Promise<void>;
+  setModel(input: { model?: unknown; thinkingLevel?: unknown }): Promise<void>;
 }
 
 /**

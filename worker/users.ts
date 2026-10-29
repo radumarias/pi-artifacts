@@ -22,7 +22,7 @@ type SkillRow = {
   updated_at: number;
 };
 
-/** One per user: the index of their chats and artifacts, their skills and settings. The chats themselves live in ChatAgent objects. */
+/** One per user: the index of their chats and artifacts, their skills and model. The chats themselves live in ChatAgent objects. */
 export class UserDirectory extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -32,7 +32,6 @@ export class UserDirectory extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS mcp_auth (server TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS skills (name TEXT PRIMARY KEY, description TEXT NOT NULL, instructions TEXT NOT NULL, tools TEXT NOT NULL, origin TEXT NOT NULL, enabled INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS builtin_skills_off (name TEXT PRIMARY KEY);
-      CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = mcpServers(env).map((server) => server.name);
@@ -208,15 +207,11 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** The model and effort the user last picked in any chat: what their new chats start on. Checked by the chat that reads it. */
   modelChoice(): ModelChoice | null {
-    const row = this.ctx.storage.sql.exec<{ value: string }>("SELECT value FROM settings WHERE key = 'model'").toArray()[0];
-    return row ? (JSON.parse(row.value) as ModelChoice) : null;
+    return this.ctx.storage.kv.get<ModelChoice>("model") ?? null;
   }
 
   setModelChoice(choice: ModelChoice): void {
-    this.ctx.storage.sql.exec(
-      "INSERT INTO settings (key, value) VALUES ('model', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-      JSON.stringify({ model: choice.model, thinkingLevel: choice.thinkingLevel }),
-    );
+    this.ctx.storage.kv.put("model", choice);
   }
 }
 

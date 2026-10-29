@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, AgentState, EntryRecord } from "@earendil-works/pi-durable";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ChatClientMessage, ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
@@ -156,12 +156,14 @@ export function useChat(chatId: string) {
     socket.current.send(JSON.stringify(message));
     return true;
   };
+  // Stable, so the memoized model picker skips the re-render on every streamed token.
+  const setModel = useCallback((model: string, thinkingLevel?: string) => send({ type: "model", model, thinkingLevel }), []);
 
   return {
     state,
     connected,
     prompt: (text: string) => send({ type: "prompt", text }),
     abort: () => send({ type: "abort" }),
-    setModel: (model: string, thinkingLevel?: string) => send({ type: "model", model, thinkingLevel }),
+    setModel,
   };
 }
