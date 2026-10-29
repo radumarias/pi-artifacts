@@ -221,6 +221,9 @@ body.resizing iframe { pointer-events: none; }
 .composer { display: flex; flex-direction: column; gap: 8px; padding: 12px 20px 18px; }
 .composer-row { display: flex; gap: 8px; }
 .composer .attach { font-size: 18px; padding: 0 12px; }
+/* Send and Stop share a width, so the composer doesn't shift when a run starts or ends. */
+.composer .send { min-width: 64px; display: inline-flex; align-items: center; justify-content: center; }
+.composer .stop { background: var(--text); color: var(--bg); border-color: transparent; }
 /* Above the app's drop target while files are dragged: a drop here attaches them to the message. */
 .workspace.dragging .composer { position: relative; z-index: 11; outline: 2px dashed var(--accent); outline-offset: -6px; border-radius: var(--radius); background: var(--bg); }
 .pending-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
