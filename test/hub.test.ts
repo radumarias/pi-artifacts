@@ -172,22 +172,24 @@ describe("McpHub with signed-in servers", () => {
 });
 
 describe("McpHub.tools", () => {
-  // A portal whose servers change: each listing may differ from the last.
-  function portal() {
-    const listings: string[][] = [["a_search"]];
+  // A portal whose servers change: each listing is the next of `listings` (the last one repeats); an Error is thrown.
+  function portal(...listings: (string[] | Error)[]) {
     let lists = 0;
     const connection: McpConnection = {
-      listTools: async () => listings[Math.min(lists++, listings.length - 1)].map((name) => ({ name, description: "" })),
+      listTools: async () => {
+        const listing = listings[Math.min(lists++, listings.length - 1)];
+        if (listing instanceof Error) throw listing;
+        return listing.map((name) => ({ name, description: "" }));
+      },
       callTool: async () => text({}),
       close: async () => {},
     };
-    return { listings, lists: () => lists, connector: async () => connection };
+    return { lists: () => lists, connector: async () => connection };
   }
 
   it("keeps a tool list for a while, then lists the server again", async () => {
     let now = 0;
-    const server = portal();
-    server.listings.push(["a_search", "b_report"]);
+    const server = portal(["a_search"], ["a_search", "b_report"]);
     const hub = new McpHub([viewerScoped], server.connector, () => now);
     expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search"]);
     now += 60_000;
@@ -198,27 +200,18 @@ describe("McpHub.tools", () => {
   });
 
   it("lists afresh when asked, as the agent's discovery does", async () => {
-    const server = portal();
-    server.listings.push(["a_search", "b_report"]);
+    const server = portal(["a_search"], ["a_search", "b_report"]);
     const hub = new McpHub([viewerScoped], server.connector);
     await hub.tools("Prices");
-    hub.forgetTools();
+    expect((await hub.tools("Prices", { maxAgeMs: 0 })).map((t) => t.name)).toEqual(["a_search", "b_report"]);
     expect((await hub.tool("Prices", "b_report"))?.name).toBe("b_report");
+    expect(server.lists()).toBe(2);
   });
 
   it("does not keep a failed listing", async () => {
-    let fail = true;
-    const connection: McpConnection = {
-      listTools: async () => {
-        if (fail) throw new McpFailure({ code: "auth_required", server: "Prices", message: "Not signed in." });
-        return [{ name: "price", description: "" }];
-      },
-      callTool: async () => text({}),
-      close: async () => {},
-    };
-    const hub = new McpHub([viewerScoped], async () => connection);
+    const server = portal(new McpFailure({ code: "auth_required", server: "Prices", message: "Not signed in." }), ["price"]);
+    const hub = new McpHub([viewerScoped], server.connector);
     await expect(hub.tools("Prices")).rejects.toMatchObject({ error: { code: "auth_required" } });
-    fail = false;
     expect(await hub.tools("Prices")).toHaveLength(1);
   });
 });

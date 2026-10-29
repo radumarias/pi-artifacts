@@ -81,22 +81,17 @@ export class McpHub {
     return this.#servers.get(name);
   }
 
-  async tools(server: string): Promise<ToolInfo[]> {
+  /** The server's tools, from a list younger than `maxAgeMs` (0 lists afresh: for when the user asks what is there now). */
+  async tools(server: string, { maxAgeMs = TOOLS_LIFETIME_MS } = {}): Promise<ToolInfo[]> {
     const now = this.#now();
-    let entry = this.#tools.get(server);
-    if (!entry || now - entry.listedAt >= TOOLS_LIFETIME_MS) {
-      const listed = (entry = { list: this.#withConnection(server, (connection) => connection.listTools()), listedAt: now });
-      this.#tools.set(server, listed);
-      listed.list.catch(() => {
-        if (this.#tools.get(server) === listed) this.#tools.delete(server);
-      });
-    }
-    return entry.list;
-  }
-
-  /** Drop every server's tool list, so the next look lists them afresh: for when the user asks what is there now. */
-  forgetTools(): void {
-    this.#tools.clear();
+    const cached = this.#tools.get(server);
+    if (cached && now - cached.listedAt < maxAgeMs) return cached.list;
+    const fresh = { list: this.#withConnection(server, (connection) => connection.listTools()), listedAt: now };
+    this.#tools.set(server, fresh);
+    fresh.list.catch(() => {
+      if (this.#tools.get(server) === fresh) this.#tools.delete(server);
+    });
+    return fresh.list;
   }
 
   /** What the server says about itself when it connects (MCP `instructions`), if anything. */
