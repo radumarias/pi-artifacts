@@ -3,6 +3,7 @@ import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from ".
 import { errorMessage } from "../shared/util.ts";
 import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
+import { json } from "./http.ts";
 import { mcpRoute } from "./mcp-routes.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
@@ -95,7 +96,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const chat = exports.ChatAgent.getByName(name);
       if (artifact[2] === "/tools") {
         const tools = await chat.artifactTools(id, Number(url.searchParams.get("version")));
-        return Array.isArray(tools) ? json(tools) : json({ error: "No such artifact version." }, 404);
+        return tools ? json(tools) : json({ error: "No such artifact version." }, 404);
       }
       const body = await request.json<ProxyRequest>();
       if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
@@ -171,8 +172,4 @@ async function route(request: Request, env: Env): Promise<Response> {
 function demoCookie(url: URL, value: string, maxAge: number): string {
   const secure = url.protocol === "https:" ? "; Secure" : "";
   return `${DEMO_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
-}
-
-function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
-  return Response.json(body, { status, headers });
 }

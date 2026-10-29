@@ -4,12 +4,12 @@ import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
-import { isOwnedBy, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
-import { errorMessage } from "../shared/util.ts";
+import { isOwnedBy, isReadOnly, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
+import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
-import { Storage, type UserFiles } from "./storage/index.ts";
+import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
@@ -23,6 +23,12 @@ const MAX_STALE_MS = 24 * 60 * 60_000;
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
 export function chatAgentName(uid: string, chatId: string): string {
   return `${uid}:${chatId}`;
+}
+
+/** The uid and chat id a chat object's name was built from (see chatAgentName). */
+function parseChatAgentName(name: string): { uid: string; chatId: string } {
+  const [uid, chatId] = name.split(":");
+  return { uid, chatId };
 }
 
 interface ArtifactCall {
@@ -61,11 +67,8 @@ export class ChatAgent extends DurableObject<Env> {
 
   readonly scope: ChatScope;
   readonly #manifests = new Map<string, ArtifactManifest>();
-  #mcpRefresh: Promise<void> | undefined;
   /** The servers whose tools the agent has now, so a refresh reinstalls only on a change. */
   #mcpInstalled = "";
-  #files: Promise<UserFiles> | undefined;
-  #skillsRefresh: Promise<void> | undefined;
   /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
 
@@ -76,15 +79,10 @@ export class ChatAgent extends DurableObject<Env> {
       chatId: this.chatId,
       hub: this.hub,
       artifacts: this.storage.artifacts,
-      // The uid is this object's name, which the Worker sets from a verified identity.
       // Deriving the user's key is not free, so derive it once per object.
-      files: () =>
-        (this.#files ??= this.storage.userFiles(this.uid).catch((error) => {
-          this.#files = undefined;
-          throw error;
-        })),
-      onPublished: (artifact) => exports.UserDirectory.getByName(this.uid).recordArtifact({ ...artifact, chatId: this.chatId }),
-      proposeSkill: (skill) => exports.UserDirectory.getByName(this.uid).saveSkill(skill, "agent", false),
+      files: memoAsync(() => this.storage.userFiles(this.uid)),
+      onPublished: (artifact) => this.#directory.recordArtifact({ ...artifact, chatId: this.chatId }),
+      proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
     });
     this.registry.install(promptExtension);
     this.registry.install(artifactExtension(scope));
@@ -93,68 +91,68 @@ export class ChatAgent extends DurableObject<Env> {
     if (env.SANDBOX_ENABLED === "true") this.registry.install(sandboxExtension(scope));
   }
 
+  /** The uid is this object's name, which the Worker sets from a verified identity. */
   get uid(): string {
-    return this.ctx.id.name!.split(":")[0];
+    return parseChatAgentName(this.ctx.id.name!).uid;
   }
 
   get chatId(): string {
-    return this.ctx.id.name!.split(":")[1];
+    return parseChatAgentName(this.ctx.id.name!).chatId;
+  }
+
+  /** This chat's user's directory: their chats, artifacts, skills and MCP sign-ins. */
+  get #directory() {
+    return exports.UserDirectory.getByName(this.uid);
   }
 
   /** Called by Lifecycle once capabilities have started, including after an eviction. */
   onStart(): void {
     void this.refreshMcpTools();
-    this.refreshSkills().catch((error) => console.error("skills:", errorMessage(error)));
+    void this.refreshSkills();
   }
 
   /**
    * Install the user's enabled skills, built-in and their own. Runs before every
    * prompt, so a skill added, changed or turned off in any chat applies from the
-   * next message on.
+   * next message on. Never rejects: a failure is logged, and the agent keeps the skills it has.
    */
-  refreshSkills(): Promise<void> {
-    this.#skillsRefresh ??= (async () => {
-      const directory = exports.UserDirectory.getByName(this.uid);
+  readonly refreshSkills = singleFlight(async () => {
+    try {
+      const directory = this.#directory;
       const version = await directory.skillsVersion();
       if (version === this.#skillsInstalled) return;
       this.registry.install(await skills([skillSource(await directory.listSkills(), version)]));
       this.#skillsInstalled = version;
-    })().finally(() => {
-      this.#skillsRefresh = undefined;
-    });
-    return this.#skillsRefresh;
-  }
+    } catch (error) {
+      console.error("skills:", errorMessage(error));
+    }
+  });
 
   /**
    * List each MCP server's tools and install them as agent tools. Runs before
    * every prompt: tool lists are cached, and a server the user has signed in
    * to since (or whose sign-in expired) joins or leaves then.
    */
-  refreshMcpTools(): Promise<void> {
-    this.#mcpRefresh ??= (async () => {
-      const catalog = new Map<string, ServerCatalog>();
-      const unavailable = new Map<string, string>();
-      // Servers are independent: list them all at once, so a slow one delays the prompt by its own time only.
-      await Promise.all(
-        this.hub.servers().map(async (server) => {
-          try {
-            const [tools, instructions] = await Promise.all([this.hub.tools(server.name), this.hub.instructions(server.name)]);
-            catalog.set(server.name, { tools, instructions });
-          } catch (error) {
-            unavailable.set(server.name, error instanceof McpFailure ? error.error.message : errorMessage(error));
-          }
-        }),
-      );
-      const installed = JSON.stringify([[...catalog.keys()], [...unavailable.keys()]]);
-      if (installed !== this.#mcpInstalled) {
-        this.registry.install(mcpExtension(this.hub, catalog, unavailable));
-        this.#mcpInstalled = installed;
-      }
-    })().finally(() => {
-      this.#mcpRefresh = undefined;
-    });
-    return this.#mcpRefresh;
-  }
+  readonly refreshMcpTools = singleFlight(async () => {
+    const catalog = new Map<string, ServerCatalog>();
+    const unavailable = new Map<string, string>();
+    // Servers are independent: list them all at once, so a slow one delays the prompt by its own time only.
+    await Promise.all(
+      this.hub.servers().map(async (server) => {
+        try {
+          const [tools, instructions] = await Promise.all([this.hub.tools(server.name), this.hub.instructions(server.name)]);
+          catalog.set(server.name, { tools, instructions });
+        } catch (error) {
+          unavailable.set(server.name, error instanceof McpFailure ? error.error.message : errorMessage(error));
+        }
+      }),
+    );
+    const installed = JSON.stringify([[...catalog.keys()], [...unavailable.keys()]]);
+    if (installed !== this.#mcpInstalled) {
+      this.registry.install(mcpExtension(this.hub, catalog, unavailable));
+      this.#mcpInstalled = installed;
+    }
+  });
 
   /** Public servers connect as they are; a server with `auth: "oauth"` connects with this chat's user's own tokens. */
   async #connect(server: McpServerConfig) {
@@ -166,10 +164,10 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   async prompt(text: string): Promise<void> {
-    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills().catch((error) => console.error("skills:", errorMessage(error)))]);
+    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills()]);
     await this.harness.submit(text);
     // touchChat only names a chat that is still called "New chat", so the first prompt names it.
-    await exports.UserDirectory.getByName(this.uid).touchChat(this.chatId, text);
+    await this.#directory.touchChat(this.chatId, text);
   }
 
   /** Publish without the model, through the same checks as the agent's tool. Only routed when DEV_TOOLS is on. */
@@ -182,17 +180,16 @@ export class ChatAgent extends DurableObject<Env> {
     await this.harness.abort();
   }
 
-  /** The tools an artifact version declared, with their schemas: what the page's describeTool reads. */
-  async artifactTools(artifactId: string, version: number): Promise<DeclaredTool[] | McpError> {
+  /** The tools an artifact version declared, with their schemas: what the page's describeTool reads. Null for a version this chat does not have. */
+  async artifactTools(artifactId: string, version: number): Promise<DeclaredTool[] | null> {
     const manifest = await this.#manifest(artifactId, version);
-    if (!manifest) return { code: "not_in_manifest", message: "No such artifact version in this chat." };
-    const tools: DeclaredTool[] = [];
-    for (const entry of manifest.mcp?.servers ?? []) {
-      for (const tool of await this.hub.tools(entry.server).catch(() => [])) {
-        if (entry.tools.includes(tool.name)) tools.push({ ...tool, server: entry.server });
-      }
-    }
-    return tools;
+    if (!manifest) return null;
+    const perServer = await Promise.all(
+      (manifest.mcp?.servers ?? []).map(async (entry) =>
+        (await this.hub.tools(entry.server).catch(() => [])).filter((tool) => entry.tools.includes(tool.name)).map((tool) => ({ ...tool, server: entry.server })),
+      ),
+    );
+    return perServer.flat();
   }
 
   /** One MCP call from a published page. The Worker has already resolved the viewer. */
@@ -215,7 +212,7 @@ export class ChatAgent extends DurableObject<Env> {
     try {
       const info = await this.hub.tool(server, tool);
       if (!info) return fail({ code: "not_in_manifest", server, message: `${server} no longer has a tool named ${tool}.` });
-      const readOnly = info.annotations?.readOnlyHint === true;
+      const readOnly = isReadOnly(info);
 
       if (mode === "read") {
         if (!readOnly) return fail({ code: "bad_request", server, message: `${tool} is not read-only, so it cannot be watched or cached; use callTool.` });

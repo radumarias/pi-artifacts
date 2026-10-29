@@ -69,13 +69,10 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /** Bump a chat to the top. A chat still called "New chat" is named after the prompt, so the first prompt names it. */
-  touchChat(id: string, prompt?: string): void {
-    const now = Date.now();
-    this.ctx.storage.sql.exec("UPDATE chats SET updated_at = ? WHERE id = ?", now, id);
-    if (prompt) {
-      const title = prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat";
-      this.ctx.storage.sql.exec("UPDATE chats SET title = ? WHERE id = ? AND title = 'New chat'", title, id);
-    }
+  touchChat(id: string, prompt: string): void {
+    this.ctx.storage.sql.exec("UPDATE chats SET updated_at = ? WHERE id = ?", Date.now(), id);
+    const title = prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat";
+    this.ctx.storage.sql.exec("UPDATE chats SET title = ? WHERE id = ? AND title = 'New chat'", title, id);
   }
 
   listArtifacts(): ArtifactSummary[] {
@@ -110,7 +107,9 @@ export class UserDirectory extends DurableObject<Env> {
   /** The built-in skills, then the user's own, each with whether it is on. */
   listSkills(): SkillInfo[] {
     const own = this.ctx.storage.sql.exec<SkillRow>("SELECT * FROM skills ORDER BY name").toArray().map(skillInfo);
-    const builtin = BUILTIN_SKILLS.map((skill) => this.#builtinInfo(skill, own));
+    const off = new Set(this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM builtin_skills_off").toArray().map((row) => row.name));
+    const ownOn = new Set(own.filter((mine) => mine.enabled).map((mine) => mine.name));
+    const builtin = BUILTIN_SKILLS.map((skill) => builtinInfo(skill, off.has(skill.name), ownOn.has(skill.name)));
     return [...builtin, ...own];
   }
 
@@ -122,14 +121,9 @@ export class UserDirectory extends DurableObject<Env> {
 
   getBuiltinSkill(name: string): SkillInfo | null {
     const builtin = builtinSkill(name);
-    const own = this.getSkill(name);
-    return builtin ? this.#builtinInfo(builtin, own ? [own] : []) : null;
-  }
-
-  #builtinInfo(skill: SkillInput, own: readonly SkillInfo[]): SkillInfo {
-    const off = this.ctx.storage.sql.exec("SELECT 1 FROM builtin_skills_off WHERE name = ?", skill.name).toArray().length > 0;
-    const replaced = own.some((mine) => mine.name === skill.name && mine.enabled);
-    return { ...skill, origin: "builtin", enabled: !off, updatedAt: 0, ...(replaced && { replaced: true as const }) };
+    if (!builtin) return null;
+    const off = this.ctx.storage.sql.exec("SELECT 1 FROM builtin_skills_off WHERE name = ?", name).toArray().length > 0;
+    return builtinInfo(builtin, off, this.getSkill(name)?.enabled === true);
   }
 
   /**
@@ -221,4 +215,9 @@ function skillInfo(row: SkillRow): SkillInfo {
     enabled: row.enabled === 1,
     updatedAt: row.updated_at,
   };
+}
+
+/** A built-in skill as the user sees it: `replaced` when one of their own, turned on, has its name. */
+function builtinInfo(skill: SkillInput, off: boolean, replaced: boolean): SkillInfo {
+  return { ...skill, origin: "builtin", enabled: !off, updatedAt: 0, ...(replaced && { replaced: true as const }) };
 }

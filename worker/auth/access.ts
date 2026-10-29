@@ -4,6 +4,7 @@
  * the signature against the team's published keys, plus issuer, audience and
  * expiry, before trusting who the user is.
  */
+import { fromBase64 } from "../../shared/util.ts";
 
 export interface AccessClaims {
   /** Stable id of the user within the Access organization. */
@@ -111,5 +112,5 @@ function decodeJson(segment: string): unknown {
 
 function base64UrlDecode(segment: string): Uint8Array<ArrayBuffer> {
   const base64 = segment.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(segment.length / 4) * 4, "=");
-  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return fromBase64(base64);
 }
