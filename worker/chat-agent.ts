@@ -16,6 +16,7 @@ import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { mcpAuthStore } from "./users.ts";
 
 const SOCKET_TAG = "chat";
+const OWNER = { owner: "chat-sockets" } as const;
 const MAX_STALE_MS = 24 * 60 * 60_000;
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
@@ -253,17 +254,14 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     if (!new URL(request.url).pathname.endsWith("/ws")) return undefined;
     const pair = new WebSocketPair();
     this.lifecycle.sockets.accept(pair[1], [SOCKET_TAG]);
+    pair[1].serializeAttachment(OWNER);
     void this.#attach(pair[1]);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /**
-   * A chat socket has a stream from accept (or, after hibernation, from
-   * onStart). The platform's list covers sockets still open but not yet
-   * attached; a socket being closed may no longer be in it.
-   */
+  /** Lifecycle leaves ownership to each capability: a chat socket carries this capability's attachment, which survives hibernation. */
   #owns(ws: WebSocket): boolean {
-    return this.#streams.has(ws) || this.lifecycle.sockets.get(SOCKET_TAG).includes(ws);
+    return (ws.deserializeAttachment() as typeof OWNER | null)?.owner === OWNER.owner;
   }
 
   async onWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<boolean> {

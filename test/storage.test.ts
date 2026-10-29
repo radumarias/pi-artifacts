@@ -62,6 +62,13 @@ describe("UserFiles", () => {
     ]);
   });
 
+  it("returns the path it stored, which is the normalised one", async () => {
+    const { r2: bucket, calls } = new FakeBucket();
+    const files = new UserFiles(bucket, "ada", await deriveUserKey(MASTER, "ada"));
+    expect(await files.put(" uploads/a.csv ", "x")).toBe("uploads/a.csv");
+    expect(calls[0].key).toBe("users/ada/files/uploads/a.csv");
+  });
+
   it("cannot be steered into another user's folder", async () => {
     const { r2: bucket, calls } = new FakeBucket();
     const files = new UserFiles(bucket, "ada", await deriveUserKey(MASTER, "ada"));

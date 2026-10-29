@@ -267,10 +267,17 @@ describe("per-user MCP sign-in", () => {
 
 describe("applyAuthChange", () => {
   const record: McpAuthRecord = { redirectUrl: "r", state: "s", verifier: "v", tokens: { access_token: "a", token_type: "Bearer" } };
-  it("sets, clears and replaces in one step", () => {
-    expect(applyAuthChange(record, { set: { state: "s2" }, clear: ["verifier"] } satisfies McpAuthChange)).toEqual({ ...record, state: "s2", verifier: undefined });
-    expect(applyAuthChange(record, { replace: { redirectUrl: "x" } })).toEqual({ redirectUrl: "x" });
+  it("applies one change at a time", () => {
+    expect(applyAuthChange(record, { set: { state: "s2" } })).toEqual({ ...record, state: "s2" });
+    expect(applyAuthChange(record, { clear: ["verifier", "state"] })).toEqual({ redirectUrl: "r", tokens: record.tokens });
+    expect(applyAuthChange(record, { clear: "all" })).toEqual({});
     expect(applyAuthChange(record, { clearTokensIf: { access_token: "other", token_type: "Bearer" } }).tokens).toEqual(record.tokens);
     expect(applyAuthChange(record, { clearTokensIf: { access_token: "a", token_type: "Bearer" } }).tokens).toBeUndefined();
+  });
+
+  it("keeps a client registration only for a sign-in to the same redirect URL", () => {
+    const client = { client_id: "c" };
+    expect(applyAuthChange({ ...record, client }, { restart: "r" })).toEqual({ client, redirectUrl: "r" });
+    expect(applyAuthChange({ ...record, client }, { restart: "elsewhere" })).toEqual({ redirectUrl: "elsewhere" });
   });
 });

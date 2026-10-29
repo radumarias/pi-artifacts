@@ -3,14 +3,21 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 // Links open in a new tab. react-markdown renders no raw HTML and its default
-// URL check drops javascript: and other unsafe links; this keeps only http(s),
-// mailto and paths in this app (such as a sign-in link), since the text comes
-// from the model and from MCP servers.
-const SAFE_LINK = /^(https?:|mailto:|\/(?!\/))/i;
+// URL check drops javascript: and other unsafe links; this keeps only links
+// that resolve to http(s) or mailto, since the text comes from the model and
+// from MCP servers. Paths in this app (such as a sign-in link) resolve to http(s).
+const SAFE_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+function isSafeLink(href: string): boolean {
+  try {
+    return SAFE_PROTOCOLS.has(new URL(href, "https://app.invalid/").protocol);
+  } catch {
+    return false;
+  }
+}
 
 const components: Components = {
   a: ({ href, children }) =>
-    href && SAFE_LINK.test(href) ? (
+    href && isSafeLink(href) ? (
       <a href={href} target="_blank" rel="noreferrer noopener">
         {children}
       </a>
