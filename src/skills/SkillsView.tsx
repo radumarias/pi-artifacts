@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, type SkillInfo } from "../../shared/skills.ts";
+import { useState, type ChangeEvent, type FormEvent } from "react";
+import { MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, splitTools, type SkillInfo } from "../../shared/skills.ts";
+import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
 const ORIGIN_LABEL: Record<SkillInfo["origin"], string> = { builtin: "built-in", user: "yours", agent: "proposed in a chat" };
@@ -19,27 +20,20 @@ const EMPTY: Draft = { name: "", description: "", instructions: "", tools: "" };
  * SKILL.md, edited and deleted. A skill the agent proposed waits here, off,
  * until the user reviews it and turns it on.
  */
-export function SkillsView({ onChange }: { onChange: () => void }) {
-  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+export function SkillsView({ skills, reload }: { skills: SkillInfo[] | null; reload: () => void }) {
   const [error, setError] = useState<string | null>(null);
   // The skill being edited: a draft, and the name it had (undefined for a new one).
   const [editing, setEditing] = useState<{ draft: Draft; existing?: string } | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    api.skills().then(setSkills, (e: Error) => setError(e.message));
-  }, []);
-  useEffect(load, [load]);
-
   const run = async (action: () => Promise<unknown>) => {
     setError(null);
     try {
       await action();
-      load();
-      onChange();
+      reload();
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorMessage(e));
       return false;
     }
   };
@@ -49,9 +43,11 @@ export function SkillsView({ onChange }: { onChange: () => void }) {
     if (!editing) return;
     const { draft, existing } = editing;
     const enabled = skills?.find((s) => s.name === existing)?.enabled ?? true;
-    const tools = draft.tools.split(/[\s,]+/).filter(Boolean);
+    const tools = splitTools(draft.tools);
     if (await run(() => api.saveSkill({ name: draft.name, description: draft.description, instructions: draft.instructions, tools, enabled }))) setEditing(null);
   };
+  const edit = (field: keyof Draft) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setEditing((current) => current && { ...current, draft: { ...current.draft, [field]: e.target.value } });
 
   const importMarkdown = async (event: FormEvent) => {
     event.preventDefault();
@@ -104,7 +100,7 @@ export function SkillsView({ onChange }: { onChange: () => void }) {
             <input
               value={editing.draft.name}
               disabled={editing.existing !== undefined}
-              onChange={(e) => setEditing({ ...editing, draft: { ...editing.draft, name: e.target.value } })}
+              onChange={edit("name")}
               placeholder="weekly-report"
             />
           </label>
@@ -114,7 +110,7 @@ export function SkillsView({ onChange }: { onChange: () => void }) {
               rows={2}
               maxLength={MAX_SKILL_DESCRIPTION}
               value={editing.draft.description}
-              onChange={(e) => setEditing({ ...editing, draft: { ...editing.draft, description: e.target.value } })}
+              onChange={edit("description")}
               placeholder="Use when the user asks for …"
             />
           </label>
@@ -125,13 +121,13 @@ export function SkillsView({ onChange }: { onChange: () => void }) {
               rows={12}
               maxLength={MAX_SKILL_INSTRUCTIONS}
               value={editing.draft.instructions}
-              onChange={(e) => setEditing({ ...editing, draft: { ...editing.draft, instructions: e.target.value } })}
+              onChange={edit("instructions")}
               placeholder={"1. …\n2. …\n\nGuardrails:\n- Never …"}
             />
           </label>
           <label>
             Tools it works with <small>(agent tool names, separated by spaces; optional)</small>
-            <input value={editing.draft.tools} onChange={(e) => setEditing({ ...editing, draft: { ...editing.draft, tools: e.target.value } })} placeholder="files_read run_python" />
+            <input value={editing.draft.tools} onChange={edit("tools")} placeholder="files_read run_python" />
           </label>
           <div className="skill-form-actions">
             <button type="submit" className="primary">

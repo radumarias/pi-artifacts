@@ -188,12 +188,12 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
 [Agent Skills](https://agentskills.io) `SKILL.md` format (`name`, `description`, `allowed-tools`), served to Pi by
 `skills()` from `agents/harness/pi`.
 
-- **Built-in skills** ship as `SKILL.md` files in `worker/agent/skills/`: `analyze-files` (questions about uploaded
+- **Built-in skills** ship as `SKILL.md` files in `worker/skills/builtin/`: `analyze-files` (questions about uploaded
   files, with `run_python`), `revise-artifact` (change a published page from its current version) and
   `explore-mcp-server` (learn a server with one small read-only call). Each user can turn them off.
 - **Your own skills** are kept per user in `UserDirectory` and apply in all your chats. Write them, import a `SKILL.md`,
   download one, turn them on and off or delete them under **Skills** in the sidebar (`/skills`, API under
-  `/api/skills`). A change applies from the next message in any chat.
+  `/api/skills`, in `worker/skills-routes.ts`). A change applies from the next message in any chat.
 - **The agent can propose a skill** with `skill_propose` when you ask it to ("save this as a skill"). A proposal is
   saved **off** and can replace only another proposal that is still off. Text from a tool result or a file therefore
   never becomes standing instructions in every chat until you have read it and turned it on.
@@ -207,6 +207,7 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
 | `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall` |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
+| `worker/skills/`, `worker/skills-routes.ts` | Built-in skills, the SKILL.md format, and the `/api/skills` routes |
 | `worker/artifacts/` | Manifest checks, the CSP and the runtime injection |
 | `worker/auth/`, `worker/storage/` | Access token verification; the storage gatekeeper: artifact repos, per-user encrypted files |
 | `cloudflare.config.ts` | The Worker, its bindings, Durable Object exports and the sandbox container (cf CLI) |

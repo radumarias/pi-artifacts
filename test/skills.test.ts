@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { checkSkill, MAX_SKILL_INSTRUCTIONS, SkillError, type SkillInfo } from "../shared/skills.ts";
-import { BUILTIN_SKILLS, formatSkillMarkdown, isBuiltinSkill, parseSkillMarkdown, skillBody, skillSource, skillsFingerprint } from "../worker/agent/skills.ts";
+import { checkSkill, MAX_SKILL_INSTRUCTIONS, SkillError, splitTools, type SkillInfo } from "../shared/skills.ts";
+import { skillBody, skillSource } from "../worker/agent/skills.ts";
+import { BUILTIN_SKILLS, builtinSkill, formatSkillFile, parseSkillFile } from "../worker/skills/index.ts";
 
 const skill = { name: "weekly-report", description: "Use when the user asks for the weekly report.", instructions: "1. Read the data.\n2. Publish.", tools: ["files_read", "run_python"] };
 const info = (over: Partial<SkillInfo> = {}): SkillInfo => ({ ...skill, origin: "user", enabled: true, updatedAt: 1, ...over });
@@ -33,6 +34,10 @@ describe("checkSkill", () => {
     expect(() => checkSkill({ ...skill, ...change })).toThrow(SkillError);
   });
 
+  it("splits a tool list on spaces and commas", () => {
+    expect(splitTools(" files_read, run_python\nrun_bash ")).toEqual(["files_read", "run_python", "run_bash"]);
+  });
+
   it("rejects what is not an object", () => {
     expect(() => checkSkill(null)).toThrow(SkillError);
     expect(() => checkSkill("weekly-report")).toThrow(SkillError);
@@ -41,24 +46,24 @@ describe("checkSkill", () => {
 
 describe("SKILL.md", () => {
   it("round-trips through format and parse", () => {
-    expect(parseSkillMarkdown(formatSkillMarkdown(skill))).toEqual(skill);
+    expect(parseSkillFile(formatSkillFile(skill))).toEqual(skill);
   });
 
   it("quotes a description YAML would misread", () => {
     const tricky = { ...skill, description: "Use when: the user says \"report\" # weekly", tools: [] };
-    const markdown = formatSkillMarkdown(tricky);
+    const markdown = formatSkillFile(tricky);
     expect(markdown).not.toContain("allowed-tools");
-    expect(parseSkillMarkdown(markdown)).toEqual(tricky);
+    expect(parseSkillFile(markdown)).toEqual(tricky);
   });
 
   it("reads allowed-tools as a space- or comma-separated string, or a list", () => {
     const head = "---\nname: a\ndescription: Use when.\n";
-    expect(parseSkillMarkdown(`${head}allowed-tools: files_read, run_python\n---\nGo.`).tools).toEqual(["files_read", "run_python"]);
-    expect(parseSkillMarkdown(`${head}allowed-tools:\n  - files_read\n---\nGo.`).tools).toEqual(["files_read"]);
+    expect(parseSkillFile(`${head}allowed-tools: files_read, run_python\n---\nGo.`).tools).toEqual(["files_read", "run_python"]);
+    expect(parseSkillFile(`${head}allowed-tools:\n  - files_read\n---\nGo.`).tools).toEqual(["files_read"]);
   });
 
   it("accepts CRLF line ends and a byte-order mark", () => {
-    expect(parseSkillMarkdown("﻿---\r\nname: a\r\ndescription: Use when.\r\n---\r\nGo.").name).toBe("a");
+    expect(parseSkillFile("﻿---\r\nname: a\r\ndescription: Use when.\r\n---\r\nGo.").name).toBe("a");
   });
 
   it.each([
@@ -67,7 +72,7 @@ describe("SKILL.md", () => {
     ["no name", "---\ndescription: Use when.\n---\nGo."],
     ["no body", "---\nname: a\ndescription: Use when.\n---\n"],
   ])("rejects %s", (_, markdown) => {
-    expect(() => parseSkillMarkdown(markdown)).toThrow(SkillError);
+    expect(() => parseSkillFile(markdown)).toThrow(SkillError);
   });
 });
 
@@ -76,14 +81,15 @@ describe("built-in skills", () => {
     expect(BUILTIN_SKILLS.length).toBeGreaterThan(0);
     for (const builtin of BUILTIN_SKILLS) expect(checkSkill(builtin)).toEqual(builtin);
     expect(new Set(BUILTIN_SKILLS.map((s) => s.name)).size).toBe(BUILTIN_SKILLS.length);
-    expect(isBuiltinSkill(BUILTIN_SKILLS[0].name)).toBe(true);
-    expect(isBuiltinSkill("weekly-report")).toBe(false);
+    expect(builtinSkill(BUILTIN_SKILLS[0].name)).toBe(BUILTIN_SKILLS[0]);
+    expect(builtinSkill("weekly-report")).toBeUndefined();
   });
 });
 
 describe("skillSource", () => {
   it("lists and loads only enabled skills", async () => {
-    const source = skillSource([info(), info({ name: "draft", origin: "agent", enabled: false })]);
+    const source = skillSource([info(), info({ name: "draft", origin: "agent", enabled: false })], "v1");
+    expect(source.fingerprint).toBe("v1");
     expect((await source.list()).map((d) => d.name)).toEqual(["weekly-report"]);
     expect(await source.load("draft")).toBeNull();
     const loaded = await source.load("weekly-report");
@@ -96,11 +102,5 @@ describe("skillSource", () => {
     expect(skillBody({ ...skill, tools: [] })).toBe(skill.instructions);
   });
 
-  it("changes its fingerprint when an enabled skill changes, and only then", () => {
-    const base = skillsFingerprint([info(), info({ name: "draft", enabled: false })]);
-    expect(skillsFingerprint([info(), info({ name: "draft", enabled: false, updatedAt: 9 })])).toBe(base);
-    expect(skillsFingerprint([info({ updatedAt: 2 })])).not.toBe(base);
-    expect(skillsFingerprint([info(), info({ name: "draft" })])).not.toBe(base);
-    expect(skillSource([info()]).fingerprint).toBe(skillsFingerprint([info()]));
-  });
+
 });

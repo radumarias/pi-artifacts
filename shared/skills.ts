@@ -30,6 +30,8 @@ export interface SkillInput {
  * or proposed by the agent in a chat (saved off until the user turns it on).
  */
 export type SkillOrigin = "builtin" | "user" | "agent";
+/** The origins a saved skill can have. */
+export type SavedSkillOrigin = Exclude<SkillOrigin, "builtin">;
 
 /** A skill as GET /api/skills lists it. */
 export interface SkillInfo extends SkillInput {
@@ -39,13 +41,22 @@ export interface SkillInfo extends SkillInput {
   updatedAt: number;
 }
 
+/** A failed skill change, with what to fix: RPC keeps an error's message but not its class. */
+export type SkillResult = SkillInfo | { error: string };
+
+/** A tool list as people write it: names separated by spaces or commas. */
+export function splitTools(list: string): string[] {
+  return list.split(/[\s,]+/).filter(Boolean);
+}
+
 /** A skill's fields trimmed, with the tool list deduplicated. Throws with what to fix. */
 export function checkSkill(input: unknown): SkillInput {
   const value = (input ?? {}) as Partial<Record<keyof SkillInput, unknown>>;
   const name = typeof value.name === "string" ? value.name.trim() : "";
   const description = typeof value.description === "string" ? value.description.trim().replace(/\s+/g, " ") : "";
   const instructions = typeof value.instructions === "string" ? value.instructions.trim() : "";
-  const tools = Array.isArray(value.tools) ? value.tools : value.tools === undefined ? [] : null;
+  const listed = Array.isArray(value.tools) ? value.tools : value.tools === undefined ? [] : null;
+  const tools = listed && [...new Set(listed.map((tool) => (typeof tool === "string" ? tool.trim() : "")))];
   const problems: string[] = [];
   if (!SKILL_NAME_PATTERN.test(name) || name.length > MAX_SKILL_NAME) {
     problems.push(`The name must be up to ${MAX_SKILL_NAME} lowercase letters, digits and single hyphens, e.g. "weekly-report".`);
@@ -54,11 +65,10 @@ export function checkSkill(input: unknown): SkillInput {
   else if (description.length > MAX_SKILL_DESCRIPTION) problems.push(`The description is over ${MAX_SKILL_DESCRIPTION} characters.`);
   if (!instructions) problems.push("Give the skill instructions.");
   else if (instructions.length > MAX_SKILL_INSTRUCTIONS) problems.push(`The instructions are over ${MAX_SKILL_INSTRUCTIONS} characters.`);
-  if (tools === null || tools.some((tool) => typeof tool !== "string" || !TOOL_NAME_PATTERN.test(tool.trim()))) {
-    problems.push("Tools must be a list of tool names (letters, digits, _ and -).");
-  } else if (new Set(tools).size > MAX_SKILL_TOOLS) problems.push(`A skill can name up to ${MAX_SKILL_TOOLS} tools.`);
-  if (problems.length) throw new SkillError(problems.join(" "));
-  return { name, description, instructions, tools: [...new Set((tools as string[]).map((tool) => tool.trim()))] };
+  if (!tools || tools.some((tool) => !TOOL_NAME_PATTERN.test(tool))) problems.push("Tools must be a list of tool names (letters, digits, _ and -).");
+  else if (tools.length > MAX_SKILL_TOOLS) problems.push(`A skill can name up to ${MAX_SKILL_TOOLS} tools.`);
+  if (problems.length || !tools) throw new SkillError(problems.join(" "));
+  return { name, description, instructions, tools };
 }
 
 /** A skill that cannot be saved as given; the message says why. */

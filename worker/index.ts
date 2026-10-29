@@ -1,14 +1,12 @@
 import { exports } from "cloudflare:workers";
 import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
-import { SkillError, SKILL_NAME_PATTERN, type SkillInput } from "../shared/skills.ts";
-import { formatSkillMarkdown, parseSkillMarkdown } from "./agent/skills.ts";
 import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { mcpRoute } from "./mcp-routes.ts";
+import { skillsRoute } from "./skills-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
-import type { UserDirectory } from "./users.ts";
 
 export { ChatAgent } from "./chat-agent.ts";
 export { Sandbox } from "./sandbox.ts";
@@ -131,7 +129,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());
 
-  const skills = await skillsRoute(request, directory);
+  const skills = await skillsRoute(request, uid);
   if (skills) return skills;
 
   // A chat's Durable Object is named after the verified uid, so a user can only ever reach their own chats.
@@ -168,52 +166,6 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   return json({ error: "Not found" }, 404);
-}
-
-/**
- * The user's skills, which apply in all their chats:
- *   GET    /api/skills                    built-in and own skills
- *   POST   /api/skills                    save one: {name, description, instructions, tools, enabled?} or {markdown, enabled?}
- *   PATCH  /api/skills/:name              {enabled}: turn one on or off, built-in ones included
- *   DELETE /api/skills/:name              delete one of the user's own
- *   GET    /api/skills/:name/SKILL.md     one skill as a SKILL.md file
- */
-async function skillsRoute(request: Request, directory: DurableObjectStub<UserDirectory>): Promise<Response | null> {
-  const { pathname: path } = new URL(request.url);
-  const method = request.method;
-  const answer = (result: { error: string } | object | null) => (result && "error" in result ? json(result, 400) : json(result ?? {}));
-  if (path === "/api/skills" && method === "GET") return json(await directory.listSkills());
-  if (path === "/api/skills" && method === "POST") {
-    const body = await request.json<Record<string, unknown>>().catch(() => null);
-    if (!body || typeof body !== "object") return json({ error: "Expected a skill as JSON." }, 400);
-    // The directory checks every field; a SKILL.md is parsed here, where the YAML parser is.
-    let skill: SkillInput;
-    try {
-      skill = typeof body.markdown === "string" ? parseSkillMarkdown(body.markdown) : (body as unknown as SkillInput);
-    } catch (error) {
-      if (error instanceof SkillError) return json({ error: error.message }, 400);
-      throw error;
-    }
-    return answer(await directory.saveSkill(skill, "user", body.enabled !== false));
-  }
-  const one = path.match(/^\/api\/skills\/([a-z0-9-]+)(\/SKILL\.md)?$/);
-  if (!one || !SKILL_NAME_PATTERN.test(one[1])) return null;
-  const name = one[1];
-  if (one[2] && method === "GET") {
-    const skill = (await directory.listSkills()).find((s) => s.name === name);
-    if (!skill) return json({ error: `No skill named "${name}".` }, 404);
-    return new Response(formatSkillMarkdown(skill), {
-      headers: { "content-type": "text/markdown; charset=utf-8", "content-disposition": `attachment; filename="${name}.SKILL.md"` },
-    });
-  }
-  if (one[2]) return null;
-  if (method === "PATCH") {
-    const body = await request.json<{ enabled?: unknown }>().catch(() => null);
-    if (typeof body?.enabled !== "boolean") return json({ error: "Expected {enabled: true | false}." }, 400);
-    return answer(await directory.setSkillEnabled(name, body.enabled));
-  }
-  if (method === "DELETE") return answer(await directory.deleteSkill(name));
-  return null;
 }
 
 function demoCookie(url: URL, value: string, maxAge: number): string {
