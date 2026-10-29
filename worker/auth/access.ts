@@ -112,5 +112,10 @@ function decodeJson(segment: string): unknown {
 
 function base64UrlDecode(segment: string): Uint8Array<ArrayBuffer> {
   const base64 = segment.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(segment.length / 4) * 4, "=");
-  return fromBase64(base64);
+  try {
+    return fromBase64(base64);
+  } catch {
+    // atob's own error would make a garbled token a 500 instead of a rejected sign-in.
+    throw new AccessError("Malformed token.");
+  }
 }

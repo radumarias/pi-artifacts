@@ -95,6 +95,17 @@ describe("ArtifactBroker watches", () => {
     expect(t.events(2)[0].result.cache.revalidating).toBe(false); // replayed from the first watch's result
   });
 
+  it("starts polling when a polling watch joins one that does not poll", async () => {
+    const t = setup((_, now) => fresh(now));
+    t.send({ type: "watch", watchId: 1, server: "S", tool: "t", input: {}, cache: undefined });
+    await t.flush();
+    t.send({ type: "watch", watchId: 2, server: "S", tool: "t", input: {}, refetchInterval: 30_000 });
+    await t.flush();
+    expect(t.requests).toHaveLength(1); // the first result is still fresh
+    await t.advance(30_000);
+    expect(t.requests).toHaveLength(2);
+  });
+
   it("pauses while hidden and catches up when visible", async () => {
     const t = setup((_, now) => fresh(now));
     t.send({ type: "watch", watchId: 1, server: "S", tool: "t", input: {}, refetchInterval: 30_000 });

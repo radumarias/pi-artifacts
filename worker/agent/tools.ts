@@ -114,11 +114,12 @@ export function filesExtension(scope: ChatScope): Extension {
       }),
       defineTool({
         name: "files_read",
-        description: "Read one of the user's files as UTF-8 text (first 100 KB).",
+        description: `Read one of the user's files as UTF-8 text (the first ${MAX_TOOL_TEXT.toLocaleString("en")} characters).`,
         parameters: Type.Object({ path: Type.String() }),
         replay: "safe",
         execute: async (args) => {
-          const object = await (await scope.files()).get(args.path, { offset: 0, length: 100_000 });
+          // Only what clip() can show: at most 4 bytes per character.
+          const object = await (await scope.files()).get(args.path, { offset: 0, length: MAX_TOOL_TEXT * 4 });
           if (!object) throw new Error(`No file "${args.path}".`);
           return { output: text(clip(await object.text())) };
         },
