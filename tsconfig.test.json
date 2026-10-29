@@ -27,6 +27,7 @@
     "src/chat/useChat.ts",
     "src/api.ts",
     "src/chat/Markdown.tsx",
+    "src/chat/Thinking.tsx",
     "shared",
     "worker/mcp",
     "worker/agent/mcp.ts",
