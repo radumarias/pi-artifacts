@@ -101,6 +101,4 @@ describe("skillSource", () => {
   it("leaves the tools line out when a skill names none", () => {
     expect(skillBody({ ...skill, tools: [] })).toBe(skill.instructions);
   });
-
-
 });

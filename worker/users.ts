@@ -1,6 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ArtifactSummary, ChatSummary } from "../shared/protocol.ts";
-import { checkSkill, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
+import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
 import { applyAuthChange, type McpAuthChange, type McpAuthRecord, type McpAuthStore } from "./mcp/oauth.ts";
 import { mcpServers } from "./mcp/servers.ts";
@@ -148,6 +148,10 @@ export class UserDirectory extends DurableObject<Env> {
     if (!existing && this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM skills").one().n >= MAX_USER_SKILLS) {
       return { error: `You have ${MAX_USER_SKILLS} skills, the most there can be; delete one first.` };
     }
+    const pending = "SELECT COUNT(*) AS n FROM skills WHERE origin = 'agent' AND enabled = 0";
+    if (origin === "agent" && !existing && this.ctx.storage.sql.exec<{ n: number }>(pending).one().n >= MAX_SKILL_PROPOSALS) {
+      return { error: `The user has ${MAX_SKILL_PROPOSALS} proposals waiting for review; ask them to review those first.` };
+    }
     const on = origin === "user" && enabled;
     const now = Date.now();
     this.ctx.storage.sql.exec(
@@ -165,12 +169,20 @@ export class UserDirectory extends DurableObject<Env> {
     return { ...skill, origin, enabled: on, updatedAt: now };
   }
 
-  /** Turn a skill on or off; built-in ones included. */
-  setSkillEnabled(name: string, enabled: boolean): SkillResult {
+  /**
+   * Turn a skill on or off; built-in ones included. `seen` is the `updatedAt` of the
+   * version the user read: turning on a skill that changed since (a proposal the
+   * agent replaced while the user reviewed it) is refused, so they read it again.
+   */
+  setSkillEnabled(name: string, enabled: boolean, seen?: number): SkillResult {
     if (builtinSkill(name)) {
       if (enabled) this.ctx.storage.sql.exec("DELETE FROM builtin_skills_off WHERE name = ?", name);
       else this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name);
     } else if (enabled) {
+      const current = this.ctx.storage.sql.exec<{ updated_at: number }>("SELECT updated_at FROM skills WHERE name = ?", name).toArray()[0];
+      if (current && seen !== undefined && current.updated_at !== seen) {
+        return { error: `The skill "${name}" changed since you read it; read it again before turning it on.` };
+      }
       // Turning a proposal on makes it the user's own: the agent can no longer replace it.
       this.ctx.storage.sql.exec("UPDATE skills SET enabled = 1, origin = 'user', updated_at = ? WHERE name = ?", Date.now(), name);
     } else {
@@ -180,9 +192,10 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   deleteSkill(name: string): SkillResult | null {
-    if (builtinSkill(name)) return { error: `"${name}" is a built-in skill; turn it off instead.` };
+    // A user's skill can share a name with a built-in one added after it was saved: it can still be deleted.
     const deleted = this.ctx.storage.sql.exec("DELETE FROM skills WHERE name = ?", name).rowsWritten;
-    return deleted ? null : { error: `No skill named "${name}".` };
+    if (deleted) return null;
+    return builtinSkill(name) ? { error: `"${name}" is a built-in skill; turn it off instead.` } : { error: `No skill named "${name}".` };
   }
 }
 

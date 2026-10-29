@@ -13,6 +13,8 @@ export const MAX_SKILL_TOOLS = 30;
 export const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 /** Per user, not counting the built-in ones. */
 export const MAX_USER_SKILLS = 50;
+/** Proposals from the agent waiting for review, within MAX_USER_SKILLS: one chat cannot fill the user's list. */
+export const MAX_SKILL_PROPOSALS = 10;
 
 /** What a skill is made of, whoever wrote it. */
 export interface SkillInput {

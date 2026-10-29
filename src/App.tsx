@@ -135,6 +135,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PublishedArtifact | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
@@ -143,7 +144,13 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const chatRef = useRef<HTMLElement>(null);
 
   const loadSkills = useCallback(() => {
-    api.skills().then(setSkills, () => {});
+    api.skills().then(
+      (list) => {
+        setSkills(list);
+        setSkillsError(null);
+      },
+      (e: Error) => setSkillsError(e.message),
+    );
   }, []);
   const refresh = useCallback(() => {
     api.chats().then(setChats, () => {});
@@ -277,7 +284,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       <main className="main" ref={chatRef}>
         {showSkills ? (
           <ErrorBoundary what="skills">
-            <SkillsView skills={skills} reload={loadSkills} />
+            <SkillsView skills={skills} loadError={skillsError} reload={loadSkills} />
           </ErrorBoundary>
         ) : chatId ? (
           <ErrorBoundary key={chatId} what="this chat">
