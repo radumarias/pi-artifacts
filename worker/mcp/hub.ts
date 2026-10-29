@@ -1,5 +1,6 @@
 import type { CallToolResult, McpError, ToolInfo } from "../../shared/protocol.ts";
-import { canonicalJson, derivePayload } from "../../shared/canonical.ts";
+import { callIdentity, derivePayload } from "../../shared/canonical.ts";
+import { errorMessage } from "../../shared/util.ts";
 import type { McpServerConfig } from "./servers.ts";
 
 /** A tool result as an MCP server returns it. */
@@ -70,6 +71,10 @@ export class McpHub {
     return [...this.#servers.values()];
   }
 
+  server(name: string): McpServerConfig | undefined {
+    return this.#servers.get(name);
+  }
+
   async tools(server: string): Promise<ToolInfo[]> {
     let tools = this.#tools.get(server);
     if (!tools) {
@@ -110,7 +115,7 @@ export class McpHub {
   async read(server: string, tool: string, input: unknown, options: { staleMs: number; viewer: string }): Promise<ReadResult> {
     const config = this.#config(server);
     const scope = config.cacheScope === "shared" ? "*" : options.viewer;
-    const key = `${scope}\u0000${server}\u0000${tool}\u0000${canonicalJson(input ?? {})}`;
+    const key = `${scope}\u0000${callIdentity(server, tool, input)}`;
     const now = this.#now();
 
     const hit = this.#cache.get(key);
@@ -144,15 +149,17 @@ export class McpHub {
   }
 
   #config(server: string): McpServerConfig {
-    const config = this.#servers.get(server);
+    const config = this.server(server);
     if (!config) throw new McpFailure({ code: "server_not_connected", server, message: `No MCP server named "${server}" is connected to this chat.` });
     return config;
   }
 
   #store(key: string, entry: CacheEntry): void {
+    // Entries are re-inserted on every store, so the map is ordered oldest first: expire from the front.
     const now = this.#now();
     for (const [k, e] of this.#cache) {
-      if (now - e.storedAt > CACHE_LIFETIME_MS) this.#cache.delete(k);
+      if (now - e.storedAt <= CACHE_LIFETIME_MS) break;
+      this.#cache.delete(k);
     }
     this.#cache.delete(key);
     this.#cache.set(key, entry);
@@ -162,9 +169,10 @@ export class McpHub {
   }
 
   /**
-   * Run `fn` on the server's connection. A failure that is not the tool's own
-   * answer drops the connection (its MCP session may have expired) and tries
-   * once more on a fresh one.
+   * Run `fn` on the server's connection. Any failure drops the connection, so
+   * the next call connects afresh (its MCP session may have expired, or the
+   * user has signed in since). A failure that is not already an McpFailure is
+   * tried once more on a fresh connection.
    */
   async #withConnection<T>(server: string, fn: (connection: McpConnection) => Promise<T>): Promise<T> {
     const config = this.#config(server);
@@ -173,19 +181,11 @@ export class McpHub {
       try {
         return await fn(await connection);
       } catch (error) {
-        const signIn = error instanceof McpFailure && error.error.code === "auth_required";
-        // A connection that needs a sign-in is dropped, so the next call after signing in connects afresh.
-        if (signIn && this.#connections.get(server) === connection) this.#connections.delete(server);
-        if (error instanceof McpFailure) throw error;
         if (this.#connections.get(server) === connection) this.#connections.delete(server);
         connection.then((c) => c.close()).catch(() => {});
+        if (error instanceof McpFailure) throw error;
         if (attempt === 0) continue;
-        throw new McpFailure({
-          code: "server_unavailable",
-          server,
-          retryable: true,
-          message: `${server} did not answer: ${error instanceof Error ? error.message : String(error)}`,
-        });
+        throw new McpFailure({ code: "server_unavailable", server, retryable: true, message: `${server} did not answer: ${errorMessage(error)}` });
       }
     }
   }

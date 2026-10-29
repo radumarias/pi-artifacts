@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ArtifactMeta } from "../../shared/protocol.ts";
+import type { ArtifactView } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 import { ArtifactFrame } from "./ArtifactFrame.tsx";
 
@@ -7,13 +7,13 @@ interface Props {
   artifactId: string;
   /** The newest version this chat knows of; a change reloads the metadata and shows it. */
   latestKnown?: number;
-  uid: string | undefined;
+  uid: string;
   onClose?: () => void;
   fullPage?: boolean;
 }
 
 export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage }: Props) {
-  const [meta, setMeta] = useState<(Omit<ArtifactMeta, "chatId"> & { isOwner: boolean }) | null>(null);
+  const [meta, setMeta] = useState<ArtifactView | null>(null);
   const [version, setVersion] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);

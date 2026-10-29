@@ -2,12 +2,11 @@ import { Type } from "@earendil-works/pi-ai";
 import { exports } from "cloudflare:workers";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
-import type { ArtifactManifest, ArtifactMeta } from "../../shared/protocol.ts";
+import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type ToolInfo } from "../../shared/protocol.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
 import type { ArtifactStore, UserFiles } from "../storage/index.ts";
-import type { ToolInfo } from "../../shared/protocol.ts";
 
 /** What the tools need from the chat they run in. */
 export interface ChatScope {
@@ -17,7 +16,7 @@ export interface ChatScope {
   artifacts: ArtifactStore;
   /** This chat's user's files: scoped to the uid and encrypted with that user's key. */
   files: () => Promise<UserFiles>;
-  onPublished(artifact: { id: string; title: string; latest: number; updatedAt: number }): Promise<void>;
+  onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
 }
 
 const MAX_TOOL_TEXT = 16_000;
@@ -45,7 +44,7 @@ export interface ServerCatalog {
  * could not be listed (down, or the user has not signed in) are named in the
  * prompt with the reason, so the agent can tell the user.
  */
-export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, unavailable = new Map<string, string>()): Extension {
+export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, unavailable: Map<string, string>): Extension {
   const tools = [];
   for (const [server, { tools: serverTools }] of catalog) {
     for (const tool of serverTools) {
@@ -77,8 +76,7 @@ export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, u
       section("mcp_servers", () => {
         const connected =
           "MCP servers connected to this chat. Pages declare them by these exact names. Use the servers and tools the user names; " +
-          "when they don't, pick by the tool descriptions. A server whose tools start with portal_ is a Cloudflare MCP portal: its " +
-          "portal_* tools list the servers behind it and turn them on, and may answer with a link the user must open to sign in to one; " +
+          "when they don't, pick by the tool descriptions. A tool may answer with a link the user must open (to sign in, for example); " +
           `pass such links on as they are.\n${servers.join("\n")}`;
         if (unavailable.size === 0) return connected;
         const missing = [...unavailable].map(([name, reason]) => `- "${name}": ${reason}`);
@@ -179,11 +177,16 @@ export function sandboxExtension(scope: ChatScope): Extension {
   });
 }
 
+export interface PublishInput {
+  title: string;
+  html: string;
+  artifactId?: string;
+  mcp?: NonNullable<ArtifactManifest["mcp"]>["servers"];
+  message?: string;
+}
+
 /** Check the declaration, store a new version and index it for the user. Throws with what to fix. */
-export async function publishArtifact(
-  scope: ChatScope,
-  input: { title: string; html: string; artifactId?: string; mcp?: { server: string; tools: string[] }[]; message?: string },
-): Promise<ArtifactMeta> {
+export async function publishArtifact(scope: ChatScope, input: PublishInput): Promise<ArtifactMeta> {
   if (new TextEncoder().encode(input.html).byteLength > MAX_HTML_BYTES) throw new Error("The page is over 2 MB; summarise the data instead of inlining it.");
   const manifest: ArtifactManifest = input.mcp?.length ? { mcp: { servers: input.mcp } } : {};
   const problems = await checkManifest(scope.hub, manifest);
@@ -204,7 +207,7 @@ export async function publishArtifact(
 /** An artifact this chat published. Anything else reads as missing. */
 async function ownArtifact(scope: ChatScope, id: string): Promise<ArtifactMeta> {
   const meta = await scope.artifacts.readMeta(id);
-  if (!meta || meta.chatId !== scope.chatId || meta.ownerUid !== scope.uid) throw new Error(`No artifact ${id} in this chat.`);
+  if (!meta || !isOwnedBy(meta, scope.uid, scope.chatId)) throw new Error(`No artifact ${id} in this chat.`);
   return meta;
 }
 
@@ -213,7 +216,7 @@ export function artifactExtension(scope: ChatScope): Extension {
     name: "artifacts",
     tools: [
       defineTool({
-        name: "artifact_publish",
+        name: PUBLISH_TOOL,
         description:
           "Publish an HTML page as an artifact the user sees in the preview panel. Pass artifact_id to publish a new version of an artifact " +
           "you published in this chat; omit it to create a new one. Declare in `mcp` every server and tool the page calls; the page can call nothing else.",
@@ -234,7 +237,7 @@ export function artifactExtension(scope: ChatScope): Extension {
           const meta = await publishArtifact(scope, { title: args.title, html: args.html, artifactId: args.artifact_id, mcp: args.mcp, message: args.message });
           return {
             output: text(`Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.`),
-            details: { artifactId: meta.id, version: meta.latest, title: meta.title },
+            details: { artifactId: meta.id, version: meta.latest, title: meta.title } satisfies PublishedDetails,
           };
         },
       }),
@@ -248,7 +251,7 @@ export function artifactExtension(scope: ChatScope): Extension {
           const version = args.version ?? meta.latest;
           const html = await scope.artifacts.readHtml(meta.id, version);
           if (html === null) throw new Error(`Artifact ${meta.id} has no version ${version}.`);
-          const declared = JSON.stringify(meta.versions.find((v) => v.version === version)?.manifest ?? {});
+          const declared = JSON.stringify(manifestOf(meta, version) ?? {});
           return { output: text(`Version ${version} of ${meta.latest}, manifest ${declared}:\n\n${html}`) };
         },
       }),

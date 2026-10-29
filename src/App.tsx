@@ -22,23 +22,18 @@ function usePath(): [string, (path: string) => void] {
 
 export function App() {
   const [path, navigate] = usePath();
-  const [me, setMe] = useState<Me | null | undefined>(undefined);
-  const [auth, setAuth] = useState<Me["auth"]>("access");
+  // Who is signed in, and how this deployment signs people in. Undefined until the Worker answers.
+  const [session, setSession] = useState<{ me: Me | null; auth: Me["auth"] }>();
 
   useEffect(() => {
-    api.me().then(
-      (result) => {
-        setAuth(result.auth);
-        setMe(result.me);
-      },
-      () => setMe(null),
-    );
+    api.me().then(setSession, () => setSession({ me: null, auth: "access" }));
   }, []);
 
-  if (me === undefined) return null;
+  if (!session) return null;
+  const { me } = session;
   // Deployed, Cloudflare Access signs people in before the app loads; a 401 here means the session lapsed.
-  if (me === null && auth === "access") return <AccessExpired />;
-  if (me === null) return <SignIn onSignedIn={(uid) => setMe({ uid, auth: "demo" })} />;
+  if (me === null && session.auth === "access") return <AccessExpired />;
+  if (me === null) return <SignIn onSignedIn={(uid) => setSession({ me: { uid, auth: "demo" }, auth: "demo" })} />;
 
   const shared = path.match(/^\/a\/([a-z0-9]+)$/);
   if (shared) {
@@ -63,7 +58,7 @@ export function App() {
           return;
         }
         await api.signOut();
-        setMe(null);
+        setSession({ me: null, auth: me.auth });
         navigate("/");
       }}
     />
@@ -108,7 +103,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (uid: string) => void }) {
           Continue
         </button>
         {error && <p className="form-error">{error}</p>}
-        <p className="hint">Demo sign-in: no password, so anyone who types the same name sees the same chats.</p>
+        <p>Demo sign-in: no password, so anyone who types the same name sees the same chats.</p>
       </form>
     </main>
   );
@@ -171,7 +166,7 @@ function Workspace({ uid, label, chatId, navigate, onSignOut }: WorkspaceProps) 
 
   return (
     <div
-      className={["workspace", preview && "with-preview", collapsed && "collapsed"].filter(Boolean).join(" ")}
+      className={preview ? "workspace with-preview" : "workspace"}
       style={
         {
           "--sidebar-w": `${collapsed ? RAIL_WIDTH : sidebarWidth}px`,
@@ -223,7 +218,7 @@ function Workspace({ uid, label, chatId, navigate, onSignOut }: WorkspaceProps) 
             ))}
           </nav>
           <h3>Files</h3>
-          <nav className="files">
+          <nav>
             {files.map((f) => (
               <span key={f.path} title={`${f.size} bytes`}>
                 {f.path}

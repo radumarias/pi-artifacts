@@ -7,7 +7,6 @@ import { api } from "../api.ts";
 export interface RunningTool {
   toolCallId: string;
   toolName: string;
-  args: unknown;
   output: string;
 }
 
@@ -74,7 +73,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
         next = { ...next, entries: addEntry(next.entries, event.entry) };
         break;
       case "tool_execution_start":
-        if (!event.parentToolCallId) next = { ...next, tools: [...next.tools, { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args, output: "" }] };
+        if (!event.parentToolCallId) next = { ...next, tools: [...next.tools, { toolCallId: event.toolCallId, toolName: event.toolName, output: "" }] };
         break;
       case "tool_execution_update": {
         const out = event.output;

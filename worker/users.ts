@@ -1,15 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import type { ChatSummary } from "../shared/protocol.ts";
+import type { ArtifactSummary, ChatSummary } from "../shared/protocol.ts";
 import type { McpAuthRecord, McpAuthStore } from "./mcp/oauth.ts";
 import { mcpServers } from "./mcp/servers.ts";
-
-export interface ArtifactSummary {
-  id: string;
-  title: string;
-  chatId: string;
-  latest: number;
-  updatedAt: number;
-}
 
 /** One user's OAuth state for one MCP server. `uid` must come from a verified identity. */
 export function mcpAuthStore(uid: string, server: string): McpAuthStore {
@@ -60,12 +52,12 @@ export class UserDirectory extends DurableObject<Env> {
     return this.ctx.storage.sql.exec("SELECT 1 FROM chats WHERE id = ?", id).toArray().length > 0;
   }
 
-  /** Bump a chat to the top; name it after its first prompt. */
-  touchChat(id: string, firstPrompt?: string): void {
+  /** Bump a chat to the top. A chat still called "New chat" is named after the prompt, so the first prompt names it. */
+  touchChat(id: string, prompt?: string): void {
     const now = Date.now();
     this.ctx.storage.sql.exec("UPDATE chats SET updated_at = ? WHERE id = ?", now, id);
-    if (firstPrompt) {
-      const title = firstPrompt.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat";
+    if (prompt) {
+      const title = prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat";
       this.ctx.storage.sql.exec("UPDATE chats SET title = ? WHERE id = ? AND title = 'New chat'", title, id);
     }
   }

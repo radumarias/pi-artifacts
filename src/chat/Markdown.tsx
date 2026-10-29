@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -22,11 +23,13 @@ const components: Components = {
   ),
 };
 
+const plugins = [remarkGfm];
+
 /** An assistant message as Markdown (GitHub flavour: tables, task lists, strikethrough, autolinked URLs). */
-export function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown remarkPlugins={plugins} components={components}>
       {text}
     </ReactMarkdown>
   );
-}
+});

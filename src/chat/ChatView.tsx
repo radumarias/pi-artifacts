@@ -1,15 +1,12 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { PUBLISH_TOOL, type PublishedDetails } from "../../shared/protocol.ts";
 import { useChat, type RunningTool } from "./useChat.ts";
 import { Linkified } from "./Linkified.tsx";
 import { Markdown } from "./Markdown.tsx";
 
-export interface PublishedArtifact {
-  artifactId: string;
-  version: number;
-  title: string;
-}
+export type PublishedArtifact = PublishedDetails;
 
 interface Props {
   chatId: string;
@@ -21,7 +18,7 @@ interface Props {
 function published(entry: EntryRecord): PublishedArtifact | undefined {
   if (entry.kind !== "pi.tool-result") return undefined;
   const message = entry.model?.[0] as ToolResultMessage | undefined;
-  if (message?.toolName !== "artifact_publish" || message.isError) return undefined;
+  if (message?.toolName !== PUBLISH_TOOL || message.isError) return undefined;
   const details = message.details as Partial<PublishedArtifact> | undefined;
   return details?.artifactId && details.version ? (details as PublishedArtifact) : undefined;
 }
@@ -67,7 +64,6 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
     if (!text || !prompt(text)) return;
     following.current = true;
     setDraft("");
-    onActivity();
     // Clicking Send moves focus to the button; keep typing where you were.
     input.current?.focus();
   };
@@ -91,7 +87,7 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
         {state.entries.map((entry) => (
           <Entry key={entry.id} entry={entry} onOpen={onArtifact} />
         ))}
-        {state.partial && <Assistant message={state.partial} streaming />}
+        {state.partial && <Assistant message={state.partial} />}
         {state.tools.map((tool) => (
           <Running key={tool.toolCallId} tool={tool} />
         ))}
@@ -123,7 +119,8 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
   );
 }
 
-function Entry({ entry, onOpen }: { entry: EntryRecord; onOpen: (artifact: PublishedArtifact) => void }) {
+// Entries never change once committed, so streaming a new reply re-renders only the reply, not the whole history.
+const Entry = memo(function Entry({ entry, onOpen }: { entry: EntryRecord; onOpen: (artifact: PublishedArtifact) => void }) {
   const message = entry.model?.[0];
   if (entry.kind === "pi.user" && message?.role === "user") return <User message={message} />;
   if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;
@@ -143,7 +140,7 @@ function Entry({ entry, onOpen }: { entry: EntryRecord; onOpen: (artifact: Publi
     return <ToolResult message={message} />;
   }
   return null;
-}
+});
 
 /** A message's blocks, skipping any slot a stream has not filled yet. */
 function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {
@@ -155,9 +152,9 @@ function User({ message }: { message: UserMessage }) {
   return <div className="bubble user">{text}</div>;
 }
 
-function Assistant({ message, streaming }: { message: AssistantMessage; streaming?: boolean }) {
+function Assistant({ message }: { message: AssistantMessage }) {
   return (
-    <div className={streaming ? "assistant streaming" : "assistant"}>
+    <div className="assistant">
       {blocks(message.content).map((block, i) => {
         if (block.type === "text")
           return block.text ? (
@@ -190,7 +187,7 @@ function ToolResult({ message }: { message: ToolResultMessage }) {
 
 function Running({ tool }: { tool: RunningTool }) {
   return (
-    <div className="tool-call running">
+    <div className="tool-call">
       <span className="spinner" /> {tool.toolName}
       {tool.output && <pre>{tool.output.slice(-600)}</pre>}
     </div>

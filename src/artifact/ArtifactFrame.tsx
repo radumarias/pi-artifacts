@@ -7,8 +7,8 @@ interface Props {
   artifactId: string;
   version: number;
   manifest: ArtifactManifest;
-  /** The signed-in viewer, or undefined; keys the browser cache. */
-  uid: string | undefined;
+  /** The signed-in viewer; keys the browser cache, so accounts on one browser never share results. */
+  uid: string;
   title: string;
 }
 
@@ -34,7 +34,7 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Pro
       version,
       transport: (call) => api.proxy(artifactId, call),
       describe: () => api.artifactTools(artifactId, version),
-      cacheNamespace: uid ?? "anonymous",
+      cacheNamespace: uid,
       storage: browserStorage(),
     });
 
