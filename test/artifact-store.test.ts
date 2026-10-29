@@ -1,13 +1,13 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ArtifactMeta } from "../shared/protocol.ts";
 import { ArtifactStore } from "../worker/storage/artifacts.ts";
+import { FakeBucket, listen } from "./fakes.ts";
 
 // The store's Git code runs for real here: isomorphic-git pushes over HTTP to
 // git http-backend, standing in for Cloudflare Artifacts. The binding itself is
@@ -129,30 +129,17 @@ function serveGit(root: string, artifacts: () => FakeArtifacts): Server {
   });
 }
 
-class FakeBucket {
-  readonly objects = new Map<string, string>();
-  async get(key: string) {
-    const value = this.objects.get(key);
-    return value === undefined ? null : { text: async () => value, json: async () => JSON.parse(value) };
-  }
-  async put(key: string, value: string) {
-    this.objects.set(key, value);
-  }
-  async delete(key: string) {
-    this.objects.delete(key);
-  }
-}
-
 let root: string;
 let server: Server;
 let artifacts: FakeArtifacts;
 let bucket: FakeBucket;
 let store: ArtifactStore;
+let origin: string;
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "artifacts-"));
   server = serveGit(root, () => artifacts);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  origin = await listen(server);
 });
 
 afterAll(() => {
@@ -161,10 +148,9 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  const { port } = server.address() as AddressInfo;
-  artifacts = new FakeArtifacts(root, `http://127.0.0.1:${port}`);
+  artifacts = new FakeArtifacts(root, origin);
   bucket = new FakeBucket();
-  store = new ArtifactStore(artifacts, bucket);
+  store = new ArtifactStore(artifacts, bucket.r2);
 });
 
 const publish = (input: Partial<Parameters<ArtifactStore["publishVersion"]>[0]> = {}) =>

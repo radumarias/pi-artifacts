@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath, PathError } from "../worker/storage/paths.ts";
 import { UserFiles } from "../worker/storage/user-files.ts";
+import { FakeBucket } from "./fakes.ts";
 
 const MASTER = Buffer.from(new Uint8Array(32).fill(7)).toString("base64");
 
@@ -48,29 +49,10 @@ describe("deriveUserKey", () => {
   });
 });
 
-/** Records what UserFiles asks of R2. */
-function fakeBucket(objects: string[] = []) {
-  const calls: { op: string; key?: string; prefix?: string; ssecKey?: unknown }[] = [];
-  const bucket = {
-    list: async (o: { prefix: string }) => {
-      calls.push({ op: "list", prefix: o.prefix });
-      return { objects: objects.filter((k) => k.startsWith(o.prefix)).map((key) => ({ key, size: 1, uploaded: new Date(0) })), truncated: false };
-    },
-    get: async (key: string, o: { ssecKey: unknown }) => {
-      calls.push({ op: "get", key, ssecKey: o.ssecKey });
-      return null;
-    },
-    put: async (key: string, _body: unknown, o: { ssecKey: unknown }) => {
-      calls.push({ op: "put", key, ssecKey: o.ssecKey });
-    },
-  };
-  return { bucket: bucket as unknown as R2Bucket, calls };
-}
-
 describe("UserFiles", () => {
   it("builds every key under the user's own folder and sends the user's key", async () => {
     const key = await deriveUserKey(MASTER, "ada");
-    const { bucket, calls } = fakeBucket();
+    const { r2: bucket, calls } = new FakeBucket();
     const files = new UserFiles(bucket, "ada", key);
     await files.put("uploads/a.csv", "x");
     await files.get("uploads/a.csv");
@@ -81,7 +63,7 @@ describe("UserFiles", () => {
   });
 
   it("cannot be steered into another user's folder", async () => {
-    const { bucket, calls } = fakeBucket();
+    const { r2: bucket, calls } = new FakeBucket();
     const files = new UserFiles(bucket, "ada", await deriveUserKey(MASTER, "ada"));
     for (const path of ["../bob/files/a", "/users/bob/files/a", "uploads/../../bob/files/a"]) {
       await expect(files.get(path)).rejects.toThrow(PathError);
@@ -91,7 +73,7 @@ describe("UserFiles", () => {
   });
 
   it("lists only the user's folder, even when another uid starts with the same letters", async () => {
-    const { bucket, calls } = fakeBucket(["users/ada/files/a.txt", "users/adam/files/secret.txt", "users/ada/files/uploads/b.txt"]);
+    const { r2: bucket, calls } = new FakeBucket(["users/ada/files/a.txt", "users/adam/files/secret.txt", "users/ada/files/uploads/b.txt"]);
     const files = new UserFiles(bucket, "ada", await deriveUserKey(MASTER, "ada"));
     expect((await files.list()).map((e) => e.path)).toEqual(["a.txt", "uploads/b.txt"]);
     expect((await files.list("uploads")).map((e) => e.path)).toEqual(["uploads/b.txt"]);
