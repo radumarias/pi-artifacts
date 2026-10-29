@@ -7,6 +7,8 @@ import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
+import { FileRefError, filesIndex, MAX_SANDBOX_BYTES, resolveFile, resolveRefs, sandboxLayout } from "./file-refs.ts";
+import type { FileEntry } from "../storage/user-files.ts";
 import { normalisePath, PathError, type ArtifactStore, type UserFiles } from "../storage/index.ts";
 
 /** What the tools need from the chat they run in. */
@@ -97,31 +99,57 @@ export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, u
   });
 }
 
+/** `path` as a stored path, or undefined when it cannot be one ("data/", a name with characters paths do not allow). */
+function literalPath(path: string): string | undefined {
+  try {
+    return normalisePath(path);
+  } catch (error) {
+    if (error instanceof PathError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The one file `ref` names, read: the path itself when there is such a file,
+ * else the file the user's list matches it to (see resolveFile).
+ */
+async function getFile(files: UserFiles, ref: string, range?: { offset: number; length: number }): Promise<{ path: string; object: R2ObjectBody }> {
+  const literal = literalPath(ref);
+  const direct = literal === undefined ? null : await files.get(literal, range);
+  if (direct) return { path: literal!, object: direct };
+  const path = resolveFile(await files.list(), ref);
+  const object = await files.get(path, range);
+  if (!object) throw new Error(`No file "${path}".`);
+  return { path, object };
+}
+
 export function filesExtension(scope: ChatScope): Extension {
   return defineExtension({
     name: "files",
     tools: [
       defineTool({
         name: "files_list",
-        description: "List the user's files (uploads and files your scripts saved), with sizes.",
-        parameters: Type.Object({ folder: Type.Optional(Type.String({ description: "Only files in this folder, e.g. uploads." })) }),
+        description: "List the user's files (uploads, kept in their folders under uploads/, and files your scripts saved), with sizes.",
+        parameters: Type.Object({ folder: Type.Optional(Type.String({ description: "Only files in this folder, e.g. uploads or uploads/reports." })) }),
         replay: "safe",
         execute: async (args) => {
           const entries = await (await scope.files()).list(args.folder ?? "");
           const lines = entries.map((e) => `${e.path}\t${e.size} bytes`);
-          return { output: text(lines.length ? lines.join("\n") : "No files.") };
+          return { output: text(clip(lines.length ? lines.join("\n") : "No files.")) };
         },
       }),
       defineTool({
         name: "files_read",
-        description: `Read one of the user's files as UTF-8 text (the first ${MAX_TOOL_TEXT.toLocaleString("en")} characters).`,
+        description:
+          `Read one of the user's files as UTF-8 text (the first ${MAX_TOOL_TEXT.toLocaleString("en")} characters). ` +
+          "Takes its path, or its name or the end of its path when only one file matches.",
         parameters: Type.Object({ path: Type.String() }),
         replay: "safe",
         execute: async (args) => {
           // Only what clip() can show: at most 4 bytes per character.
-          const object = await (await scope.files()).get(args.path, { offset: 0, length: MAX_TOOL_TEXT * 4 });
-          if (!object) throw new Error(`No file "${args.path}".`);
-          return { output: text(clip(await object.text())) };
+          const { path, object } = await getFile(await scope.files(), args.path, { offset: 0, length: MAX_TOOL_TEXT * 4 });
+          const content = clip(await object.text());
+          return { output: text(path === args.path ? content : `${path}:\n${content}`) };
         },
       }),
       defineTool({
@@ -137,33 +165,71 @@ export function filesExtension(scope: ChatScope): Extension {
   });
 }
 
+/** The prompt's list of the user's files (see filesIndex), installed again whenever their files change. */
+export function filesIndexExtension(entries: readonly FileEntry[]): Extension {
+  const index = filesIndex(entries);
+  return defineExtension({ name: "files-index", sections: [section("user_files", () => index)] });
+}
+
 const SANDBOX_FILES =
-  "Files you name are copied from the user's files into ./files/; anything written to ./out/ (top level, not subfolders) is saved back to the user's files under out/. " +
+  "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
+  "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/report.csv is ./files/out/report.csv). " +
+  "Anything written to ./out/ (top level, not subfolders) is saved back to the user's files under out/. " +
   "Each run starts with fresh ./files and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
   "Returns exit code, stdout and stderr.";
+
+/**
+ * The files `refs` name, read, keyed by where they go under ./files/. A ref
+ * is a path, a file's name or the end of its path, or a folder for every file
+ * in it. The user's list is read once; a path past the end of it is still
+ * tried as it is.
+ */
+async function sandboxInputs(files: UserFiles, refs: readonly string[]): Promise<SandboxFile[]> {
+  if (refs.length === 0) return [];
+  const entries = await files.list();
+  const paths = new Set<string>();
+  const unlisted = new Map<string, FileRefError>();
+  for (const ref of new Set(refs)) {
+    try {
+      for (const path of resolveRefs(entries, [ref])) paths.add(path);
+    } catch (error) {
+      const literal = literalPath(ref);
+      if (!(error instanceof FileRefError) || literal === undefined) throw error;
+      paths.add(literal);
+      unlisted.set(literal, error);
+    }
+  }
+  const layout = sandboxLayout([...paths]);
+  const sizes = new Map(entries.map((e) => [e.path, e.size]));
+  const listedBytes = [...paths].reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
+  if (listedBytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(listedBytes));
+  const objects = await Promise.all(
+    [...layout].map(async ([name, path]) => {
+      const object = await files.get(path);
+      if (!object) throw unlisted.get(path) ?? new Error(`No file "${path}".`);
+      return { name, object };
+    }),
+  );
+  const bytes = objects.reduce((sum, { object }) => sum + object.size, 0);
+  if (bytes > MAX_SANDBOX_BYTES) {
+    await Promise.all(objects.map(({ object }) => object.body.cancel()));
+    throw new Error(tooMuch(bytes));
+  }
+  return Promise.all(objects.map(async ({ name, object }) => ({ name, bytes: await object.arrayBuffer() })));
+}
+
+function tooMuch(bytes: number): string {
+  return `Those files hold ${(bytes / 1024 / 1024).toFixed(1)} MB; one run takes at most ${MAX_SANDBOX_BYTES / 1024 / 1024} MB. Pass fewer.`;
+}
 
 /**
  * Copy the named user files in, run in this chat's sandbox, save ./out back to
  * the user's files. The files go through the user's UserFiles, so they are
  * decrypted on the way in and encrypted with the user's key on the way out.
  */
-async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
+async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
-  const names = new Map<string, string>();
-  for (const path of new Set((paths ?? []).map((p) => normalisePath(p)))) {
-    // Inputs land side by side in ./files/, so two paths with the same file name would overwrite each other.
-    const name = path.split("/").pop()!;
-    const other = names.get(name);
-    if (other !== undefined) throw new Error(`"${other}" and "${path}" would both be ./files/${name}; pass them in separate runs.`);
-    names.set(name, path);
-  }
-  const inputs: SandboxFile[] = await Promise.all(
-    [...names].map(async ([name, path]) => {
-      const object = await files.get(path);
-      if (!object) throw new Error(`No file "${path}".`);
-      return { name, bytes: await object.arrayBuffer() };
-    }),
-  );
+  const inputs = await sandboxInputs(files, refs ?? []);
   const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
   const toSave = new Map<string, ArrayBuffer>();
   const skipped = [];
@@ -180,7 +246,9 @@ async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: 
     }
   }
   const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
+  const copied = inputs.map((input) => `./files/${input.name}`);
   const report = [
+    copied.length && `copied in: ${copied.length > 20 ? `${copied.slice(0, 20).join(", ")} and ${copied.length - 20} more` : copied.join(", ")}`,
     `exit code ${result.exitCode}`,
     `stdout:\n${result.stdout}`,
     result.stderr && `stderr:\n${result.stderr}`,
@@ -190,7 +258,11 @@ async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: 
   return { output: text(clip(report.filter(Boolean).join("\n\n"))), isError: result.exitCode !== 0 };
 }
 
-const inputFiles = Type.Optional(Type.Array(Type.String(), { description: "Paths of the user's files to copy in." }));
+const inputFiles = Type.Optional(
+  Type.Array(Type.String(), {
+    description: "The user's files to copy in: paths, a file's name or the end of its path when only one file matches, or a folder for every file in it.",
+  }),
+);
 
 export function sandboxExtension(scope: ChatScope): Extension {
   return defineExtension({

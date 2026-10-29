@@ -95,6 +95,28 @@ body.resizing iframe { pointer-events: none; }
 .sidebar nav a:hover, .sidebar nav a.active { background: var(--surface-2); }
 .sidebar small { color: var(--muted); }
 .sidebar .upload { padding: 5px 8px; color: var(--accent); cursor: pointer; font-size: 14px; }
+.sidebar .upload:has(input:disabled) { opacity: 0.5; cursor: default; }
+.upload-actions { display: flex; flex-wrap: wrap; }
+.upload-status { padding: 2px 8px; overflow-wrap: anywhere; }
+.upload-status.error { color: var(--error); }
+.file-folder > summary { padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-folder > summary:hover { background: var(--surface-2); }
+.file-folder > :not(summary) { display: block; margin-left: 12px; }
+/* A drag of files over the app: one target over everything, and the preview's iframe must not take the drop. */
+.drop-target {
+  position: fixed;
+  inset: 8px;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  color: var(--accent);
+  font-size: 18px;
+  pointer-events: none;
+}
+.workspace.dragging iframe { pointer-events: none; }
 .sidebar footer { margin-top: auto; display: flex; align-items: center; justify-content: space-between; padding-top: 12px; color: var(--muted); }
 
 .main { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }

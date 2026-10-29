@@ -62,10 +62,14 @@ export const api = {
   deleteSkill: (skill: SkillInfo) => request<object>(skillPath(skill), { method: "DELETE" }),
   skillMarkdownUrl: (skill: SkillInfo) => `${skillPath(skill)}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),
-  upload: (file: File) => {
+  /** One request's worth of files (see uploadBatches), each with its name or its path inside a picked folder. */
+  upload: (files: readonly { file: File; path: string }[]) => {
     const form = new FormData();
-    form.set("file", file);
-    return request<{ path: string }>("/api/files", { method: "POST", body: form });
+    for (const { file, path } of files) {
+      form.append("file", file);
+      form.append("path", path);
+    }
+    return request<{ paths: string[] }>("/api/files", { method: "POST", body: form });
   },
   chatSocketUrl: (chatId: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/chats/${chatId}/ws`,
 };
