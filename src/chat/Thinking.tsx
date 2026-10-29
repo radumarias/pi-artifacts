@@ -34,7 +34,7 @@ export function nextWord(current?: string, random = Math.random): string {
 }
 
 /**
- * Pulsing dots and a rotating status word with a shimmer. Screen readers hear "Working" once, not every word;
+ * A spinning spark and a rotating status word with a shimmer. Screen readers hear "Working" once, not every word;
  * with reduced motion the word stays put and styles.css stops the animations.
  */
 export function Thinking() {
@@ -46,16 +46,26 @@ export function Thinking() {
   }, []);
   return (
     <div className="thinking" role="status">
-      <span className="thinking-dots" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </span>
+      <Spark />
       {/* Keyed so each new word fades in and starts its shimmer from the left. */}
       <span key={word} className="thinking-word" aria-hidden="true">
         {word}
       </span>
       <span className="sr-only">Working…</span>
     </div>
+  );
+}
+
+/**
+ * Twelve rounded rays in two sets of six that grow and shrink in turn while the whole spark turns, so it spins and
+ * changes shape at once. Drawn in currentColor; styles.css sets the accent and the motion.
+ */
+function Spark() {
+  const ray = (angle: number) => <line key={angle} x1="12" y1="3" x2="12" y2="21" transform={`rotate(${angle} 12 12)`} />;
+  return (
+    <svg className="thinking-spark" viewBox="0 0 24 24" aria-hidden="true">
+      <g className="thinking-spark-long">{[0, 60, 120].map(ray)}</g>
+      <g className="thinking-spark-short">{[30, 90, 150].map(ray)}</g>
+    </svg>
   );
 }

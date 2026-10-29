@@ -37,6 +37,8 @@ describe("thinking indicator", () => {
     const html = renderToStaticMarkup(<Thinking />);
     expect(html).toContain('role="status"');
     expect(html).toContain('<span class="sr-only">Working…</span>');
+    expect(html).toContain('<svg class="thinking-spark" viewBox="0 0 24 24" aria-hidden="true">');
+    expect(html.match(/<line /g)).toHaveLength(6);
     expect(html).toMatch(new RegExp(`<span class="thinking-word" aria-hidden="true">(${THINKING_WORDS.join("|")})</span>`));
   });
 });
