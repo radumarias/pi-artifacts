@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import type { ChatSummary } from "../shared/protocol.ts";
-import type { SkillInfo } from "../shared/skills.ts";
+import type { ChatSummary, PublishedDetails } from "../shared/protocol.ts";
+import { isActive, type SkillInfo } from "../shared/skills.ts";
+import { errorMessage } from "../shared/util.ts";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
-import { ChatView, type PublishedArtifact } from "./chat/ChatView.tsx";
+import { ChatView } from "./chat/ChatView.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { ResizeHandle, useStoredState } from "./layout.tsx";
 import { SkillsView } from "./skills/SkillsView.tsx";
@@ -90,7 +91,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (uid: string) => void }) {
     try {
       onSignedIn((await api.signIn(name)).uid);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorMessage(e));
     }
   };
   return (
@@ -136,7 +137,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
   const [skillsError, setSkillsError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<PublishedArtifact | null>(null);
+  const [preview, setPreview] = useState<PublishedDetails | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.
@@ -152,13 +153,16 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       (e: Error) => setSkillsError(e.message),
     );
   }, []);
+  const loadChats = useCallback(() => void api.chats().then(setChats, () => {}), []);
+  const loadArtifacts = useCallback(() => void api.artifacts().then(setArtifacts, () => {}), []);
+  const loadFiles = useCallback(() => void api.files().then(setFiles, () => {}), []);
+  // After a run: it may have named the chat, published, saved files (run_python) or proposed a skill.
   const refresh = useCallback(() => {
-    api.chats().then(setChats, () => {});
-    api.artifacts().then(setArtifacts, () => {});
-    api.files().then(setFiles, () => {});
-    // The agent may have proposed a skill.
+    loadChats();
+    loadArtifacts();
+    loadFiles();
     loadSkills();
-  }, [loadSkills]);
+  }, [loadChats, loadArtifacts, loadFiles, loadSkills]);
   useEffect(refresh, [refresh]);
   useEffect(() => setPreview(null), [chatId]);
 
@@ -167,22 +171,22 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
 
   const newChat = async () => {
     const chat = await api.createChat();
-    refresh();
+    loadChats();
     navigate(`/c/${chat.id}`);
   };
 
   const onArtifact = useCallback(
-    (artifact: PublishedArtifact) => {
+    (artifact: PublishedDetails) => {
       setPreview(artifact);
-      refresh();
+      loadArtifacts();
     },
-    [refresh],
+    [loadArtifacts],
   );
 
   const upload = async (file: File | undefined) => {
     if (!file) return;
     await api.upload(file);
-    refresh();
+    loadFiles();
   };
 
   return (
@@ -248,7 +252,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
                 navigate("/skills");
               }}
             >
-              {(skills ?? []).filter((s) => s.enabled && !s.replaced).length} on, {skills?.length ?? 0} in all
+              {(skills ?? []).filter(isActive).length} on, {skills?.length ?? 0} in all
               {proposed > 0 && <small> · {proposed} to review</small>}
             </a>
           </nav>

@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from "react";
-import { MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, splitTools, type SkillInfo } from "../../shared/skills.ts";
+import { isActive, MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, splitTools, type SkillInfo } from "../../shared/skills.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
@@ -62,7 +62,7 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
   };
 
   const card = (skill: SkillInfo) => (
-    <li key={`${skill.origin === "builtin" ? "builtin" : "own"}:${skill.name}`} className={skill.enabled && !skill.replaced ? "skill" : "skill off"}>
+    <li key={`${skill.origin === "builtin" ? "builtin" : "own"}:${skill.name}`} className={isActive(skill) ? "skill" : "skill off"}>
       <div className="skill-row">
         <label className="skill-toggle" title={skill.enabled ? "Turn off" : "Turn on"}>
           <input type="checkbox" checked={skill.enabled} onChange={(e) => run(() => api.setSkillEnabled(skill, e.target.checked))} />

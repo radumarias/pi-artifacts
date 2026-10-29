@@ -45,6 +45,11 @@ export interface SkillInfo extends SkillInput {
   replaced?: true;
 }
 
+/** Whether the agent gets this skill: it is on, and no skill of the user's own with its name replaces it. */
+export function isActive(skill: Pick<SkillInfo, "enabled" | "replaced">): boolean {
+  return skill.enabled && !skill.replaced;
+}
+
 /**
  * Built-in and user skills are kept apart: each kind has its own names and its own
  * routes, so a built-in added later never takes over a user's skill. The agent

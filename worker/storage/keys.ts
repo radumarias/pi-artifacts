@@ -1,3 +1,5 @@
+import { fromBase64 } from "../../shared/util.ts";
+
 /**
  * Each user's files are encrypted at rest with their own key (R2 SSE-C).
  * The key is derived, never stored: HKDF-SHA-256 over one master secret,
@@ -18,7 +20,7 @@ export async function deriveUserKey(masterSecret: string, uid: string): Promise<
 function decodeMaster(secret: string): Uint8Array<ArrayBuffer> {
   let bytes: Uint8Array<ArrayBuffer>;
   try {
-    bytes = Uint8Array.from(atob(secret.trim()), (c) => c.charCodeAt(0));
+    bytes = fromBase64(secret.trim());
   } catch {
     throw new Error("FILES_MASTER_KEY is not valid base64.");
   }

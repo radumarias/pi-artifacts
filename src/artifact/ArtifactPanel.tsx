@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ArtifactView } from "../../shared/protocol.ts";
+import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { ArtifactFrame } from "./ArtifactFrame.tsx";
 
@@ -41,7 +42,7 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
       // The token goes in a one-off -c option, so it is not saved in the clone's .git/config.
       setClone({ command: `git -c http.extraHeader="Authorization: Bearer ${access.token}" clone ${access.remote}`, expiresAt: access.expiresAt });
     } catch (e) {
-      setClone({ error: (e as Error).message });
+      setClone({ error: errorMessage(e) });
     }
   }
 

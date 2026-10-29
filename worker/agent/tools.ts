@@ -2,7 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { exports } from "cloudflare:workers";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
-import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type ToolInfo } from "../../shared/protocol.ts";
+import { isOwnedBy, isReadOnly, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type ToolInfo } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
@@ -50,25 +50,21 @@ export interface ServerCatalog {
 export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, unavailable: Map<string, string>): Extension {
   // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
   // and providers reject a request whose tool names repeat: number the later ones.
-  const names = new Map<string, string>();
   const used = new Set<string>();
-  const agentName = (server: string, tool: string) => names.get(`${server}\u0000${tool}`)!;
-  for (const [server, { tools: serverTools }] of catalog) {
+  const tools = [];
+  const servers: string[] = [];
+  for (const [server, { tools: serverTools, instructions }] of catalog) {
+    const list: string[] = [];
     for (const tool of serverTools) {
       const base = mcpToolName(server, tool.name);
       let name = base;
       for (let n = 2; used.has(name); n++) name = `${base.slice(0, 64 - String(n).length - 1)}_${n}`;
       used.add(name);
-      names.set(`${server}\u0000${tool.name}`, name);
-    }
-  }
-  const tools = [];
-  for (const [server, { tools: serverTools }] of catalog) {
-    for (const tool of serverTools) {
-      const readOnly = tool.annotations?.readOnlyHint === true;
+      const readOnly = isReadOnly(tool);
+      list.push(`${tool.name}${readOnly ? " (read-only)" : ""} — agent tool ${name}`);
       tools.push(
         defineTool({
-          name: agentName(server, tool.name),
+          name,
           description: `[MCP server "${server}", tool "${tool.name}"${readOnly ? ", read-only" : ""}] ${tool.description}`,
           parameters: Type.Unsafe<Record<string, unknown>>((tool.inputSchema as object) ?? { type: "object" }),
           replay: readOnly ? "safe" : "unsafe",
@@ -80,12 +76,9 @@ export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, u
         }),
       );
     }
-  }
-  const servers = [...catalog.entries()].map(([name, { tools: serverTools, instructions }]) => {
-    const list = serverTools.map((t) => `${t.name}${t.annotations?.readOnlyHint ? " (read-only)" : ""} — agent tool ${agentName(name, t.name)}`);
     const about = instructions?.trim() ? `\n  Says about itself: ${instructions.trim().replace(/\s+/g, " ").slice(0, 1_500)}` : "";
-    return `- "${name}"${about}\n  Tools: ${list.join("; ")}`;
-  });
+    servers.push(`- "${server}"${about}\n  Tools: ${list.join("; ")}`);
+  }
   return defineExtension({
     name: "mcp",
     tools,
@@ -171,23 +164,21 @@ async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: 
     }),
   );
   const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
-  const saved: string[] = [];
+  const toSave = new Map<string, ArrayBuffer>();
   const skipped = [];
   for (const output of result.outputs) {
     // A name the user's files do not allow must not throw away the run's output and the files already saved.
     try {
       // Names that differ only in what normalising trims ("a.csv" and "a.csv ") would overwrite each other.
       const path = normalisePath(`out/${output.name}`);
-      if (saved.includes(path)) {
-        skipped.push(`${output.name} (same file as ${path})`);
-        continue;
-      }
-      saved.push(await files.put(path, output.bytes));
+      if (toSave.has(path)) skipped.push(`${output.name} (same file as ${path})`);
+      else toSave.set(path, output.bytes);
     } catch (error) {
       if (!(error instanceof PathError)) throw error;
       skipped.push(`${output.name} (${error.message})`);
     }
   }
+  const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
   const report = [
     `exit code ${result.exitCode}`,
     `stdout:\n${result.stdout}`,

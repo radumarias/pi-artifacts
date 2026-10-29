@@ -1,5 +1,5 @@
 import type { CallToolResult, McpError, ToolInfo } from "../../shared/protocol.ts";
-import { callIdentity, derivePayload } from "../../shared/canonical.ts";
+import { callIdentity, derivePayload, firstText, withCache } from "../../shared/canonical.ts";
 import { errorMessage } from "../../shared/util.ts";
 import type { McpServerConfig } from "./servers.ts";
 
@@ -102,8 +102,7 @@ export class McpHub {
   async call(server: string, tool: string, input: unknown): Promise<CallToolResult> {
     const raw = await this.#withConnection(server, (connection) => connection.callTool(tool, input ?? {}));
     if (raw.isError) {
-      const text = raw.content.find((block) => block.type === "text") as { text?: string } | undefined;
-      throw new McpFailure({ code: "tool_error", server, message: text?.text ?? "The tool reported an error.", result: raw });
+      throw new McpFailure({ code: "tool_error", server, message: firstText(raw.content) ?? "The tool reported an error.", result: raw });
     }
     const result: CallToolResult = { content: raw.content };
     if (raw.structuredContent !== undefined) result.structuredContent = raw.structuredContent;
@@ -125,7 +124,7 @@ export class McpHub {
     const hit = this.#cache.get(key);
     if (hit && now - hit.storedAt < options.staleMs) {
       return {
-        result: { ...hit.result, cache: { storedAt: hit.storedAt, revalidating: false } },
+        result: withCache(hit.result, hit.storedAt, false),
         storedAt: hit.storedAt,
         nextRefreshAt: hit.storedAt + options.staleMs,
       };

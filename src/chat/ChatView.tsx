@@ -6,21 +6,19 @@ import { useChat, type RunningTool } from "./useChat.ts";
 import { Linkified } from "./Linkified.tsx";
 import { Markdown } from "./Markdown.tsx";
 
-export type PublishedArtifact = PublishedDetails;
-
 interface Props {
   chatId: string;
   /** Called with the newest artifact this chat published, on load and on every publish. */
-  onArtifact: (artifact: PublishedArtifact) => void;
+  onArtifact: (artifact: PublishedDetails) => void;
   onActivity: () => void;
 }
 
-function published(entry: EntryRecord): PublishedArtifact | undefined {
+function published(entry: EntryRecord): PublishedDetails | undefined {
   if (entry.kind !== "pi.tool-result") return undefined;
   const message = entry.model?.[0] as ToolResultMessage | undefined;
   if (message?.toolName !== PUBLISH_TOOL || message.isError) return undefined;
-  const details = message.details as Partial<PublishedArtifact> | undefined;
-  return details?.artifactId && details.version ? (details as PublishedArtifact) : undefined;
+  const details = message.details as Partial<PublishedDetails> | undefined;
+  return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
 export function ChatView({ chatId, onArtifact, onActivity }: Props) {
@@ -120,7 +118,7 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
 }
 
 // Entries never change once committed, so streaming a new reply re-renders only the reply, not the whole history.
-const Entry = memo(function Entry({ entry, onOpen }: { entry: EntryRecord; onOpen: (artifact: PublishedArtifact) => void }) {
+const Entry = memo(function Entry({ entry, onOpen }: { entry: EntryRecord; onOpen: (artifact: PublishedDetails) => void }) {
   const message = entry.model?.[0];
   if (entry.kind === "pi.user" && message?.role === "user") return <User message={message} />;
   if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;

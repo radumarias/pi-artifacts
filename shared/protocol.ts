@@ -59,6 +59,11 @@ export interface ToolInfo {
   inputSchema?: unknown;
 }
 
+/** Whether a tool says it only reads: what lets a viewer who is not the author call it, and the agent replay it. */
+export function isReadOnly(tool: ToolInfo): boolean {
+  return tool.annotations?.readOnlyHint === true;
+}
+
 /** A tool an artifact version declared, with the server it belongs to: what GET /api/artifacts/:id/tools lists. */
 export type DeclaredTool = ToolInfo & { server: string };
 

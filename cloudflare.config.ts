@@ -1,16 +1,18 @@
 import { bindings, defineConfig, defineContainer, exports } from "cf/config";
 import { existsSync, readFileSync } from "node:fs";
 import * as entrypoint from "./worker/index.ts" with { type: "cf-worker" };
+import type { McpServerConfig } from "./worker/mcp/servers.ts";
 
 // PI_NO_DOCKER=1 leaves out the sandbox container (and the run_python and run_bash tools), for machines without Docker.
 const withSandbox = process.env.PI_NO_DOCKER !== "1";
 
 /**
- * The MCP servers every chat connects to, as [{ name, url, auth? }]. Each deployment keeps its own list out of the
+ * The MCP servers every chat connects to, as [{ name, url, auth?, cacheScope? }]. Each deployment keeps its own list out of the
  * repository: PI_MCP_SERVERS (JSON) if set, else mcp-servers.json (gitignored; see mcp-servers.example.json), else
  * only the public demo server.
  */
-function mcpServerList(): { name: string; url: string; auth?: "oauth" }[] {
+// Pick, not the interface itself: the JSON binding takes a mapped type, which has an implicit index signature.
+function mcpServerList(): Pick<McpServerConfig, keyof McpServerConfig>[] {
   if (process.env.PI_MCP_SERVERS) return JSON.parse(process.env.PI_MCP_SERVERS);
   const file = new URL("./mcp-servers.json", import.meta.url);
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8"));

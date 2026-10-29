@@ -1,5 +1,5 @@
 import type { SkillContent, SkillSource } from "agents/skills";
-import type { SkillInfo, SkillInput } from "../../shared/skills.ts";
+import { isActive, type SkillInfo, type SkillInput } from "../../shared/skills.ts";
 
 /**
  * The enabled skills as one source for `skills()` from agents/harness/pi, which
@@ -10,7 +10,7 @@ import type { SkillInfo, SkillInput } from "../../shared/skills.ts";
  */
 export function skillSource(skills: readonly SkillInfo[], version: string): SkillSource {
   // The agent activates by name alone: a built-in skill the user replaced with their own is left out.
-  const enabled = skills.filter((skill) => skill.enabled && !skill.replaced);
+  const enabled = skills.filter(isActive);
   const byName = new Map(enabled.map((skill) => [skill.name, skill]));
   const descriptor = (skill: SkillInfo) => ({ name: skill.name, description: skill.description, sourceId: "pi-artifacts", version: skill.updatedAt ? String(skill.updatedAt) : undefined });
   return {

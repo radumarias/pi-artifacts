@@ -1,5 +1,5 @@
-import { callIdentity } from "../../shared/canonical.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { callIdentity, stripCache, withCache } from "../../shared/canonical.ts";
+import { errorMessage, memoAsync } from "../../shared/util.ts";
 import { MIN_REFETCH_MS, type CallToolResult, type McpError, type DeclaredTool, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
 
 /** Sends one proxied call to the Worker. Swappable in tests. */
@@ -42,6 +42,8 @@ interface Group {
 }
 
 const CACHE_LIFETIME_MS = 10 * 60_000;
+/** The storages swept of expired results already (see #sweepStorage). */
+const sweptStorages = new WeakSet<object>();
 /** Errors no refetch can fix: stop polling and drop the data. */
 const DENIALS = new Set(["not_in_manifest", "server_not_connected", "not_granted", "bad_request"]);
 
@@ -62,7 +64,7 @@ export class ArtifactBroker {
   #hidden = false;
   #closed = false;
   /** A version's tool list never changes, so one describe call serves the page's whole life. */
-  #tools: Promise<DeclaredTool[]> | undefined;
+  readonly #tools: () => Promise<DeclaredTool[]>;
 
   constructor(options: BrokerOptions) {
     this.#o = {
@@ -73,6 +75,7 @@ export class ArtifactBroker {
       storage: null,
       ...options,
     };
+    this.#tools = memoAsync(() => this.#o.describe());
     this.#sweepStorage();
   }
 
@@ -112,7 +115,7 @@ export class ArtifactBroker {
     try {
       if (method === "call") {
         const cache = params.cache;
-        const read = cache !== false && cache !== undefined && typeof cache === "object";
+        const read = typeof cache === "object" && cache !== null;
         const staleMs = read ? (cache.refresh ? 0 : Math.max(0, Number(cache.staleTime) || 0)) : 0;
         const response = await this.#send({ mode: read ? "read" : "call", server: params.server, tool: params.tool, input: params.input, staleMs });
         if (!response.ok) return reply(false, response.error);
@@ -122,11 +125,7 @@ export class ArtifactBroker {
         this.#invalidate(params.server, params.tool, params.input);
         reply(true, undefined);
       } else if (method === "describe") {
-        this.#tools ??= this.#o.describe().catch((error) => {
-          this.#tools = undefined;
-          throw error;
-        });
-        const tools = await this.#tools;
+        const tools = await this.#tools();
         const tool = tools.find((t) => t.server === params.server && t.name === params.tool);
         if (!tool) return reply(false, { code: "not_in_manifest", server: params.server, message: `${params.server}/${params.tool} is not declared by this page.` });
         reply(true, { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations });
@@ -151,7 +150,7 @@ export class ArtifactBroker {
     this.#watchGroup.set(message.watchId, group);
 
     const stale = !group.last || this.#o.now() - group.last.storedAt >= this.#staleMs(group);
-    if (group.last) this.#deliverTo(message.watchId, { type: "data", result: withCache(group.last, stale) });
+    if (group.last) this.#deliverTo(message.watchId, { type: "data", result: withCache(group.last.result, group.last.storedAt, stale) });
     if (group.denied) return this.#deliverTo(message.watchId, { type: "error", error: group.denied });
     if (stale && !group.inflight) void this.#fetch(group);
     else this.#schedule(group);
@@ -216,7 +215,8 @@ export class ArtifactBroker {
   #feed(key: string, response: Extract<ProxyResponse, { ok: true }>): void {
     const group = this.#groups.get(key);
     const cached = { result: stripCache(response.result), storedAt: response.storedAt };
-    this.#writeStorage(key, cached);
+    // A copy the server served again is already stored.
+    if (group?.last?.storedAt !== cached.storedAt) this.#writeStorage(key, cached);
     if (!group) return;
     group.last = cached;
     this.#deliver(group, { type: "data", result: response.result });
@@ -291,12 +291,14 @@ export class ArtifactBroker {
 
   /**
    * Expiry is only checked on read, so drop the expired results of every page
-   * this browser has viewed, once per broker. Otherwise they pile up until the
+   * this browser has viewed. Otherwise they pile up until the
    * storage quota is full.
    */
   #sweepStorage(): void {
     const storage = this.#o.storage;
-    if (!storage) return;
+    // Every result is parsed, so sweep once per page load, not for every preview opened.
+    if (!storage || sweptStorages.has(storage)) return;
+    sweptStorages.add(storage);
     try {
       const expired: string[] = [];
       for (let i = 0; i < storage.length; i++) {
@@ -343,11 +345,4 @@ function smallest(values: (number | undefined)[]): number | undefined {
   return numbers.length ? Math.min(...numbers) : undefined;
 }
 
-function stripCache(result: CallToolResult): CallToolResult {
-  const { cache: _cache, ...rest } = result;
-  return rest;
-}
 
-function withCache(cached: Cached, revalidating: boolean): CallToolResult {
-  return { ...cached.result, cache: { storedAt: cached.storedAt, revalidating } };
-}

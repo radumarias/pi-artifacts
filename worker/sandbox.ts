@@ -39,18 +39,18 @@ export class Sandbox extends DurableObject<Env> {
     const container = await this.#ensureRunning();
     const files = new Files(container);
 
-    await this.#exec(container, ["sh", "-c", "rm -rf /workspace/files /workspace/out && mkdir -p /workspace/files /workspace/out"]);
-    for (const input of inputs) await files.writeFile(`${WORKSPACE}/files/${input.name}`, input.bytes);
-    await files.writeFile(`${WORKSPACE}/${entry.name}`, entry.contents);
+    await this.#exec(container, ["sh", "-c", `rm -rf ${WORKSPACE}/files ${WORKSPACE}/out && mkdir -p ${WORKSPACE}/files ${WORKSPACE}/out`]);
+    await Promise.all([
+      ...inputs.map((input) => files.writeFile(`${WORKSPACE}/files/${input.name}`, input.bytes)),
+      files.writeFile(`${WORKSPACE}/${entry.name}`, entry.contents),
+    ]);
 
     const run = await this.#exec(container, ["timeout", String(RUN_TIMEOUT_SECONDS), ...argv]);
 
-    const outputs: SandboxFile[] = [];
-    for (const entry of await files.readDirectory(`${WORKSPACE}/out`)) {
-      if (entry.type !== "file") continue;
-      const response = await files.readFile(`${WORKSPACE}/out/${entry.name}`);
-      outputs.push({ name: entry.name, bytes: await response.arrayBuffer() });
-    }
+    const written = (await files.readDirectory(`${WORKSPACE}/out`)).filter((entry) => entry.type === "file");
+    const outputs = await Promise.all(
+      written.map(async (entry) => ({ name: entry.name, bytes: await (await files.readFile(`${WORKSPACE}/out/${entry.name}`)).arrayBuffer() })),
+    );
     return { ...run, outputs };
   }
 
