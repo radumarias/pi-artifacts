@@ -58,7 +58,7 @@ export function Thinking() {
 
 /**
  * Twelve rounded rays in two sets of six that grow and shrink in turn while the whole spark turns, so it spins and
- * changes shape at once. Drawn in currentColor; styles.css sets the accent and the motion.
+ * changes shape at once. styles.css sets its accent color and the motion.
  */
 function Spark() {
   const ray = (angle: number) => <line key={angle} x1="12" y1="3" x2="12" y2="21" transform={`rotate(${angle} 12 12)`} />;
