@@ -79,7 +79,7 @@ describe("verifyAccessJwt", () => {
     expect(fetches).toBe(2);
   });
 
-  it("refetches for unknown keys at most once a minute", async () => {
+  it("refetches for unknown keys at most once in 10 seconds", async () => {
     const { privateKey, jwk } = await keyPair("k1");
     let fetches = 0;
     let now = NOW;
@@ -89,7 +89,7 @@ describe("verifyAccessJwt", () => {
     await expect(verifyAccessJwt(unknown, config)).rejects.toThrow("Unknown signing key.");
     await expect(verifyAccessJwt(unknown, config)).rejects.toThrow("Unknown signing key.");
     expect(fetches).toBe(2);
-    now += 60_000;
+    now += 10_000;
     await expect(verifyAccessJwt(unknown, config)).rejects.toThrow("Unknown signing key.");
     expect(fetches).toBe(3);
   });

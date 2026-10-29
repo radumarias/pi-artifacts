@@ -30,7 +30,11 @@ export type McpAuthChange =
    * user shares them, and another chat may have refreshed them since.
    */
   | { clearTokensIf: OAuthTokens }
-  /** Start a sign-in for this redirect URL: drop everything but a client registered for the same URL. */
+  /**
+   * Start a sign-in for this redirect URL: drop any sign-in in progress, and
+   * keep the client registered for the same URL with its tokens (they stay in
+   * use until the new sign-in replaces them).
+   */
   | { restart: string };
 
 export interface McpAuthStore {
@@ -43,7 +47,7 @@ export function applyAuthChange(stored: McpAuthRecord, change: McpAuthChange): M
   if ("set" in change) return { ...stored, ...change.set };
   if ("restart" in change) {
     const redirectUrl = change.restart;
-    return stored.client && stored.redirectUrl === redirectUrl ? { client: stored.client, redirectUrl } : { redirectUrl };
+    return stored.client && stored.redirectUrl === redirectUrl ? { client: stored.client, tokens: stored.tokens, redirectUrl } : { redirectUrl };
   }
   if ("clear" in change) {
     if (change.clear === "all") return {};
@@ -86,15 +90,18 @@ export class McpOAuthClient implements OAuthClientProvider {
   readonly #server: string;
   readonly #redirectUrl: string;
   readonly #interactive: boolean;
+  readonly #newSignIn: boolean;
   /** The tokens this client last read or saved: the ones a failed refresh was about. */
   #readTokens: OAuthTokens | undefined;
 
-  constructor(store: McpAuthStore, server: string, options: { redirectUrl: string; interactive: boolean }) {
+  /** `newSignIn`: act as if no tokens were stored, so the SDK asks the user to sign in instead of reusing them. */
+  constructor(store: McpAuthStore, server: string, options: { redirectUrl: string; interactive: boolean; newSignIn?: boolean }) {
     this.#store = store;
     this.#server = server;
     // The SDK takes a missing redirect URL for a machine-to-machine flow, so there always is one.
     this.#redirectUrl = options.redirectUrl;
     this.#interactive = options.interactive;
+    this.#newSignIn = options.newSignIn ?? false;
   }
 
   get redirectUrl(): string {
@@ -126,7 +133,7 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    this.#readTokens = (await this.#store.get()).tokens;
+    this.#readTokens = this.#newSignIn ? undefined : (await this.#store.get()).tokens;
     return this.#readTokens;
   }
 
@@ -163,14 +170,15 @@ function sameTokens(a: OAuthTokens | undefined, b: OAuthTokens | undefined): boo
 }
 
 /**
- * Start a sign-in: returns the URL to send the browser to, or `signedIn` when the
- * stored tokens still work. Any old tokens are dropped first, so the user
- * always gets the login screen; a client registration made for this same
- * redirect URL is kept.
+ * Start a sign-in: returns the URL to send the browser to, or `signedIn` if the
+ * server authorized without one. Stored tokens are ignored, so the user always
+ * gets the login screen, but kept until the new sign-in replaces them: anyone
+ * can link to the sign-in route, and following such a link signs no one out.
+ * A client registration made for this same redirect URL is kept.
  */
 export async function startSignIn(serverUrl: string, server: string, store: McpAuthStore, redirectUrl: string): Promise<{ url: string } | { signedIn: true }> {
   await store.update({ restart: redirectUrl });
-  const client = new McpOAuthClient(store, server, { redirectUrl, interactive: true });
+  const client = new McpOAuthClient(store, server, { redirectUrl, interactive: true, newSignIn: true });
   const trace = tracedFetch();
   const result = await auth(client, { serverUrl, fetchFn: trace.fetch }).catch(trace.explain);
   if (result === "AUTHORIZED") return { signedIn: true };

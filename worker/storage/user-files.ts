@@ -43,12 +43,12 @@ export class UserFiles {
 
   /** Returns the path as stored: normalised, so it may differ from the one passed in. */
   async put(path: string, body: ReadableStream | ArrayBuffer | string, contentType?: string): Promise<string> {
-    const stored = normalisePath(path);
-    await this.#bucket.put(this.#prefix + stored, body, {
+    const key = this.#objectKey(path);
+    await this.#bucket.put(key, body, {
       ssecKey: this.#key,
       httpMetadata: contentType ? { contentType } : undefined,
     });
-    return stored;
+    return key.slice(this.#prefix.length);
   }
 
   #objectKey(path: string): string {
