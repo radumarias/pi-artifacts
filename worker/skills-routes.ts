@@ -1,5 +1,5 @@
 import { SKILL_NAME_PATTERN, type SkillResult } from "../shared/skills.ts";
-import { json } from "./http.ts";
+import { json, readJson } from "./http.ts";
 import { formatSkillFile } from "./skills/index.ts";
 import type { UserDirectory } from "./users.ts";
 
@@ -21,14 +21,10 @@ export async function skillsRoute(request: Request, directory: DurableObjectStub
   const answer = (result: SkillResult | null) => (result && "error" in result ? json(result, 400) : json(result ?? {}));
   if (path === "/api/skills" && method === "GET") return json(await directory.listSkills());
   if (path === "/api/skills" && method === "POST") {
-    // A JSON content type cannot be sent cross-site without a CORS preflight, so another
-    // site cannot post a skill, turned on, into a signed-in user's chats from a plain form.
-    if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? "")) {
-      return json({ error: "Expected a skill as JSON (content-type: application/json)." }, 415);
-    }
+    // readJson takes only a JSON content type, so another site cannot post a skill, turned on, into a signed-in user's chats.
     // The directory checks every field, and parses a SKILL.md.
-    const body = await request.json<{ enabled?: unknown } | null>().catch(() => null);
-    if (!body || typeof body !== "object") return json({ error: "Expected a skill as JSON." }, 400);
+    const body = await readJson<{ enabled?: unknown }>(request);
+    if (!body || typeof body !== "object") return json({ error: "Expected a skill as JSON (content-type: application/json)." }, 400);
     return answer(await directory.saveSkill(body, "user", body.enabled !== false));
   }
   const one = path.match(/^\/api\/skills\/(builtin\/)?([a-z0-9-]+)(\/SKILL\.md)?$/);

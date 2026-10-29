@@ -128,6 +128,22 @@ body.resizing iframe { pointer-events: none; }
 .bubble { padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 88%; }
 .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
 .bubble.bot { background: var(--surface); border: 1px solid var(--border); }
+/* Someone else's message in a shared chat: on the left, under their name. */
+.other { align-self: flex-start; display: flex; flex-direction: column; gap: 2px; max-width: 88%; }
+.other small { color: var(--muted); padding-left: 4px; }
+.bubble.peer { background: var(--surface-2); max-width: none; }
+
+.chat-header { display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; min-height: 40px; }
+.chat-people { flex: 1; min-width: 0; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.share-panel { margin: 8px 20px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.share-panel ul { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.share-panel li { display: flex; align-items: center; gap: 8px; }
+.share-panel li button { margin-left: auto; padding: 2px 8px; font-size: 13px; }
+.share-panel small { color: var(--muted); }
+.share-warning { margin: 0; font-size: 13px; color: var(--muted); }
+.invite-link { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
+.invite-link input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.invite-link small { flex-basis: 100%; }
 /* Markdown replies: the bubble's pre-wrap would double the spacing Markdown already gives. */
 .bubble.markdown { white-space: normal; }
 .bubble.markdown > :first-child { margin-top: 0; }
