@@ -40,7 +40,7 @@ interface CacheEntry {
   result: CallToolResult;
   storedAt: number;
   /** About how much memory the result holds: its JSON length. */
-  bytes?: number;
+  bytes: number;
 }
 
 /** What one chat object may hold in cached results. Durable Objects have 128 MB; results vary from bytes to megabytes. */
@@ -134,7 +134,7 @@ export class McpHub {
     let flight = this.#inflight.get(key);
     if (!flight) {
       flight = this.call(server, tool, input).then((result) => {
-        const entry = { result, storedAt: this.#now() };
+        const entry = { result, storedAt: this.#now(), bytes: JSON.stringify(result).length };
         this.#store(key, entry);
         return entry;
       });
@@ -165,7 +165,6 @@ export class McpHub {
    * budget is not cached.
    */
   #store(key: string, entry: CacheEntry): void {
-    entry.bytes = JSON.stringify(entry.result).length;
     this.#evict(key);
     if (entry.bytes > MAX_CACHE_BYTES) return;
     const now = this.#now();
@@ -181,7 +180,7 @@ export class McpHub {
     const entry = this.#cache.get(key);
     if (!entry) return;
     this.#cache.delete(key);
-    this.#cacheBytes -= entry.bytes ?? 0;
+    this.#cacheBytes -= entry.bytes;
   }
 
   /**

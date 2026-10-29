@@ -41,11 +41,14 @@ export class UserFiles {
     return this.#bucket.get(this.#objectKey(path), range ? { range, ssecKey: this.#key } : { ssecKey: this.#key });
   }
 
-  async put(path: string, body: ReadableStream | ArrayBuffer | string, contentType?: string): Promise<void> {
-    await this.#bucket.put(this.#objectKey(path), body, {
+  /** Returns the path as stored: normalised, so it may differ from the one passed in. */
+  async put(path: string, body: ReadableStream | ArrayBuffer | string, contentType?: string): Promise<string> {
+    const stored = normalisePath(path);
+    await this.#bucket.put(this.#prefix + stored, body, {
       ssecKey: this.#key,
       httpMetadata: contentType ? { contentType } : undefined,
     });
+    return stored;
   }
 
   #objectKey(path: string): string {

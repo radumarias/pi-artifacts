@@ -52,8 +52,8 @@ function fingerprint(text: string): string {
   return (hash >>> 0).toString(36);
 }
 
-// What a served page is made of besides its version: the runtime inlined into it and the policy it runs under.
-const BUILD = fingerprint(RUNTIME + ARTIFACT_CSP);
+// What a served page is made of besides its version: the wrapper and runtime renderArtifact adds, and its policy.
+const BUILD = fingerprint(renderArtifact("") + ARTIFACT_CSP);
 
 /**
  * A version's page never changes, but the runtime inlined into it changes

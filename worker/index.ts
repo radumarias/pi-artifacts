@@ -74,11 +74,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   // The artifact page itself, framed by the viewer.
   const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)$/);
   if (page && method === "GET") {
-    if (!ID_PATTERN.test(page[1])) return new Response("Not found", { status: 404 });
-    const etag = artifactETag(page[1], Number(page[2]));
+    const [id, version] = [page[1], Number(page[2])];
+    if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
+    const etag = artifactETag(id, version);
     const cached = notModified(request, etag);
     if (cached) return cached;
-    const html = await storage.artifacts.readHtml(page[1], Number(page[2]));
+    const html = await storage.artifacts.readHtml(id, version);
     return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html, etag);
   }
 
@@ -154,10 +155,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     const file = form.get("file");
     if (!(file instanceof File)) return json({ error: "Expected a file field" }, 400);
     if (file.size > MAX_UPLOAD_BYTES) return json({ error: "Files are limited to 10 MB" }, 413);
-    const name = file.name.replace(/[^\w .-]/g, "_").replace(/^[.\s]+/, "").slice(0, 120).trimEnd() || "upload";
+    const name = file.name.replace(/[^\w .-]/g, "_").replace(/^[.\s]+/, "").slice(0, 120) || "upload";
     const files = await storage.userFiles(uid);
-    await files.put(`uploads/${name}`, file.stream(), file.type || undefined);
-    return json({ path: `uploads/${name}` });
+    return json({ path: await files.put(`uploads/${name}`, file.stream(), file.type || undefined) });
   }
 
   return json({ error: "Not found" }, 404);

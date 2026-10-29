@@ -6,7 +6,7 @@ import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type Artifa
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import { PathError, type ArtifactStore, type UserFiles } from "../storage/index.ts";
+import { normalisePath, PathError, type ArtifactStore, type UserFiles } from "../storage/index.ts";
 
 /** What the tools need from the chat they run in. */
 export interface ChatScope {
@@ -131,8 +131,8 @@ export function filesExtension(scope: ChatScope): Extension {
         description: "Write a UTF-8 text file into the user's files, replacing any file at that path.",
         parameters: Type.Object({ path: Type.String(), content: Type.String() }),
         execute: async (args) => {
-          await (await scope.files()).put(args.path, args.content, "text/plain; charset=utf-8");
-          return { output: text(`Wrote ${args.path} (${args.content.length} characters).`) };
+          const path = await (await scope.files()).put(args.path, args.content, "text/plain; charset=utf-8");
+          return { output: text(`Wrote ${path} (${args.content.length} characters).`) };
         },
       }),
     ],
@@ -151,28 +151,28 @@ const SANDBOX_FILES =
  */
 async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
-  const inputs: SandboxFile[] = [];
   const names = new Map<string, string>();
-  for (const path of paths ?? []) {
+  for (const path of new Set((paths ?? []).map((p) => normalisePath(p)))) {
     // Inputs land side by side in ./files/, so two paths with the same file name would overwrite each other.
     const name = path.split("/").pop()!;
     const other = names.get(name);
     if (other !== undefined) throw new Error(`"${other}" and "${path}" would both be ./files/${name}; pass them in separate runs.`);
     names.set(name, path);
   }
-  for (const [name, path] of names) {
-    const object = await files.get(path);
-    if (!object) throw new Error(`No file "${path}".`);
-    inputs.push({ name, bytes: await object.arrayBuffer() });
-  }
+  const inputs: SandboxFile[] = await Promise.all(
+    [...names].map(async ([name, path]) => {
+      const object = await files.get(path);
+      if (!object) throw new Error(`No file "${path}".`);
+      return { name, bytes: await object.arrayBuffer() };
+    }),
+  );
   const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
   const saved = [];
   const skipped = [];
   for (const output of result.outputs) {
     // A name the user's files do not allow must not throw away the run's output and the files already saved.
     try {
-      await files.put(`out/${output.name}`, output.bytes);
-      saved.push(`out/${output.name}`);
+      saved.push(await files.put(`out/${output.name}`, output.bytes));
     } catch (error) {
       if (!(error instanceof PathError)) throw error;
       skipped.push(`${output.name} (${error.message})`);

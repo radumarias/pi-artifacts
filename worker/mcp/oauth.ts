@@ -22,17 +22,16 @@ export interface McpAuthRecord {
  * One change to a record, applied in a single step by the store, so that a
  * sign-in and the token refreshes of several chats cannot overwrite each other.
  */
-export interface McpAuthChange {
-  /** Start from this record instead of the stored one. */
-  replace?: McpAuthRecord;
-  set?: Partial<McpAuthRecord>;
-  clear?: (keyof McpAuthRecord)[];
+export type McpAuthChange =
+  | { set: Partial<McpAuthRecord> }
+  | { clear: (keyof McpAuthRecord)[] | "all" }
   /**
    * Clear the tokens, but only while they are still these. Every chat of a
    * user shares them, and another chat may have refreshed them since.
    */
-  clearTokensIf?: OAuthTokens;
-}
+  | { clearTokensIf: OAuthTokens }
+  /** Start a sign-in for this redirect URL: drop everything but a client registered for the same URL. */
+  | { restart: string };
 
 export interface McpAuthStore {
   get(): Promise<McpAuthRecord>;
@@ -41,10 +40,19 @@ export interface McpAuthStore {
 
 /** The record after a change. The store runs this where the record lives, in one step. */
 export function applyAuthChange(stored: McpAuthRecord, change: McpAuthChange): McpAuthRecord {
-  const record: McpAuthRecord = { ...(change.replace ?? stored), ...change.set };
-  for (const key of change.clear ?? []) delete record[key];
-  if (change.clearTokensIf && sameTokens(record.tokens, change.clearTokensIf)) delete record.tokens;
-  return record;
+  if ("set" in change) return { ...stored, ...change.set };
+  if ("restart" in change) {
+    const redirectUrl = change.restart;
+    return stored.client && stored.redirectUrl === redirectUrl ? { client: stored.client, redirectUrl } : { redirectUrl };
+  }
+  if ("clear" in change) {
+    if (change.clear === "all") return {};
+    const record = { ...stored };
+    for (const key of change.clear) delete record[key];
+    return record;
+  }
+  const { tokens, ...rest } = stored;
+  return sameTokens(tokens, change.clearTokensIf) ? rest : stored;
 }
 
 /** The callback path the authorization server sends the browser back to. */
@@ -105,7 +113,7 @@ export class McpOAuthClient implements OAuthClientProvider {
 
   async state(): Promise<string> {
     const state = `${this.#server}~${randomHex(16)}`;
-    if (this.#interactive) await this.#patch({ state, redirectUrl: this.#redirectUrl });
+    if (this.#interactive) await this.#store.update({ set: { state, redirectUrl: this.#redirectUrl } });
     return state;
   }
 
@@ -114,7 +122,7 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async saveClientInformation(client: OAuthClientInformationMixed): Promise<void> {
-    await this.#patch({ client });
+    await this.#store.update({ set: { client } });
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
@@ -124,7 +132,7 @@ export class McpOAuthClient implements OAuthClientProvider {
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     this.#readTokens = tokens;
-    await this.#patch({ tokens });
+    await this.#store.update({ set: { tokens } });
   }
 
   redirectToAuthorization(url: URL): void {
@@ -132,7 +140,7 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async saveCodeVerifier(verifier: string): Promise<void> {
-    if (this.#interactive) await this.#patch({ verifier });
+    if (this.#interactive) await this.#store.update({ set: { verifier } });
   }
 
   async codeVerifier(): Promise<string> {
@@ -142,15 +150,11 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
-    if (scope === "all") await this.#store.update({ replace: {} });
+    if (scope === "all") await this.#store.update({ clear: "all" });
     else if (scope === "client" || scope === "verifier") await this.#store.update({ clear: [scope] });
     // When another chat has refreshed the tokens since this one read them, the rejected refresh token was the old one:
     // keep the new tokens rather than signing the user out.
     else if (scope === "tokens" && this.#readTokens) await this.#store.update({ clearTokensIf: this.#readTokens });
-  }
-
-  async #patch(set: Partial<McpAuthRecord>): Promise<void> {
-    await this.#store.update({ set });
   }
 }
 
@@ -165,8 +169,7 @@ function sameTokens(a: OAuthTokens | undefined, b: OAuthTokens | undefined): boo
  * redirect URL is kept.
  */
 export async function startSignIn(serverUrl: string, server: string, store: McpAuthStore, redirectUrl: string): Promise<{ url: string } | { signedIn: true }> {
-  const record = await store.get();
-  await store.update({ replace: record.client && record.redirectUrl === redirectUrl ? { client: record.client, redirectUrl } : { redirectUrl } });
+  await store.update({ restart: redirectUrl });
   const client = new McpOAuthClient(store, server, { redirectUrl, interactive: true });
   const trace = tracedFetch();
   const result = await auth(client, { serverUrl, fetchFn: trace.fetch }).catch(trace.explain);

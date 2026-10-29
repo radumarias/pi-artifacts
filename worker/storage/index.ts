@@ -6,7 +6,7 @@ import { UserFiles } from "./user-files.ts";
 export { newId } from "./artifacts.ts";
 export type { ArtifactStore } from "./artifacts.ts";
 export type { FileEntry, UserFiles } from "./user-files.ts";
-export { PathError } from "./paths.ts";
+export { normalisePath, PathError } from "./paths.ts";
 
 /**
  * The only code that touches the R2 bucket or the Artifacts repos
