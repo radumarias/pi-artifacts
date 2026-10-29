@@ -169,16 +169,29 @@ await mcp.invalidate("CoinGecko");                                    // refetch
 
 [`examples/crypto-dashboard.html`](examples/crypto-dashboard.html) is a complete page written against it.
 
+## Your files
+
+Upload from the sidebar (several files, or a whole folder) or drop files and folders anywhere on the app. Uploads land
+in `uploads/`, a folder keeping its layout (`reports/q3/sales.csv` is `uploads/reports/q3/sales.csv`); files and folders
+whose names start with a dot (`.git`, `.DS_Store`) are left out of a folder. A file may be up to 10 MB; the app splits a
+big pick into requests of at most 50 files and 40 MB (`shared/uploads.ts`, `worker/files-routes.ts`).
+
+Before each message, the agent's prompt gets a list of your files, newest first (at most 150, then a count per folder),
+so "the sales file from q3" maps to its path without a tool call. `files_read`, `run_python` and `run_bash` also take a
+file's name or the end of its path when only one file matches, and answer with the candidates when several do
+(`worker/agent/file-refs.ts`). The list changes the system prompt only when your files change.
+
 ## The sandbox
 
 `run_python` and `run_bash` run in one Linux container per chat (`worker/sandbox.ts`, the Sandbox SDK's container
 in a Durable Object). It runs Debian with Python 3.13, pandas, numpy and the usual command-line tools, and has no
 internet. Each run is limited to 60 seconds. Files move like this:
 
-- **In:** the agent names files from the user's files. The tool reads each one through the user's `UserFiles`, so R2
-  decrypts it with the user's key. It is copied into the container's `./files/` with the Sandbox SDK's file API.
-  Two files with the same name (`a/data.csv` and `b/data.csv`) would land on the same `./files/data.csv`, so the run
-  is refused instead.
+- **In:** the agent names files from the user's files: paths, a file's name or the end of its path when only one file
+  matches, or a folder for every file in it. The tool reads each one through the user's `UserFiles`, so R2 decrypts it
+  with the user's key, and copies it into the container's `./files/` with the Sandbox SDK's file API, in its folders
+  but without the leading `uploads/` (`uploads/q3/sales.csv` is `./files/q3/sales.csv`). Two files that would land on
+  one path (`uploads/a.csv` and `a.csv`) refuse the run. One run takes at most 200 files and 25 MB (they reach the container in one RPC call, capped at 32 MiB).
 - **Out:** after the run, whatever the script wrote to `./out/` (top level only) is read back from the container and
   saved through the same `UserFiles` as `out/<name>`, encrypted with the user's key.
 - **Between runs:** `./files` and `./out` start empty each run. Anything else in the working directory stays until
@@ -212,7 +225,7 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
 
 | Path | What |
 |---|---|
-| `worker/index.ts` | Routes: identity, chats, chat WebSocket, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files |
+| `worker/index.ts`, `worker/files-routes.ts` | Routes: identity, chats, chat WebSocket, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files and uploads |
 | `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall` |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
@@ -222,7 +235,7 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
 | `cloudflare.config.ts` | The Worker, its bindings, Durable Object exports and the sandbox container (cf CLI) |
 | `worker/users.ts`, `worker/sandbox.ts` | `UserDirectory` DO (chats, artifacts and skills per user), `Sandbox` DO (the container) |
 | `runtime/` | The page runtime and its contract |
-| `src/` | React app: chats, the streamed transcript, the preview panel, `ArtifactBroker`; resizable columns (`layout.tsx`) |
+| `src/` | React app: chats, the streamed transcript, the preview panel, `ArtifactBroker`; resizable columns (`layout.tsx`); uploads and the file tree (`files/`) |
 | `shared/` | Types and helpers used by all of the above |
 
 ## Run it

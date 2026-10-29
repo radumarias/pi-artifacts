@@ -1,3 +1,5 @@
+import { MAX_PATH, PATH_CHARS } from "../../shared/uploads.ts";
+
 /**
  * Turn a caller's path into a safe relative path inside a user's folder, or
  * throw. R2 keys are literal strings, so ".." could never climb out of a
@@ -11,8 +13,8 @@ export function normalisePath(path: string, { allowEmpty = false } = {}): string
     if (allowEmpty) return "";
     throw new PathError("Path is empty.");
   }
-  if (nfc.length > 200) throw new PathError("Path is longer than 200 characters.");
-  if (!/^[A-Za-z0-9 ._\-/]+$/.test(nfc)) {
+  if (nfc.length > MAX_PATH) throw new PathError(`Path is longer than ${MAX_PATH} characters.`);
+  if (!PATH_CHARS.test(nfc)) {
     throw new PathError(`Invalid path "${path}": use letters, digits, spaces, . - _ and /.`);
   }
   if (nfc.startsWith("/")) throw new PathError(`Invalid path "${path}": it must be relative.`);
