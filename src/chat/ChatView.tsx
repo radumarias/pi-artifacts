@@ -27,7 +27,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
-  const { state, connected, people, prompt, abort } = useChat(chatId);
+  const { state, connected, people, gone, prompt, abort } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
   const list = useRef<HTMLDivElement>(null);
@@ -52,6 +52,11 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     if (wasBusy.current && !state.busy) onActivity();
     wasBusy.current = state.busy;
   }, [state.busy, onActivity]);
+
+  // No longer in the chat (removed, or it is gone): the sidebar entry went too, so reload it.
+  useEffect(() => {
+    if (gone) onActivity();
+  }, [gone, onActivity]);
 
   useEffect(() => {
     const latest = state.entries.map(published).filter(Boolean).pop();
@@ -79,6 +84,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     submit();
   };
 
+  const ownerName = people && people.owner.uid !== uid ? people.owner.name : undefined;
   const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid).map((person) => person.name).join(", ") : "";
   return (
     <section className="chat">
@@ -101,7 +107,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
           </div>
         )}
         {state.entries.map((entry) => (
-          <Entry key={entry.id} entry={entry} uid={uid} onOpen={onArtifact} />
+          <Entry key={entry.id} entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
         ))}
         {state.partial && <Assistant message={state.partial} />}
         {state.tools.map((tool) => (
@@ -136,9 +142,20 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
 }
 
 // Entries never change once committed, so streaming a new reply re-renders only the reply, not the whole history.
-const Entry = memo(function Entry({ entry, uid, onOpen }: { entry: EntryRecord; uid: string; onOpen: (artifact: PublishedDetails) => void }) {
+const Entry = memo(function Entry({
+  entry,
+  uid,
+  ownerName,
+  onOpen,
+}: {
+  entry: EntryRecord;
+  uid: string;
+  /** Set when someone other than the owner is viewing: a plain `pi.user` entry, from before chats were shared, is the owner's. */
+  ownerName?: string;
+  onOpen: (artifact: PublishedDetails) => void;
+}) {
   const message = entry.model?.[0];
-  if (entry.kind === "pi.user" && message?.role === "user") return <User text={userText(message)} />;
+  if (entry.kind === "pi.user" && message?.role === "user") return <User text={userText(message)} author={ownerName} />;
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as unknown as ChatMessageData;
     return <User text={data.text} author={data.uid !== uid ? data.name : undefined} />;

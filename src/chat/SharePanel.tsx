@@ -16,6 +16,8 @@ export function SharePanel({ chatId, uid, people, onLeft }: Props) {
   const [created, setCreated] = useState<CreatedInvite | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isOwner = people.owner.uid === uid;
+  // Once the link is used or revoked, its invite leaves the open list: stop offering a dead link.
+  const shown = created && people.invites?.some((open) => open.id === created.id) ? created : null;
 
   // No reload afterwards: the chat's socket brings the new people and invites, also after a refusal from an old list.
   const act = async (action: () => Promise<unknown>) => {
@@ -69,13 +71,13 @@ export function SharePanel({ chatId, uid, people, onLeft }: Props) {
           <button type="button" className="primary" onClick={() => void act(async () => setCreated(await api.createInvite(chatId)))}>
             Create an invite link
           </button>
-          {created && (
+          {shown && (
             <div className="invite-link">
-              <input readOnly value={created.url} onFocus={(e) => e.target.select()} />
-              <button type="button" onClick={() => void navigator.clipboard.writeText(created.url)}>
+              <input readOnly value={shown.url} onFocus={(e) => e.target.select()} />
+              <button type="button" onClick={() => void navigator.clipboard.writeText(shown.url)}>
                 Copy
               </button>
-              <small>Works once, until {new Date(created.expiresAt).toLocaleString()}. Only shown now.</small>
+              <small>Works once, until {new Date(shown.expiresAt).toLocaleString()}. Only shown now.</small>
             </div>
           )}
         </>

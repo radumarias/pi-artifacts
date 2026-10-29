@@ -38,8 +38,9 @@ export function peopleExtension(people: () => ChatPeople): Extension {
     sections: [
       section("people", () => {
         const { owner, members } = people();
-        const about = 'Each user message starts with its author\'s name ("name: text"); one without a name is the owner\'s.';
-        if (members.length === 0) return `${about} ${owner.name} owns this chat.`;
+        // The same text whether or not the chat was ever shared: the prefix outlives the members who left.
+        const about = 'In a shared chat, each user message starts with its author\'s name ("name: text"); one without a name is the owner\'s.';
+        if (members.length === 0) return about;
         return (
           `${about} ${owner.name} owns this chat; ${members.map((m) => m.name).join(", ")} joined it by invite. ` +
           "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +

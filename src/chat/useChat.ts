@@ -111,11 +111,13 @@ export function useChat(chatId: string) {
   const [state, dispatch] = useReducer(reduce, initial);
   const [connected, setConnected] = useState(false);
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
+  const [gone, setGone] = useState(false);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     dispatch({ type: "reset" });
     setPeople(null);
+    setGone(false);
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -138,6 +140,7 @@ export function useChat(chatId: string) {
         if (closed) return;
         if (event.code === SOCKET_NOT_A_MEMBER) {
           closed = true;
+          setGone(true);
           dispatch({ type: "error", message: "You are not in this chat." });
           return;
         }
@@ -162,6 +165,8 @@ export function useChat(chatId: string) {
     state,
     connected,
     people,
+    /** True once the chat refused this user's socket: they are not (or no longer) in it. */
+    gone,
     prompt: (text: string) => send({ type: "prompt", text }),
     abort: () => send({ type: "abort" }),
   };

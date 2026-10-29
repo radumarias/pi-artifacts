@@ -216,7 +216,8 @@ people: many people share one conversation with one agent, and their messages qu
   owner. The Share panel says so before the owner makes a link: members can ask it to read or change anything those
   reach.
 - **Who wrote what:** each message is placed as a `chat.message` entry naming its author. Once the chat has members,
-  the model reads it as `name: text`, and a system-prompt section says who is in the chat.
+  the model reads it as `name: text` (before that, no name reaches the model), and a system-prompt section says who
+  is in the chat.
 - **Access:** the Worker finds the chat through the user's index (their own chats and the ones shared with them), and
   the chat object checks membership again on every socket and prompt, and on page calls to servers that sign in each
   user. Removing someone closes their sockets at once (close code 4403), and the app stops reconnecting.

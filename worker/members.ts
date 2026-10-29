@@ -71,8 +71,10 @@ export class ChatMembers {
       .map((row) => ({ uid: row.uid as string, name: row.name as string }));
   }
 
-  has(uid: string): boolean {
-    return this.#sql.exec("SELECT 1 FROM chat_members WHERE uid = ?", uid).toArray().length > 0;
+  /** Whether `uid` is a member; without one, whether the chat has any. */
+  has(uid?: string): boolean {
+    const query = uid === undefined ? "SELECT 1 FROM chat_members LIMIT 1" : "SELECT 1 FROM chat_members WHERE uid = ?";
+    return this.#sql.exec(query, ...(uid === undefined ? [] : [uid])).toArray().length > 0;
   }
 
   /** A member's name changes when they sign in with another email for the same uid; keep the one they last used. */

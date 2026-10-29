@@ -142,7 +142,7 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** This chat's user's directory: their chats, artifacts, skills and MCP sign-ins. */
   get #directory() {
-    return exports.UserDirectory.getByName(this.uid);
+    return this.#index(this.uid);
   }
 
   /** Called by Lifecycle once capabilities have started, including after an eviction. */
@@ -245,13 +245,14 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * One person's message, placed as a `chat.message` entry naming its author.
-   * The model reads it as "name: text". While a run is going, it waits in pi's
-   * inbox and is answered next.
+   * Once the chat has members, the model reads it as "name: text"; until then
+   * it gets the text alone, so no name reaches the model for a chat nobody shares.
+   * While a run is going, it waits in pi's inbox and is answered next.
    */
   async prompt(text: string, author: Person): Promise<void> {
     if (!this.isInChat(author.uid)) throw new Error("You are no longer in this chat.");
     await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills()]);
-    await this.harness.submit(`${author.name}: ${text}`, {
+    await this.harness.submit(this.members.has() ? `${author.name}: ${text}` : text, {
       entry: { kind: CHAT_MESSAGE_KIND, data: { uid: author.uid, name: author.name, text } satisfies ChatMessageData },
     });
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
@@ -443,9 +444,14 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
 
   /** Tell every open socket who is in the chat; the owner's also get the open invites. */
   broadcastPeople(): void {
+    // One view per person, however many sockets they have open.
+    const views = new Map<string, ChatPeopleView>();
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
       const person = this.#person(ws);
-      if (person) send(ws, { type: "people", people: this.#chat.peopleFor(person.uid) });
+      if (!person) continue;
+      let people = views.get(person.uid);
+      if (!people) views.set(person.uid, (people = this.#chat.peopleFor(person.uid)));
+      send(ws, { type: "people", people });
     }
   }
 
