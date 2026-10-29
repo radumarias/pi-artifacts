@@ -11,12 +11,14 @@ interface Props {
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   disabled: boolean;
+  /** Whether images wait in the composer: a model that cannot see them says so. */
+  attachingImages?: boolean;
   /** Ask for a model and effort; the chat answers with the effort the model takes, through its agent state. */
   onChange: (model: string, thinkingLevel?: ModelThinkingLevel) => void;
 }
 
 /** The chat's model and, for a model that reasons, its effort. Memoized: the chat re-renders on every streamed token. */
-export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, disabled, onChange }: Props) {
+export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, disabled, attachingImages, onChange }: Props) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   useEffect(() => {
     let live = true;
@@ -67,6 +69,9 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
             </option>
           ))}
         </select>
+      )}
+      {current && !current.images && attachingImages && (
+        <span className="model-note">{current.name} cannot see images: it gets their names only. Pick a model that can to ask about them.</span>
       )}
     </div>
   );

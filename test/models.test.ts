@@ -30,6 +30,12 @@ describe("model catalog", () => {
     expect(byId("openai/gpt-5.5").efforts).toEqual(["low", "medium", "high", "xhigh"]);
     expect(byId("openai/gpt-4o").efforts).toEqual([]);
   });
+
+  it("says which models see images", () => {
+    expect(byId("anthropic/claude-opus-5.5").images).toBe(true);
+    expect(byId("openai/gpt-5.5").images).toBe(true);
+    expect(byId("@cf/openai/gpt-oss-120b").images).toBe(false);
+  });
 });
 
 describe("model choice", () => {

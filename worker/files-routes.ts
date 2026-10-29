@@ -17,7 +17,15 @@ export async function filesRoute(request: Request, userFiles: () => Promise<User
   if (pathname !== "/api/files") return undefined;
   if (request.method === "GET") return json(await (await userFiles()).list());
   if (request.method !== "POST") return undefined;
+  return storeUpload(request, userFiles);
+}
 
+/**
+ * Store an upload's files under uploads/ in `userFiles`, and answer with the
+ * paths they got: the files route's POST, and a chat's attachments, which go
+ * to the chat owner's files.
+ */
+export async function storeUpload(request: Request, userFiles: () => Promise<UserFiles>): Promise<Response> {
   const declared = Number(request.headers.get("content-length"));
   if (declared > MAX_UPLOAD_BYTES + FORM_OVERHEAD) return json({ error: tooBig() }, 413);
   const form = await request.formData();

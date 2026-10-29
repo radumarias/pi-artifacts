@@ -28,6 +28,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** An upload's form: a `file` and a `path` field per file, in order (see worker/files-routes.ts). */
+function uploadForm(files: readonly { file: File; path: string }[]): FormData {
+  const form = new FormData();
+  for (const { file, path } of files) {
+    form.append("file", file);
+    form.append("path", path);
+  }
+  return form;
+}
+
 const send = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const post = (body: unknown) => send("POST", body);
 
@@ -70,13 +80,9 @@ export const api = {
   skillMarkdownUrl: (skill: SkillInfo) => `${skillPath(skill)}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),
   /** One request's worth of files (see uploadBatches), each with its name or its path inside a picked folder. */
-  upload: (files: readonly { file: File; path: string }[]) => {
-    const form = new FormData();
-    for (const { file, path } of files) {
-      form.append("file", file);
-      form.append("path", path);
-    }
-    return request<{ paths: string[] }>("/api/files", { method: "POST", body: form });
-  },
+  upload: (files: readonly { file: File; path: string }[]) => request<{ paths: string[] }>("/api/files", { method: "POST", body: uploadForm(files) }),
+  /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */
+  attach: (chatId: string, files: readonly { file: File; path: string }[]) =>
+    request<{ paths: string[] }>(`/api/chats/${chatId}/attachments`, { method: "POST", body: uploadForm(files) }),
   chatSocketUrl: (chatId: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/chats/${chatId}/ws`,
 };

@@ -4,7 +4,8 @@ import RUNTIME_CONTRACT from "../../runtime/runtime.d.ts?raw";
 
 const PREAMBLE = `You are the assistant in pi-artifacts, a chat that builds live, interactive web pages ("artifacts") for the user.
 Prefer an artifact whenever a page would show something better than text: dashboards, charts, comparisons, tools.
-Keep chat replies short; the page is the deliverable. Never paste a page's HTML into the chat.`;
+Keep chat replies short; the page is the deliverable. Never paste a page's HTML into the chat.
+Users can attach files to a message; they come before its text, each named by its path in the user's files: an image as an image, a text file or document (PDF, Word, Excel) as its text in an <attachment> tag, cut when long, and any other file by name only. Answer questions about them directly; build a page from them only when asked or when it clearly helps. To read the rest of a long file, or to work with one shown by name only, use your file tools on its path. If an image reaches you as a placeholder, you cannot see images: say so, and suggest a model that can.`;
 
 const DASHBOARDS = `How to build a live dashboard:
 1. Find the data. Use the MCP tools to discover what a server offers, then make ONE real read-only call with exactly the input the page will send (the same code, for code-mode tools), not a summary of it. The page receives that call's result as \`payload\`: write the page against the full shape you saw, wrapper objects included. Never guess a shape you have not seen.

@@ -218,9 +218,35 @@ body.resizing iframe { pointer-events: none; }
 .artifact-card-icon { font-size: 22px; color: var(--accent); }
 .artifact-card small { display: block; color: var(--muted); }
 
-.composer { display: flex; gap: 8px; padding: 12px 20px 18px; }
+.composer { display: flex; flex-direction: column; gap: 8px; padding: 12px 20px 18px; }
+.composer-row { display: flex; gap: 8px; }
+.composer .attach { font-size: 18px; padding: 0 12px; }
+/* Above the app's drop target while files are dragged: a drop here attaches them to the message. */
+.workspace.dragging .composer { position: relative; z-index: 11; outline: 2px dashed var(--accent); outline-offset: -6px; border-radius: var(--radius); background: var(--bg); }
+.pending-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
+.pending-attachment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 4px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 13px;
+}
+.pending-attachment img { width: 32px; height: 32px; object-fit: cover; border-radius: 6px; }
+.pending-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pending-attachment button { border: 0; background: none; padding: 0 4px; cursor: pointer; color: var(--muted); }
+.file-icon { color: var(--muted); }
+/* A message's attachments, above its text. */
+.attachments { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; max-width: 88%; }
+.attachments.mine { align-self: flex-end; justify-content: flex-end; }
+.attachment-thumb { max-width: 160px; max-height: 160px; border-radius: var(--radius); border: 1px solid var(--border); }
+.attachment-chip { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 13px; overflow-wrap: anywhere; }
 .model-picker { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 20px 0; }
 .model-picker select { font-size: 13px; padding: 3px 6px; max-width: 100%; }
+.model-note { align-self: center; font-size: 13px; color: var(--muted); }
 .model-picker + .composer { padding-top: 6px; }
 .composer textarea {
   flex: 1;

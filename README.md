@@ -182,6 +182,25 @@ so "the sales file from q3" maps to its path without a tool call. `files_read`, 
 file's name or the end of its path when only one file matches, and answer with the candidates when several do
 (`worker/agent/file-refs.ts`). The list changes the system prompt only when your files change.
 
+### Attachments
+
+Files can also go with a message: attach them with **+** next to the message box, paste an image, or drop files on the
+message box (at most 10 per message). They are uploaded to the chat owner's `uploads/` (the agent acts as the owner, so
+in a shared chat a member's attachments go there too), and the model gets their content with the message, each
+introduced by its path (`worker/agent/attachments.ts`, `shared/attachments.ts`):
+
+- **Images** (JPEG, PNG, GIF, WebP, and anything else the browser decodes, re-encoded as JPEG) as images. The browser
+  scales them to at most 1568 px and a share of 1.1 MB of base64 per message, since a message is one transcript row
+  (2 MB at most), and sends a thumbnail the transcript shows. The Worker never decodes an image. A model without
+  vision gets pi-ai's placeholder instead; the model picker says so when images are attached.
+- **Text files** (by extension) as their text, up to 100 000 characters each and 150 000 per message, cut with a note
+  pointing at the whole file.
+- **PDFs and office documents** as Markdown from Workers AI's `toMarkdown` (free for these formats).
+- **Anything else** by name only, for `files_read` and the sandbox.
+
+The chat's sockets send the transcript without image data (the thumbnails stand in), so a chat full of images still
+opens quickly.
+
 ## The sandbox
 
 `run_python` and `run_bash` run in one Linux container per chat (`worker/sandbox.ts`, the Sandbox SDK's container

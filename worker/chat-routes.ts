@@ -1,8 +1,10 @@
 import { exports } from "cloudflare:workers";
 import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type CreatedInvite, type Person } from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
+import { storeUpload } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
 import { parseInviteToken } from "./members.ts";
+import type { UserFiles } from "./storage/user-files.ts";
 import type { UserDirectory } from "./users.ts";
 
 /**
@@ -12,10 +14,16 @@ import type { UserDirectory } from "./users.ts";
  *   POST   /api/chats/:id/invites             (owner) a new single-use invite link
  *   DELETE /api/chats/:id/invites/:inviteId   (owner) revoke an invite
  *   DELETE /api/chats/:id/members/:uid        (owner) remove a member, or (member) leave
+ *   POST   /api/chats/:id/attachments         files for a message, as POST /api/files takes them, into the owner's files
  *   POST   /api/invites/accept                {token}: join the chat an invite link is for
  * Returns null for any other path.
  */
-export async function chatRoute(request: Request, directory: DurableObjectStub<UserDirectory>, person: Person): Promise<Response | null> {
+export async function chatRoute(
+  request: Request,
+  directory: DurableObjectStub<UserDirectory>,
+  person: Person,
+  filesOf: (uid: string) => Promise<UserFiles>,
+): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
   const answer = (refusal: ChatRefusal | null) => (refusal ? json({ error: refusal.error }, refusal.status) : json({}));
@@ -29,7 +37,7 @@ export async function chatRoute(request: Request, directory: DurableObjectStub<U
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/(ws|invites|members)(?:\/([a-z0-9-]+))?$/);
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/(ws|invites|members|attachments)(?:\/([a-z0-9-]+))?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
@@ -50,6 +58,11 @@ export async function chatRoute(request: Request, directory: DurableObjectStub<U
     if ("status" in created) return answer(created);
     const { token, ...invite } = created;
     return json({ ...invite, url: `${url.origin}/join/${token}` } satisfies CreatedInvite);
+  }
+  // The agent acts as the owner and reads the owner's files, so a member's attachments go there too.
+  if (what === "attachments" && method === "POST" && !item) {
+    if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
+    return storeUpload(request, () => filesOf(ownerUid));
   }
   if (what === "invites" && method === "DELETE" && item) return answer(await chat.revokeInvite(person, item));
   if (what === "members" && method === "DELETE" && item) return answer(await chat.removeMember(person, item));
