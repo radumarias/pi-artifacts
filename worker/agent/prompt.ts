@@ -1,4 +1,5 @@
 import { defineExtension, section, type Extension } from "@earendil-works/pi-durable";
+import type { ChatPeople } from "../../shared/protocol.ts";
 import RUNTIME_CONTRACT from "../../runtime/runtime.d.ts?raw";
 
 const PREAMBLE = `You are the assistant in pi-artifacts, a chat that builds live, interactive web pages ("artifacts") for the user.
@@ -29,3 +30,23 @@ export const promptExtension: Extension = defineExtension({
     section("runtime_contract", () => `TypeScript declarations of what a published page can call:\n\n${RUNTIME_CONTRACT}`),
   ],
 });
+
+/** Who is in the chat, so the model can tell the people apart. */
+export function peopleExtension(people: () => ChatPeople): Extension {
+  return defineExtension({
+    name: "people",
+    sections: [
+      section("people", () => {
+        const { owner, members } = people();
+        // The same text whether or not the chat was ever shared: the prefix outlives the members who left.
+        const about = 'In a shared chat, each user message starts with its author\'s name ("name: text"); one without a name is the owner\'s.';
+        if (members.length === 0) return about;
+        return (
+          `${about} ${owner.name} owns this chat; ${members.map((m) => m.name).join(", ")} joined it by invite. ` +
+          "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +
+          "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner."
+        );
+      }),
+    ],
+  });
+}

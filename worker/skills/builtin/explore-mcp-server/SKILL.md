@@ -4,7 +4,7 @@ description: Use when the user asks what a connected MCP server can do, wants da
 ---
 Learn a server from what it says about itself, then from one real call.
 
-1. Start from the server's own description and its tool list in the system prompt. Name the tools that fit the request, and which are read-only.
+1. Start from the server's own description and its tool list in the system prompt. If the user asks what is available, has just signed in, or names a server or tool you don't see, call mcp_discover first: it lists every server afresh, a portal's servers included. Name the tools that fit the request, and which are read-only.
 2. Make one small read-only call with realistic input: a single item, a short time range, a low limit. Look at the whole result, wrapper objects included, before planning a page around it.
 3. If a call fails, read the error: fix the input from the tool's schema and try again at most twice, then tell the user what the server said.
 4. Summarise for the user in a few lines: what data is there, how fresh it is, and what you could build with it.

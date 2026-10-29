@@ -1,5 +1,5 @@
 import { UID_PATTERN } from "../../shared/protocol.ts";
-import { toHex } from "../../shared/util.ts";
+import { sha256Hex } from "../../shared/util.ts";
 import { AccessError, verifyAccessJwt } from "./access.ts";
 
 export interface Identity {
@@ -36,8 +36,7 @@ export async function identify(request: Request, env: Env): Promise<Identity | n
 
 /** A stable, opaque uid per Access user: 32 hex characters of SHA-256 over the team and subject. */
 export async function uidFor(teamDomain: string, sub: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${teamDomain}:${sub}`));
-  return toHex(digest).slice(0, 32);
+  return (await sha256Hex(`${teamDomain}:${sub}`)).slice(0, 32);
 }
 
 function cookieValue(request: Request, name: string): string | null {

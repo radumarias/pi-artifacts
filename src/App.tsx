@@ -50,6 +50,9 @@ export function App() {
     );
   }
 
+  const join = path.match(/^\/join\/([a-z0-9.-]+)$/);
+  if (join) return <Join token={join[1]} navigate={navigate} />;
+
   const chatId = path.match(/^\/c\/([a-z0-9]+)$/)?.[1];
   return (
     <Workspace
@@ -68,6 +71,36 @@ export function App() {
         navigate("/");
       }}
     />
+  );
+}
+
+/** An invite link: joining takes a click, so a link opened by accident (or prefetched) joins nobody. */
+function Join({ token, navigate }: { token: string; navigate: (path: string) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const [joining, setJoining] = useState(false);
+  const join = async () => {
+    setJoining(true);
+    try {
+      navigate(`/c/${(await api.acceptInvite(token)).chatId}`);
+    } catch (e) {
+      setError(errorMessage(e));
+      setJoining(false);
+    }
+  };
+  return (
+    <main className="sign-in">
+      <div>
+        <h1>Join a chat</h1>
+        <p>You were invited to build artifacts together in someone's chat. Everyone in it sees the whole conversation, including what you write.</p>
+        <button type="button" className="primary" disabled={joining} onClick={() => void join()}>
+          Join the chat
+        </button>{" "}
+        <button type="button" onClick={() => navigate("/")}>
+          Not now
+        </button>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </main>
   );
 }
 
@@ -256,12 +289,14 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
                 key={chat.id}
                 href={`/c/${chat.id}`}
                 className={chat.id === chatId ? "active" : ""}
+                title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
                 onClick={(e) => {
                   e.preventDefault();
                   navigate(`/c/${chat.id}`);
                 }}
               >
                 {chat.title}
+                {chat.sharedBy && <small> · {chat.sharedBy}</small>}
               </a>
             ))}
           </nav>
@@ -313,7 +348,17 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           </ErrorBoundary>
         ) : chatId ? (
           <ErrorBoundary key={chatId} what="this chat">
-            <ChatView chatId={chatId} onArtifact={onArtifact} onActivity={refresh} />
+            <ChatView
+              chatId={chatId}
+              uid={uid}
+              onArtifact={onArtifact}
+              onActivity={refresh}
+              onGone={loadChats}
+              onLeft={() => {
+                loadChats();
+                navigate("/");
+              }}
+            />
           </ErrorBoundary>
         ) : (
           <div className="panel-empty">

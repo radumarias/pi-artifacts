@@ -91,7 +91,11 @@ The last entry is a Cloudflare MCP portal.
   the tool descriptions.
 - **A Cloudflare MCP portal is one entry** for every server behind it. Its tools come namespaced (`reports_run_query`),
   and its own `portal_*` tools are left in. Through them, the agent can list the portal's servers and turn them on,
-  and the portal can answer with a link for signing in to one of them.
+  and the portal can answer with a link for signing in to one of them. Add a server to the portal and it reaches the
+  agent without a change here: no server behind a portal is named in the code or the config.
+- **Discovery** happens when a chat starts and before every prompt, and tool lists are listed again after five
+  minutes, so servers added to a portal show up on their own. Asked "what's available?", or told you just signed in,
+  the agent calls `mcp_discover`, which lists every server afresh and installs any new tools at once, in the same turn.
 
 `auth: "oauth"` means each user signs in themselves, and their chats call with their own tokens. The app is a standard
 MCP OAuth client for it (`worker/mcp/oauth.ts`, on the MCP SDK): discovery, dynamic client registration, PKCE and
@@ -104,7 +108,7 @@ refresh. There is nothing specific to any one server:
    to its identity provider. The portal keeps those sessions; the app never sees them.
 3. The browser comes back to `/api/mcp/oauth/callback`. The Worker checks the `state` against the sign-in it started
    for *you* (the callback needs your app session too), exchanges the code and stores your tokens. Ask again in the
-   chat: your next prompt picks up the server's tools.
+   chat: your next prompt picks up the server's tools (and `mcp_discover` picks them up within a turn).
 
 Where things live and who can use them:
 
@@ -115,9 +119,10 @@ Where things live and who can use them:
 - **Two chats refreshing at once don't undo each other.** Each change to the stored record (new tokens, a cleared
   verifier) is applied inside the `UserDirectory` in one step, and a rejected refresh clears the tokens only if they
   are still the ones that chat used.
-- **Pages that call such a server load only for their author.** A page calls through its author's chat, so it would
-  otherwise show the author's data to anyone with the link. Other viewers get `not_granted`. Claude's artifacts
-  instead use each viewer's own connectors.
+- **Pages that call such a server load only for people in their author's chat** (the author, and anyone they invited
+  into it; see [Shared chats](#shared-chats)). A page calls through its author's chat, so it would otherwise show the
+  author's data to anyone with the link. Other viewers get `not_granted`. Claude's artifacts instead use each viewer's
+  own connectors.
 - **Removing a server** from the list also removes everyone's stored sign-in for it, tokens included. This happens the
   next time each user's directory loads.
 - **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then. To end the portal's own session, sign out on the portal's home
@@ -142,7 +147,9 @@ Setting up a Cloudflare MCP portal for it (Zero Trust → Access controls → MC
   one, nobody can sign in.
 - Keep **Require user auth** on for servers whose data depends on who asks: that is what makes each person sign in
   with their own account.
-- Put the portal's `/mcp` address in `mcp-servers.json` with `"auth": "oauth"`.
+- Put the portal's `/mcp` address in `mcp-servers.json` with `"auth": "oauth"`. When you deploy from a fresh checkout
+  (a cloud session, CI), set `PI_MCP_SERVERS` in that environment instead: without either, a deploy falls back to the
+  demo server alone and the agent no longer sees the portal.
 
 ## The page runtime
 
@@ -215,12 +222,55 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   built-in added later can take one of yours: then the agent uses yours while it is on, and the list says so.
 - The tool list is guidance shown on activation, not a sandbox: every tool of the chat stays callable.
 
+## Shared chats
+
+A chat's owner can invite other people to build artifacts with them in the same chat. Pi Durable is multiplayer for
+people: many people share one conversation with one agent, and their messages queue in its inbox while it works.
+
+- **Invite:** **Share** in the chat header makes a single-use link, `/join/<token>`, valid for 7 days. The token names
+  the chat and carries a random secret; the chat keeps only the secret's SHA-256 hash, so the link is shown once.
+  Whoever opens it, signed in, clicks **Join** and finds the chat in their sidebar. The owner sees who is in the chat
+  and the open links, removes people and revokes links; a member can leave. Only the owner invites.
+- **One agent, acting as the owner:** a shared chat stays the owner's `ChatAgent`. Whoever writes, the agent works
+  with the owner's MCP connections and sign-ins, files, sandbox and skills, and what it publishes belongs to the
+  owner. The Share panel says so before the owner makes a link: members can ask it to read or change anything those
+  reach.
+- **Who wrote what:** each message is placed as a `chat.message` entry naming its author. Once the chat has members,
+  the model reads it as `name: text` (before that, no name reaches the model), and a system-prompt section says who
+  is in the chat.
+- **Access:** the Worker finds the chat through the user's index (their own chats and the ones shared with them), and
+  the chat object checks membership again on every socket and prompt, and on page calls to servers that sign in each
+  user. Removing someone tells their sockets so and closes them at once (close code 4403), and the app stops reconnecting.
+- **Pages:** people in the chat may load its pages' data from servers that sign in each user, since they see that
+  data in the conversation anyway. A page's write tools stay the author's only.
+- Routes in `worker/chat-routes.ts`; members and invites in `worker/members.ts`, in the chat object's SQLite.
+
+## Models
+
+Each chat picks its model and effort above the message box. The picker (`src/chat/ModelPicker.tsx`, choices from
+`GET /api/models`, built in `worker/models.ts`) lists:
+
+- **Anthropic and OpenAI:** every chat model in pi-ai's AI Gateway catalog for the two, newest first. Calls go through
+  the `pi-artifacts` AI Gateway, which holds the keys (Provider Keys, BYOK) or bills them (unified billing).
+- **Workers AI:** a few open models that run on Cloudflare and suit building pages (tool calling, a context of 128k
+  tokens or more): Kimi K2.7 Code, GLM 5.3, DeepSeek V4, Qwen 3.8, GPT OSS 120B, Gemma 4. They need no provider
+  key and use the account's free daily Workers AI allowance first, then Workers AI pricing.
+
+The effort picker shows only the levels the model takes, and nothing for a model that does not reason. The choice is
+the chat's own (pi's agent state, so a change reaches every open view of the chat) and applies from the next model
+request. Everyone in a [shared chat](#shared-chats) can change it. The latest pick is also the default for new chats
+of whoever made it (kept in their `UserDirectory`): a chat takes it when it is first opened and keeps its model from
+then on, even before its first message, until someone changes it. Before a user has picked anything, chats start on
+`MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at high effort).
+
 ## Layout
 
 | Path | What |
 |---|---|
-| `worker/index.ts`, `worker/files-routes.ts` | Routes: identity, chats, chat WebSocket, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files and uploads |
-| `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall` |
+| `worker/index.ts`, `worker/files-routes.ts` | Routes: identity, chats, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files and uploads |
+| `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall`, members |
+| `worker/chat-routes.ts`, `worker/members.ts` | Shared chats: the chat socket, people, invite links and their routes |
+| `worker/models.ts` | The models a chat can pick, and the check on a pick |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
 | `worker/skills/`, `worker/skills-routes.ts` | Built-in skills, the SKILL.md format, and the `/api/skills` routes |
@@ -267,9 +317,10 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
 2. Enable R2 for the account in the dashboard, then create the bucket: `cf r2 buckets create --name pi-artifacts`.
    The Artifacts namespace `pi-artifacts` needs no setup: it is created with the first repo. Artifacts needs the
    Workers Paid plan.
-3. Create an AI Gateway named `pi-artifacts` and store an Anthropic key in it (BYOK), or use unified billing.
-   `MODEL` in `cloudflare.config.ts` is a pi-ai gateway specifier (`anthropic/claude-sonnet-5.5`). A Workers AI id
-   such as `@cf/zai-org/glm-5.3-flash` needs no key.
+3. Create an AI Gateway named `pi-artifacts` and store an Anthropic key and an OpenAI key in it (Provider Keys,
+   BYOK), or use unified billing. Without an OpenAI key, OpenAI models answer with the gateway's error and everything
+   else works. `MODEL` in `cloudflare.config.ts`, what new chats start on, is a pi-ai gateway specifier
+   (`anthropic/claude-opus-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
 4. Put the app behind Cloudflare Access: create a self-hosted Access application for the Worker's hostname with a
    policy listing who may sign in, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` (the application's audience tag) in
    `cloudflare.config.ts`.
@@ -293,6 +344,8 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
 - **Artifacts** are shared by link with anyone Access lets in, and are not encrypted per user. Only their owner's chat
   can publish new versions, and only their owner can clone their repo. See
   [Versions in Git](#versions-in-git).
+- **Shared chats** open only to their owner and the people the owner invited, and everyone in one works through the
+  owner's agent and connections. See [Shared chats](#shared-chats).
 
 ### Versions in Git
 
@@ -393,6 +446,7 @@ before reading R2. Changing the runtime or the CSP changes the fingerprint, so a
 - **Next:**
   - a screenshot self-check in the sandbox before publishing
   - live data from sign-in servers for every viewer, each with their own sign-in
+  - in shared chats, members bringing their own files and sign-ins to the agent
   - WebSocket push for sources that stream
   - a separate preview domain
 
