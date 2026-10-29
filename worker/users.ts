@@ -57,15 +57,14 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** The user's own chats and the ones shared with them, most recent first. */
   listChats(): ChatSummary[] {
-    const own = this.ctx.storage.sql
-      .exec<{ id: string; title: string; created_at: number; updated_at: number }>("SELECT * FROM chats")
+    return this.ctx.storage.sql
+      .exec<{ id: string; title: string; created_at: number; updated_at: number; shared_by: string | null }>(
+        `SELECT id, title, created_at, updated_at, NULL AS shared_by FROM chats
+         UNION ALL SELECT id, title, joined_at, updated_at, owner_name FROM shared_chats
+         ORDER BY updated_at DESC`,
+      )
       .toArray()
-      .map((row): ChatSummary => ({ id: row.id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at }));
-    const shared = this.ctx.storage.sql
-      .exec<{ id: string; title: string; owner_name: string; joined_at: number; updated_at: number }>("SELECT * FROM shared_chats")
-      .toArray()
-      .map((row): ChatSummary => ({ id: row.id, title: row.title, createdAt: row.joined_at, updatedAt: row.updated_at, sharedBy: row.owner_name }));
-    return [...own, ...shared].sort((a, b) => b.updatedAt - a.updatedAt);
+      .map((row) => ({ id: row.id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.shared_by !== null && { sharedBy: row.shared_by }) }));
   }
 
   /** Whose chat `id` is: this user's own uid, the owner's for a chat shared with them, or null. The chat itself still checks membership. */

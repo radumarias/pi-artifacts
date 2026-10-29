@@ -156,7 +156,7 @@ export interface ChatInvite {
   expiresAt: number;
 }
 
-/** GET /api/chats/:id/people: who is in the chat, and for its owner the invites still open. */
+/** What one person's app is told about a chat's people: everyone in it, and for its owner the invites still open. */
 export type ChatPeopleView = ChatPeople & { invites?: ChatInvite[] };
 
 /** POST /api/chats/:id/invites: a single-use link to the chat. */
@@ -167,7 +167,7 @@ export interface CreatedInvite extends ChatInvite {
 /**
  * The transcript entry each prompt is placed as, instead of pi's `pi.user`, so a shared
  * chat shows who wrote what. The model gets the text as a user message, prefixed with the
- * author's name once the chat has members.
+ * author's name.
  */
 export const CHAT_MESSAGE_KIND = "chat.message";
 export interface ChatMessageData {
@@ -179,13 +179,13 @@ export interface ChatMessageData {
 /** Browser → ChatAgent over the chat WebSocket. */
 export type ChatClientMessage = { type: "prompt"; text: string } | { type: "abort" };
 
-/** ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever someone joins or leaves. */
+/** ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change. */
 export type ChatServerMessage =
   | { type: "events"; events: unknown[] }
-  | { type: "people"; people: ChatPeople }
+  | { type: "people"; people: ChatPeopleView }
   | { type: "error"; message: string };
 
-/** The close code of a chat socket whose user is no longer in the chat: the app stops reconnecting. */
+/** The close code of a chat socket whose user is not (or no longer) in the chat: the app stops reconnecting. */
 export const SOCKET_NOT_A_MEMBER = 4403;
 
 /** The minimum polling interval a page can ask for, as at Claude. */

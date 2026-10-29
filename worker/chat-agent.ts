@@ -15,6 +15,7 @@ import {
   type ChatInvite,
   type ChatMessageData,
   type ChatPeople,
+  type ChatPeopleView,
   type ChatServerMessage,
   type DeclaredTool,
   type McpError,
@@ -23,6 +24,7 @@ import {
   type ProxyResponse,
 } from "../shared/protocol.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
+import { closedSocket } from "./http.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
@@ -33,6 +35,16 @@ import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
 import { mcpAuthStore } from "./users.ts";
+
+/** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
+export interface ChatRefusal {
+  error: string;
+  status: 403 | 404 | 409;
+}
+
+function refuse(status: ChatRefusal["status"], error: string): ChatRefusal {
+  return { error, status };
+}
 
 const SOCKET_TAG = "chat";
 const OWNER = "chat-sockets";
@@ -83,7 +95,13 @@ export class ChatAgent extends DurableObject<Env> {
     defaults: { model: this.ai(this.env.MODEL), thinkingLevel: "medium" },
   });
   readonly members = new ChatMembers(this.ctx.storage.sql);
-  readonly sockets = new ChatSockets(this);
+  readonly sockets = new ChatSockets({
+    events: () => this.harness.session().events(),
+    admit: (person) => this.admit(person),
+    peopleFor: (uid) => this.peopleFor(uid),
+    prompt: (text, author) => this.prompt(text, author),
+    abort: (by) => this.abort(by),
+  });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets);
 
   readonly scope: ChatScope;
@@ -198,61 +216,94 @@ export class ChatAgent extends DurableObject<Env> {
     return uid === this.uid || this.members.has(uid);
   }
 
+  /**
+   * Let a verified person's socket in, if they are in the chat, and keep the name they last
+   * signed in with: the others see it, and the model reads it. A member's sidebar entry for a
+   * chat they are no longer in goes when they next try to open it.
+   */
+  admit(person: Person): boolean {
+    if (person.uid === this.uid) {
+      this.members.setOwnerName(person);
+      return true;
+    }
+    if (this.members.has(person.uid)) {
+      this.members.rename(person);
+      return true;
+    }
+    void this.#index(person.uid).removeSharedChat(this.chatId, this.uid);
+    return false;
+  }
+
   people(): ChatPeople {
     return { owner: { uid: this.uid, name: this.members.ownerName(this.uid) }, members: this.members.list() };
   }
 
+  /** What one person's app shows: everyone in the chat, and for the owner the invites still open. */
+  peopleFor(uid: string): ChatPeopleView {
+    return { ...this.people(), ...(uid === this.uid && { invites: this.members.invites() }) };
+  }
+
   /**
-   * One person's message. It is placed as a `chat.message` entry naming its
-   * author; once the chat has members, the model reads it as "name: text".
-   * While a run is going, it waits in pi's inbox and is answered next.
+   * One person's message, placed as a `chat.message` entry naming its author.
+   * The model reads it as "name: text". While a run is going, it waits in pi's
+   * inbox and is answered next.
    */
   async prompt(text: string, author: Person): Promise<void> {
     if (!this.isInChat(author.uid)) throw new Error("You are no longer in this chat.");
     await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills()]);
-    const shared = this.members.list().length > 0;
-    await this.harness.submit(shared ? `${author.name}: ${text}` : text, {
+    await this.harness.submit(`${author.name}: ${text}`, {
       entry: { kind: CHAT_MESSAGE_KIND, data: { uid: author.uid, name: author.name, text } satisfies ChatMessageData },
     });
-    // touchChat only names a chat that is still called "New chat", so the first prompt names it.
-    const title = await this.#directory.touchChat(this.chatId, text);
-    // Members see the chat in their own sidebar: move it up there too. Their index is only a convenience, so a failure is fine.
-    await Promise.allSettled(this.members.list().map((member) => exports.UserDirectory.getByName(member.uid).touchSharedChat(this.chatId, this.uid, title)));
+    // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
+    void this.#touchIndexes(text).catch((error) => console.error("chat index:", errorMessage(error)));
   }
 
-  /** A link's secret for the owner to pass on. Only the owner may call this; the Worker checks, and so does the chat. */
-  async createInvite(owner: Person): Promise<(ChatInvite & { token: string }) | { error: string }> {
-    if (owner.uid !== this.uid) return { error: "Only the chat's owner can invite people." };
-    this.members.setOwnerName(owner);
+  /** Move the chat up in everyone's sidebar. touchChat only names a chat still called "New chat", so the first prompt names it. */
+  async #touchIndexes(text: string): Promise<void> {
+    const title = await this.#directory.touchChat(this.chatId, text);
+    await Promise.allSettled(this.members.list().map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title)));
+  }
+
+  #index(uid: string) {
+    return exports.UserDirectory.getByName(uid);
+  }
+
+  /** A single-use link's token, shown once to the owner. The chat itself decides who may: only its owner. */
+  async createInvite(by: Person): Promise<(ChatInvite & { token: string }) | ChatRefusal> {
+    if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can invite people.");
+    this.members.setOwnerName(by);
     const created = await this.members.createInvite();
-    if ("error" in created) return created;
+    if ("error" in created) return refuse(409, created.error);
+    this.sockets.broadcastPeople();
     return { ...created.invite, token: formatInviteToken({ ownerUid: this.uid, chatId: this.chatId, secret: created.secret }) };
   }
 
-  invites(): ChatInvite[] {
-    return this.members.invites();
+  revokeInvite(by: Person, id: string): ChatRefusal | null {
+    if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can revoke invites.");
+    if (!this.members.revokeInvite(id)) return refuse(404, "No such invite.");
+    this.sockets.broadcastPeople();
+    return null;
   }
 
-  revokeInvite(id: string): boolean {
-    return this.members.revokeInvite(id);
-  }
-
-  /** Join by an invite's secret. Returns what the new member's sidebar shows. */
-  async acceptInvite(secret: string, person: Person): Promise<{ title: string; ownerName: string } | { error: string }> {
-    if (person.uid === this.uid) return { error: "This is your own chat." };
+  /** Join by an invite's secret; the chat then shows in the new member's sidebar. */
+  async acceptInvite(secret: string, person: Person): Promise<ChatRefusal | null> {
+    if (person.uid === this.uid) return refuse(403, "This is your own chat.");
     const failed = await this.members.accept(secret, person);
-    if (failed) return failed;
-    this.sockets.broadcast({ type: "people", people: this.people() });
-    return { title: (await this.#directory.chatTitle(this.chatId)) ?? "Shared chat", ownerName: this.members.ownerName(this.uid) };
+    if (failed) return refuse(403, failed.error);
+    this.sockets.broadcastPeople();
+    const title = (await this.#directory.chatTitle(this.chatId)) ?? "Shared chat";
+    await this.#index(person.uid).addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
+    return null;
   }
 
-  /** The owner removes a member, or a member leaves. Their open sockets close at once. */
-  removeMember(by: string, uid: string): boolean {
-    if (by !== this.uid && by !== uid) return false;
-    if (!this.members.remove(uid)) return false;
+  /** The owner removes a member, or a member leaves. Their open sockets close at once, and the chat leaves their sidebar. */
+  async removeMember(by: Person, uid: string): Promise<ChatRefusal | null> {
+    if (by.uid !== this.uid && by.uid !== uid) return refuse(403, "Only the chat's owner can remove people.");
+    if (!this.members.remove(uid)) return refuse(404, "No such member.");
     this.sockets.disconnect(uid);
-    this.sockets.broadcast({ type: "people", people: this.people() });
-    return true;
+    this.sockets.broadcastPeople();
+    await this.#index(uid).removeSharedChat(this.chatId, this.uid);
+    return null;
   }
 
   /** Publish without the model, through the same checks as the agent's tool. Only routed when DEV_TOOLS is on. */
@@ -336,17 +387,15 @@ export class ChatAgent extends DurableObject<Env> {
 
 /** What the chat's sockets need from the chat. */
 interface ChatSession {
-  readonly uid: string;
-  readonly members: ChatMembers;
-  readonly harness: PiHarness;
-  isInChat(uid: string): boolean;
-  people(): ChatPeople;
+  events(): Promise<AgentEventStream>;
+  admit(person: Person): boolean;
+  peopleFor(uid: string): ChatPeopleView;
   prompt(text: string, author: Person): Promise<void>;
   abort(by: Person): Promise<void>;
 }
 
-/** A chat socket's hibernation attachment: whose socket it is. Sockets from before shared chats carry no person, and were all the owner's. */
-type SocketAttachment = { owner: typeof OWNER; person?: Person };
+/** A chat socket's hibernation attachment: whose socket it is. */
+type SocketAttachment = { owner: typeof OWNER; person: Person };
 
 /**
  * The chat's browser connections, one or more per person in the chat. Each
@@ -365,9 +414,9 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
 
   onStart(): void {
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
-      // A socket accepted before chat sockets carried an attachment has only the tag: claim it, or its messages go unhandled.
-      if (!this.#owns(ws)) ws.serializeAttachment({ owner: OWNER } satisfies SocketAttachment);
-      void this.#attach(ws);
+      // A socket from before sockets named their person cannot say whose it is: close it, and the app reconnects as someone.
+      if (!this.#person(ws)) close(ws, 1012, "Reconnect");
+      else void this.#attach(ws);
     }
   }
 
@@ -375,10 +424,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   onWebSocketUpgrade({ request }: { request: Request }): Response | undefined {
     if (!new URL(request.url).pathname.endsWith("/ws")) return undefined;
     const person = JSON.parse(request.headers.get(PERSON_HEADER) ?? "null") as Person | null;
-    if (!person || !this.#chat.isInChat(person.uid)) return new Response("Not in this chat", { status: 403 });
-    // Keep the name each person last signed in with: the others see it, and the model reads it.
-    if (person.uid === this.#chat.uid) this.#chat.members.setOwnerName(person);
-    else this.#chat.members.rename(person);
+    if (!person || !this.#chat.admit(person)) return closedSocket(SOCKET_NOT_A_MEMBER, "Not in this chat");
     const pair = new WebSocketPair();
     this.lifecycle.sockets.accept(pair[1], [SOCKET_TAG]);
     pair[1].serializeAttachment({ owner: OWNER, person } satisfies SocketAttachment);
@@ -386,35 +432,35 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /** Lifecycle leaves ownership to each capability: a chat socket carries this capability's attachment, which survives hibernation. */
-  #owns(ws: WebSocket): boolean {
-    return (ws.deserializeAttachment() as SocketAttachment | null)?.owner === OWNER;
+  /**
+   * The person a chat socket belongs to; undefined for a socket that is not a chat socket, or is one from before
+   * sockets named their person. Lifecycle leaves ownership to each capability: this attachment survives hibernation.
+   */
+  #person(ws: WebSocket): Person | undefined {
+    const attachment = ws.deserializeAttachment() as Partial<SocketAttachment> | null;
+    return attachment?.owner === OWNER ? attachment.person : undefined;
   }
 
-  #person(ws: WebSocket): Person {
-    return (ws.deserializeAttachment() as SocketAttachment).person ?? { uid: this.#chat.uid, name: this.#chat.members.ownerName(this.#chat.uid) };
-  }
-
-  /** Tell every open socket. */
-  broadcast(message: ChatServerMessage): void {
-    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) if (this.#owns(ws)) send(ws, message);
+  /** Tell every open socket who is in the chat; the owner's also get the open invites. */
+  broadcastPeople(): void {
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
+      const person = this.#person(ws);
+      if (person) send(ws, { type: "people", people: this.#chat.peopleFor(person.uid) });
+    }
   }
 
   /** Close the sockets of someone no longer in the chat. The app sees the close code and stops reconnecting. */
   disconnect(uid: string): void {
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
-      if (!this.#owns(ws) || this.#person(ws).uid !== uid) continue;
+      if (this.#person(ws)?.uid !== uid) continue;
       void this.#detach(ws);
-      try {
-        ws.close(SOCKET_NOT_A_MEMBER, "Removed from the chat");
-      } catch {
-        // Already closed.
-      }
+      close(ws, SOCKET_NOT_A_MEMBER, "Removed from the chat");
     }
   }
 
   async onWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<boolean> {
-    if (!this.#owns(ws)) return false;
+    const person = this.#person(ws);
+    if (!person) return false;
     void this.#attach(ws);
     let message: ChatClientMessage;
     try {
@@ -422,7 +468,6 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     } catch {
       return true;
     }
-    const person = this.#person(ws);
     try {
       if (message.type === "prompt" && message.text.trim()) await this.#chat.prompt(message.text.slice(0, 20_000), person);
       else if (message.type === "abort") await this.#chat.abort(person);
@@ -433,7 +478,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   }
 
   async onWebSocketClose(ws: WebSocket): Promise<boolean> {
-    if (!this.#owns(ws)) return false;
+    if (!this.#person(ws)) return false;
     await this.#detach(ws);
     return true;
   }
@@ -446,8 +491,8 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     let stream = this.#streams.get(ws);
     if (stream) return stream;
     stream = (async () => {
-      const events = await this.#chat.harness.session().events();
-      send(ws, { type: "people", people: this.#chat.people() });
+      const events = await this.#chat.events();
+      send(ws, { type: "people", people: this.#chat.peopleFor(this.#person(ws)!.uid) });
       send(ws, { type: "events", events: [events.snapshot] });
       events.start(async (batch) => {
         if (!send(ws, { type: "events", events: [...batch] })) await this.#detach(ws);
@@ -466,6 +511,14 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     const stream = this.#streams.get(ws);
     this.#streams.delete(ws);
     if (stream) await (await stream.catch(() => undefined))?.stop();
+  }
+}
+
+function close(ws: WebSocket, code: number, reason: string): void {
+  try {
+    ws.close(code, reason);
+  } catch {
+    // Already closed.
   }
 }
 

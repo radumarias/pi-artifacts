@@ -1,5 +1,5 @@
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
-import type { ArtifactSummary, ArtifactView, ChatPeopleView, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
+import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
 
 export type { ArtifactSummary };
 
@@ -42,7 +42,6 @@ export const api = {
   signOut: () => request<object>("/api/session", { method: "DELETE" }),
   chats: () => request<ChatSummary[]>("/api/chats"),
   createChat: () => request<ChatSummary>("/api/chats", { method: "POST" }),
-  people: (chatId: string) => request<ChatPeopleView>(`/api/chats/${chatId}/people`),
   createInvite: (chatId: string) => request<CreatedInvite>(`/api/chats/${chatId}/invites`, post({})),
   revokeInvite: (chatId: string, inviteId: string) => request<object>(`/api/chats/${chatId}/invites/${inviteId}`, { method: "DELETE" }),
   /** The owner removes a member; a member passes their own uid to leave. */

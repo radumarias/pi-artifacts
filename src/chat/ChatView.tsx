@@ -79,12 +79,12 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     submit();
   };
 
-  const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid) : [];
+  const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid).map((person) => person.name).join(", ") : "";
   return (
     <section className="chat">
       <header className="chat-header">
-        <span className="chat-people" title={others.map((person) => person.name).join(", ")}>
-          {others.length > 0 && `With ${others.map((person) => person.name).join(", ")}`}
+        <span className="chat-people" title={others}>
+          {others && `With ${others}`}
         </span>
         {people && (
           <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
@@ -92,7 +92,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
           </button>
         )}
       </header>
-      {sharing && <SharePanel chatId={chatId} uid={uid} people={people} onLeft={onLeft} />}
+      {sharing && people && <SharePanel chatId={chatId} uid={uid} people={people} onLeft={onLeft} />}
       <div className="messages" ref={list} onScroll={onScroll}>
         {state.entries.length === 0 && !state.busy && (
           <div className="empty-chat">
@@ -118,7 +118,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
-          placeholder={connected ? (others.length ? "Message everyone and the agent…" : "Describe a dashboard…") : "Connecting…"}
+          placeholder={connected ? (others ? "Message everyone and the agent…" : "Describe a dashboard…") : "Connecting…"}
           rows={2}
         />
         {state.busy ? (
@@ -140,9 +140,8 @@ const Entry = memo(function Entry({ entry, uid, onOpen }: { entry: EntryRecord; 
   const message = entry.model?.[0];
   if (entry.kind === "pi.user" && message?.role === "user") return <User text={userText(message)} />;
   if (entry.kind === CHAT_MESSAGE_KIND) {
-    const data = entry.data as Partial<ChatMessageData> | undefined;
-    const text = typeof data?.text === "string" ? data.text : message?.role === "user" ? userText(message) : "";
-    return <User text={text} author={data?.uid && data.uid !== uid ? data.name : undefined} />;
+    const data = entry.data as unknown as ChatMessageData;
+    return <User text={data.text} author={data.uid !== uid ? data.name : undefined} />;
   }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {

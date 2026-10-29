@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, EntryRecord } from "@earendil-works/pi-durable";
 import { useEffect, useReducer, useRef, useState } from "react";
-import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeople, type ChatServerMessage } from "../../shared/protocol.ts";
+import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
 export interface RunningTool {
@@ -110,7 +110,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
 export function useChat(chatId: string) {
   const [state, dispatch] = useReducer(reduce, initial);
   const [connected, setConnected] = useState(false);
-  const [people, setPeople] = useState<ChatPeople | null>(null);
+  const [people, setPeople] = useState<ChatPeopleView | null>(null);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -123,9 +123,7 @@ export function useChat(chatId: string) {
     const open = () => {
       const ws = new WebSocket(api.chatSocketUrl(chatId));
       socket.current = ws;
-      let opened = false;
       ws.onopen = () => {
-        opened = true;
         attempt = 0;
         setConnected(true);
       };
@@ -135,19 +133,13 @@ export function useChat(chatId: string) {
         else if (message.type === "people") setPeople(message.people);
         else dispatch({ type: "error", message: message.message });
       };
-      const stop = () => {
-        closed = true;
-        dispatch({ type: "error", message: "You are no longer in this chat." });
-      };
-      ws.onclose = async (event) => {
+      ws.onclose = (event) => {
         setConnected(false);
         if (closed) return;
-        if (event.code === SOCKET_NOT_A_MEMBER) return stop();
-        // A refused upgrade shows only as a close; ask over HTTP whether the chat is still ours to open.
-        if (!opened) {
-          const status = await api.people(chatId).then(() => 200, (e: { status?: number }) => e.status);
-          if (closed) return;
-          if (status === 403 || status === 404) return stop();
+        if (event.code === SOCKET_NOT_A_MEMBER) {
+          closed = true;
+          dispatch({ type: "error", message: "You are not in this chat." });
+          return;
         }
         timer = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 15_000));
       };

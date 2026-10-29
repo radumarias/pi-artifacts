@@ -31,17 +31,17 @@ export const promptExtension: Extension = defineExtension({
   ],
 });
 
-/** Who is in a shared chat, so the model can tell the people apart. Nothing for a chat only its owner is in. */
+/** Who is in the chat, so the model can tell the people apart. */
 export function peopleExtension(people: () => ChatPeople): Extension {
   return defineExtension({
     name: "people",
     sections: [
       section("people", () => {
         const { owner, members } = people();
-        if (members.length === 0) return undefined;
+        const about = 'Each user message starts with its author\'s name ("name: text"); one without a name is the owner\'s.';
+        if (members.length === 0) return `${about} ${owner.name} owns this chat.`;
         return (
-          `This chat is shared. ${owner.name} owns it; ${members.map((m) => m.name).join(", ")} joined by invite. ` +
-          'Each user message starts with its author\'s name ("name: text"); earlier messages without a name are the owner\'s. ' +
+          `${about} ${owner.name} owns this chat; ${members.map((m) => m.name).join(", ")} joined it by invite. ` +
           "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +
           "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner."
         );

@@ -1,5 +1,5 @@
 import { ID_PATTERN, UID_PATTERN, type ChatInvite, type Person } from "../shared/protocol.ts";
-import { randomHex, toHex } from "../shared/util.ts";
+import { randomHex, sha256Hex } from "../shared/util.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
 export const MAX_MEMBERS = 20;
@@ -31,10 +31,6 @@ export function parseInviteToken(token: unknown): InviteToken | null {
   return { ownerUid, chatId, secret };
 }
 
-async function hash(secret: string): Promise<string> {
-  return toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret)));
-}
-
 /**
  * One chat's members and open invites, in the chat object's own SQLite. The
  * owner is not a member: the chat object's name says who owns it. An invite
@@ -59,8 +55,13 @@ export class ChatMembers {
     return (row?.name as string | undefined) ?? ownerUid;
   }
 
+  /** Only a changed name is written: this runs on every connect. */
   setOwnerName(owner: Person): void {
-    this.#sql.exec("INSERT INTO chat_owner (uid, name) VALUES (?, ?) ON CONFLICT(uid) DO UPDATE SET name = excluded.name", owner.uid, owner.name);
+    this.#sql.exec(
+      "INSERT INTO chat_owner (uid, name) VALUES (?, ?) ON CONFLICT(uid) DO UPDATE SET name = excluded.name WHERE name <> excluded.name",
+      owner.uid,
+      owner.name,
+    );
   }
 
   list(): Person[] {
@@ -76,7 +77,15 @@ export class ChatMembers {
 
   /** A member's name changes when they sign in with another email for the same uid; keep the one they last used. */
   rename(member: Person): void {
-    this.#sql.exec("UPDATE chat_members SET name = ? WHERE uid = ?", member.name, member.uid);
+    this.#sql.exec("UPDATE chat_members SET name = ? WHERE uid = ? AND name <> ?", member.name, member.uid, member.name);
+  }
+
+  #count(table: "chat_members" | "chat_invites"): number {
+    return this.#sql.exec(`SELECT COUNT(*) AS n FROM ${table}`).toArray()[0].n as number;
+  }
+
+  #full(): { error: string } | null {
+    return this.#count("chat_members") >= MAX_MEMBERS ? { error: `This chat has ${MAX_MEMBERS} members, the most there can be.` } : null;
   }
 
   remove(uid: string): boolean {
@@ -94,11 +103,15 @@ export class ChatMembers {
 
   /** A new invite and its secret, which only the link carries. */
   async createInvite(now = Date.now()): Promise<{ invite: ChatInvite; secret: string } | { error: string }> {
-    if (this.invites(now).length >= MAX_OPEN_INVITES) return { error: `This chat has ${MAX_OPEN_INVITES} open invites; revoke one first.` };
-    if (this.list().length >= MAX_MEMBERS) return { error: `This chat has ${MAX_MEMBERS} members, the most there can be.` };
     const secret = randomHex(32);
+    const secretHash = await sha256Hex(secret);
+    // After the await, as in accept: the checks and the insert happen in one step of the object.
+    this.#sql.exec("DELETE FROM chat_invites WHERE expires_at <= ?", now);
+    if (this.#count("chat_invites") >= MAX_OPEN_INVITES) return { error: `This chat has ${MAX_OPEN_INVITES} open invites; revoke one first.` };
+    const full = this.#full();
+    if (full) return full;
     const invite = { id: randomHex(8), createdAt: now, expiresAt: now + INVITE_TTL_MS };
-    this.#sql.exec("INSERT INTO chat_invites (secret_hash, id, created_at, expires_at) VALUES (?, ?, ?, ?)", await hash(secret), invite.id, invite.createdAt, invite.expiresAt);
+    this.#sql.exec("INSERT INTO chat_invites (secret_hash, id, created_at, expires_at) VALUES (?, ?, ?, ?)", secretHash, invite.id, invite.createdAt, invite.expiresAt);
     return { invite, secret };
   }
 
@@ -109,15 +122,16 @@ export class ChatMembers {
   /**
    * Use an invite: `person` becomes a member and the invite is gone. Someone
    * already in the chat keeps the invite unused, so it can still go to whoever
-   * it was meant for. The owner is checked by the caller. Null when they are in.
+   * it was meant for. The chat refuses its owner before this. Null when they are in.
    */
   async accept(secret: string, person: Person, now = Date.now()): Promise<{ error: string } | null> {
-    const secretHash = await hash(secret);
+    const secretHash = await sha256Hex(secret);
     // After the await: nothing below awaits, so the check and the change happen in one step of the object.
     if (this.has(person.uid)) return null;
     const row = this.#sql.exec("SELECT expires_at FROM chat_invites WHERE secret_hash = ?", secretHash).toArray()[0];
     if (!row || (row.expires_at as number) <= now) return { error: "This invite link has expired or was already used. Ask for a new one." };
-    if (this.list().length >= MAX_MEMBERS) return { error: `This chat has ${MAX_MEMBERS} members, the most there can be.` };
+    const full = this.#full();
+    if (full) return full;
     this.#sql.exec("DELETE FROM chat_invites WHERE secret_hash = ?", secretHash);
     this.#sql.exec("INSERT INTO chat_members (uid, name, joined_at) VALUES (?, ?, ?)", person.uid, person.name, now);
     return null;

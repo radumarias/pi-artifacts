@@ -8,6 +8,11 @@ export function toHex(bytes: ArrayBuffer | Uint8Array): string {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Lowercase hex of the SHA-256 of a string's UTF-8 bytes. */
+export async function sha256Hex(text: string): Promise<string> {
+  return toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+}
+
 /** `n` random bytes as lowercase hex. */
 export function randomHex(n: number): string {
   return toHex(crypto.getRandomValues(new Uint8Array(n)));
