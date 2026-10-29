@@ -219,13 +219,16 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   );
 
   const { status: uploadStatus, upload } = useUploads(loadFiles);
-  // Files dragged over the app: counted, since entering a child element leaves its parent first.
-  const [dragging, setDragging] = useState(0);
+  // Files dragged over the app: entries counted, since entering a child element leaves its parent first. Only whether
+  // the count is above zero is state, so crossing elements does not render the app again.
+  const dragDepth = useRef(0);
+  const [dragging, setDragging] = useState(false);
   const dropHandlers = {
     onDragEnter: (e: DragEvent) => {
       if (!carriesFiles(e.dataTransfer)) return;
       e.preventDefault();
-      setDragging((n) => n + 1);
+      dragDepth.current++;
+      setDragging(true);
     },
     onDragOver: (e: DragEvent) => {
       if (!carriesFiles(e.dataTransfer)) return;
@@ -233,12 +236,15 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       e.dataTransfer.dropEffect = "copy";
     },
     onDragLeave: (e: DragEvent) => {
-      if (carriesFiles(e.dataTransfer)) setDragging((n) => Math.max(0, n - 1));
+      if (!carriesFiles(e.dataTransfer)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      setDragging(dragDepth.current > 0);
     },
     onDrop: (e: DragEvent) => {
       if (!carriesFiles(e.dataTransfer)) return;
       e.preventDefault();
-      setDragging(0);
+      dragDepth.current = 0;
+      setDragging(false);
       void fromDrop(e.dataTransfer).then(
         (picked) => (picked.length ? upload(picked) : undefined),
         (error) => alert(`Could not read the dropped files: ${errorMessage(error)}`),
@@ -248,7 +254,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
 
   return (
     <div
-      className={["workspace", preview && "with-preview", dragging > 0 && "dragging"].filter(Boolean).join(" ")}
+      className={["workspace", preview && "with-preview", dragging && "dragging"].filter(Boolean).join(" ")}
       {...dropHandlers}
       style={
         {
@@ -372,7 +378,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           onReset={() => setChatWidth(null)}
         />
       )}
-      {dragging > 0 && (
+      {dragging && (
         <div className="drop-target" aria-hidden>
           Drop files or folders to upload them
         </div>

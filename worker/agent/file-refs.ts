@@ -1,4 +1,4 @@
-import { UPLOADS } from "../../shared/uploads.ts";
+import { underUploads } from "../../shared/uploads.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
 import type { FileEntry } from "../storage/user-files.ts";
 
@@ -50,6 +50,8 @@ function matchFile(paths: readonly string[], wanted: string): string | undefined
   const lower = wanted.toLowerCase();
   const exact = paths.filter((p) => p.toLowerCase() === lower);
   if (exact.length === 1) return exact[0];
+  // "Report.csv" and "report.csv" both match "REPORT.csv": say so, rather than that nothing does.
+  if (exact.length > 1) throw new FileRefError(`"${wanted}" could be any of ${list(exact)}. Pass the exact path.`);
   const ending = paths.filter((p) => p.toLowerCase().endsWith(`/${lower}`));
   if (ending.length === 1) return ending[0];
   if (ending.length > 1) {
@@ -73,10 +75,9 @@ function matchFolder(paths: readonly string[], wanted: string): string[] {
   }
   // A folder's full path names it, as a file's does, even when other folders end the same way ("out" and "uploads/out").
   const exact = folders.has(wanted) ? [wanted] : [...folders].filter((folder) => folder.toLowerCase() === lower);
-  if (exact.length === 1) return paths.filter((p) => p.startsWith(`${exact[0]}/`));
-  if (folders.size > 1) throw new FileRefError(`"${wanted}" could be any of the folders ${list([...folders])}. Pass the full path.`);
-  const [folder] = folders;
-  return folder ? paths.filter((p) => p.startsWith(`${folder}/`)) : [];
+  const folder = exact.length === 1 ? exact[0] : folders.size === 1 ? [...folders][0] : undefined;
+  if (folder === undefined && folders.size > 1) throw new FileRefError(`"${wanted}" could be any of the folders ${list([...folders])}. Pass the full path.`);
+  return folder === undefined ? [] : paths.filter((p) => p.startsWith(`${folder}/`));
 }
 
 function notFound(paths: readonly string[], ref: string): FileRefError {
@@ -93,22 +94,23 @@ function list(paths: readonly string[]): string {
 export class FileRefError extends Error {}
 
 /** Where a user file lands in a sandbox run, under ./files/: its path without the leading uploads/. */
-export function sandboxPath(path: string): string {
-  return path.startsWith(`${UPLOADS}/`) ? path.slice(UPLOADS.length + 1) : path;
-}
+export const sandboxPath = underUploads;
 
 const INDEX_MAX_FILES = 150;
 const INDEX_MAX_CHARS = 6_000;
+const INDEX_MAX_FOLDERS = 40;
 
 /**
  * The prompt's list of the user's files, newest first, so the agent can match
  * what the user calls a file to its path without a tool call. A long list is
  * cut; then it names the folders, with how many files each holds.
  */
-export function filesIndex(entries: readonly FileEntry[]): string {
+export function filesIndex(entries: readonly FileEntry[], { sandbox = true } = {}): string {
   const intro =
     "The user's files (uploads, and files your scripts saved). When the user names a file or folder, match it here and use its path. " +
-    "files_read, run_python and run_bash also take a file's name or the end of its path when only one file matches, and a folder for all the files in it.";
+    (sandbox
+      ? "files_read, run_python and run_bash also take a file's name or the end of its path when only one file matches, and a folder for all the files in it."
+      : "files_read also takes a file's name or the end of its path when only one file matches.");
   if (entries.length === 0) return `${intro}\nThe user has no files yet; they upload them from the sidebar, or by dropping them on the app.`;
   const newest = [...entries].sort((a, b) => +b.uploaded - +a.uploaded);
   const lines: string[] = [];
@@ -126,7 +128,8 @@ export function filesIndex(entries: readonly FileEntry[]): string {
     const folder = path.split("/").slice(0, -1).slice(0, 2).join("/") || "(top level)";
     counts.set(folder, (counts.get(folder) ?? 0) + 1);
   }
-  const folders = [...counts].map(([folder, n]) => `${folder} (${n})`).join(", ");
+  // Capped like the list itself: a user with many folders must not fill the prompt with them.
+  const folders = listSome([...counts].map(([folder, n]) => `${folder} (${n})`), INDEX_MAX_FOLDERS);
   return `${intro}\n${lines.join("\n")}\n… and ${rest} more (files_list shows them, by folder). All files by folder: ${folders}.`;
 }
 

@@ -1,6 +1,9 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+/** A FILES_MASTER_KEY for tests. */
+export const MASTER_KEY = Buffer.from(new Uint8Array(32).fill(7)).toString("base64");
+
 /** An in-memory R2 bucket for the stores: keeps string bodies and records every call it gets. */
 export class FakeBucket {
   readonly objects = new Map<string, string>();

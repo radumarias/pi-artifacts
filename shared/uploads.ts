@@ -40,6 +40,25 @@ function cleanSegment(segment: string): string {
     .trimEnd();
 }
 
+/**
+ * Where each of `names` is kept (see uploadPath), named over the whole list:
+ * two names that clean up to one path ("a?.csv" and "a*.csv") get -2, -3…
+ * rather than lose a file. A name with nothing left of it is "upload".
+ */
+export function uploadTargets(names: readonly string[]): string[] {
+  const taken = new Set<string>();
+  return names.map((name) => {
+    const path = freePath(uploadPath(name) ?? `${UPLOADS}/upload`, taken);
+    taken.add(path);
+    return path;
+  });
+}
+
+/** `path` without its leading uploads/, if it has one: "uploads/q3/sales.csv" is "q3/sales.csv". */
+export function underUploads(path: string): string {
+  return path.startsWith(`${UPLOADS}/`) ? path.slice(UPLOADS.length + 1) : path;
+}
+
 /** Inside a folder, files and folders whose names start with a dot (.git, .DS_Store) are left out of an upload. */
 export function isHidden(relative: string): boolean {
   return relative.split(/[/\\]/).some((segment) => segment.startsWith("."));
@@ -59,8 +78,11 @@ export function freePath(path: string, taken: ReadonlySet<string>): string {
   const room = Math.min(MAX_SEGMENT - (path.length - slash - 1), MAX_PATH - path.length);
   for (let n = 2; ; n++) {
     const suffix = `-${n}`;
-    const stemEnd = Math.max(slash + 1, cut - Math.max(0, suffix.length - room));
-    const candidate = `${path.slice(0, stemEnd)}${suffix}${path.slice(cut)}`;
+    const over = Math.max(0, suffix.length - room);
+    const stemEnd = Math.max(slash + 1, cut - over);
+    // A stem too short to give up enough ("a.<long extension>") leaves the rest to the end of the extension.
+    const extEnd = path.length - Math.max(0, over - (cut - stemEnd));
+    const candidate = `${path.slice(0, stemEnd)}${suffix}${path.slice(cut, extEnd)}`.trimEnd();
     if (!taken.has(candidate)) return candidate;
   }
 }

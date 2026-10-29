@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, uploadBatches, uploadPath } from "../shared/uploads.ts";
+import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, underUploads, uploadBatches, uploadPath, uploadTargets } from "../shared/uploads.ts";
 import { FileRefError, filesIndex, MAX_SANDBOX_FILES, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath } from "../worker/storage/paths.ts";
 import { UserFiles, type FileEntry } from "../worker/storage/user-files.ts";
-import { FakeBucket } from "./fakes.ts";
+import { FakeBucket, MASTER_KEY as MASTER } from "./fakes.ts";
 
 describe("uploadPath", () => {
   it("keeps a file's name, or its path inside a folder, under uploads/", () => {
@@ -55,6 +55,18 @@ describe("upload helpers", () => {
       expect(free).toMatch(/-2\.csv$/);
       expect(uploadPath(free.slice("uploads/".length))).toBe(free);
     }
+    // A stem too short to make room: the extension gives up its end too.
+    const path = uploadPath(`a.${"x".repeat(118)}`)!;
+    const free = freePath(path, new Set([path]));
+    expect(free).not.toBe(path);
+    expect(free).toContain("-2.x");
+    expect(uploadPath(free.slice("uploads/".length))).toBe(free);
+  });
+
+  it("names a whole pick at once, numbering names that clean up to one path", () => {
+    expect(uploadTargets(["a?.csv", "a*.csv", "q3/a?.csv", "..."])).toEqual(["uploads/a_.csv", "uploads/a_-2.csv", "uploads/q3/a_.csv", "uploads/upload"]);
+    expect(underUploads("uploads/q3/a.csv")).toBe("q3/a.csv");
+    expect(underUploads("out/a.csv")).toBe("out/a.csv");
   });
 
   it("splits files into requests the Worker accepts", () => {
@@ -96,6 +108,9 @@ describe("resolveFile", () => {
 
   it("names the candidates when a name matches several files", () => {
     expect(() => resolveFile(files, "sales.csv")).toThrow(/could be any of "uploads\/reports\/q3\/sales.csv", "uploads\/reports\/q4\/sales.csv"/);
+    const cased = [entry("uploads/Report.csv"), entry("uploads/report.csv")];
+    expect(resolveFile(cased, "uploads/report.csv")).toBe("uploads/report.csv");
+    expect(() => resolveFile(cased, "uploads/REPORT.csv")).toThrow(/could be any of "uploads\/Report.csv", "uploads\/report.csv"/);
   });
 
   it("does not match part of a name", () => {
@@ -165,6 +180,11 @@ describe("filesIndex", () => {
     expect(filesIndex([])).toContain("no files yet");
   });
 
+  it("mentions the sandbox tools only when there is a sandbox", () => {
+    expect(filesIndex(files)).toContain("run_python");
+    expect(filesIndex(files, { sandbox: false })).not.toContain("run_python");
+  });
+
   it("cuts a long list and counts the files per folder", () => {
     const many = Array.from({ length: 400 }, (_, i) => entry(`uploads/batch/${i}.csv`, 2048, i));
     const index = filesIndex([...many, entry("uploads/one.csv")]);
@@ -177,8 +197,6 @@ describe("filesIndex", () => {
 });
 
 describe("filesRoute", () => {
-  const MASTER = Buffer.from(new Uint8Array(32).fill(7)).toString("base64");
-
   async function setup() {
     const bucket = new FakeBucket();
     const userFiles = new UserFiles(bucket.r2, "ada", await deriveUserKey(MASTER, "ada"));

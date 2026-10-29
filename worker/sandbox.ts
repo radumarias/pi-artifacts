@@ -41,11 +41,10 @@ export class Sandbox extends DurableObject<Env> {
     const container = await this.#ensureRunning();
     const files = new Files(container);
 
-    await this.#exec(container, ["sh", "-c", `rm -rf ${WORKSPACE}/files ${WORKSPACE}/out && mkdir -p ${WORKSPACE}/files ${WORKSPACE}/out`]);
-    // Inputs keep their folders: make those first, deepest only, since recursive makes the parents too.
+    // Inputs keep their folders: made with ./files and ./out, passed as arguments so their names need no quoting.
     const folders = new Set(inputs.map((input) => input.name.split("/").slice(0, -1).join("/")).filter(Boolean));
-    const deepest = [...folders].filter((folder) => ![...folders].some((other) => other.startsWith(`${folder}/`)));
-    await Promise.all(deepest.map((folder) => files.mkdir(`${WORKSPACE}/files/${folder}`, { recursive: true })));
+    const dirs = [`${WORKSPACE}/files`, `${WORKSPACE}/out`, ...[...folders].map((folder) => `${WORKSPACE}/files/${folder}`)];
+    await this.#exec(container, ["sh", "-c", `rm -rf ${WORKSPACE}/files ${WORKSPACE}/out && mkdir -p "$@"`, "sh", ...dirs]);
     await Promise.all([
       ...inputs.map((input) => files.writeFile(`${WORKSPACE}/files/${input.name}`, input.bytes)),
       files.writeFile(`${WORKSPACE}/${entry.name}`, entry.contents),
