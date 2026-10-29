@@ -24,7 +24,9 @@ export class AccessError extends Error {}
 
 const KEYS_TTL_MS = 10 * 60_000;
 const CLOCK_SKEW_S = 60;
+const KEYS_REFETCH_MS = 60_000;
 let cachedKeys: { teamDomain: string; keys: JsonWebKey[]; fetchedAt: number } | undefined;
+let lastRefetchAt = -Infinity;
 // Every request is verified, so each published key is imported once, not per request. Keyed by the JWK object, which
 // lives as long as the key set it came from.
 const importedKeys = new WeakMap<JsonWebKey, Promise<CryptoKey>>();
@@ -68,16 +70,23 @@ export async function verifyAccessJwt(token: string, config: AccessConfig): Prom
   return { sub: claims.sub, email: claims.email };
 }
 
-/** The signing key named by `kid`, refetching once when it is unknown (Access rotates keys). */
+/** The signing key named by `kid`, refetching when it is unknown (Access rotates keys). */
 async function findKey(config: AccessConfig, kid: string | undefined, now: number): Promise<JsonWebKey> {
-  const fetchKeys = config.fetchKeys ?? fetchTeamKeys;
+  const load = async () => {
+    cachedKeys = { teamDomain: config.teamDomain, keys: await (config.fetchKeys ?? fetchTeamKeys)(config.teamDomain), fetchedAt: now };
+  };
+  const lookup = () => cachedKeys!.keys.find((k) => (k as { kid?: string }).kid === kid);
   const fresh = cachedKeys && cachedKeys.teamDomain === config.teamDomain && now - cachedKeys.fetchedAt < KEYS_TTL_MS;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (!fresh || attempt === 1) cachedKeys = { teamDomain: config.teamDomain, keys: await fetchKeys(config.teamDomain), fetchedAt: now };
-    const key = cachedKeys!.keys.find((k) => (k as { kid?: string }).kid === kid);
-    if (key) return key;
+  if (!fresh) await load();
+  let key = lookup();
+  // Any request can name an unknown key before its signature is checked, so this refetch is limited to once a minute.
+  if (!key && fresh && now - lastRefetchAt >= KEYS_REFETCH_MS) {
+    lastRefetchAt = now;
+    await load();
+    key = lookup();
   }
-  throw new AccessError("Unknown signing key.");
+  if (!key) throw new AccessError("Unknown signing key.");
+  return key;
 }
 
 async function fetchTeamKeys(teamDomain: string): Promise<JsonWebKey[]> {
@@ -89,6 +98,7 @@ async function fetchTeamKeys(teamDomain: string): Promise<JsonWebKey[]> {
 /** For tests: forget the cached signing keys. */
 export function resetAccessKeyCache(): void {
   cachedKeys = undefined;
+  lastRefetchAt = -Infinity;
 }
 
 function decodeJson(segment: string): unknown {
