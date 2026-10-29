@@ -27,7 +27,8 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   pages calling them are author-only. `test/mcp-oauth.test.ts` runs the flow against a stand-in portal.
 - Each artifact is the repo `artifact-<id>`: one commit and tag `v<n>` per publish, pushed with isomorphic-git
   (`worker/storage/git.ts`), since the binding cannot write files. `pnpm dev` uses a local Git backend for it (needs
-  `git`); `test/artifact-store.test.ts` runs the real Git code against `git http-backend`.
+  `git`); `test/artifact-store.test.ts` runs the real Git code against `git http-backend`. Shared test doubles (R2 bucket, local
+  server) live in `test/fakes.ts`.
 - The README lists the security model (manifest per version, author's connections, write tools only for the author)
   and what has been verified in production (agent runs, `run_python`, per-user R2 encryption, artifact repos; the per-user
   MCP sign-in only locally).

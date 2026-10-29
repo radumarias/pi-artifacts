@@ -57,6 +57,10 @@ CoinGecko needs no sign-in. A server can also require each user's own; see [MCP 
 - Each server's results are cached per viewer by default (`cacheScope: "viewer"` in `worker/mcp/servers.ts`, the way
   Claude keeps viewers apart). Switch a keyless server to `"shared"` to let every viewer reuse one upstream call per
   interval.
+- A chat keeps at most 16 MB of cached results. Expired entries go first, then the oldest; a single result larger than
+  that is passed on but not cached.
+- Each viewer may make 120 calls a minute through one page, counted by the Workers rate-limit binding `PAGE_CALLS`
+  across every Worker instance. Past that the proxy answers `rate_limited`, and the viewer waits 30 s before asking again.
 
 Measured against CoinGecko:
 
@@ -94,7 +98,7 @@ MCP OAuth client for it (`worker/mcp/oauth.ts`, on the MCP SDK): discovery, dyna
 refresh. There is nothing specific to any one server:
 
 1. Until you sign in, the server's tools are missing. The agent's prompt names the server as unavailable, with a
-   sign-in link such as `https://<app>/api/mcp/sign-in/portal`, and the agent passes the link on when you ask for it.
+   sign-in link such as `/api/mcp/sign-in/portal` (a path in this app, so it needs no knowledge of the app's address), and the agent passes the link on when you ask for it.
 2. The link starts the flow and redirects to the server's sign-in. For a Cloudflare MCP portal, that means Cloudflare
    Access, then the portal's page where you select **Connect** for each server that needs your own login and sign in
    to its identity provider. The portal keeps those sessions; the app never sees them.
@@ -108,6 +112,9 @@ Where things live and who can use them:
   reach. All your chats share them.
 - **When a sign-in lapses,** the SDK refreshes it. If it can't, calls fail with `auth_required`, and the message
   carries the sign-in link.
+- **Two chats refreshing at once don't undo each other.** Each change to the stored record (new tokens, a cleared
+  verifier) is applied inside the `UserDirectory` in one step, and a rejected refresh clears the tokens only if they
+  are still the ones that chat used.
 - **Pages that call such a server load only for their author.** A page calls through its author's chat, so it would
   otherwise show the author's data to anyone with the link. Other viewers get `not_granted`. Claude's artifacts
   instead use each viewer's own connectors.
@@ -164,6 +171,8 @@ internet. Each run is limited to 60 seconds. Files move like this:
 
 - **In:** the agent names files from the user's files. The tool reads each one through the user's `UserFiles`, so R2
   decrypts it with the user's key. It is copied into the container's `./files/` with the Sandbox SDK's file API.
+  Two files with the same name (`a/data.csv` and `b/data.csv`) would land on the same `./files/data.csv`, so the run
+  is refused instead.
 - **Out:** after the run, whatever the script wrote to `./out/` (top level only) is read back from the container and
   saved through the same `UserFiles` as `out/<name>`, encrypted with the user's key.
 - **Between runs:** `./files` and `./out` start empty each run. Anything else in the working directory stays until
@@ -175,8 +184,8 @@ The container never sees R2, the bucket or any key: only the bytes the Worker ha
 
 | Path | What |
 |---|---|
-| `worker/index.ts` | Routes: identity, chats, chat WebSocket, artifact pages (`/u/:id/v:n`), the MCP proxy, files |
-| `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket, `artifactCall`, rate limit |
+| `worker/index.ts` | Routes: identity, chats, chat WebSocket, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files |
+| `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall` |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`) and the system prompt |
 | `worker/artifacts/` | Manifest checks, the CSP and the runtime injection |
@@ -321,6 +330,10 @@ Artifact pages are served from the app's own origin inside an opaque-origin sand
 `sandbox`, and their CSP carries a `sandbox` directive too, so a page opened directly or as a popup is just as
 isolated. That is enough to keep them away from the app's cookies and storage. A production deployment should still serve `/u/*` from a separate domain, as
 claude.ai uses `*.claudeusercontent.com`.
+
+A published version never changes, so its page carries an `ETag` (artifact, version, and a fingerprint of the runtime
+and CSP) and `Cache-Control: private, no-cache`. The browser revalidates on every load, and the Worker answers `304`
+before reading R2. Changing the runtime or the CSP changes the fingerprint, so a deploy is picked up at once.
 
 ## Limits and what's next
 
