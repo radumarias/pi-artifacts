@@ -17,6 +17,8 @@ export interface ModelInfo {
   vendor: Vendor;
   /** The effort levels the model takes, lowest first. Empty for a model that does not reason. */
   efforts: ModelThinkingLevel[];
+  /** Whether the model sees images. One that does not gets a placeholder for each image attached to a message. */
+  images: boolean;
 }
 
 /** A chat's model and effort, and a user's default for new chats. */

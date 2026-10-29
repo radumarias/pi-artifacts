@@ -24,8 +24,10 @@ import {
   type ProxyRequest,
   type ProxyResponse,
 } from "../shared/protocol.ts";
+import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import type { ModelChoice } from "../shared/models.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
+import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
@@ -115,7 +117,7 @@ export class ChatAgent extends DurableObject<Env> {
     events: () => this.harness.session().events(),
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
-    prompt: (text, author) => this.prompt(text, author),
+    prompt: (text, author, attachments) => this.prompt(text, author, attachments),
     abort: (by) => this.abort(by),
     setModel: (input, by) => this.setModel(input, by),
   });
@@ -347,19 +349,39 @@ export class ChatAgent extends DurableObject<Env> {
    * One person's message, placed as a `chat.message` entry naming its author.
    * Once the chat has members, the model reads it as "name: text"; until then
    * it gets the text alone, so no name reaches the model for a chat nobody shares.
+   * Attached files (already uploaded to the owner's files) come before the text,
+   * as images, text or names (see attachmentContent).
    * While a run is going, it waits in pi's inbox and is answered next.
    */
-  async prompt(text: string, author: Person): Promise<void> {
+  async prompt(text: string, author: Person, attachments: readonly AttachmentInput[] = []): Promise<void> {
     this.#requireInChat(author);
-    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills(), this.refreshFiles()]);
+    const [attached] = await Promise.all([
+      attachments.length ? this.scope.files().then((files) => attachmentContent(attachments, files, this.#toMarkdown)) : undefined,
+      this.refreshMcpTools().catch(() => {}),
+      this.refreshSkills(),
+      this.refreshFiles(),
+    ]);
     // Again after the refreshes, which can take seconds: the author may have been removed meanwhile.
     this.#requireInChat(author);
-    await this.harness.submit(this.members.hasAny() ? `${author.name}: ${text}` : text, {
-      entry: { kind: CHAT_MESSAGE_KIND, data: { uid: author.uid, name: author.name, text } satisfies ChatMessageData },
+    const said = this.members.hasAny() ? `${author.name}: ${text}` : text;
+    const content = attached ? [...attached.content, ...(text ? [{ type: "text" as const, text: said }] : [])] : said;
+    await this.harness.submit(content, {
+      entry: {
+        kind: CHAT_MESSAGE_KIND,
+        data: { uid: author.uid, name: author.name, text, ...(attached && { attachments: attached.attachments }) } satisfies ChatMessageData,
+      },
     });
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
-    void this.#touchIndexes(text, author.uid).catch((error) => console.error("chat index:", errorMessage(error)));
+    const title = text || attachments.map((a) => baseName(a.path)).join(", ");
+    void this.#touchIndexes(title, author.uid).catch((error) => console.error("chat index:", errorMessage(error)));
   }
+
+  /** A PDF or office document as Markdown, by Workers AI (no model is involved for these formats). */
+  readonly #toMarkdown: ToMarkdown = async (name, bytes) => {
+    const result = await this.env.AI.toMarkdown({ name, blob: new Blob([bytes], { type: "application/octet-stream" }) });
+    if (result.format === "error") throw new Error(result.error);
+    return result.data;
+  };
 
   /**
    * Move the chat up in everyone's sidebar. touchChat only names a chat still called "New chat", so the first prompt names it.
@@ -508,7 +530,7 @@ interface ChatSession {
   events(): Promise<AgentEventStream>;
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
-  prompt(text: string, author: Person): Promise<void>;
+  prompt(text: string, author: Person, attachments: readonly AttachmentInput[]): Promise<void>;
   abort(by: Person): Promise<void>;
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
 }
@@ -594,7 +616,11 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       return true;
     }
     try {
-      if (message.type === "prompt" && message.text.trim()) await this.#chat.prompt(message.text.slice(0, 20_000), person);
+      if (message.type === "prompt") {
+        const attachments = parseAttachments(message.attachments);
+        const text = String(message.text ?? "").trim().slice(0, 20_000);
+        if (text || attachments.length) await this.#chat.prompt(text, person, attachments);
+      }
       else if (message.type === "abort") await this.#chat.abort(person);
       else if (message.type === "model") await this.#chat.setModel(message, person);
     } catch (error) {
@@ -619,9 +645,9 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     stream = (async () => {
       const events = await this.#chat.events();
       send(ws, { type: "people", people: this.#chat.peopleFor(this.#person(ws)!.uid) });
-      send(ws, { type: "events", events: [events.snapshot] });
+      send(ws, { type: "events", events: [withoutImageData(events.snapshot)] });
       events.start(async (batch) => {
-        if (!send(ws, { type: "events", events: [...batch] })) await this.#detach(ws);
+        if (!send(ws, { type: "events", events: batch.map(withoutImageData) })) await this.#detach(ws);
       });
       return events;
     })();

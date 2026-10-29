@@ -32,6 +32,7 @@
     "worker/mcp",
     "worker/agent/mcp.ts",
     "worker/agent/output.ts",
+    "worker/agent/attachments.ts",
     "worker/storage/paths.ts",
     "worker/storage/artifacts.ts",
     "worker/storage/git.ts",

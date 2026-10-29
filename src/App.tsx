@@ -242,9 +242,12 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
     },
     onDrop: (e: DragEvent) => {
       if (!carriesFiles(e.dataTransfer)) return;
+      // Already taken: the chat's composer attaches files dropped on it to the message.
+      const taken = e.defaultPrevented;
       e.preventDefault();
       dragDepth.current = 0;
       setDragging(false);
+      if (taken) return;
       void fromDrop(e.dataTransfer).then(
         (picked) => (picked.length ? upload(picked) : undefined),
         (error) => alert(`Could not read the dropped files: ${errorMessage(error)}`),
@@ -380,7 +383,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       )}
       {dragging && (
         <div className="drop-target" aria-hidden>
-          Drop files or folders to upload them
+          Drop files or folders to upload them, or on the message box to send them with your message
         </div>
       )}
       {preview && (

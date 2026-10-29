@@ -1,6 +1,7 @@
 import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentEvent, AgentState, EntryRecord } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import type { AttachmentInput } from "../../shared/attachments.ts";
 import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
@@ -194,7 +195,7 @@ export function useChat(chatId: string) {
     people,
     /** True once the chat refused this user's socket: they are not (or no longer) in it. */
     gone,
-    prompt: (text: string) => send({ type: "prompt", text }),
+    prompt: (text: string, attachments?: AttachmentInput[]) => send({ type: "prompt", text, ...(attachments?.length && { attachments }) }),
     abort: () => send({ type: "abort" }),
     setModel,
   };

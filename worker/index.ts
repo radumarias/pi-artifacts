@@ -145,7 +145,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (skills) return skills;
 
   // A chat's Durable Object is named after its owner's verified uid; others reach it only once they joined by an invite.
-  const chat = await chatRoute(request, directory, { uid, name: identity.email ?? uid });
+  const chat = await chatRoute(request, directory, { uid, name: identity.email ?? uid }, (owner) => storage.userFiles(owner));
   if (chat) return chat;
 
   // Publish a page without the model, to try the live-data path locally. Needs DEV_TOOLS=true.

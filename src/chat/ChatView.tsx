@@ -1,6 +1,12 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { memo, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
+import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
+import { errorMessage, formatBytes } from "../../shared/util.ts";
+import { api } from "../api.ts";
+import { carriesFiles } from "../files/pick.ts";
+import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
 import { SharePanel } from "./SharePanel.tsx";
 import { useChat, waitingOnModel, type RunningTool } from "./useChat.ts";
@@ -34,8 +40,10 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   const { state, connected, people, gone, prompt, abort, setModel } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
+  const attachments = useAttachments(chatId);
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
 
   // Follow new output only while the reader is at the bottom; scrolling up to read stops it,
@@ -70,21 +78,43 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
     onArtifact(latest);
   }, [state.entries, onArtifact]);
 
-  const submit = (event?: FormEvent) => {
+  const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const text = draft.trim();
-    if (!text || !prompt(text)) return;
+    if (attachments.sending || (!text && attachments.pending.length === 0)) return;
+    if (attachments.pending.length === 0) {
+      if (!prompt(text)) return;
+    } else if (!(await attachments.send((inputs) => prompt(text, inputs)))) return;
     following.current = true;
     setDraft("");
     // Clicking Send moves focus to the button; keep typing where you were.
     input.current?.focus();
   };
 
+  // Files dropped on the composer go with the message; anywhere else in the app they only upload (App.tsx).
+  const onDragOver = (event: DragEvent) => {
+    if (!carriesFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const onDrop = (event: DragEvent) => {
+    if (!carriesFiles(event.dataTransfer)) return;
+    // Seen by the app's own drop handler, which then only ends its drag.
+    event.preventDefault();
+    attachments.add([...event.dataTransfer.files]);
+  };
+  const onPaste = (event: ClipboardEvent) => {
+    const files = [...event.clipboardData.files];
+    if (files.length === 0) return;
+    event.preventDefault();
+    attachments.add(files.map((file) => pastedName(file)));
+  };
+
   // Enter sends, Shift+Enter adds a line. Not while an IME is composing (Enter then confirms the text).
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
-    submit();
+    void submit();
   };
 
   const isOwner = people?.owner.uid === uid;
@@ -120,27 +150,70 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
         {waitingOnModel(state) && <Thinking />}
         {state.error && <div className="chat-error">{state.error}</div>}
       </div>
-      <ModelPicker model={state.model} thinkingLevel={state.thinkingLevel} disabled={!connected} onChange={setModel} />
-      <form className="composer" onSubmit={submit}>
-        <textarea
-          ref={input}
-          // Each chat mounts its own view, so a new or opened chat starts with the cursor here.
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKey}
-          placeholder={connected ? (others ? "Message everyone and the agent…" : "Describe a dashboard…") : "Connecting…"}
-          rows={2}
-        />
-        {state.busy ? (
-          <button type="button" onClick={abort}>
-            Stop
-          </button>
-        ) : (
-          <button type="submit" disabled={!connected || !draft.trim()}>
-            Send
-          </button>
+      <ModelPicker
+        model={state.model}
+        thinkingLevel={state.thinkingLevel}
+        disabled={!connected}
+        attachingImages={attachments.pending.some((item) => item.preview)}
+        onChange={setModel}
+      />
+      <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
+        {attachments.pending.length > 0 && (
+          <div className="pending-attachments">
+            {attachments.pending.map((item) => (
+              <span key={item.id} className="pending-attachment" title={`${item.file.name} · ${formatBytes(item.file.size)}`}>
+                {item.preview ? <img src={item.preview} alt="" /> : <span className="file-icon">▤</span>}
+                <span className="pending-name">{item.file.name}</span>
+                <button type="button" onClick={() => attachments.remove(item.id)} disabled={attachments.sending} aria-label={`Remove ${item.file.name}`}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
         )}
+        {attachments.error && <div className="chat-error">{attachments.error}</div>}
+        <div className="composer-row">
+          <button
+            type="button"
+            className="attach"
+            onClick={() => picker.current?.click()}
+            disabled={attachments.sending || attachments.pending.length >= MAX_ATTACHMENTS}
+            title="Attach images or files"
+            aria-label="Attach images or files"
+          >
+            +
+          </button>
+          <input
+            ref={picker}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              attachments.add([...(e.target.files ?? [])]);
+              e.target.value = "";
+            }}
+          />
+          <textarea
+            ref={input}
+            // Each chat mounts its own view, so a new or opened chat starts with the cursor here.
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKey}
+            onPaste={onPaste}
+            placeholder={connected ? (others ? "Message everyone and the agent…" : "Describe a dashboard, or attach a file to ask about…") : "Connecting…"}
+            rows={2}
+          />
+          {state.busy ? (
+            <button type="button" onClick={abort}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}>
+              {attachments.sending ? "Sending…" : "Send"}
+            </button>
+          )}
+        </div>
       </form>
     </section>
   );
@@ -163,7 +236,7 @@ const Entry = memo(function Entry({
   if (entry.kind === "pi.user" && message?.role === "user") return <User text={userText(message)} author={ownerName} />;
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as unknown as ChatMessageData;
-    return <User text={data.text} author={data.uid !== uid ? data.name : undefined} />;
+    return <User text={data.text} author={data.uid !== uid ? data.name : undefined} attachments={data.attachments} />;
   }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
@@ -193,15 +266,110 @@ function userText(message: UserMessage): string {
   return typeof message.content === "string" ? message.content : blocks(message.content).map((b) => (b.type === "text" ? b.text : "")).join("");
 }
 
-/** A person's message: yours on the right; someone else's on the left, under their name. */
-function User({ text, author }: { text: string; author?: string }) {
-  if (author === undefined) return <div className="bubble user">{text}</div>;
+/** A person's message: yours on the right; someone else's on the left, under their name. Attachments show above the text. */
+function User({ text, author, attachments = [] }: { text: string; author?: string; attachments?: Attachment[] }) {
+  const mine = author === undefined;
+  const files = attachments.length > 0 && (
+    <div className={mine ? "attachments mine" : "attachments"}>
+      {attachments.map((attachment) => (
+        <Attached key={attachment.path} attachment={attachment} />
+      ))}
+    </div>
+  );
+  if (mine) {
+    return (
+      <>
+        {files}
+        {text && <div className="bubble user">{text}</div>}
+      </>
+    );
+  }
   return (
     <div className="other">
       <small>{author}</small>
-      <div className="bubble peer">{text}</div>
+      {files}
+      {text && <div className="bubble peer">{text}</div>}
     </div>
   );
+}
+
+const SHOWN: Record<Attachment["shown"], string> = {
+  image: "the agent sees the image",
+  text: "the agent reads its text",
+  path: "the agent got its name only; its tools can open it",
+};
+
+function Attached({ attachment }: { attachment: Attachment }) {
+  const name = baseName(attachment.path);
+  const title = `${attachment.path} · ${formatBytes(attachment.size)} · ${SHOWN[attachment.shown]}`;
+  if (attachment.thumb) return <img className="attachment-thumb" src={attachment.thumb} alt={name} title={title} />;
+  return (
+    <span className="attachment-chip" title={title}>
+      <span className="file-icon">▤</span> {name}
+    </span>
+  );
+}
+
+/** Files waiting in the composer, and sending them: uploaded to the chat, then named in the message with what the model sees. */
+function useAttachments(chatId: string) {
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string>();
+  const live = useRef(pending);
+  live.current = pending;
+  // Each chat mounts its own view: its previews go with it.
+  useEffect(() => () => live.current.forEach(release), []);
+
+  const add = (files: File[]) => {
+    if (files.length === 0) return;
+    const large = files.filter((file) => file.size > MAX_FILE_BYTES).map((file) => file.name);
+    const room = MAX_ATTACHMENTS - live.current.length;
+    const fitting = files.filter((file) => file.size <= MAX_FILE_BYTES);
+    const added = fitting.slice(0, Math.max(0, room)).map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+    }));
+    setPending((list) => [...list, ...added]);
+    const problems = [
+      large.length ? `${large.join(", ")} ${large.length === 1 ? "is" : "are"} over ${formatBytes(MAX_FILE_BYTES)}.` : "",
+      fitting.length > added.length ? `A message takes at most ${MAX_ATTACHMENTS} files.` : "",
+    ].filter(Boolean);
+    setError(problems.length ? problems.join(" ") : undefined);
+  };
+
+  const remove = (id: string) => {
+    const item = live.current.find((p) => p.id === id);
+    if (item) release(item);
+    setPending((list) => list.filter((p) => p.id !== id));
+  };
+
+  /** Upload the files and hand `prompt` what goes with the message. True once it went; on a failure the files stay, with the error. */
+  const send = async (prompt: (inputs: Awaited<ReturnType<typeof attachmentInput>>[]) => boolean): Promise<boolean> => {
+    const items = live.current;
+    setSending(true);
+    setError(undefined);
+    try {
+      const { paths } = await api.attach(chatId, items.map(({ file }) => ({ file, path: file.name })));
+      const budget = imageBudget(items.filter(({ file }) => file.type.startsWith("image/")).length);
+      const inputs = await Promise.all(items.map(({ file }, i) => attachmentInput(file, paths[i], budget)));
+      if (!prompt(inputs)) throw new Error("Not connected; try again in a moment.");
+      items.forEach(release);
+      setPending((list) => list.filter((p) => !items.includes(p)));
+      return true;
+    } catch (e) {
+      setError(`Could not send the files: ${errorMessage(e)}`);
+      return false;
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return { pending, sending, error, add, remove, send };
+}
+
+function release(item: Pending): void {
+  if (item.preview) URL.revokeObjectURL(item.preview);
 }
 
 function Assistant({ message }: { message: AssistantMessage }) {

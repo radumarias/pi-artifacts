@@ -65,7 +65,8 @@ export function chatModels(models: readonly Model<Api>[]): ModelEntry[] {
     )
     .map(({ model, vendor }) => {
       const metadata = metadataOf(model, vendor);
-      return { info: { id: model.id, name: model.name, vendor, efforts: model.reasoning ? getSupportedThinkingLevels(metadata) : [] }, metadata };
+      const efforts = model.reasoning ? getSupportedThinkingLevels(metadata) : [];
+      return { info: { id: model.id, name: model.name, vendor, efforts, images: model.input.includes("image") }, metadata };
     });
 }
 
