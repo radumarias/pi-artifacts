@@ -247,7 +247,11 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   }
 
   onStart(): void {
-    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) void this.#attach(ws);
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
+      // A socket accepted before chat sockets carried an attachment has only the tag: claim it, or its messages go unhandled.
+      if (!this.#owns(ws)) ws.serializeAttachment(OWNER);
+      void this.#attach(ws);
+    }
   }
 
   onWebSocketUpgrade({ request }: { request: Request }): Response | undefined {

@@ -94,7 +94,8 @@ export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, u
           `pass such links on as they are.\n${servers.join("\n")}`;
         if (unavailable.size === 0) return connected;
         const missing = [...unavailable].map(([name, reason]) => `- "${name}": ${reason}`);
-        return `${connected}\n\nServers this chat cannot use right now. If the user asks for one, say why, and pass on any sign-in link exactly:\n${missing.join("\n")}`;
+        return `${connected}\n\nServers this chat cannot use right now. If the user asks for one, say why, and pass on any sign-in link exactly, ` +
+          `as a Markdown link (a path such as /api/mcp/sign-in/<name> is only clickable that way):\n${missing.join("\n")}`;
       }),
     ],
   });
@@ -167,12 +168,18 @@ async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: 
     }),
   );
   const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
-  const saved = [];
+  const saved: string[] = [];
   const skipped = [];
   for (const output of result.outputs) {
     // A name the user's files do not allow must not throw away the run's output and the files already saved.
     try {
-      saved.push(await files.put(`out/${output.name}`, output.bytes));
+      // Names that differ only in what normalising trims ("a.csv" and "a.csv ") would overwrite each other.
+      const path = normalisePath(`out/${output.name}`);
+      if (saved.includes(path)) {
+        skipped.push(`${output.name} (same file as ${path})`);
+        continue;
+      }
+      saved.push(await files.put(path, output.bytes));
     } catch (error) {
       if (!(error instanceof PathError)) throw error;
       skipped.push(`${output.name} (${error.message})`);

@@ -24,7 +24,7 @@ export class AccessError extends Error {}
 
 const KEYS_TTL_MS = 10 * 60_000;
 const CLOCK_SKEW_S = 60;
-const KEYS_REFETCH_MS = 60_000;
+const KEYS_REFETCH_MS = 10_000;
 let cachedKeys: { teamDomain: string; keys: JsonWebKey[]; fetchedAt: number } | undefined;
 let lastRefetchAt = -Infinity;
 // Every request is verified, so each published key is imported once, not per request. Keyed by the JWK object, which
@@ -79,7 +79,7 @@ async function findKey(config: AccessConfig, kid: string | undefined, now: numbe
   const fresh = cachedKeys && cachedKeys.teamDomain === config.teamDomain && now - cachedKeys.fetchedAt < KEYS_TTL_MS;
   if (!fresh) await load();
   let key = lookup();
-  // Any request can name an unknown key before its signature is checked, so this refetch is limited to once a minute.
+  // Any request can name an unknown key before its signature is checked, so this refetch is limited to once in 10 s.
   if (!key && fresh && now - lastRefetchAt >= KEYS_REFETCH_MS) {
     lastRefetchAt = now;
     await load();

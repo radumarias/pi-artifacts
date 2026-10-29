@@ -59,7 +59,7 @@ CoinGecko needs no sign-in. A server can also require each user's own; see [MCP 
   interval.
 - A chat keeps at most 16 MB of cached results. Expired entries go first, then the oldest; a single result larger than
   that is passed on but not cached.
-- Each viewer may make 120 calls a minute through one page, counted by the Workers rate-limit binding `PAGE_CALLS`
+- Each viewer may make 120 calls a minute through the pages of one chat, counted by the Workers rate-limit binding `PAGE_CALLS`
   across every Worker instance. Past that the proxy answers `rate_limited`, and the viewer waits 30 s before asking again.
 
 Measured against CoinGecko:
@@ -120,7 +120,7 @@ Where things live and who can use them:
   instead use each viewer's own connectors.
 - **Removing a server** from the list also removes everyone's stored sign-in for it, tokens included. This happens the
   next time each user's directory loads.
-- **Signing out:** a new sign-in replaces your tokens. To end the portal's own session, sign out on the portal's home
+- **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then. To end the portal's own session, sign out on the portal's home
   page.
 
 `test/mcp-oauth.test.ts` runs the whole flow against a stand-in portal:

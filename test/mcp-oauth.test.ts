@@ -229,14 +229,19 @@ describe("per-user MCP sign-in", () => {
     expect(ada.record.verifier).toBe("verifier-of-open-popup");
   });
 
-  it("drops old tokens when a new sign-in starts, keeping the registration", async () => {
+  it("asks for a new sign-in but keeps the old tokens and registration until it finishes", async () => {
     const ada = new MemoryStore();
     await signIn(ada, "ada@example.com");
     const clientId = ada.record.client!.client_id;
-    await startSignIn(config.url, "Portal", ada, REDIRECT);
-    expect(ada.record.tokens).toBeUndefined();
+    const tokens = ada.record.tokens;
+    const started = await startSignIn(config.url, "Portal", ada, REDIRECT);
+    expect(started).toHaveProperty("url");
+    expect(ada.record.tokens).toEqual(tokens);
     expect(ada.record.client!.client_id).toBe(clientId);
     expect(portal.clients.size).toBe(1);
+    const { code, state } = portal.approve((started as { url: string }).url, "ada@example.com");
+    await finishSignIn(config.url, "Portal", ada, code, state);
+    expect(ada.record.tokens!.access_token).not.toBe(tokens!.access_token);
   });
 
   it("names the request that failed when the code exchange is refused", async () => {
@@ -277,7 +282,7 @@ describe("applyAuthChange", () => {
 
   it("keeps a client registration only for a sign-in to the same redirect URL", () => {
     const client = { client_id: "c" };
-    expect(applyAuthChange({ ...record, client }, { restart: "r" })).toEqual({ client, redirectUrl: "r" });
+    expect(applyAuthChange({ ...record, client }, { restart: "r" })).toEqual({ client, tokens: record.tokens, redirectUrl: "r" });
     expect(applyAuthChange({ ...record, client }, { restart: "elsewhere" })).toEqual({ redirectUrl: "elsewhere" });
   });
 });
