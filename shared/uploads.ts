@@ -7,9 +7,16 @@ export const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
 /** Where uploads go in the user's files. */
 export const UPLOADS = "uploads";
 
-/** User file paths are at most 200 characters (worker/storage/paths.ts). */
-const MAX_PATH = 200;
+/** What a user file path may be: at most this long, in these characters and "/" (worker/storage/paths.ts checks both). */
+export const MAX_PATH = 200;
+const NAME_CHARS = "A-Za-z0-9 ._\\-";
+export const PATH_CHARS = new RegExp(`^[${NAME_CHARS}/]+$`);
+/** What an uploaded name's segments lose: any character a path may not have. */
+const NOT_NAME_CHAR = new RegExp(`[^${NAME_CHARS}]`, "g");
 const MAX_SEGMENT = 120;
+
+/** UserFiles lists at most this many files; an upload picks no more at once. */
+export const MAX_LISTED = 2_000;
 
 /**
  * Where an uploaded file is kept: its name, or its path inside a picked or
@@ -27,7 +34,7 @@ export function uploadPath(relative: string): string | null {
 function cleanSegment(segment: string): string {
   return segment
     .normalize("NFC")
-    .replace(/[^\w .-]/g, "_")
+    .replace(NOT_NAME_CHAR, "_")
     .replace(/^[.\s]+|\s+$/g, "")
     .slice(0, MAX_SEGMENT)
     .trimEnd();
@@ -51,18 +58,19 @@ export function freePath(path: string, taken: ReadonlySet<string>): string {
 }
 
 /** Split files into requests the Worker accepts: at most MAX_FILES_PER_UPLOAD files and MAX_UPLOAD_BYTES each. */
-export function uploadBatches<T extends { size: number }>(files: readonly T[]): T[][] {
+export function uploadBatches<T>(files: readonly T[], size: (file: T) => number): T[][] {
   const batches: T[][] = [];
   let current: T[] = [];
   let bytes = 0;
   for (const file of files) {
-    if (current.length && (current.length === MAX_FILES_PER_UPLOAD || bytes + file.size > MAX_UPLOAD_BYTES)) {
+    const fileBytes = size(file);
+    if (current.length && (current.length === MAX_FILES_PER_UPLOAD || bytes + fileBytes > MAX_UPLOAD_BYTES)) {
       batches.push(current);
       current = [];
       bytes = 0;
     }
     current.push(file);
-    bytes += file.size;
+    bytes += fileBytes;
   }
   if (current.length) batches.push(current);
   return batches;

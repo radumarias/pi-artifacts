@@ -1,4 +1,4 @@
-import { isHidden } from "../../shared/uploads.ts";
+import { isHidden, MAX_LISTED } from "../../shared/uploads.ts";
 
 /** A file to upload, with its name or its path inside the folder it was picked or dropped with. */
 export interface Picked {
@@ -6,15 +6,12 @@ export interface Picked {
   path: string;
 }
 
-/** More than the sidebar and the agent's list can make use of in one go. */
-export const MAX_PICKED = 2_000;
-
 /** Files from a file input; a folder input names each with its path inside the folder. Hidden files inside a folder are left out. */
 export function fromInput(list: FileList | null): Picked[] {
   return [...(list ?? [])]
     .map((file) => ({ file, path: file.webkitRelativePath || file.name }))
     .filter(({ file, path }) => !(file.webkitRelativePath && isHidden(path)))
-    .slice(0, MAX_PICKED);
+    .slice(0, MAX_LISTED);
 }
 
 /**
@@ -30,18 +27,19 @@ export function fromDrop(data: DataTransfer): Promise<Picked[]> {
 }
 
 async function walk(roots: FileSystemEntry[]): Promise<Picked[]> {
-  const picked: Picked[] = [];
+  const files: Promise<Picked>[] = [];
   const queue = [...roots];
-  while (queue.length && picked.length < MAX_PICKED) {
-    const entry = queue.shift()!;
+  // Walked by index: shifting the queue would copy it for every entry.
+  for (let i = 0; i < queue.length && files.length < MAX_LISTED; i++) {
+    const entry = queue[i];
+    // What the user dropped themselves is uploaded whatever its name; inside a folder, hidden files and folders are not.
+    if (i >= roots.length && entry.name.startsWith(".")) continue;
     // The entry's own path starts with "/" and the dropped folder's name: "/reports/q3/sales.csv".
     const path = entry.fullPath.replace(/^\/+/, "") || entry.name;
-    // What the user dropped themselves is uploaded whatever its name; inside a folder, hidden files and folders are not.
-    if (!roots.includes(entry) && entry.name.startsWith(".")) continue;
-    if (entry.isFile) picked.push({ file: await fileOf(entry as FileSystemFileEntry), path });
+    if (entry.isFile) files.push(fileOf(entry as FileSystemFileEntry).then((file) => ({ file, path })));
     else if (entry.isDirectory) queue.push(...(await children(entry as FileSystemDirectoryEntry)));
   }
-  return picked;
+  return Promise.all(files);
 }
 
 function fileOf(entry: FileSystemFileEntry): Promise<File> {

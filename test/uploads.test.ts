@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, uploadBatches, uploadPath } from "../shared/uploads.ts";
-import { FileRefError, filesIndex, MAX_SANDBOX_FILES, resolveFile, resolveRefs, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
+import { FileRefError, filesIndex, MAX_SANDBOX_FILES, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath } from "../worker/storage/paths.ts";
@@ -50,9 +50,9 @@ describe("upload helpers", () => {
 
   it("splits files into requests the Worker accepts", () => {
     const many = Array.from({ length: MAX_FILES_PER_UPLOAD + 1 }, () => ({ size: 1 }));
-    expect(uploadBatches(many).map((b) => b.length)).toEqual([MAX_FILES_PER_UPLOAD, 1]);
+    expect(uploadBatches(many, (f) => f.size).map((b) => b.length)).toEqual([MAX_FILES_PER_UPLOAD, 1]);
     const big = Array.from({ length: 5 }, () => ({ size: MAX_FILE_BYTES }));
-    const batches = uploadBatches(big);
+    const batches = uploadBatches(big, (f) => f.size);
     expect(batches.every((b) => b.reduce((sum, f) => sum + f.size, 0) <= MAX_UPLOAD_BYTES)).toBe(true);
     expect(batches.flat()).toHaveLength(5);
   });
@@ -102,19 +102,19 @@ describe("resolveFile", () => {
   });
 });
 
-describe("resolveRefs", () => {
+describe("resolveRef", () => {
   it("expands a folder to every file in it", () => {
-    expect(resolveRefs(files, ["reports/q4"])).toEqual(["uploads/reports/q4/sales.csv", "uploads/reports/q4/notes.md"]);
-    expect(resolveRefs(files, ["uploads/reports/"])).toHaveLength(3);
+    expect(resolveRef(files, "reports/q4")).toEqual(["uploads/reports/q4/sales.csv", "uploads/reports/q4/notes.md"]);
+    expect(resolveRef(files, "uploads/reports/")).toHaveLength(3);
   });
 
-  it("joins files and folders without repeats", () => {
-    expect(resolveRefs(files, ["prices.csv", "uploads/prices.csv", "q3"])).toEqual(["uploads/prices.csv", "uploads/reports/q3/sales.csv"]);
+  it("names one file as a list of one", () => {
+    expect(resolveRef(files, "prices.csv")).toEqual(["uploads/prices.csv"]);
   });
 
   it("throws for what it cannot find", () => {
-    expect(() => resolveRefs(files, ["missing.csv"])).toThrow(FileRefError);
-    expect(() => resolveRefs(files, [""])).toThrow(FileRefError);
+    expect(() => resolveRef(files, "missing.csv")).toThrow(FileRefError);
+    expect(() => resolveRef(files, "")).toThrow(FileRefError);
   });
 });
 
