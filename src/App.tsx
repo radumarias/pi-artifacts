@@ -206,7 +206,10 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       if (!carriesFiles(e.dataTransfer)) return;
       e.preventDefault();
       setDragging(0);
-      void fromDrop(e.dataTransfer).then((picked) => (picked.length ? upload(picked) : undefined));
+      void fromDrop(e.dataTransfer).then(
+        (picked) => (picked.length ? upload(picked) : undefined),
+        (error) => alert(`Could not read the dropped files: ${errorMessage(error)}`),
+      );
     },
   };
 

@@ -185,7 +185,7 @@ internet. Each run is limited to 60 seconds. Files move like this:
   matches, or a folder for every file in it. The tool reads each one through the user's `UserFiles`, so R2 decrypts it
   with the user's key, and copies it into the container's `./files/` with the Sandbox SDK's file API, in its folders
   but without the leading `uploads/` (`uploads/q3/sales.csv` is `./files/q3/sales.csv`). Two files that would land on
-  one path (`uploads/a.csv` and `a.csv`) refuse the run. One run takes at most 200 files and 50 MB.
+  one path (`uploads/a.csv` and `a.csv`) refuse the run. One run takes at most 200 files and 25 MB (they reach the container in one RPC call, capped at 32 MiB).
 - **Out:** after the run, whatever the script wrote to `./out/` (top level only) is read back from the container and
   saved through the same `UserFiles` as `out/<name>`, encrypted with the user's key.
 - **Between runs:** `./files` and `./out` start empty each run. Anything else in the working directory stays until

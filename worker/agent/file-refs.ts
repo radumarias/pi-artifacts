@@ -71,6 +71,9 @@ function matchFolder(paths: readonly string[], wanted: string): string[] {
       if (f === lower || f.endsWith(`/${lower}`)) folders.add(folder);
     }
   }
+  // A folder's full path names it, as a file's does, even when other folders end the same way ("out" and "uploads/out").
+  const exact = folders.has(wanted) ? [wanted] : [...folders].filter((folder) => folder.toLowerCase() === lower);
+  if (exact.length === 1) return paths.filter((p) => p.startsWith(`${exact[0]}/`));
   if (folders.size > 1) throw new FileRefError(`"${wanted}" could be any of the folders ${list([...folders])}. Pass the full path.`);
   const [folder] = folders;
   return folder ? paths.filter((p) => p.startsWith(`${folder}/`)) : [];
@@ -127,9 +130,12 @@ export function filesIndex(entries: readonly FileEntry[]): string {
   return `${intro}\n${lines.join("\n")}\n… and ${rest} more (files_list shows them, by folder). All files by folder: ${folders}.`;
 }
 
-/** At most this many files, and this many bytes, go into one sandbox run. */
+/**
+ * At most this many files, and this many bytes, go into one sandbox run. The
+ * bytes travel to the Sandbox in one RPC call, which takes at most 32 MiB.
+ */
 export const MAX_SANDBOX_FILES = 200;
-export const MAX_SANDBOX_BYTES = 50 * 1024 * 1024;
+export const MAX_SANDBOX_BYTES = 25 * 1024 * 1024;
 
 /**
  * Where each file goes in a sandbox run: ./files/<sandbox path> for each

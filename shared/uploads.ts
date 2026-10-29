@@ -45,14 +45,22 @@ export function isHidden(relative: string): boolean {
   return relative.split(/[/\\]/).some((segment) => segment.startsWith("."));
 }
 
-/** `path`, or the same path with -2, -3… before its extension, whichever `taken` does not have yet. */
+/**
+ * `path`, or the same path with -2, -3… before its extension, whichever `taken`
+ * does not have yet. The name loses characters before the number rather than
+ * grow past MAX_SEGMENT or the path past MAX_PATH, so uploadPath keeps it as it is.
+ */
 export function freePath(path: string, taken: ReadonlySet<string>): string {
   if (!taken.has(path)) return path;
   const slash = path.lastIndexOf("/");
   const dot = path.lastIndexOf(".");
   const cut = dot > slash + 1 ? dot : path.length;
+  // How far the name may still grow.
+  const room = Math.min(MAX_SEGMENT - (path.length - slash - 1), MAX_PATH - path.length);
   for (let n = 2; ; n++) {
-    const candidate = `${path.slice(0, cut)}-${n}${path.slice(cut)}`;
+    const suffix = `-${n}`;
+    const stemEnd = Math.max(slash + 1, cut - Math.max(0, suffix.length - room));
+    const candidate = `${path.slice(0, stemEnd)}${suffix}${path.slice(cut)}`;
     if (!taken.has(candidate)) return candidate;
   }
 }

@@ -157,10 +157,17 @@ export function filesExtension(scope: ChatScope): Extension {
         replay: "safe",
         execute: async (args) => {
           const files = await scope.files();
-          const { paths: [path], missing } = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref)]);
           // Only what clip() can show: at most 4 bytes per character.
-          const object = await files.get(path, { offset: 0, length: MAX_TOOL_TEXT * 4 });
-          if (!object) throw missing(path);
+          const range = { offset: 0, length: MAX_TOOL_TEXT * 4 };
+          // A stored path names itself (resolveFile would pick it too): read it without listing every file first.
+          let path = literalPath(args.path);
+          let object = path === undefined ? null : await files.get(path, range);
+          if (!object) {
+            const found = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref)]);
+            path = found.paths[0];
+            object = await files.get(path, range);
+            if (!object) throw found.missing(path);
+          }
           const content = clip(await object.text());
           return { output: text(path === args.path ? content : `${path}:\n${content}`) };
         },
@@ -198,18 +205,16 @@ async function sandboxInputs(files: UserFiles, refs: readonly string[]): Promise
   const sizes = new Map(entries.map((e) => [e.path, e.size]));
   const listedBytes = paths.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
   if (listedBytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(listedBytes));
-  const objects = await Promise.all(
-    [...layout].map(async ([name, path]) => {
-      const object = await files.get(path);
-      if (!object) throw missing(path);
-      return { name, object };
-    }),
-  );
+  const fetched = await Promise.allSettled([...layout].map(async ([name, path]) => ({ name, path, object: await files.get(path) })));
+  const objects = fetched.flatMap((result) => (result.status === "fulfilled" && result.value.object ? [{ name: result.value.name, object: result.value.object }] : []));
   // Paths past the end of the listing had no size above.
   const bytes = objects.reduce((sum, { object }) => sum + object.size, 0);
-  if (bytes > MAX_SANDBOX_BYTES) {
+  const failed = fetched.find((result) => result.status === "rejected" || !result.value.object);
+  if (failed || bytes > MAX_SANDBOX_BYTES) {
+    // Nothing is read on a failure: let go of the bodies already opened.
     await Promise.all(objects.map(({ object }) => object.body.cancel()));
-    throw new Error(tooMuch(bytes));
+    if (failed?.status === "rejected") throw failed.reason;
+    throw failed ? missing(failed.value.path) : new Error(tooMuch(bytes));
   }
   return Promise.all(objects.map(async ({ name, object }) => ({ name, bytes: await object.arrayBuffer() })));
 }
