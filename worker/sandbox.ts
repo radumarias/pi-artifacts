@@ -7,6 +7,7 @@ const RUN_TIMEOUT_SECONDS = 60;
 const MAX_OUTPUT_CHARS = 20_000;
 
 export interface SandboxFile {
+  /** Relative to ./files/ for an input, which may be in folders ("q3/sales.csv"); a file name for an output. */
   name: string;
   bytes: ArrayBuffer;
 }
@@ -21,9 +22,10 @@ export interface SandboxRun {
 
 /**
  * One Linux container per chat for code the agent wants to run. No internet:
- * data comes in as files the agent picks from R2, and results go back the
- * same way. Each run starts with fresh ./files and ./out; anything else under
- * /workspace stays while the container is up (10 minutes after the last run).
+ * data comes in as files the agent picks from R2, in their folders under
+ * ./files, and results go back the same way. Each run starts with fresh
+ * ./files and ./out; anything else under /workspace stays while the
+ * container is up (10 minutes after the last run).
  */
 export class Sandbox extends DurableObject<Env> {
   async runPython(code: string, inputs: SandboxFile[]): Promise<SandboxRun> {
@@ -40,6 +42,10 @@ export class Sandbox extends DurableObject<Env> {
     const files = new Files(container);
 
     await this.#exec(container, ["sh", "-c", `rm -rf ${WORKSPACE}/files ${WORKSPACE}/out && mkdir -p ${WORKSPACE}/files ${WORKSPACE}/out`]);
+    // Inputs keep their folders: make those first, deepest only, since recursive makes the parents too.
+    const folders = new Set(inputs.map((input) => input.name.split("/").slice(0, -1).join("/")).filter(Boolean));
+    const deepest = [...folders].filter((folder) => ![...folders].some((other) => other.startsWith(`${folder}/`)));
+    await Promise.all(deepest.map((folder) => files.mkdir(`${WORKSPACE}/files/${folder}`, { recursive: true })));
     await Promise.all([
       ...inputs.map((input) => files.writeFile(`${WORKSPACE}/files/${input.name}`, input.bytes)),
       files.writeFile(`${WORKSPACE}/${entry.name}`, entry.contents),

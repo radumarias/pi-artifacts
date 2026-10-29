@@ -3,6 +3,7 @@ import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from ".
 import { errorMessage } from "../shared/util.ts";
 import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
+import { filesRoute } from "./files-routes.ts";
 import { json } from "./http.ts";
 import { mcpRoute } from "./mcp-routes.ts";
 import { modelCatalog } from "./models.ts";
@@ -13,8 +14,6 @@ import { newId, PathError, Storage } from "./storage/index.ts";
 export { ChatAgent } from "./chat-agent.ts";
 export { Sandbox } from "./sandbox.ts";
 export { UserDirectory } from "./users.ts";
-
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 /**
  * Which chat each artifact lives in. That never changes once an artifact
@@ -163,19 +162,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
   }
 
-  if (path === "/api/files" && method === "GET") {
-    const files = await storage.userFiles(uid);
-    return json(await files.list());
-  }
-  if (path === "/api/files" && method === "POST") {
-    const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) return json({ error: "Expected a file field" }, 400);
-    if (file.size > MAX_UPLOAD_BYTES) return json({ error: "Files are limited to 10 MB" }, 413);
-    const name = file.name.replace(/[^\w .-]/g, "_").replace(/^[.\s]+/, "").slice(0, 120) || "upload";
-    const files = await storage.userFiles(uid);
-    return json({ path: await files.put(`uploads/${name}`, file.stream(), file.type || undefined) });
-  }
+  const files = await filesRoute(request, () => storage.userFiles(uid));
+  if (files) return files;
 
   return json({ error: "Not found" }, 404);
 }
