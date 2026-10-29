@@ -205,11 +205,13 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
             rows={2}
           />
           {state.busy ? (
-            <button type="button" onClick={abort}>
-              Stop
+            <button type="button" className="send stop" onClick={abort} title="Stop" aria-label="Stop">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <rect x="2" y="2" width="12" height="12" rx="2" fill="currentColor" />
+              </svg>
             </button>
           ) : (
-            <button type="submit" disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}>
+            <button type="submit" className="send" disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}>
               {attachments.sending ? "Sending…" : "Send"}
             </button>
           )}
