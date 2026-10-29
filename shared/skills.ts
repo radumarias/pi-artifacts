@@ -41,6 +41,17 @@ export interface SkillInfo extends SkillInput {
   enabled: boolean;
   /** Epoch ms; 0 for built-in skills. */
   updatedAt: number;
+  /** A built-in skill that one of the user's own, turned on, has the same name as: the agent gets the user's. */
+  replaced?: true;
+}
+
+/**
+ * Built-in and user skills are kept apart: each kind has its own names and its own
+ * routes, so a built-in added later never takes over a user's skill. The agent
+ * activates skills by name alone, so where names meet, the user's own (when on) wins.
+ */
+export function skillPath(skill: Pick<SkillInfo, "name" | "origin">): string {
+  return skill.origin === "builtin" ? `/api/skills/builtin/${skill.name}` : `/api/skills/${skill.name}`;
 }
 
 /** A failed skill change, with what to fix: RPC keeps an error's message but not its class. */

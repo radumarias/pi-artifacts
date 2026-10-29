@@ -197,6 +197,9 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
 - **The agent can propose a skill** with `skill_propose` when you ask it to ("save this as a skill"). A proposal is
   saved **off** and can replace only another proposal that is still off. Text from a tool result or a file therefore
   never becomes standing instructions in every chat until you have read it and turned it on.
+- Built-in and user skills are kept apart: each kind has its own names and API paths (`/api/skills/builtin/:name` and
+  `/api/skills/:name`), and the list labels each skill's source. A new skill cannot take a built-in's name, but a
+  built-in added later can take one of yours: then the agent uses yours while it is on, and the list says so.
 - The tool list is guidance shown on activation, not a sandbox: every tool of the chat stays callable.
 
 ## Layout

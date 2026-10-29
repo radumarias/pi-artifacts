@@ -45,11 +45,11 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
     if (!editing) return;
     const { draft, existing } = editing;
     // Saving under a name that is taken replaces that skill: only from its Edit button.
-    if (existing === undefined && skills?.some((s) => s.name === draft.name.trim())) {
+    if (existing === undefined && skills?.some((s) => s.origin !== "builtin" && s.name === draft.name.trim())) {
       setError(`You already have a skill named "${draft.name.trim()}"; edit that one or pick another name.`);
       return;
     }
-    const enabled = skills?.find((s) => s.name === existing)?.enabled ?? true;
+    const enabled = skills?.find((s) => s.origin !== "builtin" && s.name === existing)?.enabled ?? true;
     const tools = splitTools(draft.tools);
     if (await run(() => api.saveSkill({ name: draft.name, description: draft.description, instructions: draft.instructions, tools, enabled }))) setEditing(null);
   };
@@ -60,6 +60,48 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
     event.preventDefault();
     if (importing !== null && (await run(() => api.saveSkill({ markdown: importing })))) setImporting(null);
   };
+
+  const card = (skill: SkillInfo) => (
+    <li key={`${skill.origin === "builtin" ? "builtin" : "own"}:${skill.name}`} className={skill.enabled && !skill.replaced ? "skill" : "skill off"}>
+      <div className="skill-row">
+        <label className="skill-toggle" title={skill.enabled ? "Turn off" : "Turn on"}>
+          <input type="checkbox" checked={skill.enabled} onChange={(e) => run(() => api.setSkillEnabled(skill, e.target.checked))} />
+          <strong>{skill.name}</strong>
+        </label>
+        <span className={skill.origin === "agent" ? "pill review" : "pill"}>{ORIGIN_LABEL[skill.origin]}</span>
+        <span className="skill-buttons">
+          {skill.origin !== "builtin" && (
+            <button
+              type="button"
+              onClick={() =>
+                setEditing({
+                  existing: skill.name,
+                  draft: { name: skill.name, description: skill.description, instructions: skill.instructions, tools: skill.tools.join(" ") },
+                })
+              }
+            >
+              Edit
+            </button>
+          )}
+          <a className="button" href={api.skillMarkdownUrl(skill)} download>
+            SKILL.md
+          </a>
+          {skill.origin !== "builtin" && (
+            <button type="button" onClick={() => confirm(`Delete the skill "${skill.name}"?`) && run(() => api.deleteSkill(skill))}>
+              Delete
+            </button>
+          )}
+        </span>
+      </div>
+      <p>{skill.description}</p>
+      {skill.replaced && <p className="skills-note">One of your skills has this name, so the agent uses yours instead. Turn yours off or delete it to use this one.</p>}
+      {skill.origin === "agent" && !skill.enabled && <p className="skills-note">The agent proposed this skill. Read its instructions before turning it on.</p>}
+      <details>
+        <summary>Instructions{skill.tools.length ? ` · tools: ${skill.tools.join(", ")}` : ""}</summary>
+        <pre>{skill.instructions}</pre>
+      </details>
+    </li>
+  );
 
   return (
     <div className="skills">
@@ -159,48 +201,7 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
           <p className="skills-note">Loading…</p>
         )
       ) : (
-        <ul className="skill-list">
-          {skills.map((skill) => (
-            <li key={skill.name} className={skill.enabled ? "skill" : "skill off"}>
-              <div className="skill-row">
-                <label className="skill-toggle" title={skill.enabled ? "Turn off" : "Turn on"}>
-                  <input type="checkbox" checked={skill.enabled} onChange={(e) => run(() => api.setSkillEnabled(skill.name, e.target.checked, skill.updatedAt || undefined))} />
-                  <strong>{skill.name}</strong>
-                </label>
-                <span className={skill.origin === "agent" ? "pill review" : "pill"}>{ORIGIN_LABEL[skill.origin]}</span>
-                <span className="skill-buttons">
-                  {skill.origin !== "builtin" && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditing({
-                          existing: skill.name,
-                          draft: { name: skill.name, description: skill.description, instructions: skill.instructions, tools: skill.tools.join(" ") },
-                        })
-                      }
-                    >
-                      Edit
-                    </button>
-                  )}
-                  <a className="button" href={api.skillMarkdownUrl(skill.name)} download>
-                    SKILL.md
-                  </a>
-                  {skill.origin !== "builtin" && (
-                    <button type="button" onClick={() => confirm(`Delete the skill "${skill.name}"?`) && run(() => api.deleteSkill(skill.name))}>
-                      Delete
-                    </button>
-                  )}
-                </span>
-              </div>
-              <p>{skill.description}</p>
-              {skill.origin === "agent" && !skill.enabled && <p className="skills-note">The agent proposed this skill. Read its instructions before turning it on.</p>}
-              <details>
-                <summary>Instructions{skill.tools.length ? ` · tools: ${skill.tools.join(", ")}` : ""}</summary>
-                <pre>{skill.instructions}</pre>
-              </details>
-            </li>
-          ))}
-        </ul>
+        <ul className="skill-list">{skills.map(card)}</ul>
       )}
     </div>
   );

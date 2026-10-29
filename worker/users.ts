@@ -109,19 +109,27 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** The built-in skills, then the user's own, each with whether it is on. */
   listSkills(): SkillInfo[] {
-    const off = new Set(this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM builtin_skills_off").toArray().map((row) => row.name));
-    const builtin = BUILTIN_SKILLS.map((skill): SkillInfo => ({ ...skill, origin: "builtin", enabled: !off.has(skill.name), updatedAt: 0 }));
-    return [...builtin, ...this.ctx.storage.sql.exec<SkillRow>("SELECT * FROM skills ORDER BY name").toArray().map(skillInfo)];
+    const own = this.ctx.storage.sql.exec<SkillRow>("SELECT * FROM skills ORDER BY name").toArray().map(skillInfo);
+    const builtin = BUILTIN_SKILLS.map((skill) => this.#builtinInfo(skill, own));
+    return [...builtin, ...own];
   }
 
+  /** One of the user's own skills. */
   getSkill(name: string): SkillInfo | null {
-    const builtin = builtinSkill(name);
-    if (builtin) {
-      const off = this.ctx.storage.sql.exec("SELECT 1 FROM builtin_skills_off WHERE name = ?", name).toArray().length > 0;
-      return { ...builtin, origin: "builtin", enabled: !off, updatedAt: 0 };
-    }
     const row = this.ctx.storage.sql.exec<SkillRow>("SELECT * FROM skills WHERE name = ?", name).toArray()[0];
     return row ? skillInfo(row) : null;
+  }
+
+  getBuiltinSkill(name: string): SkillInfo | null {
+    const builtin = builtinSkill(name);
+    const own = this.getSkill(name);
+    return builtin ? this.#builtinInfo(builtin, own ? [own] : []) : null;
+  }
+
+  #builtinInfo(skill: SkillInput, own: readonly SkillInfo[]): SkillInfo {
+    const off = this.ctx.storage.sql.exec("SELECT 1 FROM builtin_skills_off WHERE name = ?", skill.name).toArray().length > 0;
+    const replaced = own.some((mine) => mine.name === skill.name && mine.enabled);
+    return { ...skill, origin: "builtin", enabled: !off, updatedAt: 0, ...(replaced && { replaced: true as const }) };
   }
 
   /**
@@ -170,16 +178,20 @@ export class UserDirectory extends DurableObject<Env> {
     return { ...skill, origin, enabled: on, updatedAt: now };
   }
 
+  setBuiltinSkillEnabled(name: string, enabled: boolean): SkillResult {
+    if (!builtinSkill(name)) return { error: `No built-in skill named "${name}".` };
+    if (enabled) this.ctx.storage.sql.exec("DELETE FROM builtin_skills_off WHERE name = ?", name);
+    else this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name);
+    return this.getBuiltinSkill(name)!;
+  }
+
   /**
-   * Turn a skill on or off; built-in ones included. `seen` is the `updatedAt` of the
-   * version the user read: turning on a skill that changed since (a proposal the
-   * agent replaced while the user reviewed it) is refused, so they read it again.
+   * Turn one of the user's skills on or off. `seen` is the `updatedAt` of the version
+   * the user read: turning on a skill that changed since (a proposal the agent
+   * replaced while the user reviewed it) is refused, so they read it again.
    */
   setSkillEnabled(name: string, enabled: boolean, seen?: number): SkillResult {
-    if (builtinSkill(name)) {
-      if (enabled) this.ctx.storage.sql.exec("DELETE FROM builtin_skills_off WHERE name = ?", name);
-      else this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name);
-    } else if (enabled) {
+    if (enabled) {
       const current = this.ctx.storage.sql.exec<{ updated_at: number }>("SELECT updated_at FROM skills WHERE name = ?", name).toArray()[0];
       if (current && seen !== undefined && current.updated_at !== seen) {
         return { error: `The skill "${name}" changed since you read it; read it again before turning it on.` };
@@ -192,11 +204,10 @@ export class UserDirectory extends DurableObject<Env> {
     return this.getSkill(name) ?? { error: `No skill named "${name}".` };
   }
 
+  /** Delete one of the user's skills. Built-in ones can only be turned off. */
   deleteSkill(name: string): SkillResult | null {
-    // A user's skill can share a name with a built-in one added after it was saved: it can still be deleted.
     const deleted = this.ctx.storage.sql.exec("DELETE FROM skills WHERE name = ?", name).rowsWritten;
-    if (deleted) return null;
-    return builtinSkill(name) ? { error: `"${name}" is a built-in skill; turn it off instead.` } : { error: `No skill named "${name}".` };
+    return deleted ? null : { error: `No skill named "${name}".` };
   }
 }
 

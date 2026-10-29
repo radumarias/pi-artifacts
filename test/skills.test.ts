@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkSkill, MAX_SKILL_INSTRUCTIONS, SkillError, splitTools, type SkillInfo } from "../shared/skills.ts";
+import { checkSkill, MAX_SKILL_INSTRUCTIONS, SkillError, skillPath, splitTools, type SkillInfo } from "../shared/skills.ts";
 import { skillBody, skillSource } from "../worker/agent/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, formatSkillFile, parseSkillFile } from "../worker/skills/index.ts";
 
@@ -96,6 +96,17 @@ describe("skillSource", () => {
     expect(loaded?.description).toBe(skill.description);
     expect(loaded?.body).toBe(skillBody(skill));
     expect(loaded?.body).toContain("files_read, run_python");
+  });
+
+  it("leaves out a built-in skill the user replaced with their own", async () => {
+    const source = skillSource([info({ origin: "builtin", updatedAt: 0, replaced: true, instructions: "Built in." }), info()], "v1");
+    expect((await source.list()).map((d) => d.name)).toEqual(["weekly-report"]);
+    expect((await source.load("weekly-report"))?.body).toContain("1. Read the data.");
+  });
+
+  it("gives built-in and own skills separate paths", () => {
+    expect(skillPath({ name: "weekly-report", origin: "builtin" })).toBe("/api/skills/builtin/weekly-report");
+    expect(skillPath({ name: "weekly-report", origin: "agent" })).toBe("/api/skills/weekly-report");
   });
 
   it("leaves the tools line out when a skill names none", () => {
