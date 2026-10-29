@@ -91,7 +91,11 @@ The last entry is a Cloudflare MCP portal.
   the tool descriptions.
 - **A Cloudflare MCP portal is one entry** for every server behind it. Its tools come namespaced (`reports_run_query`),
   and its own `portal_*` tools are left in. Through them, the agent can list the portal's servers and turn them on,
-  and the portal can answer with a link for signing in to one of them.
+  and the portal can answer with a link for signing in to one of them. Add a server to the portal and it reaches the
+  agent without a change here: no server behind a portal is named in the code or the config.
+- **Discovery** happens when a chat starts and before every prompt, and tool lists are listed again after five
+  minutes, so servers added to a portal show up on their own. Asked "what's available?", or told you just signed in,
+  the agent calls `mcp_discover`, which lists every server afresh and installs any new tools at once, in the same turn.
 
 `auth: "oauth"` means each user signs in themselves, and their chats call with their own tokens. The app is a standard
 MCP OAuth client for it (`worker/mcp/oauth.ts`, on the MCP SDK): discovery, dynamic client registration, PKCE and
@@ -104,7 +108,7 @@ refresh. There is nothing specific to any one server:
    to its identity provider. The portal keeps those sessions; the app never sees them.
 3. The browser comes back to `/api/mcp/oauth/callback`. The Worker checks the `state` against the sign-in it started
    for *you* (the callback needs your app session too), exchanges the code and stores your tokens. Ask again in the
-   chat: your next prompt picks up the server's tools.
+   chat: your next prompt picks up the server's tools (and `mcp_discover` picks them up within a turn).
 
 Where things live and who can use them:
 
@@ -143,7 +147,9 @@ Setting up a Cloudflare MCP portal for it (Zero Trust → Access controls → MC
   one, nobody can sign in.
 - Keep **Require user auth** on for servers whose data depends on who asks: that is what makes each person sign in
   with their own account.
-- Put the portal's `/mcp` address in `mcp-servers.json` with `"auth": "oauth"`.
+- Put the portal's `/mcp` address in `mcp-servers.json` with `"auth": "oauth"`. When you deploy from a fresh checkout
+  (a cloud session, CI), set `PI_MCP_SERVERS` in that environment instead: without either, a deploy falls back to the
+  demo server alone and the agent no longer sees the portal.
 
 ## The page runtime
 

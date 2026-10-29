@@ -29,6 +29,8 @@
     "src/chat/Markdown.tsx",
     "shared",
     "worker/mcp",
+    "worker/agent/mcp.ts",
+    "worker/agent/output.ts",
     "worker/storage/paths.ts",
     "worker/storage/artifacts.ts",
     "worker/storage/git.ts",
