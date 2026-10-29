@@ -1,4 +1,4 @@
-import { freePath, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, uploadPath } from "../shared/uploads.ts";
+import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, uploadTargets } from "../shared/uploads.ts";
 import { formatBytes } from "../shared/util.ts";
 import { json } from "./http.ts";
 import type { UserFiles } from "./storage/user-files.ts";
@@ -29,15 +29,12 @@ export async function filesRoute(request: Request, userFiles: () => Promise<User
   if (large) return json({ error: `${large.name} is over ${formatBytes(MAX_FILE_BYTES)}; files are limited to that.` }, 413);
   if (files.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BYTES) return json({ error: tooBig() }, 413);
 
-  // Two names can clean up to one path ("a?.csv" and "a*.csv"): number the later ones rather than lose a file.
-  const taken = new Set<string>();
-  const targets = files.map((file, i) => {
-    const given = paths[i];
-    const name = typeof given === "string" && given ? given : file.name;
-    const path = freePath(uploadPath(name) ?? uploadPath("upload")!, taken);
-    taken.add(path);
-    return path;
-  });
+  const targets = uploadTargets(
+    files.map((file, i) => {
+      const given = paths[i];
+      return typeof given === "string" && given ? given : file.name;
+    }),
+  );
   const store = await userFiles();
   const stored = await Promise.all(files.map((file, i) => store.put(targets[i], file.stream(), file.type || undefined)));
   return json({ paths: stored });

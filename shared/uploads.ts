@@ -40,6 +40,25 @@ function cleanSegment(segment: string): string {
     .trimEnd();
 }
 
+/**
+ * Where each of `names` is kept (see uploadPath), named over the whole list:
+ * two names that clean up to one path ("a?.csv" and "a*.csv") get -2, -3…
+ * rather than lose a file. A name with nothing left of it is "upload".
+ */
+export function uploadTargets(names: readonly string[]): string[] {
+  const taken = new Set<string>();
+  return names.map((name) => {
+    const path = freePath(uploadPath(name) ?? `${UPLOADS}/upload`, taken);
+    taken.add(path);
+    return path;
+  });
+}
+
+/** `path` without its leading uploads/, if it has one: "uploads/q3/sales.csv" is "q3/sales.csv". */
+export function underUploads(path: string): string {
+  return path.startsWith(`${UPLOADS}/`) ? path.slice(UPLOADS.length + 1) : path;
+}
+
 /** Inside a folder, files and folders whose names start with a dot (.git, .DS_Store) are left out of an upload. */
 export function isHidden(relative: string): boolean {
   return relative.split(/[/\\]/).some((segment) => segment.startsWith("."));

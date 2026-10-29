@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, uploadBatches, uploadPath } from "../shared/uploads.ts";
+import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, underUploads, uploadBatches, uploadPath, uploadTargets } from "../shared/uploads.ts";
 import { FileRefError, filesIndex, MAX_SANDBOX_FILES, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath } from "../worker/storage/paths.ts";
 import { UserFiles, type FileEntry } from "../worker/storage/user-files.ts";
-import { FakeBucket } from "./fakes.ts";
+import { FakeBucket, MASTER_KEY as MASTER } from "./fakes.ts";
 
 describe("uploadPath", () => {
   it("keeps a file's name, or its path inside a folder, under uploads/", () => {
@@ -55,6 +55,12 @@ describe("upload helpers", () => {
       expect(free).toMatch(/-2\.csv$/);
       expect(uploadPath(free.slice("uploads/".length))).toBe(free);
     }
+  });
+
+  it("names a whole pick at once, numbering names that clean up to one path", () => {
+    expect(uploadTargets(["a?.csv", "a*.csv", "q3/a?.csv", "..."])).toEqual(["uploads/a_.csv", "uploads/a_-2.csv", "uploads/q3/a_.csv", "uploads/upload"]);
+    expect(underUploads("uploads/q3/a.csv")).toBe("q3/a.csv");
+    expect(underUploads("out/a.csv")).toBe("out/a.csv");
   });
 
   it("splits files into requests the Worker accepts", () => {
@@ -177,8 +183,6 @@ describe("filesIndex", () => {
 });
 
 describe("filesRoute", () => {
-  const MASTER = Buffer.from(new Uint8Array(32).fill(7)).toString("base64");
-
   async function setup() {
     const bucket = new FakeBucket();
     const userFiles = new UserFiles(bucket.r2, "ada", await deriveUserKey(MASTER, "ada"));

@@ -13,7 +13,7 @@ export interface Picked {
 export function fromInput(list: FileList | null): Picked[] {
   return [...(list ?? [])]
     .map((file) => ({ file, path: file.webkitRelativePath || file.name }))
-    .filter(({ file, path }) => !(file.webkitRelativePath && isHidden(path.split("/").slice(1).join("/"))))
+    .filter(({ file }) => !isHidden(file.webkitRelativePath.split("/").slice(1).join("/")))
     .slice(0, MAX_LISTED);
 }
 
@@ -36,7 +36,7 @@ async function walk(roots: FileSystemEntry[]): Promise<Picked[]> {
   for (let i = 0; i < queue.length && files.length < MAX_LISTED; i++) {
     const entry = queue[i];
     // What the user dropped themselves is uploaded whatever its name; inside a folder, hidden files and folders are not.
-    if (i >= roots.length && entry.name.startsWith(".")) continue;
+    if (i >= roots.length && isHidden(entry.name)) continue;
     // The entry's own path starts with "/" and the dropped folder's name: "/reports/q3/sales.csv".
     const path = entry.fullPath.replace(/^\/+/, "") || entry.name;
     if (entry.isFile) files.push(fileOf(entry as FileSystemFileEntry).then((file) => ({ file, path })));

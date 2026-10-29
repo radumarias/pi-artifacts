@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath, PathError } from "../worker/storage/paths.ts";
 import { UserFiles } from "../worker/storage/user-files.ts";
-import { FakeBucket } from "./fakes.ts";
-
-const MASTER = Buffer.from(new Uint8Array(32).fill(7)).toString("base64");
+import { FakeBucket, MASTER_KEY as MASTER } from "./fakes.ts";
 
 describe("normalisePath", () => {
   it("accepts ordinary relative paths", () => {

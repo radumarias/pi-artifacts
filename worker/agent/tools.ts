@@ -4,13 +4,12 @@ import { defineExtension, defineTool, section, type Extension } from "@earendil-
 import { createTwoFilesPatch } from "diff";
 import { isOwnedBy, isReadOnly, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type ToolInfo } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
+import { formatBytes, listSome } from "../../shared/util.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import { formatBytes, listSome } from "../../shared/util.ts";
+import { normalisePath, PathError, type ArtifactStore, type FileEntry, type UserFiles } from "../storage/index.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
-import type { FileEntry } from "../storage/user-files.ts";
-import { normalisePath, PathError, type ArtifactStore, type UserFiles } from "../storage/index.ts";
 
 /** What the tools need from the chat they run in. */
 export interface ChatScope {
@@ -160,12 +159,14 @@ export function filesExtension(scope: ChatScope): Extension {
           // Only what clip() can show: at most 4 bytes per character.
           const range = { offset: 0, length: MAX_TOOL_TEXT * 4 };
           // A stored path names itself (resolveFile would pick it too): read it without listing every file first.
-          let path = literalPath(args.path);
+          const literal = literalPath(args.path);
+          let path = literal;
           let object = path === undefined ? null : await files.get(path, range);
           if (!object) {
             const found = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref)]);
             path = found.paths[0];
-            object = await files.get(path, range);
+            // The listing did not match it either and fell back to the path just read: it is not there.
+            object = path === literal ? null : await files.get(path, range);
             if (!object) throw found.missing(path);
           }
           const content = clip(await object.text());
@@ -205,18 +206,20 @@ async function sandboxInputs(files: UserFiles, refs: readonly string[]): Promise
   const sizes = new Map(entries.map((e) => [e.path, e.size]));
   const listedBytes = paths.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
   if (listedBytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(listedBytes));
-  const fetched = await Promise.allSettled([...layout].map(async ([name, path]) => ({ name, path, object: await files.get(path) })));
-  const objects = fetched.flatMap((result) => (result.status === "fulfilled" && result.value.object ? [{ name: result.value.name, object: result.value.object }] : []));
-  // Paths past the end of the listing had no size above.
-  const bytes = objects.reduce((sum, { object }) => sum + object.size, 0);
-  const failed = fetched.find((result) => result.status === "rejected" || !result.value.object);
-  if (failed || bytes > MAX_SANDBOX_BYTES) {
-    // Nothing is read on a failure: let go of the bodies already opened.
-    await Promise.all(objects.map(({ object }) => object.body.cancel()));
-    if (failed?.status === "rejected") throw failed.reason;
-    throw failed ? missing(failed.value.path) : new Error(tooMuch(bytes));
-  }
-  return Promise.all(objects.map(async ({ name, object }) => ({ name, bytes: await object.arrayBuffer() })));
+  // Paths past the end of the listing had no size above: they count as they come, before their body is read.
+  let unlisted = 0;
+  return Promise.all(
+    [...layout].map(async ([name, path]): Promise<SandboxFile> => {
+      const object = await files.get(path);
+      if (!object) throw missing(path);
+      if (!sizes.has(path) && listedBytes + (unlisted += object.size) > MAX_SANDBOX_BYTES) {
+        await object.body.cancel();
+        throw new Error(tooMuch(listedBytes + unlisted));
+      }
+      // Each body is read as soon as it opens: a Worker keeps only a few connections open at once.
+      return { name, bytes: await object.arrayBuffer() };
+    }),
+  );
 }
 
 function tooMuch(bytes: number): string {

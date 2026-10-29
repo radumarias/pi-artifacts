@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { freePath, MAX_FILE_BYTES, UPLOADS, uploadBatches, uploadPath } from "../../shared/uploads.ts";
+import { MAX_FILE_BYTES, underUploads, uploadBatches, uploadTargets } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { fromInput, type Picked } from "./pick.ts";
@@ -18,19 +18,11 @@ export function useUploads(onUploaded: () => void): { status: UploadStatus | nul
   const queue = useRef<Promise<void>>(Promise.resolve());
   const run = useCallback(
     async (picked: Picked[]) => {
-      const files: Picked[] = [];
-      const large: string[] = [];
+      const fitting = picked.filter(({ file }) => file.size <= MAX_FILE_BYTES);
+      const large = picked.filter(({ file }) => file.size > MAX_FILE_BYTES).map(({ path }) => path);
       // Named here, over the whole pick: the Worker numbers clashing names only within one request.
-      const taken = new Set<string>();
-      for (const { file, path } of picked) {
-        if (file.size > MAX_FILE_BYTES) {
-          large.push(path);
-          continue;
-        }
-        const target = freePath(uploadPath(path) ?? `${UPLOADS}/upload`, taken);
-        taken.add(target);
-        files.push({ file, path: target.slice(UPLOADS.length + 1) });
-      }
+      const targets = uploadTargets(fitting.map(({ path }) => path));
+      const files = fitting.map(({ file }, i) => ({ file, path: underUploads(targets[i]) }));
       const skipped = large.length ? ` Skipped ${listSome(large, 3)}: over ${formatBytes(MAX_FILE_BYTES)}.` : "";
       if (files.length === 0) {
         setStatus(picked.length ? { text: skipped.trim(), busy: false, error: true } : null);

@@ -1,4 +1,4 @@
-import { UPLOADS } from "../../shared/uploads.ts";
+import { underUploads } from "../../shared/uploads.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
 import type { FileEntry } from "../storage/user-files.ts";
 
@@ -73,10 +73,9 @@ function matchFolder(paths: readonly string[], wanted: string): string[] {
   }
   // A folder's full path names it, as a file's does, even when other folders end the same way ("out" and "uploads/out").
   const exact = folders.has(wanted) ? [wanted] : [...folders].filter((folder) => folder.toLowerCase() === lower);
-  if (exact.length === 1) return paths.filter((p) => p.startsWith(`${exact[0]}/`));
-  if (folders.size > 1) throw new FileRefError(`"${wanted}" could be any of the folders ${list([...folders])}. Pass the full path.`);
-  const [folder] = folders;
-  return folder ? paths.filter((p) => p.startsWith(`${folder}/`)) : [];
+  const folder = exact.length === 1 ? exact[0] : folders.size === 1 ? [...folders][0] : undefined;
+  if (folder === undefined && folders.size > 1) throw new FileRefError(`"${wanted}" could be any of the folders ${list([...folders])}. Pass the full path.`);
+  return folder === undefined ? [] : paths.filter((p) => p.startsWith(`${folder}/`));
 }
 
 function notFound(paths: readonly string[], ref: string): FileRefError {
@@ -93,9 +92,7 @@ function list(paths: readonly string[]): string {
 export class FileRefError extends Error {}
 
 /** Where a user file lands in a sandbox run, under ./files/: its path without the leading uploads/. */
-export function sandboxPath(path: string): string {
-  return path.startsWith(`${UPLOADS}/`) ? path.slice(UPLOADS.length + 1) : path;
-}
+export const sandboxPath = underUploads;
 
 const INDEX_MAX_FILES = 150;
 const INDEX_MAX_CHARS = 6_000;
