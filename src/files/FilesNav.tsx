@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
-import { MAX_FILE_BYTES, uploadBatches } from "../../shared/uploads.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { memo, useCallback, useMemo, useState } from "react";
+import { freePath, MAX_FILE_BYTES, UPLOADS, uploadBatches, uploadPath } from "../../shared/uploads.ts";
+import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { fromInput, type Picked } from "./pick.ts";
 
@@ -16,25 +16,36 @@ export function useUploads(onUploaded: () => void): { status: UploadStatus | nul
   const [status, setStatus] = useState<UploadStatus | null>(null);
   const upload = useCallback(
     async (picked: Picked[]) => {
-      const large = picked.filter(({ file }) => file.size > MAX_FILE_BYTES);
-      const files = picked.filter(({ file }) => file.size <= MAX_FILE_BYTES);
-      const named = large.slice(0, 3).map(({ path }) => path).join(", ") + (large.length > 3 ? ` and ${large.length - 3} more` : "");
-      const skipped = large.length ? ` Skipped ${named}: over ${MAX_FILE_BYTES / 1024 / 1024} MB.` : "";
+      const files: Picked[] = [];
+      const large: string[] = [];
+      // Named here, over the whole pick: the Worker numbers clashing names only within one request.
+      const taken = new Set<string>();
+      for (const { file, path } of picked) {
+        if (file.size > MAX_FILE_BYTES) {
+          large.push(path);
+          continue;
+        }
+        const target = freePath(uploadPath(path) ?? `${UPLOADS}/upload`, taken);
+        taken.add(target);
+        files.push({ file, path: target.slice(UPLOADS.length + 1) });
+      }
+      const skipped = large.length ? ` Skipped ${listSome(large, 3)}: over ${formatBytes(MAX_FILE_BYTES)}.` : "";
       if (files.length === 0) {
         setStatus(picked.length ? { text: skipped.trim(), busy: false, error: true } : null);
         return;
       }
       let done = 0;
       try {
-        for (const batch of uploadBatches(files.map((item) => ({ ...item, size: item.file.size })))) {
+        for (const batch of uploadBatches(files, (item) => item.file.size)) {
           setStatus({ text: `Uploading ${done + 1}–${done + batch.length} of ${files.length}…`, busy: true });
           await api.upload(batch);
           done += batch.length;
-          onUploaded();
         }
         setStatus({ text: `Uploaded ${files.length === 1 ? files[0].path : `${files.length} files`}.${skipped}`, busy: false, error: !!skipped });
       } catch (e) {
         setStatus({ text: `Uploaded ${done} of ${files.length}: ${errorMessage(e)}${skipped}`, busy: false, error: true });
+      } finally {
+        // Once at the end: listing after every request would list a growing folder again and again.
         onUploaded();
       }
     },
@@ -81,7 +92,7 @@ function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
         </details>
       ))}
       {folder.files.map((file) => (
-        <span key={file.path} title={`${file.path} · ${file.size} bytes`}>
+        <span key={file.path} title={`${file.path} · ${formatBytes(file.size)}`}>
           {file.path.split("/").pop()}
         </span>
       ))}
@@ -89,8 +100,9 @@ function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
   );
 }
 
-/** The sidebar's files: a folder tree, the two pickers, and how the last upload went. */
-export function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
+/** The sidebar's files: a folder tree, the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app. */
+export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
+  const root = useMemo(() => tree(files), [files]);
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
     // Cleared, so picking the same files again (after changing them) uploads them again.
@@ -99,7 +111,7 @@ export function FilesNav({ files, status, upload }: { files: readonly FileInfo[]
   };
   return (
     <nav className="files">
-      <FolderView folder={tree(files)} depth={0} />
+      <FolderView folder={root} depth={0} />
       <div className="upload-actions">
         <label className="upload" title="Pick one or more files">
           Upload files
@@ -121,4 +133,4 @@ export function FilesNav({ files, status, upload }: { files: readonly FileInfo[]
       </small>
     </nav>
   );
-}
+});

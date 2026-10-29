@@ -6,6 +6,7 @@ import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
 import { isOwnedBy, isReadOnly, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
+import { filesIndex } from "./agent/file-refs.ts";
 import { promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
@@ -71,7 +72,7 @@ export class ChatAgent extends DurableObject<Env> {
   #mcpInstalled = "";
   /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
-  /** The user's files as the agent's prompt lists them, so a refresh reinstalls the list only on a change. */
+  /** The agent's prompt's list of the user's files, so a refresh reinstalls it only on a change. */
   #filesInstalled: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -137,11 +138,10 @@ export class ChatAgent extends DurableObject<Env> {
    */
   readonly refreshFiles = singleFlight(async () => {
     try {
-      const entries = await (await this.scope.files()).list();
-      const version = JSON.stringify(entries.map((e) => [e.path, e.size, +e.uploaded]));
-      if (version === this.#filesInstalled) return;
-      this.registry.install(filesIndexExtension(entries));
-      this.#filesInstalled = version;
+      const index = filesIndex(await (await this.scope.files()).list());
+      if (index === this.#filesInstalled) return;
+      this.registry.install(filesIndexExtension(index));
+      this.#filesInstalled = index;
     } catch (error) {
       console.error("files:", errorMessage(error));
     }

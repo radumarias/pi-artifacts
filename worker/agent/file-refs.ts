@@ -1,39 +1,37 @@
 import { UPLOADS } from "../../shared/uploads.ts";
+import { formatBytes, listSome } from "../../shared/util.ts";
 import type { FileEntry } from "../storage/user-files.ts";
 
 /**
  * What the user calls a file, matched to the files they have. The user says
  * "sales.csv" or "q3/sales.csv"; the file is uploads/q3/sales.csv. A path
  * names itself; otherwise a name or the end of a path names the one file it
- * ends, and a folder names every file under it.
+ * ends, and a folder names every file under it. Throws when nothing, or more
+ * than one thing, matches.
  */
-export function resolveRefs(entries: readonly FileEntry[], refs: readonly string[]): string[] {
-  const found = new Set<string>();
-  for (const ref of refs) for (const path of resolveRef(entries, ref)) found.add(path);
-  return [...found];
-}
-
-/** The one file `ref` names, or throws: for tools that read a single file. */
-export function resolveFile(entries: readonly FileEntry[], ref: string): string {
-  const paths = entries.map((e) => e.path);
-  for (const wanted of variants(ref)) {
-    const file = matchFile(paths, wanted);
-    if (file) return file;
-    if (matchFolder(paths, wanted).length) throw new FileRefError(`"${ref}" is a folder; name one of its files, or list it with files_list.`);
-  }
-  throw notFound(paths, ref);
-}
-
-function resolveRef(entries: readonly FileEntry[], ref: string): string[] {
+function match(entries: readonly FileEntry[], ref: string): { file: string } | { folder: string[] } {
   const paths = entries.map((e) => e.path);
   for (const wanted of variants(ref)) {
     // "data/" asks for the folder even when a file is also called "data".
     const file = ref.trim().endsWith("/") ? undefined : matchFile(paths, wanted);
-    if (file) return [file];
+    if (file) return { file };
     const folder = matchFolder(paths, wanted);
-    if (folder.length) return folder;
+    if (folder.length) return { folder };
   }
   throw notFound(paths, ref);
+}
+
+/** The one file `ref` names: for tools that read a single file. */
+export function resolveFile(entries: readonly FileEntry[], ref: string): string {
+  const found = match(entries, ref);
+  if ("folder" in found) throw new FileRefError(`"${ref}" is a folder; name one of its files, or list it with files_list.`);
+  return found.file;
+}
+
+/** The file `ref` names, or every file in the folder it names. */
+export function resolveRef(entries: readonly FileEntry[], ref: string): string[] {
+  const found = match(entries, ref);
+  return "folder" in found ? found.folder : [found.file];
 }
 
 /**
@@ -86,8 +84,7 @@ function notFound(paths: readonly string[], ref: string): FileRefError {
 }
 
 function list(paths: readonly string[]): string {
-  const shown = paths.slice(0, 8).map((p) => `"${p}"`);
-  return paths.length > 8 ? `${shown.join(", ")} and ${paths.length - 8} more` : shown.join(", ");
+  return listSome(paths.map((p) => `"${p}"`), 8);
 }
 
 export class FileRefError extends Error {}
@@ -114,7 +111,7 @@ export function filesIndex(entries: readonly FileEntry[]): string {
   const lines: string[] = [];
   let chars = 0;
   for (const entry of newest) {
-    const line = `${entry.path}\t${size(entry.size)}`;
+    const line = `${entry.path}\t${formatBytes(entry.size)}`;
     if (lines.length === INDEX_MAX_FILES || chars + line.length > INDEX_MAX_CHARS) break;
     lines.push(line);
     chars += line.length + 1;
@@ -130,20 +127,14 @@ export function filesIndex(entries: readonly FileEntry[]): string {
   return `${intro}\n${lines.join("\n")}\n… and ${rest} more (files_list shows them, by folder). All files by folder: ${folders}.`;
 }
 
-function size(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
 /** At most this many files, and this many bytes, go into one sandbox run. */
 export const MAX_SANDBOX_FILES = 200;
 export const MAX_SANDBOX_BYTES = 50 * 1024 * 1024;
 
 /**
  * Where each file goes in a sandbox run: ./files/<sandbox path> for each
- * stored path. Throws when two files would land on one path, or a file where
- * another needs a folder.
+ * stored path, which must not repeat. Throws when two files would land on one
+ * path, or a file where another needs a folder.
  */
 export function sandboxLayout(paths: readonly string[]): Map<string, string> {
   if (paths.length > MAX_SANDBOX_FILES) throw new FileRefError(`That is ${paths.length} files; one run takes at most ${MAX_SANDBOX_FILES}. Pass fewer, or a smaller folder.`);
@@ -151,15 +142,14 @@ export function sandboxLayout(paths: readonly string[]): Map<string, string> {
   for (const path of paths) {
     const name = sandboxPath(path);
     const other = layout.get(name);
-    if (other !== undefined && other !== path) throw new FileRefError(`"${other}" and "${path}" would both be ./files/${name}; pass them in separate runs.`);
+    if (other !== undefined) throw new FileRefError(`"${other}" and "${path}" would both be ./files/${name}; pass them in separate runs.`);
     layout.set(name, path);
   }
-  const names = new Set(layout.keys());
-  for (const name of names) {
+  for (const name of layout.keys()) {
     const segments = name.split("/");
     for (let end = 1; end < segments.length; end++) {
       const folder = segments.slice(0, end).join("/");
-      if (names.has(folder)) throw new FileRefError(`"${layout.get(folder)}" is a file where "${layout.get(name)}" needs a folder; pass them in separate runs.`);
+      if (layout.has(folder)) throw new FileRefError(`"${layout.get(folder)}" is a file where "${layout.get(name)}" needs a folder; pass them in separate runs.`);
     }
   }
   return layout;

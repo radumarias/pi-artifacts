@@ -1,4 +1,5 @@
 import { freePath, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, uploadPath } from "../shared/uploads.ts";
+import { formatBytes } from "../shared/util.ts";
 import { json } from "./http.ts";
 import type { UserFiles } from "./storage/user-files.ts";
 
@@ -25,7 +26,7 @@ export async function filesRoute(request: Request, userFiles: () => Promise<User
   if (files.length === 0 || !files.every((file): file is File => file instanceof File)) return json({ error: "Expected one or more file fields" }, 400);
   if (files.length > MAX_FILES_PER_UPLOAD) return json({ error: `Upload at most ${MAX_FILES_PER_UPLOAD} files at a time.` }, 413);
   const large = files.find((file) => file.size > MAX_FILE_BYTES);
-  if (large) return json({ error: `${large.name} is over ${MAX_FILE_BYTES / 1024 / 1024} MB; files are limited to that.` }, 413);
+  if (large) return json({ error: `${large.name} is over ${formatBytes(MAX_FILE_BYTES)}; files are limited to that.` }, 413);
   if (files.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BYTES) return json({ error: tooBig() }, 413);
 
   // Two names can clean up to one path ("a?.csv" and "a*.csv"): number the later ones rather than lose a file.
@@ -43,5 +44,5 @@ export async function filesRoute(request: Request, userFiles: () => Promise<User
 }
 
 function tooBig(): string {
-  return `One upload holds at most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB; send the files in several.`;
+  return `One upload holds at most ${formatBytes(MAX_UPLOAD_BYTES)}; send the files in several.`;
 }
