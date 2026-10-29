@@ -46,6 +46,8 @@ interface CacheEntry {
 /** What one chat object may hold in cached results. Durable Objects have 128 MB; results vary from bytes to megabytes. */
 const MAX_CACHE_BYTES = 16 * 1024 * 1024;
 const CACHE_LIFETIME_MS = 10 * 60_000;
+/** How long a server's tool list holds before it is listed again: the servers behind a portal come and go. */
+const TOOLS_LIFETIME_MS = 5 * 60_000;
 
 /**
  * The chat's MCP connections. Pi's tools and artifact pages call through the
@@ -60,7 +62,7 @@ export class McpHub {
   readonly #now: () => number;
   readonly #servers = new Map<string, McpServerConfig>();
   readonly #connections = new Map<string, Promise<McpConnection>>();
-  readonly #tools = new Map<string, Promise<ToolInfo[]>>();
+  readonly #tools = new Map<string, { list: Promise<ToolInfo[]>; listedAt: number }>();
   readonly #cache = new Map<string, CacheEntry>();
   #cacheBytes = 0;
   readonly #inflight = new Map<string, Promise<CacheEntry>>();
@@ -80,13 +82,21 @@ export class McpHub {
   }
 
   async tools(server: string): Promise<ToolInfo[]> {
-    let tools = this.#tools.get(server);
-    if (!tools) {
-      tools = this.#withConnection(server, (connection) => connection.listTools());
-      this.#tools.set(server, tools);
-      tools.catch(() => this.#tools.delete(server));
+    const now = this.#now();
+    let entry = this.#tools.get(server);
+    if (!entry || now - entry.listedAt >= TOOLS_LIFETIME_MS) {
+      const listed = (entry = { list: this.#withConnection(server, (connection) => connection.listTools()), listedAt: now });
+      this.#tools.set(server, listed);
+      listed.list.catch(() => {
+        if (this.#tools.get(server) === listed) this.#tools.delete(server);
+      });
     }
-    return tools;
+    return entry.list;
+  }
+
+  /** Drop every server's tool list, so the next look lists them afresh: for when the user asks what is there now. */
+  forgetTools(): void {
+    this.#tools.clear();
   }
 
   /** What the server says about itself when it connects (MCP `instructions`), if anything. */

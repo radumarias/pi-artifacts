@@ -8,7 +8,8 @@ import { isOwnedBy, isReadOnly, manifestOf, type ArtifactManifest, type ChatClie
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
-import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
+import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
+import { artifactExtension, filesExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput } from "./agent/tools.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
@@ -69,6 +70,8 @@ export class ChatAgent extends DurableObject<Env> {
   readonly #manifests = new Map<string, ArtifactManifest>();
   /** The servers whose tools the agent has now, so a refresh reinstalls only on a change. */
   #mcpInstalled = "";
+  /** What the agent's prompt says about the MCP servers now. */
+  #mcpSummary = "";
   /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
 
@@ -131,9 +134,10 @@ export class ChatAgent extends DurableObject<Env> {
   /**
    * List each MCP server's tools and install them as agent tools. Runs before
    * every prompt: tool lists are cached, and a server the user has signed in
-   * to since (or whose sign-in expired) joins or leaves then.
+   * to since (or whose sign-in expired) joins or leaves then. Returns what
+   * the agent's prompt now says about the servers.
    */
-  readonly refreshMcpTools = singleFlight(async () => {
+  readonly refreshMcpTools = singleFlight(async (): Promise<string> => {
     const catalog = new Map<string, ServerCatalog>();
     const unavailable = new Map<string, string>();
     // Servers are independent: list them all at once, so a slow one delays the prompt by its own time only.
@@ -157,10 +161,25 @@ export class ChatAgent extends DurableObject<Env> {
     // Everything the extension is built from: a server's new tool list, or a new reason it is unavailable, reinstalls it.
     const installed = JSON.stringify([[...catalog], [...unavailable]]);
     if (installed !== this.#mcpInstalled) {
-      this.registry.install(mcpExtension(this.hub, catalog, unavailable));
+      const { extension, summary } = mcpExtension(this.hub, catalog, unavailable, () => this.discoverMcp());
+      this.registry.install(extension);
       this.#mcpInstalled = installed;
+      this.#mcpSummary = summary;
     }
+    return this.#mcpSummary;
   });
+
+  /**
+   * List every server afresh, not from cached tool lists, and install what it
+   * finds: the agent's mcp_discover. The agent's next step already has the
+   * new tools: pi fixes the offered tools per model request, not per turn.
+   */
+  async discoverMcp(): Promise<string> {
+    // A refresh in flight may still be reading the old lists: let it finish, so the one below starts from nothing cached.
+    await this.refreshMcpTools();
+    this.hub.forgetTools();
+    return this.refreshMcpTools();
+  }
 
   /** Public servers connect as they are; a server with `auth: "oauth"` connects with this chat's user's own tokens. */
   async #connect(server: McpServerConfig) {

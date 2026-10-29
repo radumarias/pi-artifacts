@@ -171,6 +171,58 @@ describe("McpHub with signed-in servers", () => {
   });
 });
 
+describe("McpHub.tools", () => {
+  // A portal whose servers change: each listing may differ from the last.
+  function portal() {
+    const listings: string[][] = [["a_search"]];
+    let lists = 0;
+    const connection: McpConnection = {
+      listTools: async () => listings[Math.min(lists++, listings.length - 1)].map((name) => ({ name, description: "" })),
+      callTool: async () => text({}),
+      close: async () => {},
+    };
+    return { listings, lists: () => lists, connector: async () => connection };
+  }
+
+  it("keeps a tool list for a while, then lists the server again", async () => {
+    let now = 0;
+    const server = portal();
+    server.listings.push(["a_search", "b_report"]);
+    const hub = new McpHub([viewerScoped], server.connector, () => now);
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search"]);
+    now += 60_000;
+    await hub.tools("Prices");
+    expect(server.lists()).toBe(1);
+    now += 5 * 60_000;
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search", "b_report"]);
+  });
+
+  it("lists afresh when asked, as the agent's discovery does", async () => {
+    const server = portal();
+    server.listings.push(["a_search", "b_report"]);
+    const hub = new McpHub([viewerScoped], server.connector);
+    await hub.tools("Prices");
+    hub.forgetTools();
+    expect((await hub.tool("Prices", "b_report"))?.name).toBe("b_report");
+  });
+
+  it("does not keep a failed listing", async () => {
+    let fail = true;
+    const connection: McpConnection = {
+      listTools: async () => {
+        if (fail) throw new McpFailure({ code: "auth_required", server: "Prices", message: "Not signed in." });
+        return [{ name: "price", description: "" }];
+      },
+      callTool: async () => text({}),
+      close: async () => {},
+    };
+    const hub = new McpHub([viewerScoped], async () => connection);
+    await expect(hub.tools("Prices")).rejects.toMatchObject({ error: { code: "auth_required" } });
+    fail = false;
+    expect(await hub.tools("Prices")).toHaveLength(1);
+  });
+});
+
 describe("mcpServers", () => {
   it("takes name and URL entries from the binding and drops malformed ones", () => {
     const servers = mcpServers({

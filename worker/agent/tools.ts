@@ -1,12 +1,13 @@
 import { Type } from "@earendil-works/pi-ai";
 import { exports } from "cloudflare:workers";
-import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
-import { isOwnedBy, isReadOnly, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type ToolInfo } from "../../shared/protocol.ts";
+import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
+import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 import { normalisePath, PathError, type ArtifactStore, type UserFiles } from "../storage/index.ts";
 
 /** What the tools need from the chat they run in. */
@@ -20,81 +21,6 @@ export interface ChatScope {
   onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
   /** Save a skill for the user, turned off until they turn it on. */
   proposeSkill(skill: SkillInput): Promise<SkillResult>;
-}
-
-const MAX_TOOL_TEXT = 16_000;
-
-const text = (value: string) => [{ type: "text" as const, text: value }];
-
-function clip(value: string): string {
-  return value.length <= MAX_TOOL_TEXT ? value : `${value.slice(0, MAX_TOOL_TEXT)}\n… [${value.length - MAX_TOOL_TEXT} more characters cut]`;
-}
-
-/** Tool names the providers accept: the server's name as a slug, then the MCP tool's name. */
-export function mcpToolName(server: string, tool: string): string {
-  return `${server.toLowerCase().replace(/[^a-z0-9]+/g, "_")}__${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`.slice(0, 64);
-}
-
-/** What one MCP server told the chat about itself. */
-export interface ServerCatalog {
-  tools: ToolInfo[];
-  instructions?: string;
-}
-
-/**
- * One pi tool per MCP tool, calling through the hub the artifacts also use.
- * The agent knows only what the servers say about themselves. Servers that
- * could not be listed (down, or the user has not signed in) are named in the
- * prompt with the reason, so the agent can tell the user.
- */
-export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, unavailable: Map<string, string>): Extension {
-  // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
-  // and providers reject a request whose tool names repeat: number the later ones.
-  const used = new Set<string>();
-  const tools = [];
-  const servers: string[] = [];
-  for (const [server, { tools: serverTools, instructions }] of catalog) {
-    const list: string[] = [];
-    for (const tool of serverTools) {
-      const base = mcpToolName(server, tool.name);
-      let name = base;
-      for (let n = 2; used.has(name); n++) name = `${base.slice(0, 64 - String(n).length - 1)}_${n}`;
-      used.add(name);
-      const readOnly = isReadOnly(tool);
-      list.push(`${tool.name}${readOnly ? " (read-only)" : ""} — agent tool ${name}`);
-      tools.push(
-        defineTool({
-          name,
-          description: `[MCP server "${server}", tool "${tool.name}"${readOnly ? ", read-only" : ""}] ${tool.description}`,
-          parameters: Type.Unsafe<Record<string, unknown>>((tool.inputSchema as object) ?? { type: "object" }),
-          replay: readOnly ? "safe" : "unsafe",
-          execute: async (args) => {
-            const result = await hub.call(server, tool.name, args);
-            const payload = result.payload ?? result.content;
-            return { output: text(clip(typeof payload === "string" ? payload : JSON.stringify(payload, null, 1))) };
-          },
-        }),
-      );
-    }
-    const about = instructions?.trim() ? `\n  Says about itself: ${instructions.trim().replace(/\s+/g, " ").slice(0, 1_500)}` : "";
-    servers.push(`- "${server}"${about}\n  Tools: ${list.join("; ")}`);
-  }
-  return defineExtension({
-    name: "mcp",
-    tools,
-    sections: [
-      section("mcp_servers", () => {
-        const connected =
-          "MCP servers connected to this chat. Pages declare them by these exact names. Use the servers and tools the user names; " +
-          "when they don't, pick by the tool descriptions. A tool may answer with a link the user must open (to sign in, for example); " +
-          `pass such links on as they are.\n${servers.join("\n")}`;
-        if (unavailable.size === 0) return connected;
-        const missing = [...unavailable].map(([name, reason]) => `- "${name}": ${reason}`);
-        return `${connected}\n\nServers this chat cannot use right now. If the user asks for one, say why, and pass on any sign-in link exactly, ` +
-          `as a Markdown link (a path such as /api/mcp/sign-in/<name> is only clickable that way):\n${missing.join("\n")}`;
-      }),
-    ],
-  });
 }
 
 export function filesExtension(scope: ChatScope): Extension {
