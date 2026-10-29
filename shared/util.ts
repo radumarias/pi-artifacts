@@ -28,14 +28,13 @@ export function memoAsync<T>(fn: () => Promise<T>): () => Promise<T> {
     }));
 }
 
-/** `fn`, with concurrent calls sharing the run in flight; the next call after it settles runs `fn` again. `running()` is that run, if any. */
-export function singleFlight<T>(fn: () => Promise<T>): (() => Promise<T>) & { running(): Promise<T> | undefined } {
+/** `fn`, with concurrent calls sharing the run in flight; the next call after it settles runs `fn` again. */
+export function singleFlight<T>(fn: () => Promise<T>): () => Promise<T> {
   let running: Promise<T> | undefined;
-  const run = () =>
+  return () =>
     (running ??= fn().finally(() => {
       running = undefined;
     }));
-  return Object.assign(run, { running: () => running });
 }
 
 /** A size people read: "512 B", "2.0 KB", "10.0 MB". */

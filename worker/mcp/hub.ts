@@ -86,7 +86,16 @@ export class McpHub {
     const now = this.#now();
     const cached = this.#tools.get(server);
     if (cached && now - cached.listedAt < maxAgeMs) return cached.list;
-    const fresh = { list: this.#withConnection(server, (connection) => connection.listTools()), listedAt: now };
+    const fresh = {
+      listedAt: now,
+      list: this.#withConnection(server, (connection) => connection.listTools()).catch((error) => {
+        // A server that listed before and does not answer now keeps its last list (and is listed again on the next call),
+        // so a passing failure neither drops its tools from the agent nor fails the pages calling it. A sign-in failure does.
+        if (!cached || !(error instanceof McpFailure && error.error.retryable)) throw error;
+        fresh.listedAt = cached.listedAt;
+        return cached.list;
+      }),
+    };
     this.#tools.set(server, fresh);
     fresh.list.catch(() => {
       if (this.#tools.get(server) === fresh) this.#tools.delete(server);

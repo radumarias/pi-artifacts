@@ -214,6 +214,17 @@ describe("McpHub.tools", () => {
     await expect(hub.tools("Prices")).rejects.toMatchObject({ error: { code: "auth_required" } });
     expect(await hub.tools("Prices")).toHaveLength(1);
   });
+
+  it("keeps the last list while the server does not answer, and lists again on the next call", async () => {
+    const server = portal(["a_search"], new Error("socket hang up"), new Error("socket hang up"), ["a_search", "b_report"]);
+    let now = 0;
+    const hub = new McpHub([viewerScoped], server.connector, () => now);
+    await hub.tools("Prices");
+    now += 6 * 60_000;
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search"]);
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search", "b_report"]);
+    expect(server.lists()).toBe(4);
+  });
 });
 
 describe("mcpServers", () => {

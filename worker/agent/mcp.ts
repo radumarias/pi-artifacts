@@ -23,15 +23,16 @@ export interface ServerCatalog {
  * The agent knows only what the servers say about themselves. Servers that
  * could not be listed (down, or the user has not signed in) are named in the
  * prompt with the reason, so the agent can tell the user. `discover` lists
- * every server afresh and returns the new summary: the agent's mcp_discover.
- * Returns the extension and the summary its prompt section shows.
+ * every server afresh and returns the new listing: the agent's mcp_discover.
+ * Returns the extension, the summary its prompt section shows, and the
+ * listing mcp_discover answers with.
  */
 export function mcpExtension(
   hub: McpHub,
   catalog: Map<string, ServerCatalog>,
   unavailable: Map<string, string>,
   discover: () => Promise<string>,
-): { extension: Extension; summary: string } {
+): { extension: Extension; summary: string; listing: string } {
   // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
   // and providers reject a request whose tool names repeat: number the later ones.
   const used = new Set<string>();
@@ -63,19 +64,23 @@ export function mcpExtension(
     const about = instructions?.trim() ? `\n  Says about itself: ${instructions.trim().replace(/\s+/g, " ").slice(0, 1_500)}` : "";
     servers.push(`- "${server}"${about}\n  Tools: ${list.length ? list.join("; ") : "none listed for this user"}`);
   }
-  let summary =
+  const connected = servers.length ? servers.join("\n") : "(none)";
+  const missing = unavailable.size
+    ? "Servers this chat cannot use right now. If the user asks for one, say why, and pass on any sign-in link exactly, " +
+      "as a Markdown link (a path such as /api/mcp/sign-in/<name> is only clickable that way):\n" +
+      [...unavailable].map(([name, reason]) => `- "${name}": ${reason}`).join("\n")
+    : "";
+  const summary =
     "MCP servers connected to this chat. Pages declare them by these exact names. Use the servers and tools the user names; " +
     "when they don't, pick by the tool descriptions. One entry may be a portal: a single address in front of several servers, whose " +
     "tools all appear under the portal's name (often prefixed with each server's name), and whose own tools may list or connect the servers behind it. " +
     `When the user asks what is available, or says they have just signed in or connected something, call ${MCP_DISCOVER_TOOL} first, then answer from what it lists. ` +
     "A tool may answer with a link the user must open (to sign in, for example); pass such links on as they are.\n" +
-    (servers.length ? servers.join("\n") : "(none)");
-  if (unavailable.size) {
-    const missing = [...unavailable].map(([name, reason]) => `- "${name}": ${reason}`);
-    summary +=
-      "\n\nServers this chat cannot use right now. If the user asks for one, say why, and pass on any sign-in link exactly, " +
-      `as a Markdown link (a path such as /api/mcp/sign-in/<name> is only clickable that way):\n${missing.join("\n")}`;
-  }
+    connected +
+    (missing && `\n\n${missing}`);
+  // What mcp_discover answers: the servers without the guidance the prompt already gives, and the sign-in links first,
+  // so that a portal's long tool list, cut to fit a tool result, cannot cut them off.
+  const listing = `${missing && `${missing}\n\n`}Connected servers:\n${connected}`;
   tools.push(
     defineTool({
       name: MCP_DISCOVER_TOOL,
@@ -88,5 +93,5 @@ export function mcpExtension(
     }),
   );
   const extension = defineExtension({ name: "mcp", tools, sections: [section("mcp_servers", () => summary)] });
-  return { extension, summary };
+  return { extension, summary, listing };
 }
