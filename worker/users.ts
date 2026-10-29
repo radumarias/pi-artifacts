@@ -153,7 +153,8 @@ export class UserDirectory extends DurableObject<Env> {
       return { error: `The user has ${MAX_SKILL_PROPOSALS} proposals waiting for review; ask them to review those first.` };
     }
     const on = origin === "user" && enabled;
-    const now = Date.now();
+    // Strictly newer than the version it replaces, even within one millisecond: turning a skill on checks it.
+    const now = Math.max(Date.now(), (existing?.updated_at ?? 0) + 1);
     this.ctx.storage.sql.exec(
       `INSERT INTO skills (name, description, instructions, tools, origin, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET description = excluded.description, instructions = excluded.instructions, tools = excluded.tools,
