@@ -208,13 +208,23 @@ async function sandboxInputs(files: UserFiles, refs: readonly string[]): Promise
   if (listedBytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(listedBytes));
   // Paths past the end of the listing had no size above: they count as they come, before their body is read.
   let unlisted = 0;
+  // Once one file fails the run is refused: the others still opening are not read.
+  let failed = false;
   return Promise.all(
     [...layout].map(async ([name, path]): Promise<SandboxFile> => {
       const object = await files.get(path);
-      if (!object) throw missing(path);
-      if (!sizes.has(path) && listedBytes + (unlisted += object.size) > MAX_SANDBOX_BYTES) {
-        await object.body.cancel();
-        throw new Error(tooMuch(listedBytes + unlisted));
+      if (!object) {
+        failed = true;
+        throw missing(path);
+      }
+      let error: Error | undefined;
+      if (failed) error = new Error("Another file failed.");
+      else if (!sizes.has(path) && listedBytes + (unlisted += object.size) > MAX_SANDBOX_BYTES) error = new Error(tooMuch(listedBytes + unlisted));
+      if (error) {
+        failed = true;
+        // Thrown before the cancel settles, so the first failure is the one Promise.all reports.
+        void object.body.cancel().catch(() => {});
+        throw error;
       }
       // Each body is read as soon as it opens: a Worker keeps only a few connections open at once.
       return { name, bytes: await object.arrayBuffer() };

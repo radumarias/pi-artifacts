@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { MAX_FILE_BYTES, underUploads, uploadBatches, uploadTargets } from "../../shared/uploads.ts";
+import { MAX_FILE_BYTES, MAX_LISTED, underUploads, uploadBatches, uploadTargets } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { fromInput, type Picked } from "./pick.ts";
@@ -17,13 +17,17 @@ export function useUploads(onUploaded: () => void): { status: UploadStatus | nul
   // One upload at a time: a drop during an upload (the pickers are disabled, drops are not) waits its turn.
   const queue = useRef<Promise<void>>(Promise.resolve());
   const run = useCallback(
-    async (picked: Picked[]) => {
+    async (all: Picked[]) => {
+      // As many files as UserFiles lists: past that, neither the sidebar nor the agent would see them.
+      const picked = all.slice(0, MAX_LISTED);
       const fitting = picked.filter(({ file }) => file.size <= MAX_FILE_BYTES);
       const large = picked.filter(({ file }) => file.size > MAX_FILE_BYTES).map(({ path }) => path);
       // Named here, over the whole pick: the Worker numbers clashing names only within one request.
       const targets = uploadTargets(fitting.map(({ path }) => path));
       const files = fitting.map(({ file }, i) => ({ file, path: underUploads(targets[i]) }));
-      const skipped = large.length ? ` Skipped ${listSome(large, 3)}: over ${formatBytes(MAX_FILE_BYTES)}.` : "";
+      const skipped =
+        (large.length ? ` Skipped ${listSome(large, 3)}: over ${formatBytes(MAX_FILE_BYTES)}.` : "") +
+        (all.length > picked.length ? ` Left out files past the first ${MAX_LISTED.toLocaleString("en")}; upload the rest separately.` : "");
       if (files.length === 0) {
         setStatus(picked.length ? { text: skipped.trim(), busy: false, error: true } : null);
         return;

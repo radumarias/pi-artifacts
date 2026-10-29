@@ -78,8 +78,11 @@ export function freePath(path: string, taken: ReadonlySet<string>): string {
   const room = Math.min(MAX_SEGMENT - (path.length - slash - 1), MAX_PATH - path.length);
   for (let n = 2; ; n++) {
     const suffix = `-${n}`;
-    const stemEnd = Math.max(slash + 1, cut - Math.max(0, suffix.length - room));
-    const candidate = `${path.slice(0, stemEnd)}${suffix}${path.slice(cut)}`;
+    const over = Math.max(0, suffix.length - room);
+    const stemEnd = Math.max(slash + 1, cut - over);
+    // A stem too short to give up enough ("a.<long extension>") leaves the rest to the end of the extension.
+    const extEnd = path.length - Math.max(0, over - (cut - stemEnd));
+    const candidate = `${path.slice(0, stemEnd)}${suffix}${path.slice(cut, extEnd)}`.trimEnd();
     if (!taken.has(candidate)) return candidate;
   }
 }

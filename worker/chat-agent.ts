@@ -112,6 +112,7 @@ export class ChatAgent extends DurableObject<Env> {
   onStart(): void {
     void this.refreshMcpTools();
     void this.refreshSkills();
+    void this.refreshFiles();
   }
 
   /**
@@ -138,7 +139,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   readonly refreshFiles = singleFlight(async () => {
     try {
-      const index = filesIndex(await (await this.scope.files()).list());
+      const index = filesIndex(await (await this.scope.files()).list(), { sandbox: this.env.SANDBOX_ENABLED === "true" });
       if (index === this.#filesInstalled) return;
       this.registry.install(filesIndexExtension(index));
       this.#filesInstalled = index;

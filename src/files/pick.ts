@@ -8,13 +8,12 @@ export interface Picked {
 
 /**
  * Files from a file input; a folder input names each with its path inside the folder. Hidden files inside a folder are
- * left out, but not the folder the user picked, whatever its name (as with a drop).
+ * left out, but not the folder the user picked, whatever its name (as with a drop). useUploads caps how many it takes.
  */
 export function fromInput(list: FileList | null): Picked[] {
   return [...(list ?? [])]
     .map((file) => ({ file, path: file.webkitRelativePath || file.name }))
-    .filter(({ file }) => !isHidden(file.webkitRelativePath.split("/").slice(1).join("/")))
-    .slice(0, MAX_LISTED);
+    .filter(({ file }) => !isHidden(file.webkitRelativePath.split("/").slice(1).join("/")));
 }
 
 /**
@@ -32,8 +31,9 @@ export function fromDrop(data: DataTransfer): Promise<Picked[]> {
 async function walk(roots: FileSystemEntry[]): Promise<Picked[]> {
   const files: Promise<Picked>[] = [];
   const queue = [...roots];
-  // Walked by index: shifting the queue would copy it for every entry.
-  for (let i = 0; i < queue.length && files.length < MAX_LISTED; i++) {
+  // Walked by index: shifting the queue would copy it for every entry. One file past MAX_LISTED, so useUploads can say
+  // the drop held more than it takes, without walking all of a huge folder.
+  for (let i = 0; i < queue.length && files.length <= MAX_LISTED; i++) {
     const entry = queue[i];
     // What the user dropped themselves is uploaded whatever its name; inside a folder, hidden files and folders are not.
     if (i >= roots.length && isHidden(entry.name)) continue;

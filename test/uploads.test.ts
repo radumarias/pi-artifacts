@@ -55,6 +55,12 @@ describe("upload helpers", () => {
       expect(free).toMatch(/-2\.csv$/);
       expect(uploadPath(free.slice("uploads/".length))).toBe(free);
     }
+    // A stem too short to make room: the extension gives up its end too.
+    const path = uploadPath(`a.${"x".repeat(118)}`)!;
+    const free = freePath(path, new Set([path]));
+    expect(free).not.toBe(path);
+    expect(free).toContain("-2.x");
+    expect(uploadPath(free.slice("uploads/".length))).toBe(free);
   });
 
   it("names a whole pick at once, numbering names that clean up to one path", () => {
@@ -102,6 +108,9 @@ describe("resolveFile", () => {
 
   it("names the candidates when a name matches several files", () => {
     expect(() => resolveFile(files, "sales.csv")).toThrow(/could be any of "uploads\/reports\/q3\/sales.csv", "uploads\/reports\/q4\/sales.csv"/);
+    const cased = [entry("uploads/Report.csv"), entry("uploads/report.csv")];
+    expect(resolveFile(cased, "uploads/report.csv")).toBe("uploads/report.csv");
+    expect(() => resolveFile(cased, "uploads/REPORT.csv")).toThrow(/could be any of "uploads\/Report.csv", "uploads\/report.csv"/);
   });
 
   it("does not match part of a name", () => {
@@ -169,6 +178,11 @@ describe("filesIndex", () => {
 
   it("says when there are none", () => {
     expect(filesIndex([])).toContain("no files yet");
+  });
+
+  it("mentions the sandbox tools only when there is a sandbox", () => {
+    expect(filesIndex(files)).toContain("run_python");
+    expect(filesIndex(files, { sandbox: false })).not.toContain("run_python");
   });
 
   it("cuts a long list and counts the files per folder", () => {
