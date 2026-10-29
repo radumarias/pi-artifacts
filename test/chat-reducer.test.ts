@@ -42,3 +42,13 @@ describe("chat reducer", () => {
     expect(state.partial).toBeUndefined();
   });
 });
+
+describe("chat model", () => {
+  it("follows the agent state from the snapshot and its changes", () => {
+    const agent = (modelId: string, thinkingLevel: string) => ({ model: { provider: "cloudflare", modelId }, thinkingLevel });
+    let state = reduce(empty, { type: "events", events: [{ type: "snapshot", entries: [], tools: [], agent: agent("anthropic/claude-opus-5.5", "high") }] as never });
+    expect([state.model, state.thinkingLevel]).toEqual(["anthropic/claude-opus-5.5", "high"]);
+    state = reduce(state, { type: "events", events: [{ type: "agent_changed", agent: agent("openai/gpt-5.5", "medium") }] as never });
+    expect([state.model, state.thinkingLevel]).toEqual(["openai/gpt-5.5", "medium"]);
+  });
+});

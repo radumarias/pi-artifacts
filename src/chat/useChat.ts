@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { AgentEvent, EntryRecord } from "@earendil-works/pi-durable";
+import type { AgentEvent, AgentState, EntryRecord } from "@earendil-works/pi-durable";
 import { useEffect, useReducer, useRef, useState } from "react";
 import type { ChatClientMessage, ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
@@ -17,11 +17,18 @@ export interface ChatState {
   tools: RunningTool[];
   busy: boolean;
   error?: string;
+  /** The model and effort the chat runs on, from pi's agent state. */
+  model?: string;
+  thinkingLevel?: string;
 }
 
 const initial: ChatState = { entries: [], tools: [], busy: false };
 
 type Action = { type: "events"; events: AgentEvent[] } | { type: "error"; message?: string } | { type: "reset" };
+
+function withAgent(state: ChatState, agent: AgentState | undefined): ChatState {
+  return { ...state, model: agent?.model?.modelId, thinkingLevel: agent?.thinkingLevel };
+}
 
 function addEntry(entries: EntryRecord[], entry: EntryRecord): EntryRecord[] {
   return entries.some((e) => e.id === entry.id) ? entries : [...entries, entry];
@@ -35,7 +42,10 @@ export function reduce(state: ChatState, action: Action): ChatState {
   for (const event of action.events) {
     switch (event.type) {
       case "snapshot":
-        next = { entries: [...event.entries], partial: event.generation?.message, tools: [], busy: event.run !== undefined };
+        next = withAgent({ entries: [...event.entries], partial: event.generation?.message, tools: [], busy: event.run !== undefined }, event.agent);
+        break;
+      case "agent_changed":
+        next = withAgent(next, event.agent);
         break;
       case "run_start":
         next = { ...next, busy: true, error: undefined };
@@ -152,5 +162,6 @@ export function useChat(chatId: string) {
     connected,
     prompt: (text: string) => send({ type: "prompt", text }),
     abort: () => send({ type: "abort" }),
+    setModel: (model: string, thinkingLevel?: string) => send({ type: "model", model, thinkingLevel }),
   };
 }

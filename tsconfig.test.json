@@ -37,6 +37,7 @@
     "worker/storage/user-files.ts",
     "worker/auth/access.ts",
     "worker/agent/skills.ts",
+    "worker/models.ts",
     "worker/skills/index.ts",
     "worker/raw.d.ts"
   ]

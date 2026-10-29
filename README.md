@@ -202,12 +202,30 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   built-in added later can take one of yours: then the agent uses yours while it is on, and the list says so.
 - The tool list is guidance shown on activation, not a sandbox: every tool of the chat stays callable.
 
+## Models
+
+Each chat picks its model and effort above the message box. The picker (`src/chat/ModelPicker.tsx`, choices from
+`GET /api/models`, built in `worker/models.ts`) lists:
+
+- **Anthropic and OpenAI:** every chat model in pi-ai's AI Gateway catalog for the two, newest first. Calls go through
+  the `pi-artifacts` AI Gateway, which holds the keys (Provider Keys, BYOK) or bills them (unified billing).
+- **Workers AI:** a few open models that run on Cloudflare and suit building pages (tool calling, a context of 128k
+  tokens or more): Kimi K2.7 Code, GLM 5.3, DeepSeek V4, Qwen 3.8, GPT OSS 120B, Gemma 4. They need no provider
+  key and use the account's free daily Workers AI allowance first, then Workers AI pricing.
+
+The effort picker shows only the levels the model takes, and nothing for a model that does not reason. The choice is
+the chat's own (pi's agent state, so a change reaches every open view of the chat) and applies from the next model
+request. The latest pick is also the user's default for new chats (kept in `UserDirectory`); a chat that already has
+messages keeps its model until someone changes it. Before a user has picked anything, chats start on `MODEL` at
+`THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at high effort).
+
 ## Layout
 
 | Path | What |
 |---|---|
 | `worker/index.ts` | Routes: identity, chats, chat WebSocket, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files |
 | `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall` |
+| `worker/models.ts` | The models a chat can pick, and the check on a pick |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
 | `worker/skills/`, `worker/skills-routes.ts` | Built-in skills, the SKILL.md format, and the `/api/skills` routes |
@@ -254,9 +272,10 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
 2. Enable R2 for the account in the dashboard, then create the bucket: `cf r2 buckets create --name pi-artifacts`.
    The Artifacts namespace `pi-artifacts` needs no setup: it is created with the first repo. Artifacts needs the
    Workers Paid plan.
-3. Create an AI Gateway named `pi-artifacts` and store an Anthropic key in it (BYOK), or use unified billing.
-   `MODEL` in `cloudflare.config.ts` is a pi-ai gateway specifier (`anthropic/claude-sonnet-5.5`). A Workers AI id
-   such as `@cf/zai-org/glm-5.3-flash` needs no key.
+3. Create an AI Gateway named `pi-artifacts` and store an Anthropic key and an OpenAI key in it (Provider Keys,
+   BYOK), or use unified billing. Without an OpenAI key, OpenAI models answer with the gateway's error and everything
+   else works. `MODEL` in `cloudflare.config.ts`, what new chats start on, is a pi-ai gateway specifier
+   (`anthropic/claude-opus-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
 4. Put the app behind Cloudflare Access: create a self-hosted Access application for the Worker's hostname with a
    policy listing who may sign in, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` (the application's audience tag) in
    `cloudflare.config.ts`.

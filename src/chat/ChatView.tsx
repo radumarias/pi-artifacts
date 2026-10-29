@@ -5,6 +5,7 @@ import { PUBLISH_TOOL, type PublishedDetails } from "../../shared/protocol.ts";
 import { useChat, type RunningTool } from "./useChat.ts";
 import { Linkified } from "./Linkified.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { ModelPicker } from "./ModelPicker.tsx";
 
 interface Props {
   chatId: string;
@@ -22,7 +23,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 export function ChatView({ chatId, onArtifact, onActivity }: Props) {
-  const { state, connected, prompt, abort } = useChat(chatId);
+  const { state, connected, prompt, abort, setModel } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -92,6 +93,7 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
         {state.busy && !state.partial && state.tools.length === 0 && <div className="thinking">Thinking…</div>}
         {state.error && <div className="chat-error">{state.error}</div>}
       </div>
+      <ModelPicker model={state.model} thinkingLevel={state.thinkingLevel} disabled={!connected} onChange={setModel} />
       <form className="composer" onSubmit={submit}>
         <textarea
           ref={input}

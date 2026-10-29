@@ -1,3 +1,4 @@
+import { createAI } from "agents/models/pi-ai";
 import { exports } from "cloudflare:workers";
 import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
@@ -5,6 +6,7 @@ import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.t
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { json } from "./http.ts";
 import { mcpRoute } from "./mcp-routes.ts";
+import { modelCatalog } from "./models.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
@@ -137,6 +139,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/chats" && method === "GET") return json(await directory.listChats());
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());
+  // The model picker's choices. Listing them needs pi-ai's catalog only, so no gateway settings.
+  if (path === "/api/models" && method === "GET") return json(modelCatalog(() => createAI({ binding: env.AI }).provider));
 
   const skills = await skillsRoute(request, directory);
   if (skills) return skills;
