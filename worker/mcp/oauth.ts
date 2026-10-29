@@ -1,5 +1,6 @@
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { errorMessage, randomHex } from "../../shared/util.ts";
 
 /**
  * One user's OAuth state for one MCP server. It lives in that user's
@@ -36,8 +37,8 @@ export function serverOfState(state: string): string | undefined {
  * dynamic client registration, PKCE, and token refresh happen in the SDK.
  *
  * It never sends anyone anywhere itself. When the SDK wants a sign-in,
- * `redirectToAuthorization` only records the URL: the Worker hands it to the
- * browser to open in a popup. A chat's connection is not `interactive`: if
+ * `redirectToAuthorization` only records the URL, and the sign-in route
+ * redirects the browser to it. A chat's connection is not `interactive`: if
  * its refresh fails, it records nothing, so it cannot overwrite a sign-in the
  * user has open, and the call fails with auth_required.
  */
@@ -71,8 +72,7 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async state(): Promise<string> {
-    const random = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
-    const state = `${this.#server}~${random}`;
+    const state = `${this.#server}~${randomHex(16)}`;
     if (this.#interactive) await this.#patch({ state, redirectUrl: this.#redirectUrl });
     return state;
   }
@@ -123,7 +123,7 @@ export class McpOAuthClient implements OAuthClientProvider {
 }
 
 /**
- * Start a sign-in: returns the URL to open in a popup, or `signedIn` when the
+ * Start a sign-in: returns the URL to send the browser to, or `signedIn` when the
  * stored tokens still work. Any old tokens are dropped first, so the user
  * always gets the login screen; a client registration made for this same
  * redirect URL is kept.
@@ -168,7 +168,7 @@ function tracedFetch() {
       return response;
     },
     explain: (error: unknown): never => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       throw new Error(failed ? `${message} [${failed}]` : message);
     },
   };

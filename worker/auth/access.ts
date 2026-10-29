@@ -25,6 +25,19 @@ export class AccessError extends Error {}
 const KEYS_TTL_MS = 10 * 60_000;
 const CLOCK_SKEW_S = 60;
 let cachedKeys: { teamDomain: string; keys: JsonWebKey[]; fetchedAt: number } | undefined;
+// Every request is verified, so each published key is imported once, not per request. Keyed by the JWK object, which
+// lives as long as the key set it came from.
+const importedKeys = new WeakMap<JsonWebKey, Promise<CryptoKey>>();
+
+function importKey(jwk: JsonWebKey): Promise<CryptoKey> {
+  let key = importedKeys.get(jwk);
+  if (!key) {
+    key = crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+    importedKeys.set(jwk, key);
+    key.catch(() => importedKeys.delete(jwk));
+  }
+  return key;
+}
 
 export async function verifyAccessJwt(token: string, config: AccessConfig): Promise<AccessClaims> {
   const now = config.now ?? Date.now;
@@ -35,7 +48,7 @@ export async function verifyAccessJwt(token: string, config: AccessConfig): Prom
   if (header.alg !== "RS256") throw new AccessError(`Unexpected algorithm ${header.alg}.`);
 
   const jwk = await findKey(config, header.kid, now());
-  const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+  const key = await importKey(jwk);
   const valid = await crypto.subtle.verify(
     "RSASSA-PKCS1-v1_5",
     key,

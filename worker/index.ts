@@ -1,8 +1,10 @@
 import { exports } from "cloudflare:workers";
-import { ID_PATTERN, UID_PATTERN, type ProxyRequest } from "../shared/protocol.ts";
+import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
+import { errorMessage } from "../shared/util.ts";
 import { artifactResponse } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { mcpRoute } from "./mcp-routes.ts";
+import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
 
 export { ChatAgent } from "./chat-agent.ts";
@@ -10,6 +12,26 @@ export { Sandbox } from "./sandbox.ts";
 export { UserDirectory } from "./users.ts";
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Which chat each artifact lives in. That never changes once an artifact
+ * exists, so a page's live calls, the hottest path, skip the R2 read after
+ * the first one in this isolate.
+ */
+const artifactChats = new Map<string, string>();
+const MAX_ARTIFACT_CHATS = 5_000;
+
+async function artifactChat(storage: Storage, id: string): Promise<string | undefined> {
+  let name = artifactChats.get(id);
+  if (!name) {
+    const meta = await storage.artifacts.readMeta(id);
+    if (!meta) return undefined;
+    name = chatAgentName(meta.ownerUid, meta.chatId);
+    if (artifactChats.size >= MAX_ARTIFACT_CHATS) artifactChats.delete(artifactChats.keys().next().value!);
+    artifactChats.set(id, name);
+  }
+  return name;
+}
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -59,22 +81,24 @@ async function route(request: Request, env: Env): Promise<Response> {
   // Artifact metadata and the MCP proxy.
   const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone)?$/);
   if (artifact && ID_PATTERN.test(artifact[1])) {
-    const meta = await storage.artifacts.readMeta(artifact[1]);
-    if (!meta) return json({ error: "No such artifact" }, 404);
-    const chat = exports.ChatAgent.getByName(`${meta.ownerUid}:${meta.chatId}`);
-    if (!artifact[2] && method === "GET") {
-      const { chatId: _chatId, ...visible } = meta;
-      return json({ ...visible, isOwner: uid === meta.ownerUid });
-    }
-    if (artifact[2] === "/tools" && method === "GET") {
-      return json(await chat.artifactTools(meta.id, Number(url.searchParams.get("version"))));
-    }
-    if (artifact[2] === "/mcp" && method === "POST") {
+    const id = artifact[1];
+    // A page's tool list and live calls go to the chat that published it.
+    if ((artifact[2] === "/tools" && method === "GET") || (artifact[2] === "/mcp" && method === "POST")) {
+      const name = await artifactChat(storage, id);
+      if (!name) return json({ error: "No such artifact" }, 404);
+      const chat = exports.ChatAgent.getByName(name);
+      if (artifact[2] === "/tools") return json(await chat.artifactTools(id, Number(url.searchParams.get("version"))));
       const body = await request.json<ProxyRequest>();
       if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
         return json({ ok: false, error: { code: "bad_request", message: "Expected {version, mode, server, tool, input}." } }, 400);
       }
-      return json(await chat.artifactCall({ artifactId: meta.id, viewer: uid, request: body }));
+      return json(await chat.artifactCall({ artifactId: id, viewer: uid, request: body }));
+    }
+    const meta = await storage.artifacts.readMeta(id);
+    if (!meta) return json({ error: "No such artifact" }, 404);
+    if (!artifact[2] && method === "GET") {
+      const { chatId: _chatId, ...visible } = meta;
+      return json({ ...visible, isOwner: uid === meta.ownerUid } satisfies ArtifactView);
     }
     // A read-only Git token for the artifact's repo, for `git clone`. Only the owner gets one:
     // the repo also holds the version history and the metadata.
@@ -98,7 +122,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (socket) {
     if (request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade" }, 426);
     if (!ID_PATTERN.test(socket[1]) || !(await directory.hasChat(socket[1]))) return json({ error: "No such chat" }, 404);
-    return exports.ChatAgent.getByName(`${uid}:${socket[1]}`).fetch(request);
+    return exports.ChatAgent.getByName(chatAgentName(uid, socket[1])).fetch(request);
   }
 
   // Publish a page without the model, to try the live-data path locally. Needs DEV_TOOLS=true.
@@ -106,9 +130,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (devPublish && method === "POST" && env.DEV_TOOLS === "true") {
     if (!(await directory.hasChat(devPublish[1]))) return json({ error: "No such chat" }, 404);
     try {
-      return json(await exports.ChatAgent.getByName(`${uid}:${devPublish[1]}`).devPublish(await request.json()));
+      return json(await exports.ChatAgent.getByName(chatAgentName(uid, devPublish[1])).devPublish(await request.json()));
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      return json({ error: errorMessage(error) }, 400);
     }
   }
 

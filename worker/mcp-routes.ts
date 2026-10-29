@@ -1,3 +1,4 @@
+import { errorMessage } from "../shared/util.ts";
 import { mcpAuthStore } from "./users.ts";
 import { finishSignIn, OAUTH_CALLBACK_PATH, serverOfState, startSignIn } from "./mcp/oauth.ts";
 import { mcpServers } from "./mcp/servers.ts";
@@ -22,7 +23,7 @@ export async function mcpRoute(request: Request, env: Env, uid: string): Promise
       if ("url" in started) return Response.redirect(started.url, 302);
       return page(`Signed in to ${server.name}`, "You already were. Go back to the chat and ask again.");
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = errorMessage(error);
       return page("Sign-in failed", `${server.name} did not start a sign-in (${server.url} should be an MCP server or portal address): ${reason}`, 502);
     }
   }
@@ -38,7 +39,7 @@ export async function mcpRoute(request: Request, env: Env, uid: string): Promise
       await finishSignIn(server.url, server.name, mcpAuthStore(uid, server.name), code, state);
       return page(`Signed in to ${server.name}`, "Go back to the chat and ask again. You can close this tab.");
     } catch (error) {
-      return page("Sign-in failed", error instanceof Error ? error.message : String(error), 400);
+      return page("Sign-in failed", errorMessage(error), 400);
     }
   }
 

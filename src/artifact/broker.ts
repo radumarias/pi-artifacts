@@ -1,4 +1,5 @@
-import { canonicalJson } from "../../shared/canonical.ts";
+import { callIdentity } from "../../shared/canonical.ts";
+import { errorMessage } from "../../shared/util.ts";
 import { MIN_REFETCH_MS, type CallToolResult, type McpError, type ProxyRequest, type ProxyResponse, type ToolInfo } from "../../shared/protocol.ts";
 
 /** Sends one proxied call to the Worker. Swappable in tests. */
@@ -59,6 +60,8 @@ export class ArtifactBroker {
   #port: MessagePort | undefined;
   #hidden = false;
   #closed = false;
+  /** A version's tool list never changes, so one describe call serves the page's whole life. */
+  #tools: Promise<ToolInfo[]> | undefined;
 
   constructor(options: BrokerOptions) {
     this.#o = {
@@ -69,6 +72,7 @@ export class ArtifactBroker {
       storage: null,
       ...options,
     };
+    this.#sweepStorage();
   }
 
   /** Take the port whose other end was handed to the page. */
@@ -111,13 +115,17 @@ export class ArtifactBroker {
         const staleMs = read ? (cache.refresh ? 0 : Math.max(0, Number(cache.staleTime) || 0)) : 0;
         const response = await this.#send({ mode: read ? "read" : "call", server: params.server, tool: params.tool, input: params.input, staleMs });
         if (!response.ok) return reply(false, response.error);
-        if (read) this.#feed(identity(params.server, params.tool, params.input), response);
+        if (read) this.#feed(callIdentity(params.server, params.tool, params.input), response);
         reply(true, response.result);
       } else if (method === "invalidate") {
         this.#invalidate(params.server, params.tool, params.input);
         reply(true, undefined);
       } else if (method === "describe") {
-        const tools = await this.#o.describe();
+        this.#tools ??= this.#o.describe().catch((error) => {
+          this.#tools = undefined;
+          throw error;
+        });
+        const tools = await this.#tools;
         const tool = tools.find((t) => t.name === params.tool);
         if (!tool) return reply(false, { code: "not_in_manifest", server: params.server, message: `${params.server}/${params.tool} is not declared by this page.` });
         reply(true, { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations });
@@ -125,12 +133,12 @@ export class ArtifactBroker {
         reply(false, { code: "bad_request", message: `Unknown method ${method}` });
       }
     } catch (error) {
-      reply(false, { code: "upstream_error", message: error instanceof Error ? error.message : String(error) });
+      reply(false, { code: "upstream_error", message: errorMessage(error) });
     }
   }
 
   #watch(message: { watchId: number; server: string; tool: string; input: unknown; refetchInterval?: number; staleTime?: number }): void {
-    const key = identity(message.server, message.tool, message.input);
+    const key = callIdentity(message.server, message.tool, message.input);
     let group = this.#groups.get(key);
     if (!group) {
       group = { key, server: message.server, tool: message.tool, input: message.input, subscribers: new Map(), inflight: false, retried: false, stopped: false };
@@ -161,14 +169,12 @@ export class ArtifactBroker {
 
   /** The shortest interval any subscriber asked for. */
   #interval(group: Group): number | undefined {
-    const intervals = [...group.subscribers.values()].map((s) => s.interval).filter((i): i is number => i !== undefined);
-    return intervals.length ? Math.min(...intervals) : undefined;
+    return smallest([...group.subscribers.values()].map((s) => s.interval));
   }
 
   /** How young a result must be to skip a fetch: the declared staleTime, else the polling interval. */
   #staleMs(group: Group): number {
-    const staleTimes = [...group.subscribers.values()].map((s) => s.staleTime).filter((t): t is number => typeof t === "number");
-    return staleTimes.length ? Math.min(...staleTimes) : (this.#interval(group) ?? 0);
+    return smallest([...group.subscribers.values()].map((s) => s.staleTime)) ?? this.#interval(group) ?? 0;
   }
 
   async #fetch(group: Group, staleOverride?: number): Promise<void> {
@@ -238,7 +244,7 @@ export class ArtifactBroker {
   }
 
   #invalidate(server?: string, tool?: string, input?: unknown): void {
-    const exact = input !== undefined && server !== undefined && tool !== undefined ? identity(server, tool, input) : undefined;
+    const exact = input !== undefined && server !== undefined && tool !== undefined ? callIdentity(server, tool, input) : undefined;
     const matches = (key: string, g: { server: string; tool: string }) =>
       exact ? key === exact : (server === undefined || g.server === server) && (tool === undefined || g.tool === tool);
     const storage = this.#o.storage;
@@ -264,7 +270,7 @@ export class ArtifactBroker {
     try {
       return await this.#o.transport({ ...call, version: this.#o.version });
     } catch (error) {
-      return { ok: false, error: { code: "server_unavailable", retryable: true, message: error instanceof Error ? error.message : String(error) } };
+      return { ok: false, error: { code: "server_unavailable", retryable: true, message: errorMessage(error) } };
     }
   }
 
@@ -278,6 +284,28 @@ export class ArtifactBroker {
 
   #storagePrefix(): string {
     return `pi-cache:${this.#o.cacheNamespace}:${this.#o.artifactId}:`;
+  }
+
+  /**
+   * Expiry is only checked on read, so drop the expired results of every page
+   * this browser has viewed, once per broker. Otherwise they pile up until the
+   * storage quota is full.
+   */
+  #sweepStorage(): void {
+    const storage = this.#o.storage;
+    if (!storage) return;
+    try {
+      const expired: string[] = [];
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i);
+        if (!key?.startsWith("pi-cache:")) continue;
+        const storedAt = (JSON.parse(storage.getItem(key) ?? "null") as Cached | null)?.storedAt;
+        if (typeof storedAt !== "number" || this.#o.now() - storedAt >= CACHE_LIFETIME_MS) expired.push(key);
+      }
+      for (const key of expired) storage.removeItem(key);
+    } catch {
+      // Unreadable storage: nothing to sweep.
+    }
   }
 
   #readStorage(key: string): Cached | undefined {
@@ -306,8 +334,10 @@ export class ArtifactBroker {
   }
 }
 
-export function identity(server: string, tool: string, input: unknown): string {
-  return `${server}\u0000${tool}\u0000${canonicalJson(input ?? {})}`;
+/** The smallest of the numbers given, or undefined when none is. */
+function smallest(values: (number | undefined)[]): number | undefined {
+  const numbers = values.filter((v): v is number => typeof v === "number");
+  return numbers.length ? Math.min(...numbers) : undefined;
 }
 
 function stripCache(result: CallToolResult): CallToolResult {

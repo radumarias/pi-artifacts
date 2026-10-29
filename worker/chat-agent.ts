@@ -4,10 +4,11 @@ import { PiHarness } from "agents/harness/pi";
 import { Lifecycle, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
-import type { ArtifactManifest, ChatClientMessage, ChatServerMessage, McpError, ProxyRequest, ProxyResponse, ToolInfo } from "../shared/protocol.ts";
+import { isOwnedBy, manifestOf, type ArtifactManifest, type ChatClientMessage, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse, type ToolInfo } from "../shared/protocol.ts";
+import { errorMessage } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
-import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, type ChatScope, type ServerCatalog } from "./agent/tools.ts";
-import { Storage } from "./storage/index.ts";
+import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
+import { Storage, type UserFiles } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
@@ -18,7 +19,12 @@ const SOCKET_TAG = "chat";
 const MAX_STALE_MS = 24 * 60 * 60_000;
 const CALLS_PER_MINUTE = 120;
 
-export interface ArtifactCall {
+/** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
+export function chatAgentName(uid: string, chatId: string): string {
+  return `${uid}:${chatId}`;
+}
+
+interface ArtifactCall {
   artifactId: string;
   viewer: string;
   request: ProxyRequest;
@@ -54,6 +60,7 @@ export class ChatAgent extends DurableObject<Env> {
   #mcpRefresh: Promise<void> | undefined;
   /** The servers whose tools the agent has now, so a refresh reinstalls only on a change. */
   #mcpInstalled = "";
+  #files: Promise<UserFiles> | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -63,7 +70,12 @@ export class ChatAgent extends DurableObject<Env> {
       hub: this.hub,
       artifacts: this.storage.artifacts,
       // The uid is this object's name, which the Worker sets from a verified identity.
-      files: () => this.storage.userFiles(this.uid),
+      // Deriving the user's key is not free, so derive it once per object.
+      files: () =>
+        (this.#files ??= this.storage.userFiles(this.uid).catch((error) => {
+          this.#files = undefined;
+          throw error;
+        })),
       onPublished: (artifact) => exports.UserDirectory.getByName(this.uid).recordArtifact({ ...artifact, chatId: this.chatId }),
     });
     this.registry.install(promptExtension);
@@ -94,13 +106,17 @@ export class ChatAgent extends DurableObject<Env> {
     this.#mcpRefresh ??= (async () => {
       const catalog = new Map<string, ServerCatalog>();
       const unavailable = new Map<string, string>();
-      for (const server of this.hub.servers()) {
-        try {
-          catalog.set(server.name, { tools: await this.hub.tools(server.name), instructions: await this.hub.instructions(server.name) });
-        } catch (error) {
-          unavailable.set(server.name, error instanceof McpFailure ? error.error.message : String(error));
-        }
-      }
+      // Servers are independent: list them all at once, so a slow one delays the prompt by its own time only.
+      await Promise.all(
+        this.hub.servers().map(async (server) => {
+          try {
+            const [tools, instructions] = await Promise.all([this.hub.tools(server.name), this.hub.instructions(server.name)]);
+            catalog.set(server.name, { tools, instructions });
+          } catch (error) {
+            unavailable.set(server.name, error instanceof McpFailure ? error.error.message : errorMessage(error));
+          }
+        }),
+      );
       const installed = JSON.stringify([[...catalog.keys()], [...unavailable.keys()]]);
       if (installed !== this.#mcpInstalled) {
         this.registry.install(mcpExtension(this.hub, catalog, unavailable));
@@ -116,8 +132,7 @@ export class ChatAgent extends DurableObject<Env> {
   async #connect(server: McpServerConfig) {
     if (server.auth !== "oauth") return connectStreamableHttp(server);
     const store = mcpAuthStore(this.uid, server.name);
-    const { tokens, redirectUrl } = await store.get();
-    const signInUrl = await this.#signInUrl(server.name);
+    const [{ tokens, redirectUrl }, signInUrl] = await Promise.all([store.get(), this.#signInUrl(server.name)]);
     if (!tokens || !redirectUrl) throw signInRequired(server.name, signInUrl);
     return connectStreamableHttp(server, new McpOAuthClient(store, server.name, { redirectUrl, interactive: false }), { signInUrl });
   }
@@ -134,13 +149,13 @@ export class ChatAgent extends DurableObject<Env> {
 
   async prompt(text: string): Promise<void> {
     await this.refreshMcpTools().catch(() => {});
-    const first = (await this.harness.messages()).length === 0;
     await this.harness.submit(text);
-    await exports.UserDirectory.getByName(this.uid).touchChat(this.chatId, first ? text : undefined);
+    // touchChat only names a chat that is still called "New chat", so the first prompt names it.
+    await exports.UserDirectory.getByName(this.uid).touchChat(this.chatId, text);
   }
 
   /** Publish without the model, through the same checks as the agent's tool. Only routed when DEV_TOOLS is on. */
-  async devPublish(input: { title: string; html: string; artifactId?: string; mcp?: { server: string; tools: string[] }[]; message?: string }) {
+  async devPublish(input: PublishInput) {
     const meta = await publishArtifact(this.scope, input);
     return { artifactId: meta.id, version: meta.latest };
   }
@@ -178,7 +193,7 @@ export class ChatAgent extends DurableObject<Env> {
     }
 
     // A page calls as its author. For a server that signs in each user, that would show the author's data to anyone with the link.
-    if (this.hub.servers().find((s) => s.name === server)?.auth === "oauth" && viewer !== this.uid) {
+    if (this.hub.server(server)?.auth === "oauth" && viewer !== this.uid) {
       return fail({ code: "not_granted", server, message: `${server} signs in each user, and this page calls as its author, so only the author can load it.` });
     }
 
@@ -201,7 +216,7 @@ export class ChatAgent extends DurableObject<Env> {
       return { ok: true, result, storedAt: Date.now() };
     } catch (error) {
       if (error instanceof McpFailure) return fail(error.error);
-      return fail({ code: "upstream_error", server, message: error instanceof Error ? error.message : String(error) });
+      return fail({ code: "upstream_error", server, message: errorMessage(error) });
     }
   }
 
@@ -211,8 +226,8 @@ export class ChatAgent extends DurableObject<Env> {
     let manifest = this.#manifests.get(key);
     if (!manifest) {
       const meta = await this.storage.artifacts.readMeta(artifactId);
-      if (!meta || meta.chatId !== this.chatId || meta.ownerUid !== this.uid) return undefined;
-      manifest = meta.versions.find((v) => v.version === version)?.manifest;
+      if (!meta || !isOwnedBy(meta, this.uid, this.chatId)) return undefined;
+      manifest = manifestOf(meta, version);
       if (!manifest) return undefined;
       this.#manifests.set(key, manifest);
     }
@@ -278,7 +293,7 @@ class ChatSockets implements DurableObjectCapability {
       if (message.type === "prompt" && message.text.trim()) await this.#host.prompt(message.text.slice(0, 20_000));
       else if (message.type === "abort") await this.#host.abort();
     } catch (error) {
-      send(ws, { type: "error", message: error instanceof Error ? error.message : String(error) });
+      send(ws, { type: "error", message: errorMessage(error) });
     }
     return true;
   }
@@ -307,7 +322,7 @@ class ChatSockets implements DurableObjectCapability {
     this.#streams.set(ws, stream);
     stream.catch((error) => {
       this.#streams.delete(ws);
-      send(ws, { type: "error", message: `Could not open the conversation: ${error instanceof Error ? error.message : String(error)}` });
+      send(ws, { type: "error", message: `Could not open the conversation: ${errorMessage(error)}` });
     });
     return stream;
   }

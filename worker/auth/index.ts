@@ -1,4 +1,5 @@
 import { UID_PATTERN } from "../../shared/protocol.ts";
+import { toHex } from "../../shared/util.ts";
 import { AccessError, verifyAccessJwt } from "./access.ts";
 
 export interface Identity {
@@ -15,8 +16,8 @@ export const DEMO_COOKIE = "pi_uid";
  */
 export async function identify(request: Request, env: Env): Promise<Identity | null> {
   if (env.AUTH_MODE === "demo") {
-    const match = (request.headers.get("cookie") ?? "").match(new RegExp(`(?:^|;\\s*)${DEMO_COOKIE}=([^;]+)`));
-    return match && UID_PATTERN.test(match[1]) ? { uid: match[1] } : null;
+    const uid = cookieValue(request, DEMO_COOKIE);
+    return uid && UID_PATTERN.test(uid) ? { uid } : null;
   }
 
   const token = request.headers.get("cf-access-jwt-assertion") ?? cookieValue(request, "CF_Authorization");
@@ -36,7 +37,7 @@ export async function identify(request: Request, env: Env): Promise<Identity | n
 /** A stable, opaque uid per Access user: 32 hex characters of SHA-256 over the team and subject. */
 export async function uidFor(teamDomain: string, sub: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${teamDomain}:${sub}`));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+  return toHex(digest).slice(0, 32);
 }
 
 function cookieValue(request: Request, name: string): string | null {

@@ -1,11 +1,14 @@
-import type { ArtifactManifest, ArtifactMeta } from "../../shared/protocol.ts";
-import { commitAndPush, type GitHttp } from "./git.ts";
+import { isOwnedBy, type ArtifactManifest, type ArtifactMeta, type CloneAccess } from "../../shared/protocol.ts";
+import { randomHex } from "../../shared/util.ts";
+import { commitAndPush, tokenSecret, type GitHttp } from "./git.ts";
 
 const BRANCH = "main";
 const PAGE_FILE = "index.html";
 const META_FILE = "artifact.json";
 /** How long a write token minted for one publish lives. It is revoked as soon as the push is done. */
 const PUBLISH_TOKEN_TTL_S = 300;
+/** How long a read token for `git clone` lives. */
+const CLONE_TOKEN_TTL_S = 900;
 
 const repoName = (id: string) => `artifact-${id}`;
 const tagFor = (version: number) => `v${version}`;
@@ -14,16 +17,9 @@ const tagFor = (version: number) => `v${version}`;
 const metaKey = (id: string) => `artifacts/${id}/meta.json`;
 const htmlKey = (id: string, version: number) => `artifacts/${id}/v${version}/index.html`;
 
+/** A new artifact or chat id: 16 lowercase hex characters. */
 export function newId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-export interface CloneAccess {
-  remote: string;
-  /** A read-only token for this one repo. */
-  token: string;
-  expiresAt: string;
+  return randomHex(8);
 }
 
 /**
@@ -67,10 +63,10 @@ export class ArtifactStore {
   }
 
   /** A short-lived read token for `git clone`. The caller checks that the user owns the artifact. */
-  async cloneAccess(id: string, ttlSeconds = 900): Promise<CloneAccess | null> {
+  async cloneAccess(id: string): Promise<CloneAccess | null> {
     return this.#withRepo(id, async (repo) => {
-      const [info, token] = await Promise.all([repo.info(), repo.createToken("read", ttlSeconds)]);
-      return { remote: info.remote, token: token.plaintext.split("?expires=")[0], expiresAt: token.expiresAt };
+      const [info, token] = await Promise.all([repo.info(), repo.createToken("read", CLONE_TOKEN_TTL_S)]);
+      return { remote: info.remote, token: tokenSecret(token.plaintext), expiresAt: token.expiresAt };
     });
   }
 
@@ -94,7 +90,7 @@ export class ArtifactStore {
     if (input.id) {
       const existing = (await this.#readRepoMeta(input.id)) ?? (await this.#importFromCache(input.id));
       if (!existing) throw new Error(`No artifact ${input.id}.`);
-      if (existing.ownerUid !== input.ownerUid || existing.chatId !== input.chatId) {
+      if (!isOwnedBy(existing, input.ownerUid, input.chatId)) {
         throw new Error(`Artifact ${input.id} belongs to another chat; publish a new artifact instead.`);
       }
       meta = existing;
@@ -113,8 +109,7 @@ export class ArtifactStore {
       versions: [...meta.versions, { version, publishedAt: now, manifest: input.manifest, ...(message ? { message } : {}) }],
     };
     await this.#commit(meta, input.html, now, createdToken);
-    await this.#cacheHtml(meta.id, version, input.html);
-    await this.#cacheMeta(meta);
+    await Promise.all([this.#cacheHtml(meta.id, version, input.html), this.#cacheMeta(meta)]);
     return meta;
   }
 

@@ -83,6 +83,43 @@ export interface ArtifactMeta {
   versions: ArtifactVersion[];
 }
 
+/** The manifest one version of an artifact declared, if that version exists. */
+export function manifestOf(meta: Pick<ArtifactMeta, "versions">, version: number): ArtifactManifest | undefined {
+  return meta.versions.find((v) => v.version === version)?.manifest;
+}
+
+/** Whether an artifact belongs to this user's chat: the one rule for who may publish to it and read its source. */
+export function isOwnedBy(meta: Pick<ArtifactMeta, "ownerUid" | "chatId">, uid: string, chatId: string): boolean {
+  return meta.ownerUid === uid && meta.chatId === chatId;
+}
+
+/** An artifact as the app lists it in the sidebar. */
+export interface ArtifactSummary {
+  id: string;
+  title: string;
+  chatId: string;
+  latest: number;
+  updatedAt: number;
+}
+
+/** An artifact as GET /api/artifacts/:id returns it: everything but the chat it lives in. */
+export type ArtifactView = Omit<ArtifactMeta, "chatId"> & { isOwner: boolean };
+
+/** A read-only Git token for one artifact's repo (POST /api/artifacts/:id/clone). */
+export interface CloneAccess {
+  remote: string;
+  token: string;
+  expiresAt: string;
+}
+
+/** The tool that publishes an artifact, and the details its result carries: the chat UI opens the preview from them. */
+export const PUBLISH_TOOL = "artifact_publish";
+export interface PublishedDetails {
+  artifactId: string;
+  version: number;
+  title: string;
+}
+
 export interface ChatSummary {
   id: string;
   title: string;
@@ -103,5 +140,5 @@ export const MIN_REFETCH_MS = 30_000;
 
 /** Lowercase hex ids: artifact ids and chat ids. */
 export const ID_PATTERN = /^[a-z0-9]{8,32}$/;
-/** Demo user ids: a slug of the name typed at sign-in. */
+/** User ids: the hashed Cloudflare Access subject, or in demo mode a slug of the name typed at sign-in. */
 export const UID_PATTERN = /^[a-z0-9][a-z0-9-]{1,31}$/;

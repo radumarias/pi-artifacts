@@ -2,6 +2,11 @@ import git from "isomorphic-git";
 import webHttp from "isomorphic-git/http/web";
 import { MemoryFS } from "./memory-fs.ts";
 
+/** Artifacts hands out tokens as `<secret>?expires=<unix seconds>`; Git authenticates with the secret alone. */
+export function tokenSecret(token: string): string {
+  return token.split("?expires=")[0];
+}
+
 export type GitHttp = typeof webHttp;
 
 export interface CommitInput {
@@ -33,7 +38,7 @@ const AUTHOR = { name: "pi-artifacts", email: "agent@pi-artifacts.invalid" };
 export async function commitAndPush(input: CommitInput): Promise<string> {
   const fs = new MemoryFS();
   const http = input.http ?? webHttp;
-  const secret = input.token.split("?expires=")[0];
+  const secret = tokenSecret(input.token);
   const onAuth = () => ({ username: "x", password: secret });
 
   if (input.empty) {

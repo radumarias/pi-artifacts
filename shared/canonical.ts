@@ -18,6 +18,11 @@ function sortKeys(value: unknown): unknown {
   return value;
 }
 
+/** The identity of an MCP call: equal for the same server, tool and input, whatever the input's key order. */
+export function callIdentity(server: string, tool: string, input: unknown): string {
+  return `${server}\u0000${tool}\u0000${canonicalJson(input ?? {})}`;
+}
+
 /** The convenience `payload` of a result: structured content, else the first text block as JSON, else that text. */
 export function derivePayload(result: { content: { type: string; text?: string }[]; structuredContent?: unknown }): unknown {
   if (result.structuredContent !== undefined) return result.structuredContent;
