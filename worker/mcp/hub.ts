@@ -39,9 +39,12 @@ export interface ReadResult {
 interface CacheEntry {
   result: CallToolResult;
   storedAt: number;
+  /** About how much memory the result holds: its JSON length. */
+  bytes?: number;
 }
 
-const MAX_CACHE_ENTRIES = 500;
+/** What one chat object may hold in cached results. Durable Objects have 128 MB; results vary from bytes to megabytes. */
+const MAX_CACHE_BYTES = 16 * 1024 * 1024;
 const CACHE_LIFETIME_MS = 10 * 60_000;
 
 /**
@@ -59,6 +62,7 @@ export class McpHub {
   readonly #connections = new Map<string, Promise<McpConnection>>();
   readonly #tools = new Map<string, Promise<ToolInfo[]>>();
   readonly #cache = new Map<string, CacheEntry>();
+  #cacheBytes = 0;
   readonly #inflight = new Map<string, Promise<CacheEntry>>();
 
   constructor(servers: McpServerConfig[], connector: Connector, now: () => number = Date.now) {
@@ -154,18 +158,30 @@ export class McpHub {
     return config;
   }
 
+  /**
+   * Keep a result within the byte budget. Entries are re-inserted on every
+   * store, so the map runs oldest first: expired entries go from the front,
+   * then the oldest until the new one fits. A result bigger than the whole
+   * budget is not cached.
+   */
   #store(key: string, entry: CacheEntry): void {
-    // Entries are re-inserted on every store, so the map is ordered oldest first: expire from the front.
+    entry.bytes = JSON.stringify(entry.result).length;
+    this.#evict(key);
+    if (entry.bytes > MAX_CACHE_BYTES) return;
     const now = this.#now();
     for (const [k, e] of this.#cache) {
-      if (now - e.storedAt <= CACHE_LIFETIME_MS) break;
-      this.#cache.delete(k);
+      if (now - e.storedAt <= CACHE_LIFETIME_MS && this.#cacheBytes + entry.bytes <= MAX_CACHE_BYTES) break;
+      this.#evict(k);
     }
-    this.#cache.delete(key);
     this.#cache.set(key, entry);
-    while (this.#cache.size > MAX_CACHE_ENTRIES) {
-      this.#cache.delete(this.#cache.keys().next().value!);
-    }
+    this.#cacheBytes += entry.bytes;
+  }
+
+  #evict(key: string): void {
+    const entry = this.#cache.get(key);
+    if (!entry) return;
+    this.#cache.delete(key);
+    this.#cacheBytes -= entry.bytes ?? 0;
   }
 
   /**

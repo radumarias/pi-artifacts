@@ -6,10 +6,11 @@ import { mcpServers, type McpServerConfig } from "../worker/mcp/servers.ts";
 const viewerScoped: McpServerConfig = { name: "Prices", url: "https://example.invalid/mcp", cacheScope: "viewer" };
 const sharedScoped: McpServerConfig = { ...viewerScoped, name: "Public", cacheScope: "shared" };
 
-function fakeServer(answer: (name: string, args: unknown) => RawToolResult | Promise<RawToolResult>) {
+function fakeServer(answer: (name: string, args: unknown) => RawToolResult | Promise<RawToolResult>, { instructions }: { instructions?: string } = {}) {
   const calls: { name: string; args: unknown }[] = [];
   let connects = 0;
   const connection: McpConnection = {
+    instructions,
     listTools: async () => [{ name: "price", description: "", annotations: { readOnlyHint: true } }],
     callTool: async (name, args) => {
       calls.push({ name, args });
@@ -62,6 +63,31 @@ describe("McpHub.read", () => {
     const third = await hub.read("Prices", "price", { ids: "btc" }, { staleMs: 30_000, viewer: "ann" });
     expect(server.calls).toHaveLength(2);
     expect(third.storedAt).toBe(now);
+  });
+
+  it("keeps cached results within a byte budget, evicting the oldest first", async () => {
+    // A cached result holds the text and the parsed payload: about 6 MB each here.
+    const big = "x".repeat(3 * 1024 * 1024);
+    const server = fakeServer((_name, args) => text({ id: (args as { id: number }).id, big }));
+    const hub = new McpHub([viewerScoped], server.connector);
+    const read = (id: number) => hub.read("Prices", "price", { id }, { staleMs: 60_000, viewer: "ann" });
+    await read(1);
+    await read(2);
+    await read(3); // three exceed the 16 MB budget: the first goes
+    expect(server.calls).toHaveLength(3);
+    await read(3);
+    await read(2);
+    expect(server.calls).toHaveLength(3);
+    await read(1);
+    expect(server.calls).toHaveLength(4);
+  });
+
+  it("does not cache a result bigger than the whole budget", async () => {
+    const server = fakeServer(() => text({ big: "x".repeat(17 * 1024 * 1024) }));
+    const hub = new McpHub([viewerScoped], server.connector);
+    await hub.read("Prices", "price", {}, { staleMs: 60_000, viewer: "ann" });
+    await hub.read("Prices", "price", {}, { staleMs: 60_000, viewer: "ann" });
+    expect(server.calls).toHaveLength(2);
   });
 
   it("keeps viewers apart on a viewer-scoped server", async () => {
@@ -128,8 +154,7 @@ describe("McpHub.read", () => {
 
 describe("McpHub with signed-in servers", () => {
   it("passes on what the server says about itself", async () => {
-    const connection: McpConnection = { instructions: "Example data. Start with whoami.", listTools: async () => [], callTool: async () => text({}), close: async () => {} };
-    const hub = new McpHub([viewerScoped], async () => connection);
+    const hub = new McpHub([viewerScoped], fakeServer(() => text({}), { instructions: "Example data. Start with whoami." }).connector);
     expect(await hub.instructions("Prices")).toBe("Example data. Start with whoami.");
   });
 
