@@ -24,7 +24,7 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   (tools, instructions), and the user names servers or tools in chat. `auth: "oauth"` entries (e.g. a Cloudflare MCP
   portal) sign in each user with a generic MCP OAuth client (`worker/mcp/oauth.ts`; tokens per
   user in `UserDirectory`; the agent hands out `/api/mcp/sign-in/<name>` links, routes in `worker/mcp-routes.ts`);
-  pages calling them are author-only. `test/mcp-oauth.test.ts` runs the flow against a stand-in portal.
+  pages calling them load only for people in the author's chat. `test/mcp-oauth.test.ts` runs the flow against a stand-in portal.
 - Skills (`shared/skills.ts`, `worker/skills/`, `worker/agent/skills.ts`): built-in `SKILL.md` files in `worker/skills/builtin/` plus each
   user's own, stored in `UserDirectory` and installed through `skills()` from `agents/harness/pi` before every prompt.
   A skill the agent proposes (`skill_propose`) is saved off until the user turns it on; keep it that way.

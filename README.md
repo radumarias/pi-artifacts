@@ -115,9 +115,10 @@ Where things live and who can use them:
 - **Two chats refreshing at once don't undo each other.** Each change to the stored record (new tokens, a cleared
   verifier) is applied inside the `UserDirectory` in one step, and a rejected refresh clears the tokens only if they
   are still the ones that chat used.
-- **Pages that call such a server load only for their author.** A page calls through its author's chat, so it would
-  otherwise show the author's data to anyone with the link. Other viewers get `not_granted`. Claude's artifacts
-  instead use each viewer's own connectors.
+- **Pages that call such a server load only for people in their author's chat** (the author, and anyone they invited
+  into it; see [Shared chats](#shared-chats)). A page calls through its author's chat, so it would otherwise show the
+  author's data to anyone with the link. Other viewers get `not_granted`. Claude's artifacts instead use each viewer's
+  own connectors.
 - **Removing a server** from the list also removes everyone's stored sign-in for it, tokens included. This happens the
   next time each user's directory loads.
 - **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then. To end the portal's own session, sign out on the portal's home

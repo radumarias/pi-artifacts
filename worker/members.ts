@@ -96,16 +96,10 @@ export class ChatMembers {
     return this.#sql.exec("DELETE FROM chat_members WHERE uid = ?", uid).rowsWritten > 0;
   }
 
-  /** Forget expired invites. */
-  #prune(now: number): void {
-    this.#sql.exec("DELETE FROM chat_invites WHERE expires_at <= ?", now);
-  }
-
-  /** The invites still open, oldest first. */
+  /** The invites still open, oldest first. A read only: it runs on every connect; createInvite forgets the expired ones. */
   invites(now = Date.now()): ChatInvite[] {
-    this.#prune(now);
     return this.#sql
-      .exec("SELECT id, created_at, expires_at FROM chat_invites ORDER BY created_at")
+      .exec("SELECT id, created_at, expires_at FROM chat_invites WHERE expires_at > ? ORDER BY created_at", now)
       .toArray()
       .map((row) => ({ id: row.id as string, createdAt: row.created_at as number, expiresAt: row.expires_at as number }));
   }
@@ -115,7 +109,7 @@ export class ChatMembers {
     const secret = randomHex(32);
     const secretHash = await sha256Hex(secret);
     // After the await, as in accept: the checks and the insert happen in one step of the object.
-    this.#prune(now);
+    this.#sql.exec("DELETE FROM chat_invites WHERE expires_at <= ?", now);
     if (this.#count("chat_invites") >= MAX_OPEN_INVITES) return { error: `This chat has ${MAX_OPEN_INVITES} open invites; revoke one first.` };
     const full = this.#full();
     if (full) return full;

@@ -278,23 +278,27 @@ export class ChatAgent extends DurableObject<Env> {
   async prompt(text: string, author: Person): Promise<void> {
     this.#requireInChat(author);
     await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills(), this.refreshFiles()]);
+    // Again after the refreshes, which can take seconds: the author may have been removed meanwhile.
+    this.#requireInChat(author);
     await this.harness.submit(this.members.hasAny() ? `${author.name}: ${text}` : text, {
       entry: { kind: CHAT_MESSAGE_KIND, data: { uid: author.uid, name: author.name, text } satisfies ChatMessageData },
     });
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
-    void this.#touchIndexes(text).catch((error) => console.error("chat index:", errorMessage(error)));
+    void this.#touchIndexes(text, author.uid).catch((error) => console.error("chat index:", errorMessage(error)));
   }
 
   /**
    * Move the chat up in everyone's sidebar. touchChat only names a chat still called "New chat", so the first prompt names it.
-   * Members' sidebars get a new title at once, but in a busy chat are bumped at most once a minute: each is another object.
+   * Members' sidebars get a new title at once, but in a busy chat the others' are bumped at most once a minute: each is
+   * another object. The author's own always is.
    */
-  async #touchIndexes(text: string): Promise<void> {
+  async #touchIndexes(text: string, authorUid: string): Promise<void> {
     const title = await this.#directory.touchChat(this.chatId, text);
     const now = Date.now();
-    if (title === this.#membersTouched.title && now - this.#membersTouched.at < MEMBERS_TOUCH_MS) return;
-    this.#membersTouched = { title, at: now };
-    await Promise.allSettled(this.members.list().map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title)));
+    const all = title !== this.#membersTouched.title || now - this.#membersTouched.at >= MEMBERS_TOUCH_MS;
+    if (all) this.#membersTouched = { title, at: now };
+    const members = this.members.list().filter((member) => all || member.uid === authorUid);
+    await Promise.allSettled(members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title)));
   }
 
   #index(uid: string) {
@@ -321,10 +325,16 @@ export class ChatAgent extends DurableObject<Env> {
   /** Join by an invite's secret; the chat then shows in the new member's sidebar, under `title` from the owner's index. */
   async acceptInvite(secret: string, person: Person, title: string): Promise<ChatRefusal | null> {
     if (person.uid === this.uid) return refuse(403, "This is your own chat.");
+    // The sidebar entry first: once the invite is used up, a member without one could not reach the chat.
+    const index = this.#index(person.uid);
+    await index.addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
     const failed = await this.members.accept(secret, person);
-    if (failed) return refuse(403, failed.error);
+    if (failed) {
+      // Not a member (accept lets members through): the entry goes again. Should that fail too, admit removes it.
+      await index.removeSharedChat(this.chatId, this.uid).catch(() => {});
+      return refuse(403, failed.error);
+    }
     this.sockets.broadcastPeople();
-    await this.#index(person.uid).addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
     return null;
   }
 
