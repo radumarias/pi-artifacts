@@ -4,7 +4,7 @@ import { PiHarness } from "agents/harness/pi";
 import { Lifecycle, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
-import { isOwnedBy, manifestOf, type ArtifactManifest, type ChatClientMessage, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse, type ToolInfo } from "../shared/protocol.ts";
+import { isOwnedBy, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
 import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
@@ -165,13 +165,13 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /** The tools an artifact version declared, with their schemas: what the page's describeTool reads. */
-  async artifactTools(artifactId: string, version: number): Promise<ToolInfo[] | McpError> {
+  async artifactTools(artifactId: string, version: number): Promise<DeclaredTool[] | McpError> {
     const manifest = await this.#manifest(artifactId, version);
     if (!manifest) return { code: "not_in_manifest", message: "No such artifact version in this chat." };
-    const tools: ToolInfo[] = [];
+    const tools: DeclaredTool[] = [];
     for (const entry of manifest.mcp?.servers ?? []) {
       for (const tool of await this.hub.tools(entry.server).catch(() => [])) {
-        if (entry.tools.includes(tool.name)) tools.push(tool);
+        if (entry.tools.includes(tool.name)) tools.push({ ...tool, server: entry.server });
       }
     }
     return tools;

@@ -11,7 +11,14 @@ export const MAX_HTML_BYTES = 2 * 1024 * 1024;
 export async function checkManifest(hub: McpHub, manifest: ArtifactManifest): Promise<string[]> {
   const problems: string[] = [];
   const known = new Set(hub.servers().map((server) => server.name));
+  const seen = new Set<string>();
   for (const entry of manifest.mcp?.servers ?? []) {
+    // Pages and the Worker look a server up by name and take its first entry, so a second one would be ignored.
+    if (seen.has(entry.server)) {
+      problems.push(`"${entry.server}" is declared more than once; list all its tools in one entry.`);
+      continue;
+    }
+    seen.add(entry.server);
     if (!known.has(entry.server)) {
       problems.push(`Unknown MCP server "${entry.server}". Connected servers: ${[...known].join(", ")}.`);
       continue;

@@ -13,8 +13,14 @@ const SCRIPT_HOSTS = [
  * The page has no network of its own: `connect-src 'none'`. Every connector
  * call goes through the runtime's message port to the viewer page, which
  * sends it to the Worker.
+ *
+ * `sandbox` gives the page an opaque origin however it is loaded: framed by
+ * the viewer, opened directly from a link, or as a popup that escaped the
+ * frame's sandbox. Without it, a page loaded top-level would run on the app's
+ * origin and could script the app as the viewer.
  */
 export const ARTIFACT_CSP = [
+  "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox",
   "default-src 'none'",
   `script-src 'unsafe-inline' ${SCRIPT_HOSTS.join(" ")}`,
   "style-src 'unsafe-inline' https://fonts.googleapis.com",

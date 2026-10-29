@@ -1,6 +1,6 @@
 import { callIdentity } from "../../shared/canonical.ts";
 import { errorMessage } from "../../shared/util.ts";
-import { MIN_REFETCH_MS, type CallToolResult, type McpError, type ProxyRequest, type ProxyResponse, type ToolInfo } from "../../shared/protocol.ts";
+import { MIN_REFETCH_MS, type CallToolResult, type McpError, type DeclaredTool, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
 
 /** Sends one proxied call to the Worker. Swappable in tests. */
 export type Transport = (request: ProxyRequest) => Promise<ProxyResponse>;
@@ -9,7 +9,7 @@ export interface BrokerOptions {
   artifactId: string;
   version: number;
   transport: Transport;
-  describe: () => Promise<ToolInfo[]>;
+  describe: () => Promise<DeclaredTool[]>;
   /** Browser cache namespace; include the viewer so accounts on one browser never share results. */
   cacheNamespace: string;
   storage?: Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length"> | null;
@@ -37,7 +37,8 @@ interface Group {
   timer?: unknown;
   inflight: boolean;
   retried: boolean;
-  stopped: boolean;
+  /** Set by a denial no refetch can fix: polling stops, and later subscribers get this error. */
+  denied?: McpError;
 }
 
 const CACHE_LIFETIME_MS = 10 * 60_000;
@@ -61,7 +62,7 @@ export class ArtifactBroker {
   #hidden = false;
   #closed = false;
   /** A version's tool list never changes, so one describe call serves the page's whole life. */
-  #tools: Promise<ToolInfo[]> | undefined;
+  #tools: Promise<DeclaredTool[]> | undefined;
 
   constructor(options: BrokerOptions) {
     this.#o = {
@@ -126,7 +127,7 @@ export class ArtifactBroker {
           throw error;
         });
         const tools = await this.#tools;
-        const tool = tools.find((t) => t.name === params.tool);
+        const tool = tools.find((t) => t.server === params.server && t.name === params.tool);
         if (!tool) return reply(false, { code: "not_in_manifest", server: params.server, message: `${params.server}/${params.tool} is not declared by this page.` });
         reply(true, { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations });
       } else {
@@ -141,7 +142,7 @@ export class ArtifactBroker {
     const key = callIdentity(message.server, message.tool, message.input);
     let group = this.#groups.get(key);
     if (!group) {
-      group = { key, server: message.server, tool: message.tool, input: message.input, subscribers: new Map(), inflight: false, retried: false, stopped: false };
+      group = { key, server: message.server, tool: message.tool, input: message.input, subscribers: new Map(), inflight: false, retried: false };
       group.last = this.#readStorage(key);
       this.#groups.set(key, group);
     }
@@ -151,7 +152,7 @@ export class ArtifactBroker {
 
     const stale = !group.last || this.#o.now() - group.last.storedAt >= this.#staleMs(group);
     if (group.last) this.#deliverTo(message.watchId, { type: "data", result: withCache(group.last, stale) });
-    if (group.stopped) return;
+    if (group.denied) return this.#deliverTo(message.watchId, { type: "error", error: group.denied });
     if (stale && !group.inflight) void this.#fetch(group);
     else this.#schedule(group);
   }
@@ -183,10 +184,12 @@ export class ArtifactBroker {
     group.inflight = true;
     const response = await this.#send({ mode: "read", server: group.server, tool: group.tool, input: group.input, staleMs: staleOverride ?? this.#staleMs(group) });
     group.inflight = false;
-    if (this.#closed || !this.#groups.has(group.key)) return;
+    // An unwatched group may since have been replaced by a new one for the same call: leave that one alone.
+    if (this.#closed || this.#groups.get(group.key) !== group) return;
 
     if (response.ok) {
       group.retried = false;
+      group.denied = undefined;
       this.#feed(group.key, response);
       return;
     }
@@ -194,7 +197,7 @@ export class ArtifactBroker {
     this.#deliver(group, { type: "error", error });
     if (DENIALS.has(error.code)) {
       group.last = undefined;
-      group.stopped = true;
+      group.denied = error;
       this.#removeStorage(group.key);
       return;
     }
@@ -230,7 +233,7 @@ export class ArtifactBroker {
 
   #schedule(group: Group): void {
     this.#clearTimer(group);
-    if (this.#hidden || this.#closed || group.stopped || group.nextAt === undefined) return;
+    if (this.#hidden || this.#closed || group.denied || group.nextAt === undefined) return;
     const delay = Math.max(0, group.nextAt - this.#o.now());
     group.timer = this.#o.setTimer(() => {
       group.timer = undefined;
@@ -261,7 +264,7 @@ export class ArtifactBroker {
     }
     for (const group of this.#groups.values()) {
       if (!matches(group.key, group)) continue;
-      group.stopped = false;
+      group.denied = undefined;
       void this.#fetch(group, 0);
     }
   }

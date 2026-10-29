@@ -6,7 +6,7 @@ import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type Artifa
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import type { ArtifactStore, UserFiles } from "../storage/index.ts";
+import { PathError, type ArtifactStore, type UserFiles } from "../storage/index.ts";
 
 /** What the tools need from the chat they run in. */
 export interface ChatScope {
@@ -45,13 +45,27 @@ export interface ServerCatalog {
  * prompt with the reason, so the agent can tell the user.
  */
 export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, unavailable: Map<string, string>): Extension {
+  // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
+  // and providers reject a request whose tool names repeat: number the later ones.
+  const names = new Map<string, string>();
+  const used = new Set<string>();
+  const agentName = (server: string, tool: string) => names.get(`${server}\u0000${tool}`)!;
+  for (const [server, { tools: serverTools }] of catalog) {
+    for (const tool of serverTools) {
+      const base = mcpToolName(server, tool.name);
+      let name = base;
+      for (let n = 2; used.has(name); n++) name = `${base.slice(0, 64 - String(n).length - 1)}_${n}`;
+      used.add(name);
+      names.set(`${server}\u0000${tool.name}`, name);
+    }
+  }
   const tools = [];
   for (const [server, { tools: serverTools }] of catalog) {
     for (const tool of serverTools) {
       const readOnly = tool.annotations?.readOnlyHint === true;
       tools.push(
         defineTool({
-          name: mcpToolName(server, tool.name),
+          name: agentName(server, tool.name),
           description: `[MCP server "${server}", tool "${tool.name}"${readOnly ? ", read-only" : ""}] ${tool.description}`,
           parameters: Type.Unsafe<Record<string, unknown>>((tool.inputSchema as object) ?? { type: "object" }),
           replay: readOnly ? "safe" : "unsafe",
@@ -65,7 +79,7 @@ export function mcpExtension(hub: McpHub, catalog: Map<string, ServerCatalog>, u
     }
   }
   const servers = [...catalog.entries()].map(([name, { tools: serverTools, instructions }]) => {
-    const list = serverTools.map((t) => `${t.name}${t.annotations?.readOnlyHint ? " (read-only)" : ""} — agent tool ${mcpToolName(name, t.name)}`);
+    const list = serverTools.map((t) => `${t.name}${t.annotations?.readOnlyHint ? " (read-only)" : ""} — agent tool ${agentName(name, t.name)}`);
     const about = instructions?.trim() ? `\n  Says about itself: ${instructions.trim().replace(/\s+/g, " ").slice(0, 1_500)}` : "";
     return `- "${name}"${about}\n  Tools: ${list.join("; ")}`;
   });
@@ -145,11 +159,24 @@ async function runInSandbox(scope: ChatScope, paths: string[] | undefined, run: 
   }
   const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
   const saved = [];
+  const skipped = [];
   for (const output of result.outputs) {
-    await files.put(`out/${output.name}`, output.bytes);
-    saved.push(`out/${output.name}`);
+    // A name the user's files do not allow must not throw away the run's output and the files already saved.
+    try {
+      await files.put(`out/${output.name}`, output.bytes);
+      saved.push(`out/${output.name}`);
+    } catch (error) {
+      if (!(error instanceof PathError)) throw error;
+      skipped.push(`${output.name} (${error.message})`);
+    }
   }
-  const report = [`exit code ${result.exitCode}`, `stdout:\n${result.stdout}`, result.stderr && `stderr:\n${result.stderr}`, saved.length && `saved: ${saved.join(", ")}`];
+  const report = [
+    `exit code ${result.exitCode}`,
+    `stdout:\n${result.stdout}`,
+    result.stderr && `stderr:\n${result.stderr}`,
+    saved.length && `saved: ${saved.join(", ")}`,
+    skipped.length && `not saved: ${skipped.join("; ")}`,
+  ];
   return { output: text(clip(report.filter(Boolean).join("\n\n"))), isError: result.exitCode !== 0 };
 }
 

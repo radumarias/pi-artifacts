@@ -59,6 +59,9 @@ export interface ToolInfo {
   inputSchema?: unknown;
 }
 
+/** A tool an artifact version declared, with the server it belongs to: what GET /api/artifacts/:id/tools lists. */
+export type DeclaredTool = ToolInfo & { server: string };
+
 /** What a page may call. Fixed per version at publish time; the page cannot widen it. */
 export interface ArtifactManifest {
   mcp?: { servers: { server: string; tools: string[] }[] };

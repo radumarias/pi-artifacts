@@ -107,6 +107,16 @@ describe("ArtifactBroker watches", () => {
     expect(t.requests).toHaveLength(2);
   });
 
+  it("tells a later watch of a denied call why, without asking again", async () => {
+    const t = setup(() => ({ ok: false, error: { code: "not_granted", message: "author only" } }));
+    t.send({ type: "watch", watchId: 1, server: "S", tool: "t", input: {}, refetchInterval: 30_000 });
+    await t.flush();
+    t.send({ type: "watch", watchId: 2, server: "S", tool: "t", input: {}, refetchInterval: 30_000 });
+    await t.flush();
+    expect(t.requests).toHaveLength(1);
+    expect(t.events(2)).toEqual([{ type: "error", error: { code: "not_granted", message: "author only" } }]);
+  });
+
   it("retries a retryable error once, then falls back to the interval", async () => {
     const t = setup(() => ({ ok: false, error: { code: "server_unavailable", message: "down", retryable: true, retryAfterMs: 5_000 } }));
     t.send({ type: "watch", watchId: 1, server: "S", tool: "t", input: {}, refetchInterval: 30_000 });
