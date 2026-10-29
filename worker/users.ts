@@ -1,12 +1,12 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ArtifactSummary, ChatSummary } from "../shared/protocol.ts";
-import type { McpAuthRecord, McpAuthStore } from "./mcp/oauth.ts";
+import { applyAuthChange, type McpAuthChange, type McpAuthRecord, type McpAuthStore } from "./mcp/oauth.ts";
 import { mcpServers } from "./mcp/servers.ts";
 
 /** One user's OAuth state for one MCP server. `uid` must come from a verified identity. */
 export function mcpAuthStore(uid: string, server: string): McpAuthStore {
   const directory = exports.UserDirectory.getByName(uid);
-  return { get: () => directory.mcpAuth(server), put: (record) => directory.setMcpAuth(server, record) };
+  return { get: () => directory.mcpAuth(server), update: (change) => directory.updateMcpAuth(server, change) };
 }
 
 /** One per user: the index of their chats and artifacts. The chats themselves live in ChatAgent objects. */
@@ -30,7 +30,9 @@ export class UserDirectory extends DurableObject<Env> {
     return row ? (JSON.parse(row.data) as McpAuthRecord) : {};
   }
 
-  setMcpAuth(server: string, record: McpAuthRecord): void {
+  /** Read, change and write in one step: this object runs one call at a time, and nothing here awaits. */
+  updateMcpAuth(server: string, change: McpAuthChange): void {
+    const record = applyAuthChange(this.mcpAuth(server), change);
     if (Object.keys(record).length === 0) this.ctx.storage.sql.exec("DELETE FROM mcp_auth WHERE server = ?", server);
     else this.ctx.storage.sql.exec("INSERT INTO mcp_auth (server, data) VALUES (?, ?) ON CONFLICT(server) DO UPDATE SET data = excluded.data", server, JSON.stringify(record));
   }

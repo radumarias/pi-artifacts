@@ -18,13 +18,43 @@ export interface McpAuthRecord {
   state?: string;
 }
 
+/**
+ * One change to a record, applied in a single step by the store, so that a
+ * sign-in and the token refreshes of several chats cannot overwrite each other.
+ */
+export interface McpAuthChange {
+  /** Start from this record instead of the stored one. */
+  replace?: McpAuthRecord;
+  set?: Partial<McpAuthRecord>;
+  clear?: (keyof McpAuthRecord)[];
+  /**
+   * Clear the tokens, but only while they are still these. Every chat of a
+   * user shares them, and another chat may have refreshed them since.
+   */
+  clearTokensIf?: OAuthTokens;
+}
+
 export interface McpAuthStore {
   get(): Promise<McpAuthRecord>;
-  put(record: McpAuthRecord): Promise<void>;
+  update(change: McpAuthChange): Promise<void>;
+}
+
+/** The record after a change. The store runs this where the record lives, in one step. */
+export function applyAuthChange(stored: McpAuthRecord, change: McpAuthChange): McpAuthRecord {
+  const record: McpAuthRecord = { ...(change.replace ?? stored), ...change.set };
+  for (const key of change.clear ?? []) delete record[key];
+  if (change.clearTokensIf && sameTokens(record.tokens, change.clearTokensIf)) delete record.tokens;
+  return record;
 }
 
 /** The callback path the authorization server sends the browser back to. */
 export const OAUTH_CALLBACK_PATH = "/api/mcp/oauth/callback";
+
+/** Where a user starts signing in to a server: a same-origin link the agent passes on in chat. */
+export const SIGN_IN_PATH = "/api/mcp/sign-in/";
+export function signInPath(server: string): string {
+  return `${SIGN_IN_PATH}${encodeURIComponent(server)}`;
+}
 
 /** OAuth state is `<server>~<random>`, so the callback knows which server's sign-in it finishes. */
 export function serverOfState(state: string): string | undefined {
@@ -112,19 +142,15 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
-    if (scope === "discovery") return;
-    if (scope === "all") return this.#store.put({});
-    const record = await this.#store.get();
-    if (scope === "client") delete record.client;
-    // Every chat of the user shares these tokens. When another chat has refreshed them since this one read them, the
-    // rejected refresh token was the old one: keep the new tokens rather than signing the user out.
-    if (scope === "tokens" && sameTokens(record.tokens, this.#readTokens)) delete record.tokens;
-    if (scope === "verifier") delete record.verifier;
-    await this.#store.put(record);
+    if (scope === "all") await this.#store.update({ replace: {} });
+    else if (scope === "client" || scope === "verifier") await this.#store.update({ clear: [scope] });
+    // When another chat has refreshed the tokens since this one read them, the rejected refresh token was the old one:
+    // keep the new tokens rather than signing the user out.
+    else if (scope === "tokens" && this.#readTokens) await this.#store.update({ clearTokensIf: this.#readTokens });
   }
 
-  async #patch(patch: Partial<McpAuthRecord>): Promise<void> {
-    await this.#store.put({ ...(await this.#store.get()), ...patch });
+  async #patch(set: Partial<McpAuthRecord>): Promise<void> {
+    await this.#store.update({ set });
   }
 }
 
@@ -140,7 +166,7 @@ function sameTokens(a: OAuthTokens | undefined, b: OAuthTokens | undefined): boo
  */
 export async function startSignIn(serverUrl: string, server: string, store: McpAuthStore, redirectUrl: string): Promise<{ url: string } | { signedIn: true }> {
   const record = await store.get();
-  await store.put(record.client && record.redirectUrl === redirectUrl ? { client: record.client, redirectUrl } : { redirectUrl });
+  await store.update({ replace: record.client && record.redirectUrl === redirectUrl ? { client: record.client, redirectUrl } : { redirectUrl } });
   const client = new McpOAuthClient(store, server, { redirectUrl, interactive: true });
   const trace = tracedFetch();
   const result = await auth(client, { serverUrl, fetchFn: trace.fetch }).catch(trace.explain);
@@ -156,8 +182,7 @@ export async function finishSignIn(serverUrl: string, server: string, store: Mcp
   const client = new McpOAuthClient(store, server, { redirectUrl: record.redirectUrl, interactive: true });
   const trace = tracedFetch();
   await auth(client, { serverUrl, authorizationCode: code, fetchFn: trace.fetch }).catch(trace.explain);
-  const { state: _state, verifier: _verifier, ...done } = await store.get();
-  await store.put(done);
+  await store.update({ clear: ["state", "verifier"] });
 }
 
 /**

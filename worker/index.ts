@@ -95,6 +95,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
         return json({ ok: false, error: { code: "bad_request", message: "Expected {version, mode, server, tool, input}." } }, 400);
       }
+      const { success } = await env.PAGE_CALLS.limit({ key: `${uid}:${id}` });
+      if (!success) return json({ ok: false, error: { code: "rate_limited", message: "Too many calls from this page.", retryAfterMs: 30_000 } }, 429);
       return json(await chat.artifactCall({ artifactId: id, viewer: uid, request: body }));
     }
     const meta = await storage.artifacts.readMeta(id);

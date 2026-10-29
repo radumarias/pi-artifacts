@@ -1,6 +1,6 @@
 import { errorMessage } from "../shared/util.ts";
 import { mcpAuthStore } from "./users.ts";
-import { finishSignIn, OAUTH_CALLBACK_PATH, serverOfState, startSignIn } from "./mcp/oauth.ts";
+import { finishSignIn, OAUTH_CALLBACK_PATH, serverOfState, SIGN_IN_PATH, startSignIn } from "./mcp/oauth.ts";
 import { mcpServers } from "./mcp/servers.ts";
 
 /**
@@ -14,9 +14,9 @@ export async function mcpRoute(request: Request, env: Env, uid: string): Promise
   if (request.method !== "GET") return null;
   const servers = mcpServers(env).filter((server) => server.auth === "oauth");
 
-  const start = url.pathname.match(/^\/api\/mcp\/sign-in\/([^/]+)$/);
-  if (start) {
-    const server = servers.find((s) => s.name === decodeURIComponent(start[1]));
+  const name = url.pathname.startsWith(SIGN_IN_PATH) ? url.pathname.slice(SIGN_IN_PATH.length) : undefined;
+  if (name && !name.includes("/")) {
+    const server = servers.find((s) => s.name === decodeURIComponent(name));
     if (!server) return page("Sign-in failed", "This app has no server by that name to sign in to.", 404);
     try {
       const started = await startSignIn(server.url, server.name, mcpAuthStore(uid, server.name), `${url.origin}${OAUTH_CALLBACK_PATH}`);
