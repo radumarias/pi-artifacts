@@ -1,7 +1,7 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { createAI } from "agents/models/pi-ai";
-import { EFFORT_LABELS, VENDORS, type ModelChoice, type ModelInfo } from "../shared/models.ts";
+import { EFFORT_LABELS, VENDORS, type ModelChoice, type ModelInfo, type Vendor } from "../shared/models.ts";
 
 /**
  * The Workers AI models the picker offers, best first. Workers AI runs on Cloudflare, within the account's free daily
@@ -20,7 +20,7 @@ const WORKERS_AI_MODELS = [
   "@cf/google/gemma-4-26b-a4b-it",
 ];
 
-const VENDOR_ORDER = Object.keys(VENDORS);
+const VENDOR_ORDER = Object.keys(VENDORS) as Vendor[];
 
 /** A listed model, and the pi-ai metadata its efforts come from. */
 interface ModelEntry {
@@ -28,22 +28,21 @@ interface ModelEntry {
   metadata: Model<Api>;
 }
 
-/** `@cf/…` ids are Workers AI's; AI Gateway catalog ids are `<vendor>/<id>`. */
-function vendorOf(id: string): string {
-  return id.startsWith("@cf/") ? "workers-ai" : id.slice(0, id.indexOf("/"));
+/** `@cf/…` ids are Workers AI's; AI Gateway catalog ids are `<vendor>/<id>`. Undefined for a vendor the picker leaves out. */
+function vendorOf(id: string): Vendor | undefined {
+  const vendor = id.startsWith("@cf/") ? "workers-ai" : id.slice(0, id.indexOf("/"));
+  return Object.hasOwn(VENDORS, vendor) ? (vendor as Vendor) : undefined;
 }
-
-let anthropic: Map<string, Model<Api>> | undefined;
 
 /**
  * The metadata a model's efforts come from. pi-ai's gateway catalog has older thinking levels for Claude than its
  * Anthropic catalog (which knows, say, that Claude Sonnet 5.5 takes neither "off" nor "minimal"), so Claude models use
  * the Anthropic entry, found by Anthropic's spelling of the id (claude-opus-5-5 for anthropic/claude-opus-5.5).
  */
-function metadataOf(model: Model<Api>, vendor: string): Model<Api> {
+function metadataOf(model: Model<Api>, vendor: Vendor): Model<Api> {
   if (vendor !== "anthropic") return model;
-  anthropic ??= new Map(Object.values(ANTHROPIC_MODELS).map((entry) => [entry.id, entry as Model<Api>]));
-  return anthropic.get(model.id.slice("anthropic/".length).replaceAll(".", "-")) ?? model;
+  const id = model.id.slice("anthropic/".length).replaceAll(".", "-");
+  return Object.hasOwn(ANTHROPIC_MODELS, id) ? (ANTHROPIC_MODELS[id as keyof typeof ANTHROPIC_MODELS] as Model<Api>) : model;
 }
 
 /**
@@ -51,20 +50,23 @@ function metadataOf(model: Model<Api>, vendor: string): Model<Api> {
  * (by version, then by price, so a family's largest model leads), then the Workers AI models above, in their order.
  */
 export function chatModels(models: readonly Model<Api>[]): ModelEntry[] {
-  const listed = models.filter((model) => (vendorOf(model.id) === "workers-ai" ? WORKERS_AI_MODELS.includes(model.id) : Object.hasOwn(VENDORS, vendorOf(model.id))));
-  listed.sort(
-    (a, b) =>
-      VENDOR_ORDER.indexOf(vendorOf(a.id)) - VENDOR_ORDER.indexOf(vendorOf(b.id)) ||
-      WORKERS_AI_MODELS.indexOf(a.id) - WORKERS_AI_MODELS.indexOf(b.id) ||
-      version(b.id) - version(a.id) ||
-      b.cost.output - a.cost.output ||
-      a.name.localeCompare(b.name),
-  );
-  return listed.map((model) => {
-    const vendor = vendorOf(model.id);
-    const metadata = metadataOf(model, vendor);
-    return { info: { id: model.id, name: model.name, vendor, efforts: model.reasoning ? getSupportedThinkingLevels(metadata) : [] }, metadata };
-  });
+  return models
+    .flatMap((model) => {
+      const vendor = vendorOf(model.id);
+      return vendor && (vendor !== "workers-ai" || WORKERS_AI_MODELS.includes(model.id)) ? [{ model, vendor }] : [];
+    })
+    .sort(
+      (a, b) =>
+        VENDOR_ORDER.indexOf(a.vendor) - VENDOR_ORDER.indexOf(b.vendor) ||
+        WORKERS_AI_MODELS.indexOf(a.model.id) - WORKERS_AI_MODELS.indexOf(b.model.id) ||
+        version(b.model.id) - version(a.model.id) ||
+        b.model.cost.output - a.model.cost.output ||
+        a.model.name.localeCompare(b.model.name),
+    )
+    .map(({ model, vendor }) => {
+      const metadata = metadataOf(model, vendor);
+      return { info: { id: model.id, name: model.name, vendor, efforts: model.reasoning ? getSupportedThinkingLevels(metadata) : [] }, metadata };
+    });
 }
 
 /**

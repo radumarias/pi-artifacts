@@ -153,8 +153,8 @@ export class ChatAgent extends DurableObject<Env> {
   async setModel(input: { model?: unknown; thinkingLevel?: unknown }): Promise<void> {
     const choice = checkModelChoice(input);
     if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
-    const conversation = await (await this.harness.pi()).conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT);
-    if (!conversation) throw new Error("The chat's conversation is missing.");
+    // PiHarness has made the root conversation by the time pi() resolves.
+    const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
     await conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT);
     // The chat has changed by now, so a failure to remember the pick for new chats is logged, not reported as a failed change.
     await this.#directory.setModelChoice(choice).catch((error: unknown) => console.error("model:", errorMessage(error)));
