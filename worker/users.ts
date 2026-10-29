@@ -21,7 +21,10 @@ type SkillRow = {
   updated_at: number;
 };
 
-/** One per user: the index of their chats and artifacts, and their skills. The chats themselves live in ChatAgent objects. */
+/**
+ * One per user: the index of their chats, the chats others shared with them, their artifacts and skills.
+ * The chats themselves live in ChatAgent objects, which decide who may open them.
+ */
 export class UserDirectory extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -31,6 +34,7 @@ export class UserDirectory extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS mcp_auth (server TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS skills (name TEXT PRIMARY KEY, description TEXT NOT NULL, instructions TEXT NOT NULL, tools TEXT NOT NULL, origin TEXT NOT NULL, enabled INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS builtin_skills_off (name TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS shared_chats (id TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, owner_name TEXT NOT NULL, title TEXT NOT NULL, joined_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
     `);
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = mcpServers(env).map((server) => server.name);
@@ -51,11 +55,49 @@ export class UserDirectory extends DurableObject<Env> {
     else this.ctx.storage.sql.exec("INSERT INTO mcp_auth (server, data) VALUES (?, ?) ON CONFLICT(server) DO UPDATE SET data = excluded.data", server, JSON.stringify(record));
   }
 
+  /** The user's own chats and the ones shared with them, most recent first. */
   listChats(): ChatSummary[] {
-    return this.ctx.storage.sql
-      .exec<{ id: string; title: string; created_at: number; updated_at: number }>("SELECT * FROM chats ORDER BY updated_at DESC")
+    const own = this.ctx.storage.sql
+      .exec<{ id: string; title: string; created_at: number; updated_at: number }>("SELECT * FROM chats")
       .toArray()
-      .map((row) => ({ id: row.id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at }));
+      .map((row): ChatSummary => ({ id: row.id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at }));
+    const shared = this.ctx.storage.sql
+      .exec<{ id: string; title: string; owner_name: string; joined_at: number; updated_at: number }>("SELECT * FROM shared_chats")
+      .toArray()
+      .map((row): ChatSummary => ({ id: row.id, title: row.title, createdAt: row.joined_at, updatedAt: row.updated_at, sharedBy: row.owner_name }));
+    return [...own, ...shared].sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** Whose chat `id` is: this user's own uid, the owner's for a chat shared with them, or null. The chat itself still checks membership. */
+  chatOwner(id: string): string | null {
+    if (this.hasChat(id)) return this.ctx.id.name!;
+    const row = this.ctx.storage.sql.exec<{ owner_uid: string }>("SELECT owner_uid FROM shared_chats WHERE id = ?", id).toArray()[0];
+    return row?.owner_uid ?? null;
+  }
+
+  /** Index a chat this user joined by an invite. Chat ids are random, so one never names both an own and a shared chat. */
+  addSharedChat(chat: { id: string; ownerUid: string; ownerName: string; title: string }): void {
+    if (this.hasChat(chat.id)) return;
+    const now = Date.now();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO shared_chats (id, owner_uid, owner_name, title, joined_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET owner_name = excluded.owner_name, title = excluded.title, updated_at = excluded.updated_at`,
+      chat.id,
+      chat.ownerUid,
+      chat.ownerName,
+      chat.title,
+      now,
+      now,
+    );
+  }
+
+  /** Bump a shared chat to the top with its current title, as touchChat does for the owner. */
+  touchSharedChat(id: string, ownerUid: string, title: string): void {
+    this.ctx.storage.sql.exec("UPDATE shared_chats SET title = ?, updated_at = ? WHERE id = ? AND owner_uid = ?", title, Date.now(), id, ownerUid);
+  }
+
+  removeSharedChat(id: string, ownerUid: string): void {
+    this.ctx.storage.sql.exec("DELETE FROM shared_chats WHERE id = ? AND owner_uid = ?", id, ownerUid);
   }
 
   createChat(id: string): ChatSummary {
@@ -68,11 +110,16 @@ export class UserDirectory extends DurableObject<Env> {
     return this.ctx.storage.sql.exec("SELECT 1 FROM chats WHERE id = ?", id).toArray().length > 0;
   }
 
-  /** Bump a chat to the top. A chat still called "New chat" is named after the prompt, so the first prompt names it. */
-  touchChat(id: string, prompt: string): void {
+  /** Bump a chat to the top. A chat still called "New chat" is named after the prompt, so the first prompt names it. Returns its title. */
+  touchChat(id: string, prompt: string): string {
     this.ctx.storage.sql.exec("UPDATE chats SET updated_at = ? WHERE id = ?", Date.now(), id);
     const title = prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat";
     this.ctx.storage.sql.exec("UPDATE chats SET title = ? WHERE id = ? AND title = 'New chat'", title, id);
+    return this.chatTitle(id) ?? title;
+  }
+
+  chatTitle(id: string): string | null {
+    return this.ctx.storage.sql.exec<{ title: string }>("SELECT title FROM chats WHERE id = ?", id).toArray()[0]?.title ?? null;
   }
 
   listArtifacts(): ArtifactSummary[] {

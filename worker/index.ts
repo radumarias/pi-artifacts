@@ -4,6 +4,7 @@ import { errorMessage } from "../shared/util.ts";
 import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { json } from "./http.ts";
+import { chatRoute } from "./chat-routes.ts";
 import { mcpRoute } from "./mcp-routes.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
@@ -141,13 +142,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   const skills = await skillsRoute(request, directory);
   if (skills) return skills;
 
-  // A chat's Durable Object is named after the verified uid, so a user can only ever reach their own chats.
-  const socket = path.match(/^\/api\/chats\/([a-z0-9]+)\/ws$/);
-  if (socket) {
-    if (request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade" }, 426);
-    if (!ID_PATTERN.test(socket[1]) || !(await directory.hasChat(socket[1]))) return json({ error: "No such chat" }, 404);
-    return exports.ChatAgent.getByName(chatAgentName(uid, socket[1])).fetch(request);
-  }
+  // A chat's Durable Object is named after its owner's verified uid; others reach it only once they joined by an invite.
+  const chat = await chatRoute(request, directory, { uid, name: identity.email ?? uid });
+  if (chat) return chat;
 
   // Publish a page without the model, to try the live-data path locally. Needs DEV_TOOLS=true.
   const devPublish = path.match(/^\/api\/dev\/chats\/([a-z0-9]+)\/publish$/);

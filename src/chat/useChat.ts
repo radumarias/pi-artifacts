@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, EntryRecord } from "@earendil-works/pi-durable";
 import { useEffect, useReducer, useRef, useState } from "react";
-import type { ChatClientMessage, ChatServerMessage } from "../../shared/protocol.ts";
+import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeople, type ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
 export interface RunningTool {
@@ -103,14 +103,19 @@ export function reduce(state: ChatState, action: Action): ChatState {
   return next;
 }
 
-/** The chat's WebSocket: reconnects with backoff, and every (re)connect starts from a fresh snapshot. */
+/**
+ * The chat's WebSocket: reconnects with backoff, and every (re)connect starts from a fresh snapshot.
+ * It stops for good when the user is no longer in the chat (removed, or the chat is gone).
+ */
 export function useChat(chatId: string) {
   const [state, dispatch] = useReducer(reduce, initial);
   const [connected, setConnected] = useState(false);
+  const [people, setPeople] = useState<ChatPeople | null>(null);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     dispatch({ type: "reset" });
+    setPeople(null);
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -118,18 +123,32 @@ export function useChat(chatId: string) {
     const open = () => {
       const ws = new WebSocket(api.chatSocketUrl(chatId));
       socket.current = ws;
+      let opened = false;
       ws.onopen = () => {
+        opened = true;
         attempt = 0;
         setConnected(true);
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data) as ChatServerMessage;
         if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[] });
+        else if (message.type === "people") setPeople(message.people);
         else dispatch({ type: "error", message: message.message });
       };
-      ws.onclose = () => {
+      const stop = () => {
+        closed = true;
+        dispatch({ type: "error", message: "You are no longer in this chat." });
+      };
+      ws.onclose = async (event) => {
         setConnected(false);
         if (closed) return;
+        if (event.code === SOCKET_NOT_A_MEMBER) return stop();
+        // A refused upgrade shows only as a close; ask over HTTP whether the chat is still ours to open.
+        if (!opened) {
+          const status = await api.people(chatId).then(() => 200, (e: { status?: number }) => e.status);
+          if (closed) return;
+          if (status === 403 || status === 404) return stop();
+        }
         timer = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 15_000));
       };
     };
@@ -150,6 +169,7 @@ export function useChat(chatId: string) {
   return {
     state,
     connected,
+    people,
     prompt: (text: string) => send({ type: "prompt", text }),
     abort: () => send({ type: "abort" }),
   };

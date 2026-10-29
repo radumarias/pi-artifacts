@@ -133,15 +133,60 @@ export interface ChatSummary {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** Set on a chat someone else owns and invited you to: their name. */
+  sharedBy?: string;
+}
+
+/** Someone in a chat: a verified uid, and the name the others see (their email, or the demo name). */
+export interface Person {
+  uid: string;
+  name: string;
+}
+
+/** Who is in a chat. Members joined by an invite; only the owner can invite or remove them. */
+export interface ChatPeople {
+  owner: Person;
+  members: Person[];
+}
+
+/** An invite link the owner has not seen used yet. Only its id and times: the secret is shown once, when it is made. */
+export interface ChatInvite {
+  id: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** GET /api/chats/:id/people: who is in the chat, and for its owner the invites still open. */
+export type ChatPeopleView = ChatPeople & { invites?: ChatInvite[] };
+
+/** POST /api/chats/:id/invites: a single-use link to the chat. */
+export interface CreatedInvite extends ChatInvite {
+  url: string;
+}
+
+/**
+ * The transcript entry each prompt is placed as, instead of pi's `pi.user`, so a shared
+ * chat shows who wrote what. The model gets the text as a user message, prefixed with the
+ * author's name once the chat has members.
+ */
+export const CHAT_MESSAGE_KIND = "chat.message";
+export interface ChatMessageData {
+  uid: string;
+  name: string;
+  text: string;
 }
 
 /** Browser → ChatAgent over the chat WebSocket. */
 export type ChatClientMessage = { type: "prompt"; text: string } | { type: "abort" };
 
-/** ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim. */
+/** ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever someone joins or leaves. */
 export type ChatServerMessage =
   | { type: "events"; events: unknown[] }
+  | { type: "people"; people: ChatPeople }
   | { type: "error"; message: string };
+
+/** The close code of a chat socket whose user is no longer in the chat: the app stops reconnecting. */
+export const SOCKET_NOT_A_MEMBER = 4403;
 
 /** The minimum polling interval a page can ask for, as at Claude. */
 export const MIN_REFETCH_MS = 30_000;

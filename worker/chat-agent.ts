@@ -4,9 +4,26 @@ import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
-import { isOwnedBy, isReadOnly, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
+import {
+  CHAT_MESSAGE_KIND,
+  isOwnedBy,
+  isReadOnly,
+  manifestOf,
+  SOCKET_NOT_A_MEMBER,
+  type ArtifactManifest,
+  type ChatClientMessage,
+  type ChatInvite,
+  type ChatMessageData,
+  type ChatPeople,
+  type ChatServerMessage,
+  type DeclaredTool,
+  type McpError,
+  type Person,
+  type ProxyRequest,
+  type ProxyResponse,
+} from "../shared/protocol.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
-import { promptExtension } from "./agent/prompt.ts";
+import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
 import { Storage } from "./storage/index.ts";
@@ -14,10 +31,13 @@ import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
+import { ChatMembers, formatInviteToken } from "./members.ts";
 import { mcpAuthStore } from "./users.ts";
 
 const SOCKET_TAG = "chat";
-const OWNER = { owner: "chat-sockets" } as const;
+const OWNER = "chat-sockets";
+/** Set by the Worker on a chat socket's upgrade request, from the verified identity; never taken from the browser. */
+export const PERSON_HEADER = "x-pi-person";
 const MAX_STALE_MS = 24 * 60 * 60_000;
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
@@ -39,7 +59,11 @@ interface ArtifactCall {
 
 /**
  * One chat: its Pi agent, its MCP connections, and the live calls of the
- * artifacts it published. Named `<uid>:<chatId>`.
+ * artifacts it published. Named `<uid>:<chatId>` after its owner.
+ *
+ * The owner can invite people into the chat (`members`). They share the one
+ * conversation and the one agent, which acts as the owner: with the owner's
+ * MCP connections, files, sandbox and skills, and publishing as the owner.
  *
  * An artifact's page calls MCP tools through `artifactCall`, which uses the
  * same McpHub as the agent's tools. No model is involved in those calls.
@@ -58,11 +82,8 @@ export class ChatAgent extends DurableObject<Env> {
     // Current Claude models reject pi's "off" (thinking: disabled), so new chats think at medium effort.
     defaults: { model: this.ai(this.env.MODEL), thinkingLevel: "medium" },
   });
-  readonly sockets = new ChatSockets({
-    events: () => this.harness.session().events(),
-    prompt: (text) => this.prompt(text),
-    abort: () => this.abort(),
-  });
+  readonly members = new ChatMembers(this.ctx.storage.sql);
+  readonly sockets = new ChatSockets(this);
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets);
 
   readonly scope: ChatScope;
@@ -85,6 +106,7 @@ export class ChatAgent extends DurableObject<Env> {
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
     });
     this.registry.install(promptExtension);
+    this.registry.install(peopleExtension(() => this.people()));
     this.registry.install(artifactExtension(scope));
     this.registry.install(filesExtension(scope));
     this.registry.install(skillsExtension(scope));
@@ -171,11 +193,66 @@ export class ChatAgent extends DurableObject<Env> {
     return connectStreamableHttp(server, new McpOAuthClient(store, server.name, { redirectUrl, interactive: false }));
   }
 
-  async prompt(text: string): Promise<void> {
+  /** The owner, or a member: who may open this chat, prompt it and load its pages' per-user data. */
+  isInChat(uid: string): boolean {
+    return uid === this.uid || this.members.has(uid);
+  }
+
+  people(): ChatPeople {
+    return { owner: { uid: this.uid, name: this.members.ownerName(this.uid) }, members: this.members.list() };
+  }
+
+  /**
+   * One person's message. It is placed as a `chat.message` entry naming its
+   * author; once the chat has members, the model reads it as "name: text".
+   * While a run is going, it waits in pi's inbox and is answered next.
+   */
+  async prompt(text: string, author: Person): Promise<void> {
+    if (!this.isInChat(author.uid)) throw new Error("You are no longer in this chat.");
     await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills()]);
-    await this.harness.submit(text);
+    const shared = this.members.list().length > 0;
+    await this.harness.submit(shared ? `${author.name}: ${text}` : text, {
+      entry: { kind: CHAT_MESSAGE_KIND, data: { uid: author.uid, name: author.name, text } satisfies ChatMessageData },
+    });
     // touchChat only names a chat that is still called "New chat", so the first prompt names it.
-    await this.#directory.touchChat(this.chatId, text);
+    const title = await this.#directory.touchChat(this.chatId, text);
+    // Members see the chat in their own sidebar: move it up there too. Their index is only a convenience, so a failure is fine.
+    await Promise.allSettled(this.members.list().map((member) => exports.UserDirectory.getByName(member.uid).touchSharedChat(this.chatId, this.uid, title)));
+  }
+
+  /** A link's secret for the owner to pass on. Only the owner may call this; the Worker checks, and so does the chat. */
+  async createInvite(owner: Person): Promise<(ChatInvite & { token: string }) | { error: string }> {
+    if (owner.uid !== this.uid) return { error: "Only the chat's owner can invite people." };
+    this.members.setOwnerName(owner);
+    const created = await this.members.createInvite();
+    if ("error" in created) return created;
+    return { ...created.invite, token: formatInviteToken({ ownerUid: this.uid, chatId: this.chatId, secret: created.secret }) };
+  }
+
+  invites(): ChatInvite[] {
+    return this.members.invites();
+  }
+
+  revokeInvite(id: string): boolean {
+    return this.members.revokeInvite(id);
+  }
+
+  /** Join by an invite's secret. Returns what the new member's sidebar shows. */
+  async acceptInvite(secret: string, person: Person): Promise<{ title: string; ownerName: string } | { error: string }> {
+    if (person.uid === this.uid) return { error: "This is your own chat." };
+    const failed = await this.members.accept(secret, person);
+    if (failed) return failed;
+    this.sockets.broadcast({ type: "people", people: this.people() });
+    return { title: (await this.#directory.chatTitle(this.chatId)) ?? "Shared chat", ownerName: this.members.ownerName(this.uid) };
+  }
+
+  /** The owner removes a member, or a member leaves. Their open sockets close at once. */
+  removeMember(by: string, uid: string): boolean {
+    if (by !== this.uid && by !== uid) return false;
+    if (!this.members.remove(uid)) return false;
+    this.sockets.disconnect(uid);
+    this.sockets.broadcast({ type: "people", people: this.people() });
+    return true;
   }
 
   /** Publish without the model, through the same checks as the agent's tool. Only routed when DEV_TOOLS is on. */
@@ -184,7 +261,8 @@ export class ChatAgent extends DurableObject<Env> {
     return { artifactId: meta.id, version: meta.latest };
   }
 
-  async abort(): Promise<void> {
+  async abort(by: Person): Promise<void> {
+    if (!this.isInChat(by.uid)) throw new Error("You are no longer in this chat.");
     await this.harness.abort();
   }
 
@@ -213,8 +291,9 @@ export class ChatAgent extends DurableObject<Env> {
     }
 
     // A page calls as its author. For a server that signs in each user, that would show the author's data to anyone with the link.
-    if (this.hub.server(server)?.auth === "oauth" && viewer !== this.uid) {
-      return fail({ code: "not_granted", server, message: `${server} signs in each user, and this page calls as its author, so only the author can load it.` });
+    // People in the chat already see that data in the conversation, so they may load it too.
+    if (this.hub.server(server)?.auth === "oauth" && !this.isInChat(viewer)) {
+      return fail({ code: "not_granted", server, message: `${server} signs in each user, and this page calls as its author, so only people in its chat can load it.` });
     }
 
     try {
@@ -255,17 +334,25 @@ export class ChatAgent extends DurableObject<Env> {
   }
 }
 
-/** What the chat's sockets need from the chat: its event stream, and a way to prompt and stop it. */
+/** What the chat's sockets need from the chat. */
 interface ChatSession {
-  events(): Promise<AgentEventStream>;
-  prompt(text: string): Promise<void>;
-  abort(): Promise<void>;
+  readonly uid: string;
+  readonly members: ChatMembers;
+  readonly harness: PiHarness;
+  isInChat(uid: string): boolean;
+  people(): ChatPeople;
+  prompt(text: string, author: Person): Promise<void>;
+  abort(by: Person): Promise<void>;
 }
 
+/** A chat socket's hibernation attachment: whose socket it is. Sockets from before shared chats carry no person, and were all the owner's. */
+type SocketAttachment = { owner: typeof OWNER; person?: Person };
+
 /**
- * The chat's browser connections. Each socket gets its own pi event stream:
- * a snapshot of the conversation first, then one batch per commit. Sockets
- * hibernate; after the object restarts, streams are reattached in onStart.
+ * The chat's browser connections, one or more per person in the chat. Each
+ * socket gets its own pi event stream: a snapshot of the conversation first,
+ * then one batch per commit. Sockets hibernate; after the object restarts,
+ * streams are reattached in onStart.
  */
 class ChatSockets extends LifecycleCapability implements DurableObjectCapability {
   readonly #chat: ChatSession;
@@ -279,23 +366,51 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   onStart(): void {
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
       // A socket accepted before chat sockets carried an attachment has only the tag: claim it, or its messages go unhandled.
-      if (!this.#owns(ws)) ws.serializeAttachment(OWNER);
+      if (!this.#owns(ws)) ws.serializeAttachment({ owner: OWNER } satisfies SocketAttachment);
       void this.#attach(ws);
     }
   }
 
+  /** The Worker has verified who is connecting and put them in PERSON_HEADER; the chat decides whether they are in it. */
   onWebSocketUpgrade({ request }: { request: Request }): Response | undefined {
     if (!new URL(request.url).pathname.endsWith("/ws")) return undefined;
+    const person = JSON.parse(request.headers.get(PERSON_HEADER) ?? "null") as Person | null;
+    if (!person || !this.#chat.isInChat(person.uid)) return new Response("Not in this chat", { status: 403 });
+    // Keep the name each person last signed in with: the others see it, and the model reads it.
+    if (person.uid === this.#chat.uid) this.#chat.members.setOwnerName(person);
+    else this.#chat.members.rename(person);
     const pair = new WebSocketPair();
     this.lifecycle.sockets.accept(pair[1], [SOCKET_TAG]);
-    pair[1].serializeAttachment(OWNER);
+    pair[1].serializeAttachment({ owner: OWNER, person } satisfies SocketAttachment);
     void this.#attach(pair[1]);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   /** Lifecycle leaves ownership to each capability: a chat socket carries this capability's attachment, which survives hibernation. */
   #owns(ws: WebSocket): boolean {
-    return (ws.deserializeAttachment() as typeof OWNER | null)?.owner === OWNER.owner;
+    return (ws.deserializeAttachment() as SocketAttachment | null)?.owner === OWNER;
+  }
+
+  #person(ws: WebSocket): Person {
+    return (ws.deserializeAttachment() as SocketAttachment).person ?? { uid: this.#chat.uid, name: this.#chat.members.ownerName(this.#chat.uid) };
+  }
+
+  /** Tell every open socket. */
+  broadcast(message: ChatServerMessage): void {
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) if (this.#owns(ws)) send(ws, message);
+  }
+
+  /** Close the sockets of someone no longer in the chat. The app sees the close code and stops reconnecting. */
+  disconnect(uid: string): void {
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
+      if (!this.#owns(ws) || this.#person(ws).uid !== uid) continue;
+      void this.#detach(ws);
+      try {
+        ws.close(SOCKET_NOT_A_MEMBER, "Removed from the chat");
+      } catch {
+        // Already closed.
+      }
+    }
   }
 
   async onWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<boolean> {
@@ -307,9 +422,10 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     } catch {
       return true;
     }
+    const person = this.#person(ws);
     try {
-      if (message.type === "prompt" && message.text.trim()) await this.#chat.prompt(message.text.slice(0, 20_000));
-      else if (message.type === "abort") await this.#chat.abort();
+      if (message.type === "prompt" && message.text.trim()) await this.#chat.prompt(message.text.slice(0, 20_000), person);
+      else if (message.type === "abort") await this.#chat.abort(person);
     } catch (error) {
       send(ws, { type: "error", message: errorMessage(error) });
     }
@@ -330,7 +446,8 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     let stream = this.#streams.get(ws);
     if (stream) return stream;
     stream = (async () => {
-      const events = await this.#chat.events();
+      const events = await this.#chat.harness.session().events();
+      send(ws, { type: "people", people: this.#chat.people() });
       send(ws, { type: "events", events: [events.snapshot] });
       events.start(async (batch) => {
         if (!send(ws, { type: "events", events: [...batch] })) await this.#detach(ws);

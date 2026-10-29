@@ -1,16 +1,21 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { memo, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { PUBLISH_TOOL, type PublishedDetails } from "../../shared/protocol.ts";
+import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
+import { SharePanel } from "./SharePanel.tsx";
 import { useChat, type RunningTool } from "./useChat.ts";
 import { Linkified } from "./Linkified.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 interface Props {
   chatId: string;
+  /** The signed-in user: their own messages show without a name. */
+  uid: string;
   /** Called with the newest artifact this chat published, on load and on every publish. */
   onArtifact: (artifact: PublishedDetails) => void;
   onActivity: () => void;
+  /** Called once the user left this chat. */
+  onLeft: () => void;
 }
 
 function published(entry: EntryRecord): PublishedDetails | undefined {
@@ -21,9 +26,10 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
-export function ChatView({ chatId, onArtifact, onActivity }: Props) {
-  const { state, connected, prompt, abort } = useChat(chatId);
+export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
+  const { state, connected, people, prompt, abort } = useChat(chatId);
   const [draft, setDraft] = useState("");
+  const [sharing, setSharing] = useState(false);
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const lastArtifact = useRef<string>("");
@@ -73,8 +79,20 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
     submit();
   };
 
+  const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid) : [];
   return (
     <section className="chat">
+      <header className="chat-header">
+        <span className="chat-people" title={others.map((person) => person.name).join(", ")}>
+          {others.length > 0 && `With ${others.map((person) => person.name).join(", ")}`}
+        </span>
+        {people && (
+          <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
+            {people.owner.uid === uid ? "Share" : "People"}
+          </button>
+        )}
+      </header>
+      {sharing && <SharePanel chatId={chatId} uid={uid} people={people} onLeft={onLeft} />}
       <div className="messages" ref={list} onScroll={onScroll}>
         {state.entries.length === 0 && !state.busy && (
           <div className="empty-chat">
@@ -83,7 +101,7 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
           </div>
         )}
         {state.entries.map((entry) => (
-          <Entry key={entry.id} entry={entry} onOpen={onArtifact} />
+          <Entry key={entry.id} entry={entry} uid={uid} onOpen={onArtifact} />
         ))}
         {state.partial && <Assistant message={state.partial} />}
         {state.tools.map((tool) => (
@@ -100,7 +118,7 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
-          placeholder={connected ? "Describe a dashboard…" : "Connecting…"}
+          placeholder={connected ? (others.length ? "Message everyone and the agent…" : "Describe a dashboard…") : "Connecting…"}
           rows={2}
         />
         {state.busy ? (
@@ -118,9 +136,14 @@ export function ChatView({ chatId, onArtifact, onActivity }: Props) {
 }
 
 // Entries never change once committed, so streaming a new reply re-renders only the reply, not the whole history.
-const Entry = memo(function Entry({ entry, onOpen }: { entry: EntryRecord; onOpen: (artifact: PublishedDetails) => void }) {
+const Entry = memo(function Entry({ entry, uid, onOpen }: { entry: EntryRecord; uid: string; onOpen: (artifact: PublishedDetails) => void }) {
   const message = entry.model?.[0];
-  if (entry.kind === "pi.user" && message?.role === "user") return <User message={message} />;
+  if (entry.kind === "pi.user" && message?.role === "user") return <User text={userText(message)} />;
+  if (entry.kind === CHAT_MESSAGE_KIND) {
+    const data = entry.data as Partial<ChatMessageData> | undefined;
+    const text = typeof data?.text === "string" ? data.text : message?.role === "user" ? userText(message) : "";
+    return <User text={text} author={data?.uid && data.uid !== uid ? data.name : undefined} />;
+  }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
     const artifact = published(entry);
@@ -145,9 +168,19 @@ function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {
   return typeof content === "string" ? [] : content.filter((b): b is T => b != null);
 }
 
-function User({ message }: { message: UserMessage }) {
-  const text = typeof message.content === "string" ? message.content : blocks(message.content).map((b) => (b.type === "text" ? b.text : "")).join("");
-  return <div className="bubble user">{text}</div>;
+function userText(message: UserMessage): string {
+  return typeof message.content === "string" ? message.content : blocks(message.content).map((b) => (b.type === "text" ? b.text : "")).join("");
+}
+
+/** A person's message: yours on the right; someone else's on the left, under their name. */
+function User({ text, author }: { text: string; author?: string }) {
+  if (author === undefined) return <div className="bubble user">{text}</div>;
+  return (
+    <div className="other">
+      <small>{author}</small>
+      <div className="bubble peer">{text}</div>
+    </div>
+  );
 }
 
 function Assistant({ message }: { message: AssistantMessage }) {

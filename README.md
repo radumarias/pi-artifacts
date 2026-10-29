@@ -202,12 +202,35 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   built-in added later can take one of yours: then the agent uses yours while it is on, and the list says so.
 - The tool list is guidance shown on activation, not a sandbox: every tool of the chat stays callable.
 
+## Shared chats
+
+A chat's owner can invite other people to build artifacts with them in the same chat. Pi Durable is multiplayer for
+people: many people share one conversation with one agent, and their messages queue in its inbox while it works.
+
+- **Invite:** **Share** in the chat header makes a single-use link, `/join/<token>`, valid for 7 days. The token names
+  the chat and carries a random secret; the chat keeps only the secret's SHA-256 hash, so the link is shown once.
+  Whoever opens it, signed in, clicks **Join** and finds the chat in their sidebar. The owner sees who is in the chat
+  and the open links, removes people and revokes links; a member can leave. Only the owner invites.
+- **One agent, acting as the owner:** a shared chat stays the owner's `ChatAgent`. Whoever writes, the agent works
+  with the owner's MCP connections and sign-ins, files, sandbox and skills, and what it publishes belongs to the
+  owner. The Share panel says so before the owner makes a link: members can ask it to read or change anything those
+  reach.
+- **Who wrote what:** each message is placed as a `chat.message` entry naming its author. Once the chat has members,
+  the model reads it as `name: text`, and a system-prompt section says who is in the chat.
+- **Access:** the Worker finds the chat through the user's index (their own chats and the ones shared with them), and
+  the chat object checks membership again on every socket and prompt, and on page calls to servers that sign in each
+  user. Removing someone closes their sockets at once (close code 4403), and the app stops reconnecting.
+- **Pages:** people in the chat may load its pages' data from servers that sign in each user, since they see that
+  data in the conversation anyway. A page's write tools stay the author's only.
+- Routes in `worker/chat-routes.ts`; members and invites in `worker/members.ts`, in the chat object's SQLite.
+
 ## Layout
 
 | Path | What |
 |---|---|
 | `worker/index.ts` | Routes: identity, chats, chat WebSocket, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files |
-| `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall` |
+| `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall`, members |
+| `worker/chat-routes.ts`, `worker/members.ts` | Shared chats: the chat socket, people, invite links and their routes |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
 | `worker/skills/`, `worker/skills-routes.ts` | Built-in skills, the SKILL.md format, and the `/api/skills` routes |
@@ -280,6 +303,8 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
 - **Artifacts** are shared by link with anyone Access lets in, and are not encrypted per user. Only their owner's chat
   can publish new versions, and only their owner can clone their repo. See
   [Versions in Git](#versions-in-git).
+- **Shared chats** open only to their owner and the people the owner invited, and everyone in one works through the
+  owner's agent and connections. See [Shared chats](#shared-chats).
 
 ### Versions in Git
 
@@ -380,6 +405,7 @@ before reading R2. Changing the runtime or the CSP changes the fingerprint, so a
 - **Next:**
   - a screenshot self-check in the sandbox before publishing
   - live data from sign-in servers for every viewer, each with their own sign-in
+  - in shared chats, members bringing their own files and sign-ins to the agent
   - WebSocket push for sources that stream
   - a separate preview domain
 
