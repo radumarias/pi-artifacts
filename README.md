@@ -228,9 +228,10 @@ Each chat picks its model and effort above the message box. The picker (`src/cha
 
 The effort picker shows only the levels the model takes, and nothing for a model that does not reason. The choice is
 the chat's own (pi's agent state, so a change reaches every open view of the chat) and applies from the next model
-request. The latest pick is also the user's default for new chats (kept in `UserDirectory`); a chat that already has
-messages keeps its model until someone changes it. Before a user has picked anything, chats start on `MODEL` at
-`THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at high effort).
+request. The latest pick is also the user's default for new chats (kept in `UserDirectory`): a chat takes it when it
+is first opened and keeps its model from then on, even before its first message, until someone changes it. Before a
+user has picked anything, chats start on `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at
+high effort).
 
 ## Layout
 

@@ -44,8 +44,8 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
   const current = models.find((entry) => entry.id === model);
   return (
     <div className="model-picker">
-      {/* Coming from a listed model that does not reason, ask for no effort: the chat picks the new model's usual one. */}
-      <select aria-label="Model" value={model} disabled={disabled} onChange={(e) => onChange(e.target.value, current && !current.efforts.length ? undefined : thinkingLevel)}>
+      {/* Coming from a model that does not reason (or an unlisted one at "off"), ask for no effort: the chat picks the new model's usual one. */}
+      <select aria-label="Model" value={model} disabled={disabled} onChange={(e) => onChange(e.target.value, (current ? !current.efforts.length : thinkingLevel === "off") ? undefined : thinkingLevel)}>
         {/* A deployment's default can be a model the picker does not list. */}
         {!current && <option value={model}>{model}</option>}
         {groups.map((group) => (

@@ -151,13 +151,13 @@ export function useChat(chatId: string) {
     };
   }, [chatId]);
 
-  const send = (message: ChatClientMessage) => {
+  const send = useCallback((message: ChatClientMessage) => {
     if (socket.current?.readyState !== WebSocket.OPEN) return false;
     socket.current.send(JSON.stringify(message));
     return true;
-  };
+  }, []);
   // Stable, so the memoized model picker skips the re-render on every streamed token.
-  const setModel = useCallback((model: string, thinkingLevel?: ModelThinkingLevel) => send({ type: "model", model, thinkingLevel }), []);
+  const setModel = useCallback((model: string, thinkingLevel?: ModelThinkingLevel) => send({ type: "model", model, thinkingLevel }), [send]);
 
   return {
     state,

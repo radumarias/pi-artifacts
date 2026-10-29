@@ -70,12 +70,13 @@ export function chatModels(models: readonly Model<Api>[]): ModelEntry[] {
 }
 
 /**
- * The first version number in a model id: anthropic/claude-opus-5.5 → 5.5, openai/gpt-4o → 4. A minor version has one
- * or two digits, so a dated snapshot (gpt-4-0613, gpt-5-2025-08-07) is not read as 4.0613 or 5.2025.
+ * The first version number in a model id, as major + minor / 100: anthropic/claude-opus-5.5 → 5.05, openai/gpt-4o → 4,
+ * so 4.10 sorts after 4.9. A minor version has one or two digits, so a dated snapshot (gpt-4-0613, gpt-5-2025-08-07)
+ * is not read as a minor version.
  */
 function version(id: string): number {
-  const match = id.slice(id.indexOf("/") + 1).match(/\d+(?:[.-]\d{1,2}(?!\d))?/);
-  return match ? Number(match[0].replace("-", ".")) : 0;
+  const match = id.slice(id.indexOf("/") + 1).match(/(\d+)(?:[.-](\d{1,2})(?!\d))?/);
+  return match ? Number(match[1]) + Number(match[2] ?? 0) / 100 : 0;
 }
 
 let catalog: Map<string, ModelEntry> | undefined;
@@ -97,16 +98,20 @@ export function modelCatalog(): ModelInfo[] {
 export function checkModelChoice(input: { model?: unknown; thinkingLevel?: unknown }): ModelChoice | null {
   const entry = entries().get(input.model as string);
   if (!entry) return null;
-  const level = input.thinkingLevel;
-  const wanted = typeof level === "string" && Object.hasOwn(EFFORT_LABELS, level) ? (level as ModelThinkingLevel) : "medium";
+  const wanted = thinkingLevelOf(input.thinkingLevel) ?? "medium";
   return { model: entry.info.id, thinkingLevel: entry.info.efforts.length ? clampThinkingLevel(entry.metadata, wanted) : "off" };
+}
+
+/** `level` when it is one of pi's thinking levels. */
+function thinkingLevelOf(level: unknown): ModelThinkingLevel | undefined {
+  return typeof level === "string" && Object.hasOwn(EFFORT_LABELS, level) ? (level as ModelThinkingLevel) : undefined;
 }
 
 /**
  * The deployment's default (`MODEL` at `THINKING_LEVEL`), checked like a pick when the picker lists the model, so a
  * level the model rejects (Claude 5.5 takes no "off") moves to one it takes. A model the picker does not list is used
- * as configured.
+ * as configured, at medium when `THINKING_LEVEL` is not one of pi's levels.
  */
 export function defaultModelChoice(model: string, thinkingLevel: string): ModelChoice {
-  return checkModelChoice({ model, thinkingLevel }) ?? { model, thinkingLevel: thinkingLevel as ModelThinkingLevel };
+  return checkModelChoice({ model, thinkingLevel }) ?? { model, thinkingLevel: thinkingLevelOf(thinkingLevel) ?? "medium" };
 }
