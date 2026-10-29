@@ -1,0 +1,67 @@
+// Skills: named ways of working the agent picks for itself. Each one says
+// when to use it, how to work (instructions and guardrails) and which tools
+// it works with. Only names and descriptions are in the system prompt; the
+// agent activates a skill to read the rest.
+
+/** Lowercase words joined by hyphens, as in the Agent Skills format. */
+export const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const MAX_SKILL_NAME = 64;
+export const MAX_SKILL_DESCRIPTION = 1_024;
+export const MAX_SKILL_INSTRUCTIONS = 20_000;
+export const MAX_SKILL_TOOLS = 30;
+/** Agent tool names: what the model calls, e.g. run_python or a server's slug and tool. */
+export const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+/** Per user, not counting the built-in ones. */
+export const MAX_USER_SKILLS = 50;
+
+/** What a skill is made of, whoever wrote it. */
+export interface SkillInput {
+  name: string;
+  /** When to use it: the only part the agent sees before activating it. */
+  description: string;
+  /** How to work: steps, rules and guardrails, in Markdown. */
+  instructions: string;
+  /** The agent tools it works with. Shown on activation as guidance; not a sandbox. */
+  tools: string[];
+}
+
+/**
+ * Where a skill comes from: shipped with the app, written by the user,
+ * or proposed by the agent in a chat (saved off until the user turns it on).
+ */
+export type SkillOrigin = "builtin" | "user" | "agent";
+
+/** A skill as GET /api/skills lists it. */
+export interface SkillInfo extends SkillInput {
+  origin: SkillOrigin;
+  enabled: boolean;
+  /** Epoch ms; 0 for built-in skills. */
+  updatedAt: number;
+}
+
+/** A skill's fields trimmed, with the tool list deduplicated. Throws with what to fix. */
+export function checkSkill(input: unknown): SkillInput {
+  const value = (input ?? {}) as Partial<Record<keyof SkillInput, unknown>>;
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const description = typeof value.description === "string" ? value.description.trim().replace(/\s+/g, " ") : "";
+  const instructions = typeof value.instructions === "string" ? value.instructions.trim() : "";
+  const tools = Array.isArray(value.tools) ? value.tools : value.tools === undefined ? [] : null;
+  const problems: string[] = [];
+  if (!SKILL_NAME_PATTERN.test(name) || name.length > MAX_SKILL_NAME) {
+    problems.push(`The name must be up to ${MAX_SKILL_NAME} lowercase letters, digits and single hyphens, e.g. "weekly-report".`);
+  }
+  if (!description) problems.push("Say when to use the skill in its description.");
+  else if (description.length > MAX_SKILL_DESCRIPTION) problems.push(`The description is over ${MAX_SKILL_DESCRIPTION} characters.`);
+  if (!instructions) problems.push("Give the skill instructions.");
+  else if (instructions.length > MAX_SKILL_INSTRUCTIONS) problems.push(`The instructions are over ${MAX_SKILL_INSTRUCTIONS} characters.`);
+  if (tools === null || tools.some((tool) => typeof tool !== "string" || !TOOL_NAME_PATTERN.test(tool.trim()))) {
+    problems.push("Tools must be a list of tool names (letters, digits, _ and -).");
+  } else if (new Set(tools).size > MAX_SKILL_TOOLS) problems.push(`A skill can name up to ${MAX_SKILL_TOOLS} tools.`);
+  if (problems.length) throw new SkillError(problems.join(" "));
+  return { name, description, instructions, tools: [...new Set((tools as string[]).map((tool) => tool.trim()))] };
+}
+
+/** A skill that cannot be saved as given; the message says why. */
+export class SkillError extends Error {
+  override name = "SkillError";
+}

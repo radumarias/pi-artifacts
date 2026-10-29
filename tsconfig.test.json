@@ -35,6 +35,8 @@
     "worker/storage/memory-fs.ts",
     "worker/storage/keys.ts",
     "worker/storage/user-files.ts",
-    "worker/auth/access.ts"
+    "worker/auth/access.ts",
+    "worker/agent/skills.ts",
+    "worker/raw.d.ts"
   ]
 }

@@ -1,13 +1,14 @@
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, type AgentEventStream } from "@earendil-works/pi-durable";
-import { PiHarness } from "agents/harness/pi";
+import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
 import { isOwnedBy, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { promptExtension } from "./agent/prompt.ts";
-import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
+import { skillSource, skillsFingerprint } from "./agent/skills.ts";
+import { artifactExtension, filesExtension, mcpExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput, type ServerCatalog } from "./agent/tools.ts";
 import { Storage, type UserFiles } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
@@ -64,6 +65,9 @@ export class ChatAgent extends DurableObject<Env> {
   /** The servers whose tools the agent has now, so a refresh reinstalls only on a change. */
   #mcpInstalled = "";
   #files: Promise<UserFiles> | undefined;
+  #skillsRefresh: Promise<void> | undefined;
+  /** The enabled skills the agent has now, so a refresh reinstalls only on a change. */
+  #skillsInstalled: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -80,10 +84,12 @@ export class ChatAgent extends DurableObject<Env> {
           throw error;
         })),
       onPublished: (artifact) => exports.UserDirectory.getByName(this.uid).recordArtifact({ ...artifact, chatId: this.chatId }),
+      proposeSkill: (skill) => exports.UserDirectory.getByName(this.uid).saveSkill(skill, "agent", false),
     });
     this.registry.install(promptExtension);
     this.registry.install(artifactExtension(scope));
     this.registry.install(filesExtension(scope));
+    this.registry.install(skillsExtension(scope));
     if (env.SANDBOX_ENABLED === "true") this.registry.install(sandboxExtension(scope));
   }
 
@@ -98,6 +104,25 @@ export class ChatAgent extends DurableObject<Env> {
   /** Called by Lifecycle once capabilities have started, including after an eviction. */
   onStart(): void {
     void this.refreshMcpTools();
+    void this.refreshSkills();
+  }
+
+  /**
+   * Install the user's enabled skills, built-in and their own. Runs before every
+   * prompt, so a skill added, changed or turned off in any chat applies from the
+   * next message on.
+   */
+  refreshSkills(): Promise<void> {
+    this.#skillsRefresh ??= (async () => {
+      const list = await exports.UserDirectory.getByName(this.uid).listSkills();
+      const fingerprint = skillsFingerprint(list);
+      if (fingerprint === this.#skillsInstalled) return;
+      this.registry.install(await skills([skillSource(list)]));
+      this.#skillsInstalled = fingerprint;
+    })().finally(() => {
+      this.#skillsRefresh = undefined;
+    });
+    return this.#skillsRefresh;
   }
 
   /**
@@ -141,7 +166,7 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   async prompt(text: string): Promise<void> {
-    await this.refreshMcpTools().catch(() => {});
+    await Promise.all([this.refreshMcpTools().catch(() => {}), this.refreshSkills().catch((error) => console.error("skills:", errorMessage(error)))]);
     await this.harness.submit(text);
     // touchChat only names a chat that is still called "New chat", so the first prompt names it.
     await exports.UserDirectory.getByName(this.uid).touchChat(this.chatId, text);

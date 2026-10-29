@@ -188,3 +188,30 @@ body.resizing iframe { pointer-events: none; }
   .sidebar { border-bottom: 1px solid var(--border); max-height: 40vh; }
   .workspace.with-preview .main { display: none; }
 }
+
+.skills { height: 100%; overflow-y: auto; padding: 24px 20px; max-width: 860px; }
+.skills-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+.skills-head h2 { margin: 0 0 4px; }
+.skills-head p { margin: 0; color: var(--muted); max-width: 60ch; }
+.skills-actions { display: flex; gap: 6px; align-items: flex-start; }
+.skills-note { color: var(--muted); font-size: 13px; }
+.skill-form { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.skill-form label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+.skill-form label small { font-weight: 400; color: var(--muted); }
+.skill-form input:not([type=file]), .skill-form textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-weight: 400; }
+.skill-form textarea.code { font-family: ui-monospace, monospace; font-size: 13px; resize: vertical; }
+.skill-form-actions { display: flex; gap: 6px; }
+.skill-list { list-style: none; padding: 0; margin: 16px 0; display: flex; flex-direction: column; gap: 8px; }
+.skill { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.skill.off { opacity: 0.75; }
+.skill p { margin: 6px 0 0; }
+.skill-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.skill-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; overflow-wrap: anywhere; }
+.skill-buttons { margin-left: auto; display: flex; gap: 6px; }
+.skill-buttons > * { font-size: 13px; padding: 3px 8px; }
+.pill.review { color: var(--accent); }
+.skill details { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.skill summary { cursor: pointer; }
+.skill pre { white-space: pre-wrap; background: var(--surface-2); padding: 8px 10px; border-radius: 6px; color: var(--text); max-height: 320px; overflow: auto; }
+.form-error { color: var(--error); }
+

@@ -1,5 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ArtifactSummary, ChatSummary } from "../shared/protocol.ts";
+import { checkSkill, MAX_USER_SKILLS, SkillError, type SkillInfo, type SkillInput } from "../shared/skills.ts";
+import { BUILTIN_SKILLS, isBuiltinSkill } from "./agent/skills.ts";
 import { applyAuthChange, type McpAuthChange, type McpAuthRecord, type McpAuthStore } from "./mcp/oauth.ts";
 import { mcpServers } from "./mcp/servers.ts";
 
@@ -9,7 +11,20 @@ export function mcpAuthStore(uid: string, server: string): McpAuthStore {
   return { get: () => directory.mcpAuth(server), update: (change) => directory.updateMcpAuth(server, change) };
 }
 
-/** One per user: the index of their chats and artifacts. The chats themselves live in ChatAgent objects. */
+type SkillRow = {
+  name: string;
+  description: string;
+  instructions: string;
+  tools: string;
+  origin: "user" | "agent";
+  enabled: number;
+  updated_at: number;
+};
+
+/** A failed skill change, with what to fix: RPC keeps the message but not the error's class. */
+export type SkillResult = SkillInfo | { error: string };
+
+/** One per user: the index of their chats and artifacts, and their skills. The chats themselves live in ChatAgent objects. */
 export class UserDirectory extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -17,6 +32,8 @@ export class UserDirectory extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, title TEXT NOT NULL, chat_id TEXT NOT NULL, latest INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS mcp_auth (server TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS skills (name TEXT PRIMARY KEY, description TEXT NOT NULL, instructions TEXT NOT NULL, tools TEXT NOT NULL, origin TEXT NOT NULL, enabled INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS builtin_skills_off (name TEXT PRIMARY KEY);
     `);
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = mcpServers(env).map((server) => server.name);
@@ -81,5 +98,81 @@ export class UserDirectory extends DurableObject<Env> {
       artifact.latest,
       artifact.updatedAt,
     );
+  }
+
+  /** The built-in skills, then the user's own, each with whether it is on. */
+  listSkills(): SkillInfo[] {
+    const off = new Set(this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM builtin_skills_off").toArray().map((row) => row.name));
+    const builtin = BUILTIN_SKILLS.map((skill): SkillInfo => ({ ...skill, origin: "builtin", enabled: !off.has(skill.name), updatedAt: 0 }));
+    const own = this.ctx.storage.sql
+      .exec<SkillRow>("SELECT * FROM skills ORDER BY name")
+      .toArray()
+      .map((row): SkillInfo => ({
+        name: row.name,
+        description: row.description,
+        instructions: row.instructions,
+        tools: JSON.parse(row.tools) as string[],
+        origin: row.origin,
+        enabled: row.enabled === 1,
+        updatedAt: row.updated_at,
+      }));
+    return [...builtin, ...own];
+  }
+
+  /**
+   * Save one of the user's skills, replacing any of theirs with that name. A skill
+   * the agent proposes is always saved off, and may replace only another proposal
+   * that is still off: text from a tool result or a file must not become standing
+   * instructions in every chat without the user turning it on.
+   */
+  saveSkill(input: SkillInput, origin: "user" | "agent", enabled: boolean): SkillResult {
+    let skill: SkillInput;
+    try {
+      skill = checkSkill(input);
+    } catch (error) {
+      if (error instanceof SkillError) return { error: error.message };
+      throw error;
+    }
+    if (isBuiltinSkill(skill.name)) return { error: `"${skill.name}" is a built-in skill; pick another name.` };
+    const existing = this.ctx.storage.sql.exec<SkillRow>("SELECT * FROM skills WHERE name = ?", skill.name).toArray()[0];
+    if (origin === "agent" && existing && (existing.origin === "user" || existing.enabled === 1)) {
+      return { error: `The user already has a skill named "${skill.name}"; propose it under another name.` };
+    }
+    if (!existing && this.ctx.storage.sql.exec("SELECT 1 FROM skills").toArray().length >= MAX_USER_SKILLS) {
+      return { error: `You have ${MAX_USER_SKILLS} skills, the most there can be; delete one first.` };
+    }
+    const on = origin === "user" && enabled;
+    const now = Date.now();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO skills (name, description, instructions, tools, origin, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET description = excluded.description, instructions = excluded.instructions, tools = excluded.tools,
+         origin = excluded.origin, enabled = excluded.enabled, updated_at = excluded.updated_at`,
+      skill.name,
+      skill.description,
+      skill.instructions,
+      JSON.stringify(skill.tools),
+      origin,
+      on ? 1 : 0,
+      now,
+    );
+    return { ...skill, origin, enabled: on, updatedAt: now };
+  }
+
+  /** Turn a skill on or off; built-in ones included. */
+  setSkillEnabled(name: string, enabled: boolean): SkillResult {
+    if (isBuiltinSkill(name)) {
+      if (enabled) this.ctx.storage.sql.exec("DELETE FROM builtin_skills_off WHERE name = ?", name);
+      else this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name);
+    } else {
+      // Turning a proposal on makes it the user's own: the agent can no longer replace it.
+      this.ctx.storage.sql.exec("UPDATE skills SET enabled = ?, origin = CASE WHEN ? = 1 THEN 'user' ELSE origin END, updated_at = ? WHERE name = ?", enabled ? 1 : 0, enabled ? 1 : 0, Date.now(), name);
+    }
+    return this.listSkills().find((skill) => skill.name === name) ?? { error: `No skill named "${name}".` };
+  }
+
+  deleteSkill(name: string): SkillResult | null {
+    if (isBuiltinSkill(name)) return { error: `"${name}" is a built-in skill; turn it off instead.` };
+    const deleted = this.ctx.storage.sql.exec("DELETE FROM skills WHERE name = ?", name).rowsWritten;
+    return deleted ? null : { error: `No skill named "${name}".` };
   }
 }
