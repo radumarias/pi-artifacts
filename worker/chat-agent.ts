@@ -104,7 +104,7 @@ export class ChatAgent extends DurableObject<Env> {
   /** Called by Lifecycle once capabilities have started, including after an eviction. */
   onStart(): void {
     void this.refreshMcpTools();
-    void this.refreshSkills();
+    this.refreshSkills().catch((error) => console.error("skills:", errorMessage(error)));
   }
 
   /**

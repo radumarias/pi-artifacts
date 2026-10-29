@@ -56,7 +56,8 @@ export const api = {
   skills: () => request<SkillInfo[]>("/api/skills"),
   /** Save one of the user's skills, from its fields or from a SKILL.md file's text. */
   saveSkill: (skill: (SkillInput | { markdown: string }) & { enabled?: boolean }) => request<SkillInfo>("/api/skills", post(skill)),
-  setSkillEnabled: (name: string, enabled: boolean) => request<SkillInfo>(`/api/skills/${name}`, send("PATCH", { enabled })),
+  /** `updatedAt` is the version the user read; the server refuses to turn on a skill that changed since. */
+  setSkillEnabled: (name: string, enabled: boolean, updatedAt?: number) => request<SkillInfo>(`/api/skills/${name}`, send("PATCH", { enabled, updatedAt })),
   deleteSkill: (name: string) => request<object>(`/api/skills/${name}`, { method: "DELETE" }),
   skillMarkdownUrl: (name: string) => `/api/skills/${name}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),

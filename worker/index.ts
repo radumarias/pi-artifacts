@@ -129,7 +129,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());
 
-  const skills = await skillsRoute(request, uid);
+  const skills = await skillsRoute(request, directory);
   if (skills) return skills;
 
   // A chat's Durable Object is named after the verified uid, so a user can only ever reach their own chats.

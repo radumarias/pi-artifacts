@@ -20,7 +20,7 @@ const EMPTY: Draft = { name: "", description: "", instructions: "", tools: "" };
  * SKILL.md, edited and deleted. A skill the agent proposed waits here, off,
  * until the user reviews it and turns it on.
  */
-export function SkillsView({ skills, reload }: { skills: SkillInfo[] | null; reload: () => void }) {
+export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] | null; loadError: string | null; reload: () => void }) {
   const [error, setError] = useState<string | null>(null);
   // The skill being edited: a draft, and the name it had (undefined for a new one).
   const [editing, setEditing] = useState<{ draft: Draft; existing?: string } | null>(null);
@@ -30,11 +30,13 @@ export function SkillsView({ skills, reload }: { skills: SkillInfo[] | null; rel
     setError(null);
     try {
       await action();
-      reload();
       return true;
     } catch (e) {
       setError(errorMessage(e));
       return false;
+    } finally {
+      // Also after a refusal, which may come from a list that is out of date.
+      reload();
     }
   };
 
@@ -42,6 +44,11 @@ export function SkillsView({ skills, reload }: { skills: SkillInfo[] | null; rel
     event.preventDefault();
     if (!editing) return;
     const { draft, existing } = editing;
+    // Saving under a name that is taken replaces that skill: only from its Edit button.
+    if (existing === undefined && skills?.some((s) => s.name === draft.name.trim())) {
+      setError(`You already have a skill named "${draft.name.trim()}"; edit that one or pick another name.`);
+      return;
+    }
     const enabled = skills?.find((s) => s.name === existing)?.enabled ?? true;
     const tools = splitTools(draft.tools);
     if (await run(() => api.saveSkill({ name: draft.name, description: draft.description, instructions: draft.instructions, tools, enabled }))) setEditing(null);
@@ -141,14 +148,23 @@ export function SkillsView({ skills, reload }: { skills: SkillInfo[] | null; rel
       )}
 
       {skills === null ? (
-        <p className="skills-note">Loading…</p>
+        loadError ? (
+          <p className="form-error">
+            Could not load your skills: {loadError}{" "}
+            <button type="button" onClick={reload}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <p className="skills-note">Loading…</p>
+        )
       ) : (
         <ul className="skill-list">
           {skills.map((skill) => (
             <li key={skill.name} className={skill.enabled ? "skill" : "skill off"}>
               <div className="skill-row">
                 <label className="skill-toggle" title={skill.enabled ? "Turn off" : "Turn on"}>
-                  <input type="checkbox" checked={skill.enabled} onChange={(e) => run(() => api.setSkillEnabled(skill.name, e.target.checked))} />
+                  <input type="checkbox" checked={skill.enabled} onChange={(e) => run(() => api.setSkillEnabled(skill.name, e.target.checked, skill.updatedAt || undefined))} />
                   <strong>{skill.name}</strong>
                 </label>
                 <span className={skill.origin === "agent" ? "pill review" : "pill"}>{ORIGIN_LABEL[skill.origin]}</span>
