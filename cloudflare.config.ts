@@ -58,6 +58,9 @@ export default defineConfig({
       // what a server offers from the server, and you name servers and tools in chat. "oauth": each user signs in, from
       // a link the agent gives. A Cloudflare MCP portal is one entry for every server behind it.
       MCP_SERVERS: bindings.json(mcpServerList()),
+      // Live calls from published pages: 120 a minute per viewer and page, counted by Cloudflare across the Worker's
+      // isolates. The namespace is any number unique within the account.
+      PAGE_CALLS: bindings.rateLimit({ namespace: "4201", simple: { limit: 120, period: 60 } }),
       // Workers AI binding. Pi's createAI() routes Claude through AI Gateway with it.
       AI: bindings.ai({}),
       // Each user's files (users/<uid>/files/…), and a read cache of artifact versions (artifacts/<id>/…).

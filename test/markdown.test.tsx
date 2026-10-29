@@ -22,4 +22,11 @@ describe("chat Markdown", () => {
     expect(out).toContain("click");
     expect(out).toContain("logo");
   });
+
+  it("links paths in this app, such as a sign-in link, but not protocol-relative URLs", () => {
+    expect(html("[Sign in](/api/mcp/sign-in/portal)")).toContain('<a href="/api/mcp/sign-in/portal" target="_blank" rel="noreferrer noopener">Sign in</a>');
+    const out = html("[x](//evil.example/a)");
+    expect(out).not.toContain("<a");
+    expect(out).toContain("x");
+  });
 });

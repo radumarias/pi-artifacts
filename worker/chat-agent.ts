@@ -1,7 +1,7 @@
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, type AgentEventStream } from "@earendil-works/pi-durable";
 import { PiHarness } from "agents/harness/pi";
-import { Lifecycle, type DurableObjectCapability } from "agents/lifecycle";
+import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
 import { isOwnedBy, manifestOf, type ArtifactManifest, type ChatClientMessage, type DeclaredTool, type ChatServerMessage, type McpError, type ProxyRequest, type ProxyResponse } from "../shared/protocol.ts";
@@ -17,7 +17,6 @@ import { mcpAuthStore } from "./users.ts";
 
 const SOCKET_TAG = "chat";
 const MAX_STALE_MS = 24 * 60 * 60_000;
-const CALLS_PER_MINUTE = 120;
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
 export function chatAgentName(uid: string, chatId: string): string {
@@ -51,12 +50,15 @@ export class ChatAgent extends DurableObject<Env> {
     // Current Claude models reject pi's "off" (thinking: disabled), so new chats think at medium effort.
     defaults: { model: this.ai(this.env.MODEL), thinkingLevel: "medium" },
   });
-  readonly sockets = new ChatSockets(this);
+  readonly sockets = new ChatSockets({
+    events: () => this.harness.session().events(),
+    prompt: (text) => this.prompt(text),
+    abort: () => this.abort(),
+  });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets);
 
   readonly scope: ChatScope;
   readonly #manifests = new Map<string, ArtifactManifest>();
-  readonly #rate = new Map<string, { windowStart: number; count: number }>();
   #mcpRefresh: Promise<void> | undefined;
   /** The servers whose tools the agent has now, so a refresh reinstalls only on a change. */
   #mcpInstalled = "";
@@ -132,19 +134,9 @@ export class ChatAgent extends DurableObject<Env> {
   async #connect(server: McpServerConfig) {
     if (server.auth !== "oauth") return connectStreamableHttp(server);
     const store = mcpAuthStore(this.uid, server.name);
-    const [{ tokens, redirectUrl }, signInUrl] = await Promise.all([store.get(), this.#signInUrl(server.name)]);
-    if (!tokens || !redirectUrl) throw signInRequired(server.name, signInUrl);
-    return connectStreamableHttp(server, new McpOAuthClient(store, server.name, { redirectUrl, interactive: false }), { signInUrl });
-  }
-
-  /** The app's address, from the chat's own WebSocket request: sign-in links in messages must be absolute. */
-  async rememberOrigin(origin: string): Promise<void> {
-    if (origin !== (await this.ctx.storage.get<string>("origin"))) await this.ctx.storage.put("origin", origin);
-  }
-
-  async #signInUrl(server: string): Promise<string | undefined> {
-    const origin = await this.ctx.storage.get<string>("origin");
-    return origin ? `${origin}/api/mcp/sign-in/${encodeURIComponent(server)}` : undefined;
+    const { tokens, redirectUrl } = await store.get();
+    if (!tokens || !redirectUrl) throw signInRequired(server.name);
+    return connectStreamableHttp(server, new McpOAuthClient(store, server.name, { redirectUrl, interactive: false }));
   }
 
   async prompt(text: string): Promise<void> {
@@ -181,9 +173,6 @@ export class ChatAgent extends DurableObject<Env> {
   async artifactCall({ artifactId, viewer, request }: ArtifactCall): Promise<ProxyResponse> {
     const fail = (error: McpError): ProxyResponse => ({ ok: false, error });
     const { server, tool, input, mode } = request;
-
-    const limited = this.#rateLimit(viewer);
-    if (limited) return fail({ code: "rate_limited", message: "Too many calls from this page.", retryAfterMs: limited });
 
     const manifest = await this.#manifest(artifactId, request.version);
     if (!manifest) return fail({ code: "not_in_manifest", server, message: "No such artifact version in this chat." });
@@ -233,21 +222,13 @@ export class ChatAgent extends DurableObject<Env> {
     }
     return manifest;
   }
+}
 
-  /** A fixed one-minute window per viewer. Returns the ms to wait when over the limit. */
-  #rateLimit(viewer: string): number | undefined {
-    const now = Date.now();
-    if (this.#rate.size > 1_000) {
-      for (const [key, window] of this.#rate) if (now - window.windowStart >= 60_000) this.#rate.delete(key);
-    }
-    const entry = this.#rate.get(viewer);
-    if (!entry || now - entry.windowStart >= 60_000) {
-      this.#rate.set(viewer, { windowStart: now, count: 1 });
-      return undefined;
-    }
-    entry.count++;
-    return entry.count > CALLS_PER_MINUTE ? entry.windowStart + 60_000 - now : undefined;
-  }
+/** What the chat's sockets need from the chat: its event stream, and a way to prompt and stop it. */
+interface ChatSession {
+  events(): Promise<AgentEventStream>;
+  prompt(text: string): Promise<void>;
+  abort(): Promise<void>;
 }
 
 /**
@@ -255,33 +236,38 @@ export class ChatAgent extends DurableObject<Env> {
  * a snapshot of the conversation first, then one batch per commit. Sockets
  * hibernate; after the object restarts, streams are reattached in onStart.
  */
-class ChatSockets implements DurableObjectCapability {
-  readonly #host: ChatAgent;
+class ChatSockets extends LifecycleCapability implements DurableObjectCapability {
+  readonly #chat: ChatSession;
   readonly #streams = new Map<WebSocket, Promise<AgentEventStream>>();
 
-  constructor(host: ChatAgent) {
-    this.#host = host;
-  }
-
-  get #ctx(): DurableObjectState {
-    return (this.#host as unknown as { ctx: DurableObjectState }).ctx;
+  constructor(chat: ChatSession) {
+    super("chat-sockets");
+    this.#chat = chat;
   }
 
   onStart(): void {
-    for (const ws of this.#ctx.getWebSockets(SOCKET_TAG)) void this.#attach(ws);
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) void this.#attach(ws);
   }
 
   onWebSocketUpgrade({ request }: { request: Request }): Response | undefined {
     if (!new URL(request.url).pathname.endsWith("/ws")) return undefined;
-    void this.#host.rememberOrigin(new URL(request.url).origin);
     const pair = new WebSocketPair();
-    this.#ctx.acceptWebSocket(pair[1], [SOCKET_TAG]);
+    this.lifecycle.sockets.accept(pair[1], [SOCKET_TAG]);
     void this.#attach(pair[1]);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
+  /**
+   * A chat socket has a stream from accept (or, after hibernation, from
+   * onStart). The platform's list covers sockets still open but not yet
+   * attached; a socket being closed may no longer be in it.
+   */
+  #owns(ws: WebSocket): boolean {
+    return this.#streams.has(ws) || this.lifecycle.sockets.get(SOCKET_TAG).includes(ws);
+  }
+
   async onWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<boolean> {
-    if (!this.#ctx.getTags(ws).includes(SOCKET_TAG)) return false;
+    if (!this.#owns(ws)) return false;
     void this.#attach(ws);
     let message: ChatClientMessage;
     try {
@@ -290,8 +276,8 @@ class ChatSockets implements DurableObjectCapability {
       return true;
     }
     try {
-      if (message.type === "prompt" && message.text.trim()) await this.#host.prompt(message.text.slice(0, 20_000));
-      else if (message.type === "abort") await this.#host.abort();
+      if (message.type === "prompt" && message.text.trim()) await this.#chat.prompt(message.text.slice(0, 20_000));
+      else if (message.type === "abort") await this.#chat.abort();
     } catch (error) {
       send(ws, { type: "error", message: errorMessage(error) });
     }
@@ -299,7 +285,7 @@ class ChatSockets implements DurableObjectCapability {
   }
 
   async onWebSocketClose(ws: WebSocket): Promise<boolean> {
-    if (!this.#ctx.getTags(ws).includes(SOCKET_TAG)) return false;
+    if (!this.#owns(ws)) return false;
     await this.#detach(ws);
     return true;
   }
@@ -312,7 +298,7 @@ class ChatSockets implements DurableObjectCapability {
     let stream = this.#streams.get(ws);
     if (stream) return stream;
     stream = (async () => {
-      const events = await this.#host.harness.session().events();
+      const events = await this.#chat.events();
       send(ws, { type: "events", events: [events.snapshot] });
       events.start(async (batch) => {
         if (!send(ws, { type: "events", events: [...batch] })) await this.#detach(ws);

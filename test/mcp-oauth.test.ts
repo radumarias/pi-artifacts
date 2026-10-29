@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { connectStreamableHttp } from "../worker/mcp/connect.ts";
 import { McpFailure } from "../worker/mcp/hub.ts";
-import { finishSignIn, McpOAuthClient, serverOfState, startSignIn, type McpAuthRecord, type McpAuthStore } from "../worker/mcp/oauth.ts";
+import { applyAuthChange, finishSignIn, McpOAuthClient, serverOfState, startSignIn, type McpAuthChange, type McpAuthRecord, type McpAuthStore } from "../worker/mcp/oauth.ts";
 import type { McpServerConfig } from "../worker/mcp/servers.ts";
+import { listen } from "./fakes.ts";
 
 // A stand-in for the MCP portal: an OAuth authorization server (discovery,
 // dynamic registration, PKCE, refresh) in front of an MCP server whose one
@@ -129,24 +129,25 @@ class MemoryStore implements McpAuthStore {
   async get() {
     return structuredClone(this.record);
   }
-  async put(record: McpAuthRecord) {
-    this.record = structuredClone(record);
+  async update(change: McpAuthChange) {
+    this.record = structuredClone(applyAuthChange(this.record, change));
   }
 }
 
 const REDIRECT = "https://app.example/api/mcp/oauth/callback";
 let portal: FakePortal;
 let server: Server;
+let origin: string;
 let config: McpServerConfig;
 
 beforeAll(async () => {
   server = createServer((req, res) => void portal.handle(req, res));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  origin = await listen(server);
 });
 afterAll(() => server.close());
 beforeEach(() => {
   portal = new FakePortal();
-  portal.origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  portal.origin = origin;
   config = { name: "Portal", url: `${portal.origin}/mcp`, cacheScope: "viewer", auth: "oauth" };
 });
 
@@ -244,5 +245,32 @@ describe("per-user MCP sign-in", () => {
     const { code, state } = portal.approve((started as { url: string }).url, "ada@example.com");
     portal.tokenBlocked = true;
     await expect(finishSignIn(config.url, "Portal", ada, code, state)).rejects.toThrow(/error code: 1014.*\[POST http:\/\/127\.0\.0\.1:\d+\/token answered 403 \(Cloudflare Ray ID abc123-ARN\)\]/);
+  });
+
+  it("keeps tokens another chat refreshed when this chat's refresh is rejected", async () => {
+    const ada = new MemoryStore();
+    await signIn(ada, "ada@example.com");
+    const stale = ada.record.tokens!;
+    // Chat A reads the tokens; chat B refreshes them; then A's refresh with the old refresh token is rejected.
+    const chatA = new McpOAuthClient(ada, "Portal", { redirectUrl: REDIRECT, interactive: false });
+    await chatA.tokens();
+    await ada.update({ set: { tokens: { ...stale, access_token: "at-refreshed-by-b", refresh_token: "rt-b" } } });
+    await chatA.invalidateCredentials("tokens");
+    expect(ada.record.tokens?.access_token).toBe("at-refreshed-by-b");
+    // With no newer tokens, the rejected ones are cleared.
+    const chatB = new McpOAuthClient(ada, "Portal", { redirectUrl: REDIRECT, interactive: false });
+    await chatB.tokens();
+    await chatB.invalidateCredentials("tokens");
+    expect(ada.record.tokens).toBeUndefined();
+  });
+});
+
+describe("applyAuthChange", () => {
+  const record: McpAuthRecord = { redirectUrl: "r", state: "s", verifier: "v", tokens: { access_token: "a", token_type: "Bearer" } };
+  it("sets, clears and replaces in one step", () => {
+    expect(applyAuthChange(record, { set: { state: "s2" }, clear: ["verifier"] } satisfies McpAuthChange)).toEqual({ ...record, state: "s2", verifier: undefined });
+    expect(applyAuthChange(record, { replace: { redirectUrl: "x" } })).toEqual({ redirectUrl: "x" });
+    expect(applyAuthChange(record, { clearTokensIf: { access_token: "other", token_type: "Bearer" } }).tokens).toEqual(record.tokens);
+    expect(applyAuthChange(record, { clearTokensIf: { access_token: "a", token_type: "Bearer" } }).tokens).toBeUndefined();
   });
 });
