@@ -3,10 +3,11 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { memo, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
 import { SharePanel } from "./SharePanel.tsx";
-import { useChat, type RunningTool } from "./useChat.ts";
+import { useChat, waitingOnModel, type RunningTool } from "./useChat.ts";
 import { Linkified } from "./Linkified.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
+import { Thinking } from "./Thinking.tsx";
 
 interface Props {
   chatId: string;
@@ -116,7 +117,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
         {state.tools.map((tool) => (
           <Running key={tool.toolCallId} tool={tool} />
         ))}
-        {state.busy && !state.partial && state.tools.length === 0 && <div className="thinking">Thinking…</div>}
+        {waitingOnModel(state) && <Thinking />}
         {state.error && <div className="chat-error">{state.error}</div>}
       </div>
       <ModelPicker model={state.model} thinkingLevel={state.thinkingLevel} disabled={!connected} onChange={setModel} />

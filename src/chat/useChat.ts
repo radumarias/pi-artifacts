@@ -114,6 +114,16 @@ export function reduce(state: ChatState, action: Action): ChatState {
 }
 
 /**
+ * True while a run waits on the model: before its first token, between tool calls, and while it thinks or writes a
+ * tool call. Not while a tool runs (that shows its own spinner) or while reply text streams.
+ */
+export function waitingOnModel(state: ChatState): boolean {
+  if (!state.busy || state.tools.length > 0) return false;
+  const last = state.partial?.content.filter(Boolean).at(-1);
+  return last?.type !== "text" || !last.text;
+}
+
+/**
  * The chat's WebSocket: reconnects with backoff, and every (re)connect starts from a fresh snapshot.
  * It stops for good when the user is no longer in the chat (removed, or the chat is gone).
  */
