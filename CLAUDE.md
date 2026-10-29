@@ -24,10 +24,13 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   (tools, instructions), and the user names servers or tools in chat. `auth: "oauth"` entries (e.g. a Cloudflare MCP
   portal) sign in each user with a generic MCP OAuth client (`worker/mcp/oauth.ts`; tokens per
   user in `UserDirectory`; the agent hands out `/api/mcp/sign-in/<name>` links, routes in `worker/mcp-routes.ts`);
-  pages calling them are author-only. `test/mcp-oauth.test.ts` runs the flow against a stand-in portal.
+  pages calling them load only for people in the author's chat. `test/mcp-oauth.test.ts` runs the flow against a stand-in portal.
 - Skills (`shared/skills.ts`, `worker/skills/`, `worker/agent/skills.ts`): built-in `SKILL.md` files in `worker/skills/builtin/` plus each
   user's own, stored in `UserDirectory` and installed through `skills()` from `agents/harness/pi` before every prompt.
   A skill the agent proposes (`skill_propose`) is saved off until the user turns it on; keep it that way.
+- Shared chats (`worker/chat-routes.ts`, `worker/members.ts`): the owner invites people by single-use link; they share
+  the one conversation and the one agent, which always acts as the owner (owner's MCP sign-ins, files, skills; artifacts
+  owned by the owner). The chat object checks membership on every socket and prompt; keep it that way.
 - Each artifact is the repo `artifact-<id>`: one commit and tag `v<n>` per publish, pushed with isomorphic-git
   (`worker/storage/git.ts`), since the binding cannot write files. `pnpm dev` uses a local Git backend for it (needs
   `git`); `test/artifact-store.test.ts` runs the real Git code against `git http-backend`. Shared test doubles (R2 bucket, local

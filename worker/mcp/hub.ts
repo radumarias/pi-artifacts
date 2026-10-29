@@ -46,6 +46,8 @@ interface CacheEntry {
 /** What one chat object may hold in cached results. Durable Objects have 128 MB; results vary from bytes to megabytes. */
 const MAX_CACHE_BYTES = 16 * 1024 * 1024;
 const CACHE_LIFETIME_MS = 10 * 60_000;
+/** How long a server's tool list holds before it is listed again: the servers behind a portal come and go. */
+const TOOLS_LIFETIME_MS = 5 * 60_000;
 
 /**
  * The chat's MCP connections. Pi's tools and artifact pages call through the
@@ -60,7 +62,7 @@ export class McpHub {
   readonly #now: () => number;
   readonly #servers = new Map<string, McpServerConfig>();
   readonly #connections = new Map<string, Promise<McpConnection>>();
-  readonly #tools = new Map<string, Promise<ToolInfo[]>>();
+  readonly #tools = new Map<string, { list: Promise<ToolInfo[]>; listedAt: number }>();
   readonly #cache = new Map<string, CacheEntry>();
   #cacheBytes = 0;
   readonly #inflight = new Map<string, Promise<CacheEntry>>();
@@ -79,14 +81,26 @@ export class McpHub {
     return this.#servers.get(name);
   }
 
-  async tools(server: string): Promise<ToolInfo[]> {
-    let tools = this.#tools.get(server);
-    if (!tools) {
-      tools = this.#withConnection(server, (connection) => connection.listTools());
-      this.#tools.set(server, tools);
-      tools.catch(() => this.#tools.delete(server));
-    }
-    return tools;
+  /** The server's tools, from a list younger than `maxAgeMs` (0 lists afresh: for when the user asks what is there now). */
+  async tools(server: string, { maxAgeMs = TOOLS_LIFETIME_MS } = {}): Promise<ToolInfo[]> {
+    const now = this.#now();
+    const cached = this.#tools.get(server);
+    if (cached && now - cached.listedAt < maxAgeMs) return cached.list;
+    const fresh = {
+      listedAt: now,
+      list: this.#withConnection(server, (connection) => connection.listTools()).catch((error) => {
+        // A server that listed before and does not answer now keeps its last list (and is listed again on the next call),
+        // so a passing failure neither drops its tools from the agent nor fails the pages calling it. A sign-in failure does.
+        if (!cached || !(error instanceof McpFailure && error.error.retryable)) throw error;
+        fresh.listedAt = cached.listedAt;
+        return cached.list;
+      }),
+    };
+    this.#tools.set(server, fresh);
+    fresh.list.catch(() => {
+      if (this.#tools.get(server) === fresh) this.#tools.delete(server);
+    });
+    return fresh.list;
   }
 
   /** What the server says about itself when it connects (MCP `instructions`), if anything. */

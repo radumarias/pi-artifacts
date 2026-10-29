@@ -1,7 +1,7 @@
 import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentEvent, AgentState, EntryRecord } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { ChatClientMessage, ChatServerMessage } from "../../shared/protocol.ts";
+import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
 export interface RunningTool {
@@ -113,17 +113,31 @@ export function reduce(state: ChatState, action: Action): ChatState {
   return next;
 }
 
-/** The chat's WebSocket: reconnects with backoff, and every (re)connect starts from a fresh snapshot. */
+/**
+ * The chat's WebSocket: reconnects with backoff, and every (re)connect starts from a fresh snapshot.
+ * It stops for good when the user is no longer in the chat (removed, or the chat is gone).
+ */
 export function useChat(chatId: string) {
   const [state, dispatch] = useReducer(reduce, initial);
   const [connected, setConnected] = useState(false);
+  const [people, setPeople] = useState<ChatPeopleView | null>(null);
+  const [gone, setGone] = useState(false);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     dispatch({ type: "reset" });
+    setPeople(null);
+    setGone(false);
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // Not in the chat: stop for good.
+    const stop = () => {
+      closed = true;
+      setGone(true);
+      dispatch({ type: "error", message: "You are not in this chat." });
+    };
 
     const open = () => {
       const ws = new WebSocket(api.chatSocketUrl(chatId));
@@ -135,11 +149,16 @@ export function useChat(chatId: string) {
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data) as ChatServerMessage;
         if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[] });
-        else dispatch({ type: "error", message: message.message });
+        else if (message.type === "people") setPeople(message.people);
+        else if (message.type === "removed") {
+          stop();
+          ws.close();
+        } else dispatch({ type: "error", message: message.message });
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         setConnected(false);
         if (closed) return;
+        if (event.code === SOCKET_NOT_A_MEMBER) return stop();
         timer = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 15_000));
       };
     };
@@ -162,6 +181,9 @@ export function useChat(chatId: string) {
   return {
     state,
     connected,
+    people,
+    /** True once the chat refused this user's socket: they are not (or no longer) in it. */
+    gone,
     prompt: (text: string) => send({ type: "prompt", text }),
     abort: () => send({ type: "abort" }),
     setModel,

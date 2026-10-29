@@ -171,6 +171,62 @@ describe("McpHub with signed-in servers", () => {
   });
 });
 
+describe("McpHub.tools", () => {
+  // A portal whose servers change: each listing is the next of `listings` (the last one repeats); an Error is thrown.
+  function portal(...listings: (string[] | Error)[]) {
+    let lists = 0;
+    const connection: McpConnection = {
+      listTools: async () => {
+        const listing = listings[Math.min(lists++, listings.length - 1)];
+        if (listing instanceof Error) throw listing;
+        return listing.map((name) => ({ name, description: "" }));
+      },
+      callTool: async () => text({}),
+      close: async () => {},
+    };
+    return { lists: () => lists, connector: async () => connection };
+  }
+
+  it("keeps a tool list for a while, then lists the server again", async () => {
+    let now = 0;
+    const server = portal(["a_search"], ["a_search", "b_report"]);
+    const hub = new McpHub([viewerScoped], server.connector, () => now);
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search"]);
+    now += 60_000;
+    await hub.tools("Prices");
+    expect(server.lists()).toBe(1);
+    now += 5 * 60_000;
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search", "b_report"]);
+  });
+
+  it("lists afresh when asked, as the agent's discovery does", async () => {
+    const server = portal(["a_search"], ["a_search", "b_report"]);
+    const hub = new McpHub([viewerScoped], server.connector);
+    await hub.tools("Prices");
+    expect((await hub.tools("Prices", { maxAgeMs: 0 })).map((t) => t.name)).toEqual(["a_search", "b_report"]);
+    expect((await hub.tool("Prices", "b_report"))?.name).toBe("b_report");
+    expect(server.lists()).toBe(2);
+  });
+
+  it("does not keep a failed listing", async () => {
+    const server = portal(new McpFailure({ code: "auth_required", server: "Prices", message: "Not signed in." }), ["price"]);
+    const hub = new McpHub([viewerScoped], server.connector);
+    await expect(hub.tools("Prices")).rejects.toMatchObject({ error: { code: "auth_required" } });
+    expect(await hub.tools("Prices")).toHaveLength(1);
+  });
+
+  it("keeps the last list while the server does not answer, and lists again on the next call", async () => {
+    const server = portal(["a_search"], new Error("socket hang up"), new Error("socket hang up"), ["a_search", "b_report"]);
+    let now = 0;
+    const hub = new McpHub([viewerScoped], server.connector, () => now);
+    await hub.tools("Prices");
+    now += 6 * 60_000;
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search"]);
+    expect((await hub.tools("Prices")).map((t) => t.name)).toEqual(["a_search", "b_report"]);
+    expect(server.lists()).toBe(4);
+  });
+});
+
 describe("mcpServers", () => {
   it("takes name and URL entries from the binding and drops malformed ones", () => {
     const servers = mcpServers({
