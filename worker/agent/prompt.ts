@@ -19,6 +19,8 @@ Rules every page follows:
 - Render the layout first, then light up live sections when pi.use resolves. If it resolves null, show the page with a note that live data needs the viewer.
 - Each live section shows its own loading state, its own error (branch on error.code) and a "updated Ns ago" label driven by result.cache?.storedAt (fall back to the time the result arrived).
 - Poll with refetchInterval no faster than 30 000 ms; give one-off actions a button that calls callTool.
+- The page is the widget and nothing else: data, titles, labels, units, legends and the states above. No explanatory prose: no intro or "about this page" paragraph, no notes on how it works or where the data comes from, no footer describing it.
+- Use the full width of the frame: no max-width container or centered column; let a responsive grid fill the space, with modest padding.
 - Design: a clear hierarchy, readable numbers (tabular-nums, units, sensible rounding), color tokens on :root with a prefers-color-scheme: dark variant, a layout that works at phone width.`;
 
 /** The system prompt, as pi sections rendered in this order. */
