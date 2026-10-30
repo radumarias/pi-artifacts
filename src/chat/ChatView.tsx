@@ -192,7 +192,6 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
               placeholder={connected ? (others ? "Message everyone and the agent…" : "Describe a dashboard, or attach a file to ask about…") : "Connecting…"}
               rows={1}
             />
-            <span className={connected ? "connection-dot on" : "connection-dot"} title={connected ? "Connected" : "Connecting…"} />
             {state.busy ? (
               <button type="button" className="icon-button send stop" onClick={abort} title="Stop" aria-label="Stop">
                 <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
