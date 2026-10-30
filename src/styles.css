@@ -248,12 +248,46 @@ body.resizing iframe { pointer-events: none; }
 .artifact-card-icon { font-size: 22px; color: var(--accent); }
 .artifact-card small { display: block; color: var(--muted); }
 
-.composer { display: flex; flex-direction: column; gap: 8px; padding: 12px 20px 18px; }
-.composer-row { display: flex; gap: 8px; }
-.composer .attach { font-size: 18px; padding: 0 12px; }
-/* Send and Stop share a width, so the composer doesn't shift when a run starts or ends. */
-.composer .send { min-width: 64px; display: inline-flex; align-items: center; justify-content: center; }
-.composer .stop { background: var(--text); color: var(--bg); border-color: transparent; }
+.composer { display: flex; flex-direction: column; gap: 6px; padding: 12px 20px 14px; }
+/* The input, the connection dot and Send/Stop sit in one rounded box; attach, dictation and the model under it. */
+.composer-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  cursor: text;
+  transition: border-color 0.15s;
+}
+.composer-box:focus-within { border-color: color-mix(in srgb, var(--muted) 60%, var(--border)); }
+/* Bottom-aligned, so the dot and Send stay by the last line as the input grows. */
+.composer-row { display: flex; align-items: flex-end; gap: 6px; }
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: 220px;
+  field-sizing: content;
+  resize: none;
+  border: 0;
+  outline: none;
+  padding: 5px 0;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1.4;
+}
+.composer textarea::placeholder { color: var(--muted); }
+.connection-dot { flex: none; width: 8px; height: 8px; margin: 0 8px 12px; border-radius: 50%; background: var(--muted); opacity: 0.6; }
+.connection-dot.on { background: var(--live); opacity: 1; }
+.icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text); }
+.icon-button:not(:disabled):hover { background: var(--surface-2); }
+.icon-button.listening { color: var(--error); }
+/* Send and Stop share a size, so nothing shifts when a run starts or ends. */
+.composer .send:disabled { opacity: 0.35; }
+.composer-tools { display: flex; align-items: center; gap: 2px; padding: 0 4px; min-height: 32px; }
+.spinner.working { flex: none; width: 16px; height: 16px; margin: 0 6px 0 10px; border-width: 2px; border-top-color: var(--text); }
+.spinner.working.idle { visibility: hidden; }
 /* Above the app's drop target while files are dragged: a drop here attaches them to the message. */
 .workspace.dragging .composer { position: relative; z-index: 11; outline: 2px dashed var(--accent); outline-offset: -6px; border-radius: var(--radius); background: var(--bg); }
 .pending-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -277,18 +311,13 @@ body.resizing iframe { pointer-events: none; }
 .attachments.mine { align-self: flex-end; justify-content: flex-end; }
 .attachment-thumb { max-width: 160px; max-height: 160px; border-radius: var(--radius); border: 1px solid var(--border); }
 .attachment-chip { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 13px; overflow-wrap: anywhere; }
-.model-picker { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 20px 0; }
-.model-picker select { font-size: 13px; padding: 3px 6px; max-width: 100%; }
-.model-note { align-self: center; font-size: 13px; color: var(--muted); }
-.model-picker + .composer { padding-top: 6px; }
-.composer textarea {
-  flex: 1;
-  resize: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 12px;
-  background: var(--surface);
-}
+/* The model and effort, as plain text at the right of the row under the input. */
+.model-picker { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; margin-left: auto; }
+/* Each select as wide as its chosen option where the browser can size it so; elsewhere as its longest one. */
+.model-picker select { appearance: none; field-sizing: content; max-width: 100%; border: 0; background: transparent; padding: 5px 8px; font-size: 14px; text-overflow: ellipsis; }
+.model-picker select:not(:disabled):hover { background: var(--surface-2); }
+.model-picker select:not(:first-child) { color: var(--muted); }
+.model-note { flex-basis: 100%; order: 1; text-align: right; padding: 0 8px; font-size: 13px; color: var(--muted); }
 
 .artifact-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); min-width: 0; }
 .artifact-panel.full { border-left: 0; }

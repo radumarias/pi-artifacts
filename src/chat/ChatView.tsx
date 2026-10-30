@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { memo, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -10,6 +10,7 @@ import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
 import { SharePanel } from "./SharePanel.tsx";
 import { useChat, waitingOnModel } from "./useChat.ts";
+import { Dictation } from "./Dictation.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
@@ -27,6 +28,8 @@ interface Props {
   /** Called once the user left this chat. */
   onLeft: () => void;
 }
+
+const GROWS_ITSELF = CSS.supports("field-sizing", "content");
 
 function published(entry: EntryRecord): PublishedDetails | undefined {
   if (entry.kind !== "pi.tool-result") return undefined;
@@ -117,6 +120,18 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
     void submit();
   };
 
+  // Dictated words join the draft with a space between them.
+  const dictated = (text: string) => setDraft((current) => (current && !/\s$/.test(current) ? `${current} ${text}` : current + text));
+
+  // The input grows with what is typed, up to its max-height in styles.css, then scrolls.
+  // Browsers with field-sizing do this themselves, and also when the column is resized.
+  useLayoutEffect(() => {
+    const el = input.current;
+    if (!el || GROWS_ITSELF) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [draft]);
+
   const isOwner = people?.owner.uid === uid;
   const ownerName = people && !isOwner ? people.owner.name : undefined;
   const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid).map((person) => person.name).join(", ") : "";
@@ -149,38 +164,68 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
           {state.error && <div className="chat-error">{state.error}</div>}
         </div>
       </StepsProvider>
-      <ModelPicker
-        model={state.model}
-        thinkingLevel={state.thinkingLevel}
-        disabled={!connected}
-        attachingImages={attachments.pending.some((item) => item.preview)}
-        onChange={setModel}
-      />
       <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
-        {attachments.pending.length > 0 && (
-          <div className="pending-attachments">
-            {attachments.pending.map((item) => (
-              <span key={item.id} className="pending-attachment" title={`${item.file.name} · ${formatBytes(item.file.size)}`}>
-                {item.preview ? <img src={item.preview} alt="" /> : <span className="file-icon">▤</span>}
-                <span className="pending-name">{item.file.name}</span>
-                <button type="button" onClick={() => attachments.remove(item.id)} disabled={attachments.sending} aria-label={`Remove ${item.file.name}`}>
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
         {attachments.error && <div className="chat-error">{attachments.error}</div>}
-        <div className="composer-row">
+        <div className="composer-box" onClick={(e) => e.target === e.currentTarget && input.current?.focus()}>
+          {attachments.pending.length > 0 && (
+            <div className="pending-attachments">
+              {attachments.pending.map((item) => (
+                <span key={item.id} className="pending-attachment" title={`${item.file.name} · ${formatBytes(item.file.size)}`}>
+                  {item.preview ? <img src={item.preview} alt="" /> : <span className="file-icon">▤</span>}
+                  <span className="pending-name">{item.file.name}</span>
+                  <button type="button" onClick={() => attachments.remove(item.id)} disabled={attachments.sending} aria-label={`Remove ${item.file.name}`}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="composer-row">
+            <textarea
+              ref={input}
+              // Each chat mounts its own view, so a new or opened chat starts with the cursor here.
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKey}
+              onPaste={onPaste}
+              placeholder={connected ? (others ? "Message everyone and the agent…" : "Describe a dashboard, or attach a file to ask about…") : "Connecting…"}
+              rows={1}
+            />
+            <span className={connected ? "connection-dot on" : "connection-dot"} title={connected ? "Connected" : "Connecting…"} />
+            {state.busy ? (
+              <button type="button" className="icon-button send stop" onClick={abort} title="Stop" aria-label="Stop">
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                  <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="currentColor" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="icon-button send"
+                disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
+                title={attachments.sending ? "Sending…" : "Send"}
+                aria-label={attachments.sending ? "Sending…" : "Send"}
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="composer-tools">
           <button
             type="button"
-            className="attach"
+            className="icon-button"
             onClick={() => picker.current?.click()}
             disabled={attachments.sending || attachments.pending.length >= MAX_ATTACHMENTS}
             title="Attach images or files"
             aria-label="Attach images or files"
           >
-            +
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <path d="M12 4v16M4 12h16" />
+            </svg>
           </button>
           <input
             ref={picker}
@@ -192,28 +237,16 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
               e.target.value = "";
             }}
           />
-          <textarea
-            ref={input}
-            // Each chat mounts its own view, so a new or opened chat starts with the cursor here.
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKey}
-            onPaste={onPaste}
-            placeholder={connected ? (others ? "Message everyone and the agent…" : "Describe a dashboard, or attach a file to ask about…") : "Connecting…"}
-            rows={2}
+          <Dictation disabled={!connected} onText={dictated} />
+          <ModelPicker
+            model={state.model}
+            thinkingLevel={state.thinkingLevel}
+            disabled={!connected}
+            attachingImages={attachments.pending.some((item) => item.preview)}
+            onChange={setModel}
           />
-          {state.busy ? (
-            <button type="button" className="send stop" onClick={abort} title="Stop" aria-label="Stop">
-              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                <rect x="2" y="2" width="12" height="12" rx="2" fill="currentColor" />
-              </svg>
-            </button>
-          ) : (
-            <button type="submit" className="send" disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}>
-              {attachments.sending ? "Sending…" : "Send"}
-            </button>
-          )}
+          {/* Always laid out, so the pickers don't move when a run starts or ends. */}
+          <span className={state.busy || attachments.sending ? "spinner working" : "spinner working idle"} aria-hidden="true" />
         </div>
       </form>
     </section>
