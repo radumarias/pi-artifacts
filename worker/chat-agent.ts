@@ -24,6 +24,7 @@ import {
   type McpError,
   type Person,
   type ProxyRequest,
+  type Presence,
   type ProxyResponse,
   type QueuedMessage,
 } from "../shared/protocol.ts";
@@ -664,6 +665,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     this.lifecycle.sockets.accept(pair[1], [SOCKET_TAG]);
     pair[1].serializeAttachment({ owner: OWNER, person } satisfies SocketAttachment);
     void this.#attach(pair[1]);
+    this.#broadcastPresence();
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -687,6 +689,21 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       if (!people) views.set(person.uid, (people = this.#chat.peopleFor(person.uid)));
       send(ws, { type: "people", people });
     }
+  }
+
+  /**
+   * Tell every open socket who has the chat open, and in how many windows: each socket is one. `closing` is a socket
+   * on its way out, which the list of sockets may still hold.
+   */
+  #broadcastPresence(closing?: WebSocket): void {
+    const sockets = this.lifecycle.sockets.get(SOCKET_TAG).filter((ws) => ws !== closing && this.#person(ws));
+    const windows = new Map<string, number>();
+    for (const ws of sockets) {
+      const uid = this.#person(ws)!.uid;
+      windows.set(uid, (windows.get(uid) ?? 0) + 1);
+    }
+    const online: Presence[] = [...windows].map(([uid, count]) => ({ uid, windows: count }));
+    for (const ws of sockets) send(ws, { type: "presence", online });
   }
 
   /** Close the sockets of someone no longer in the chat. The app sees the close code and stops reconnecting. */
@@ -725,6 +742,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
 
   async onWebSocketClose(ws: WebSocket): Promise<boolean> {
     if (!this.#person(ws)) return false;
+    this.#broadcastPresence(ws);
     await this.#detach(ws);
     return true;
   }

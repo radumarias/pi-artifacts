@@ -399,3 +399,5 @@ body.resizing iframe { pointer-events: none; }
 .queued > :not(.queued-label) { opacity: 0.6; }
 .queued-label { color: var(--muted); font-size: 12px; padding: 0 4px; }
 .queued.mine .queued-label { align-self: flex-end; }
+/* Someone with the chat open right now: a dot before their name. */
+.person.online::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--live); }

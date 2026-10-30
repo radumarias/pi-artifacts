@@ -264,6 +264,9 @@ people: many people share one conversation with one agent, and their messages qu
   owner trying their own, or a member in another window or on another device) shows as "joined again from another
   window or device"; a reload shows nothing. It is a passive pi write: placed at once, even mid-run, and the
   model never reads it.
+- **Who is here now:** the header lists the others in the chat, with a dot by whoever has it open right now and
+  "(2 windows)" when someone has it open more than once; "Open in 2 of your windows" counts your own. Each open
+  window is one chat socket, so the chat object counts them and tells every socket when one opens or closes.
 - **Queued messages:** a message sent while the agent works waits in pi's inbox (`pi.inbox`). pi's event stream
   reports each change to the inbox by ids only, so the chat adds the waiting messages, read from the inbox, to that
   batch. Everyone sees them at once, faded and marked "Queued" (with "2 of 3" when more than one waits), below what
