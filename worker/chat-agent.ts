@@ -7,6 +7,7 @@ import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
 import {
   CHAT_MESSAGE_KIND,
+  CHAT_PEOPLE_KIND,
   isOwnedBy,
   isReadOnly,
   manifestOf,
@@ -16,6 +17,7 @@ import {
   type ChatInvite,
   type ChatMessageData,
   type ChatPeople,
+  type ChatPeopleData,
   type ChatPeopleView,
   type ChatServerMessage,
   type DeclaredTool,
@@ -23,6 +25,7 @@ import {
   type Person,
   type ProxyRequest,
   type ProxyResponse,
+  type QueuedMessage,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import type { ModelChoice } from "../shared/models.ts";
@@ -40,6 +43,7 @@ import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
 import { checkModelChoice, defaultModelChoice } from "./models.ts";
+import { queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
 
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
@@ -96,7 +100,9 @@ export class ChatAgent extends DurableObject<Env> {
     harness: async ({ storage, context, onWake }) => {
       const models = createModels();
       models.setProvider(this.ai.provider);
-      const pi = await Harness.open(storage, { models, registry: this.registry, onWake }, context);
+      // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
+      // otherwise wait, shown as queued, until someone writes again.
+      const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings: { afterFailedRun: "continue" } }, context);
       try {
         // A new chat starts on the model its user last picked; PiHarness then finds the root and leaves it as it is.
         if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
@@ -118,6 +124,7 @@ export class ChatAgent extends DurableObject<Env> {
     runStartedAt: (snapshot) => this.runStartedAt(snapshot),
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
+    queued: () => this.queued(),
     prompt: (text, author, attachments) => this.prompt(text, author, attachments),
     abort: (by) => this.abort(by),
     setModel: (input, by) => this.setModel(input, by),
@@ -139,6 +146,8 @@ export class ChatAgent extends DurableObject<Env> {
   #filesInstalled: string | undefined;
   /** When members' sidebars were last bumped, and with which title. */
   #membersTouched = { title: "", at: 0 };
+  /** The messages waiting for the agent, kept current by the watch on pi's inbox. */
+  #queued: QueuedMessage[] = [];
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -227,11 +236,52 @@ export class ChatAgent extends DurableObject<Env> {
     this.#requireInChat(by);
     const choice = checkModelChoice(input);
     if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
-    // PiHarness has made the root conversation by the time pi() resolves.
-    const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
+    const conversation = await this.#root();
     await conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT);
     // The chat has changed by now, so a failure to remember the pick for new chats is logged, not reported as a failed change.
     await this.#index(by.uid).setModelChoice(choice).catch((error: unknown) => console.error("model:", errorMessage(error)));
+  }
+
+  /** The chat's one conversation. PiHarness has made it by the time pi() resolves. */
+  async #root() {
+    return (await this.harness.pi()).root(BACKGROUND_CONTEXT);
+  }
+
+  /** The messages waiting for the agent, oldest first. The first call starts watching pi's inbox. */
+  async queued(): Promise<QueuedMessage[]> {
+    await this.#watchQueue();
+    return this.#queued;
+  }
+
+  /**
+   * Watch pi's inbox for the rest of the object's life, and tell every socket when the messages waiting in it change:
+   * one arrives while the agent is busy, or its turn comes and it is placed in the transcript.
+   */
+  readonly #watchQueue = memoAsync(async () => {
+    const view = await (await this.#root()).viewState(BACKGROUND_CONTEXT);
+    this.#queued = queuedMessages(view.value);
+    let key = JSON.stringify(this.#queued);
+    view.subscribe((value) => {
+      const queued = queuedMessages(value);
+      const next = JSON.stringify(queued);
+      if (next === key) return;
+      key = next;
+      this.#queued = queued;
+      this.sockets.broadcast({ type: "queue", queued });
+    });
+  });
+
+  /**
+   * A notice in the transcript that someone joined or left. A passive write: everyone sees it at once, even mid-run,
+   * and the model does not read it. Only a notice, so a failure is logged and the change it reports stands.
+   */
+  async #notePeople(data: ChatPeopleData): Promise<void> {
+    try {
+      const entry = { kind: CHAT_PEOPLE_KIND, data: { uid: data.uid, name: data.name, event: data.event } satisfies ChatPeopleData };
+      await (await this.#root()).submit({ type: "write", entry }, BACKGROUND_CONTEXT);
+    } catch (error) {
+      console.error("people notice:", errorMessage(error));
+    }
   }
 
   /**
@@ -370,7 +420,7 @@ export class ChatAgent extends DurableObject<Env> {
    * it gets the text alone, so no name reaches the model for a chat nobody shares.
    * Attached files (already uploaded to the owner's files) come before the text,
    * as images, text or names (see attachmentContent).
-   * While a run is going, it waits in pi's inbox and is answered next.
+   * While a run is going, it waits in pi's inbox, where everyone sees it queued (see queued), and is answered next.
    */
   async prompt(text: string, author: Person, attachments: readonly AttachmentInput[] = []): Promise<void> {
     this.#requireInChat(author);
@@ -456,15 +506,18 @@ export class ChatAgent extends DurableObject<Env> {
       return refuse(403, failed.error);
     }
     this.sockets.broadcastPeople();
+    await this.#notePeople({ ...person, event: "joined" });
     return null;
   }
 
   /** The owner removes a member, or a member leaves. Their open sockets close at once, and the chat leaves their sidebar. */
   async removeMember(by: Person, uid: string): Promise<ChatRefusal | null> {
     if (by.uid !== this.uid && by.uid !== uid) return refuse(403, "Only the chat's owner can remove people.");
-    if (!this.members.remove(uid)) return refuse(404, "No such member.");
+    const member = this.members.list().find((m) => m.uid === uid);
+    if (!member || !this.members.remove(uid)) return refuse(404, "No such member.");
     this.sockets.disconnect(uid);
     this.sockets.broadcastPeople();
+    await this.#notePeople({ ...member, event: by.uid === uid ? "left" : "removed" });
     await this.#index(uid).removeSharedChat(this.chatId, this.uid);
     return null;
   }
@@ -554,6 +607,7 @@ interface ChatSession {
   runStartedAt(snapshot: SnapshotEvent): Promise<number | undefined>;
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
+  queued(): Promise<QueuedMessage[]>;
   prompt(text: string, author: Person, attachments: readonly AttachmentInput[]): Promise<void>;
   abort(by: Person): Promise<void>;
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
@@ -619,6 +673,11 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     }
   }
 
+  /** Send `message` to every open chat socket. */
+  broadcast(message: ChatServerMessage): void {
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) if (this.#person(ws)) send(ws, message);
+  }
+
   /** Close the sockets of someone no longer in the chat. The app sees the close code and stops reconnecting. */
   disconnect(uid: string): void {
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
@@ -670,6 +729,8 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       const events = await this.#chat.events();
       send(ws, { type: "people", people: this.#chat.peopleFor(this.#person(ws)!.uid) });
       send(ws, await this.#events([events.snapshot]));
+      // Only a view of what pi has queued: without it the chat still works, and the next socket tries again.
+      send(ws, { type: "queue", queued: await this.#chat.queued().catch(() => []) });
       events.start(async (batch) => {
         if (!send(ws, await this.#events(batch))) await this.#detach(ws);
       });
