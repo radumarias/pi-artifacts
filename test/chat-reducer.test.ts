@@ -59,7 +59,22 @@ describe("chat reducer", () => {
         },
       ] as never,
     });
-    expect(state.tools).toEqual([{ toolCallId: "a", toolName: "run_python", output: "step 1\n" }]);
+    expect(state.tools).toEqual([
+      { toolCallId: "a", toolName: "run_python", output: "step 1\n", status: "running" },
+      { toolCallId: "b", toolName: "run_bash", output: "", status: "pending" },
+    ]);
+  });
+
+  it("follows a call from its start to its end, and keeps one that ended without a result as stopped", () => {
+    const call = { toolName: "run_python" };
+    let state = reduce(empty, { type: "events", events: [{ type: "tool_execution_start", toolCallId: "a", ...call, args: {} }] as never });
+    expect(state.tools).toEqual([{ toolCallId: "a", toolName: "run_python", output: "", status: "running" }]);
+    state = reduce(state, { type: "events", events: [{ type: "tool_execution_end", toolCallId: "a", ...call }] as never });
+    expect(state.tools[0].status).toBe("stopped");
+    const entry = { id: "r", kind: "pi.tool-result", model: [] };
+    state = reduce(state, { type: "events", events: [{ type: "tool_execution_start", toolCallId: "b", ...call, args: {} }, { type: "tool_execution_end", toolCallId: "b", ...call, entry }] as never });
+    expect(state.tools.map((t) => t.toolCallId)).toEqual(["a"]);
+    expect(state.entries).toEqual([entry]);
   });
 
   it("ignores message_start for user, system and tool-result messages", () => {

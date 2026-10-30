@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { inputSections, stepHint, stepLabel, stepStatus, StepsContext, stepsView, ToolStep } from "../src/chat/Steps.tsx";
+import { inputSections, liveStatus, stepHint, stepLabel, stepResults, StepsProvider, stepsLive, ToolStep } from "../src/chat/Steps.tsx";
+import type { RunningTool } from "../src/chat/useChat.ts";
 
 const call = (id: string, name: string, args: Record<string, unknown>) => ({ type: "toolCall", id, name, arguments: args });
 const entries = [
@@ -8,24 +9,23 @@ const entries = [
   { id: "2", kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "ok", toolName: "run_python", content: [{ type: "text", text: "exit code 0" }], isError: false, durationMs: 1_250 }] },
   { id: "3", kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "bad", toolName: "run_bash", content: [{ type: "text", text: "exit code 1" }], isError: true }] },
 ] as never;
+const slot = (status: RunningTool["status"]): RunningTool => ({ toolCallId: "open", toolName: "files_list", output: "", status });
 
 describe("step status", () => {
-  it("follows the call from written to finished", () => {
-    const running = stepsView(entries, [{ toolCallId: "open", toolName: "files_list", output: "" }], true, new Set());
-    expect(stepStatus(running, "ok", false)).toBe("done");
-    expect(stepStatus(running, "bad", false)).toBe("error");
-    expect(stepStatus(running, "open", false)).toBe("running");
-    const waiting = stepsView(entries, [], true, new Set());
-    expect(stepStatus(waiting, "open", true)).toBe("writing");
-    expect(stepStatus(waiting, "open", false)).toBe("starting");
-    // The run ended without a result: stopped, or the tool faulted.
-    expect(stepStatus(stepsView(entries, [], false, new Set()), "open", false)).toBe("stopped");
+  it("follows a call without a result from written to ended", () => {
+    expect(liveStatus(stepsLive([], true), "open", true)).toBe("writing");
+    expect(liveStatus(stepsLive([], true), "open", false)).toBe("starting");
+    expect(liveStatus(stepsLive([slot("pending")], true), "open", false)).toBe("starting");
+    expect(liveStatus(stepsLive([slot("running")], true), "open", false)).toBe("running");
+    // Ended without a result while the run goes on (the tool faulted), or the run ended first.
+    expect(liveStatus(stepsLive([slot("stopped")], true), "open", false)).toBe("stopped");
+    expect(liveStatus(stepsLive([], false), "open", false)).toBe("stopped");
   });
 
   it("knows which results have their call in the chat", () => {
-    const view = stepsView(entries, [], false, new Set());
-    expect([...view.calls]).toEqual(["ok", "bad", "open"]);
-    expect([...view.results.keys()]).toEqual(["ok", "bad"]);
+    const { calls, results } = stepResults(entries);
+    expect([...calls]).toEqual(["ok", "bad", "open"]);
+    expect([...results.keys()]).toEqual(["ok", "bad"]);
   });
 });
 
@@ -36,7 +36,7 @@ describe("step header", () => {
     expect(stepLabel("something_new")).toBe("something_new");
   });
 
-  it("hints with the first line of the first text argument, else the arguments", () => {
+  it("hints with the first telling line of the first text argument, else the arguments", () => {
     expect(stepHint({ code: "\n# Load the sales\nimport pandas" })).toBe("# Load the sales");
     expect(stepHint({ script: "#!/bin/bash\nset -euo pipefail\nwc -l files/sales.csv" })).toBe("wc -l files/sales.csv");
     expect(stepHint({ script: "set -e" })).toBe("set -e");
@@ -57,11 +57,11 @@ describe("step input", () => {
 });
 
 describe("step panel", () => {
-  const render = (id: string, tools = [] as never[], busy = false) =>
+  const render = (id: string, tools: RunningTool[] = [], busy = false) =>
     renderToStaticMarkup(
-      <StepsContext value={stepsView(entries, tools, busy, new Set())}>
-        <ToolStep id={id} name="run_python" call={call(id, "run_python", { code: "print(1)" }) as never} />
-      </StepsContext>,
+      <StepsProvider entries={entries} tools={tools} busy={busy}>
+        <ToolStep call={call(id, "run_python", { code: "print(1)" }) as never} />
+      </StepsProvider>,
     );
 
   it("starts collapsed, with the name, a hint, the status and how long it took", () => {
@@ -72,13 +72,14 @@ describe("step panel", () => {
   });
 
   it("spins the thinking indicator's spark while the step runs", () => {
-    const html = render("open", [{ toolCallId: "open", toolName: "run_python", output: "" }] as never[], true);
+    const html = render("open", [slot("running")], true);
     expect(html).toMatch(/^<details class="step active">/);
     expect(html).toContain('<svg class="thinking-spark"');
     expect(html).toContain('<span class="step-status">Running…</span>');
   });
 
-  it("marks a failed step", () => {
+  it("marks a failed step, and one that stopped", () => {
     expect(render("bad")).toMatch(/^<details class="step error"><summary><span class="step-icon">✕<\/span>/);
+    expect(render("open")).toMatch(/^<details class="step"><summary><span class="step-icon">■<\/span>/);
   });
 });

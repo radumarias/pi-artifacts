@@ -20,7 +20,9 @@ describe("waiting on the model", () => {
 
   it("hides as soon as reply text streams, while a tool runs, and when idle", () => {
     expect(waitingOnModel(partial([{ type: "thinking", thinking: "Plan" }, { type: "text", text: "I" }]))).toBe(false);
-    expect(waitingOnModel({ ...busy, tools: [{ toolCallId: "t", toolName: "run_python", output: "" }] })).toBe(false);
+    expect(waitingOnModel({ ...busy, tools: [{ toolCallId: "t", toolName: "run_python", output: "", status: "running" }] })).toBe(false);
+    // A call that ended without a result no longer holds the indicator back.
+    expect(waitingOnModel({ ...busy, tools: [{ toolCallId: "t", toolName: "run_python", output: "", status: "stopped" }] })).toBe(true);
     expect(waitingOnModel({ ...busy, busy: false })).toBe(false);
   });
 

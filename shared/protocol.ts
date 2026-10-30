@@ -122,6 +122,12 @@ export interface CloneAccess {
   expiresAt: string;
 }
 
+/** The agent's tool that lists the MCP servers afresh. */
+export const MCP_DISCOVER_TOOL = "mcp_discover";
+
+/** Between the server's slug and the tool's name in an MCP tool's agent name (mcpToolName in worker/agent/mcp.ts). */
+export const MCP_TOOL_SEPARATOR = "__";
+
 /** The tool that publishes an artifact, and the details its result carries: the chat UI opens the preview from them. */
 export const PUBLISH_TOOL = "artifact_publish";
 export interface PublishedDetails {

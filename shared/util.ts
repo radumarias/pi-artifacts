@@ -3,6 +3,11 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** `value` cut to `max` characters, saying how many were cut. */
+export function clip(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max)}\n… [${value.length - max} more characters cut]`;
+}
+
 /** Lowercase hex of some bytes. */
 export function toHex(bytes: ArrayBuffer | Uint8Array): string {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
