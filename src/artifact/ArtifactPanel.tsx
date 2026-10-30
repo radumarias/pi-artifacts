@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import type { ArtifactView } from "../../shared/protocol.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
+import { useStoredState } from "../layout.tsx";
 import { ArtifactFrame } from "./ArtifactFrame.tsx";
+import { ViewportPicker, ViewportStage, isViewportId } from "./viewport.tsx";
 
 interface Props {
   artifactId: string;
@@ -19,6 +21,9 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
   const [error, setError] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
   const [clone, setClone] = useState<{ command: string; expiresAt: string } | { error: string } | null>(null);
+  const [storedViewport, setViewport] = useStoredState<string>("preview.viewport", "fit");
+  const [rotated, setRotated] = useStoredState("preview.rotated", false);
+  const viewport = isViewportId(storedViewport) ? storedViewport : "fit";
 
   useEffect(() => {
     let cancelled = false;
@@ -59,6 +64,16 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
           {servers.length > 0 && <span className="pill live">live · {servers.map((s) => s.server).join(", ")}</span>}
         </div>
         <div className="artifact-actions">
+          <ViewportPicker
+            value={viewport}
+            // A newly picked device starts upright.
+            onChange={(id) => {
+              if (id !== viewport) setRotated(false);
+              setViewport(id);
+            }}
+            rotated={rotated}
+            onRotate={() => setRotated(!rotated)}
+          />
           <select value={entry.version} onChange={(e) => setVersion(Number(e.target.value))} aria-label="Version">
             {[...meta.versions].reverse().map((v) => (
               <option key={v.version} value={v.version} title={v.message}>
@@ -103,7 +118,9 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
           )}
         </div>
       )}
-      <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid} title={meta.title} />
+      <ViewportStage id={viewport} rotated={rotated}>
+        <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid} title={meta.title} />
+      </ViewportStage>
     </section>
   );
 }
