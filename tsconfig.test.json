@@ -31,6 +31,7 @@
     "src/chat/Steps.tsx",
     "src/chat/Linkified.tsx",
     "src/artifact/viewport.tsx",
+    "src/Icon.tsx",
     "src/layout.tsx",
     "shared",
     "worker/mcp",
