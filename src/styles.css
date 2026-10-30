@@ -391,3 +391,11 @@ body.resizing iframe { pointer-events: none; }
 .skill pre { white-space: pre-wrap; background: var(--surface-2); padding: 8px 10px; border-radius: 6px; color: var(--text); max-height: 320px; overflow: auto; }
 .form-error { color: var(--error); }
 
+
+/* Someone joined or left a shared chat: a quiet line between the messages. */
+.chat-notice { align-self: center; color: var(--muted); font-size: 13px; }
+/* A message waiting for the agent: faded, with its place in the queue under it. */
+.queued { display: flex; flex-direction: column; gap: 2px; }
+.queued > :not(.queued-label) { opacity: 0.6; }
+.queued-label { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.queued.mine .queued-label { align-self: flex-end; }

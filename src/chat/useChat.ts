@@ -2,7 +2,7 @@ import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai
 import type { AgentEvent, AgentState, EntryRecord, JsonObject } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AttachmentInput } from "../../shared/attachments.ts";
-import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
+import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type QueuedMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
 /** A call of the current round: waiting its turn, running, or ended without a result (it faulted, or was orphaned). */
@@ -199,12 +199,14 @@ export function useChat(chatId: string) {
   const [state, dispatch] = useReducer(reduce, initial);
   const [connected, setConnected] = useState(false);
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const [gone, setGone] = useState(false);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     dispatch({ type: "reset" });
     setPeople(null);
+    setQueued([]);
     setGone(false);
     let closed = false;
     let attempt = 0;
@@ -228,6 +230,7 @@ export function useChat(chatId: string) {
         const message = JSON.parse(event.data) as ChatServerMessage;
         if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs });
         else if (message.type === "people") setPeople(message.people);
+        else if (message.type === "queue") setQueued(message.queued);
         else if (message.type === "removed") {
           stop();
           ws.close();
@@ -260,6 +263,8 @@ export function useChat(chatId: string) {
     state,
     connected,
     people,
+    /** Messages sent while the agent was busy, oldest first: they wait their turn in pi's inbox. */
+    queued,
     /** True once the chat refused this user's socket: they are not (or no longer) in it. */
     gone,
     prompt: (text: string, attachments?: AttachmentInput[]) => send({ type: "prompt", text, ...(attachments?.length && { attachments }) }),

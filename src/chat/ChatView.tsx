@@ -8,7 +8,7 @@ import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
 import { carriesFiles } from "../files/pick.ts";
 import { attachmentInput, pastedName, type Pending } from "./attach.ts";
-import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
+import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, PUBLISH_TOOL, type ChatMessageData, type ChatPeopleData, type PublishedDetails, type QueuedMessage } from "../../shared/protocol.ts";
 import { SharePanel } from "./SharePanel.tsx";
 import { useChat, waitingOnModel } from "./useChat.ts";
 import { Dictation } from "./Dictation.tsx";
@@ -41,7 +41,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }: Props) {
-  const { state, connected, people, gone, prompt, abort, setModel } = useChat(chatId);
+  const { state, connected, people, queued, gone, prompt, abort, setModel } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
   const attachments = useAttachments(chatId);
@@ -60,7 +60,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   useEffect(() => {
     const el = list.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
-  }, [state.entries.length, state.partial, state.tools]);
+  }, [state.entries.length, state.partial, state.tools, queued.length]);
 
   // A finished run may have renamed the chat or published artifacts: refresh the sidebar.
   const wasBusy = useRef(false);
@@ -165,6 +165,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
           {state.partial && <Assistant message={state.partial} streaming />}
           {state.runStartedAt !== undefined && waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
           {state.error && <div className="chat-error">{state.error}</div>}
+          <Queue queued={queued} uid={uid} />
         </div>
       </StepsProvider>
       <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
@@ -275,6 +276,10 @@ const Entry = memo(function Entry({
     const data = entry.data as unknown as ChatMessageData;
     return <User text={data.text} author={data.uid !== uid ? data.name : undefined} attachments={data.attachments} />;
   }
+  if (entry.kind === CHAT_PEOPLE_KIND) {
+    const data = entry.data as unknown as ChatPeopleData;
+    return <div className="chat-notice">{`${data.uid === uid ? "You" : data.name} ${PEOPLE_EVENTS[data.event]}`}</div>;
+  }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
     const artifact = published(entry);
@@ -293,6 +298,25 @@ const Entry = memo(function Entry({
   }
   return null;
 });
+
+const PEOPLE_EVENTS: Record<ChatPeopleData["event"], string> = {
+  joined: "joined the chat",
+  left: "left the chat",
+  removed: "was removed from the chat",
+};
+
+/**
+ * Messages sent while the agent was busy, below everything it is doing now, oldest first: faded and marked queued,
+ * with their place when more than one waits. Each leaves the queue for the transcript when its turn comes.
+ */
+function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
+  return queued.map((message, i) => (
+    <div key={message.id} className={message.uid === uid ? "queued mine" : "queued"}>
+      <User text={message.text} author={message.uid !== uid ? message.name : undefined} attachments={message.attachments} />
+      <small className="queued-label">{queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"}</small>
+    </div>
+  ));
+}
 
 /** A message's blocks, skipping any slot a stream has not filled yet. */
 function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {

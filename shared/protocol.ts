@@ -184,6 +184,20 @@ export interface ChatMessageData extends Person {
   attachments?: Attachment[];
 }
 
+/**
+ * A notice in the transcript that someone joined or left a shared chat. A passive entry: everyone sees it at once,
+ * even mid-run, and the model never reads it (it learns who is in the chat from its prompt).
+ */
+export const CHAT_PEOPLE_KIND = "chat.people";
+export interface ChatPeopleData extends Person {
+  event: "joined" | "left" | "removed";
+}
+
+/** A message waiting for the agent: sent while it was busy, in the order it will be answered. `id` is pi's submission id. */
+export interface QueuedMessage extends ChatMessageData {
+  id: number;
+}
+
 /** Browser → ChatAgent over the chat WebSocket. */
 export type ChatClientMessage =
   // `attachments` were uploaded first, with POST /api/chats/:id/attachments; `text` may then be empty.
@@ -193,13 +207,16 @@ export type ChatClientMessage =
   | { type: "model"; model: string; thinkingLevel?: string };
 
 /**
- * ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change.
+ * ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change,
+ * `queue` on connect and whenever pi's inbox changes.
  * A snapshot taken mid-run comes with `runElapsedMs`: how long ago, by the server's clock, the run's first message was
  * placed, which the snapshot does not say. A duration rather than a time, so the browser's clock need not agree.
  */
 export type ChatServerMessage =
   | { type: "events"; events: unknown[]; runElapsedMs?: number }
   | { type: "people"; people: ChatPeopleView }
+  /** The messages waiting for the agent, oldest first: on connect and whenever the queue changes. Empty when none wait. */
+  | { type: "queue"; queued: QueuedMessage[] }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
   | { type: "error"; message: string };
