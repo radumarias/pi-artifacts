@@ -23,8 +23,8 @@ import {
   type DeclaredTool,
   type McpError,
   type Person,
-  type ProxyRequest,
   type Presence,
+  type ProxyRequest,
   type ProxyResponse,
   type QueuedMessage,
 } from "../shared/protocol.ts";
@@ -506,6 +506,10 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async acceptInvite(secret: string, person: Person, title: string): Promise<ChatRefusal | null> {
     if (this.isInChat(person.uid)) {
+      // A member whose sidebar entry went missing gets it back, as joining by link always gave it.
+      if (person.uid !== this.uid) {
+        await this.#index(person.uid).addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
+      }
       this.#notePeople(person, "rejoined");
       return null;
     }
@@ -692,14 +696,16 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   }
 
   /**
-   * Tell every open socket who has the chat open, and in how many windows: each socket is one. `closing` is a socket
-   * on its way out, which the list of sockets may still hold.
+   * Tell every open socket who has the chat open, and in how many windows: each socket is one. `closing` are
+   * sockets on their way out, which the list of sockets may still hold.
    */
-  #broadcastPresence(closing?: WebSocket): void {
-    const sockets = this.lifecycle.sockets.get(SOCKET_TAG).filter((ws) => ws !== closing && this.#person(ws));
+  #broadcastPresence(closing: ReadonlySet<WebSocket> = new Set()): void {
+    const sockets: WebSocket[] = [];
     const windows = new Map<string, number>();
-    for (const ws of sockets) {
-      const uid = this.#person(ws)!.uid;
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
+      const uid = closing.has(ws) ? undefined : this.#person(ws)?.uid;
+      if (!uid) continue;
+      sockets.push(ws);
       windows.set(uid, (windows.get(uid) ?? 0) + 1);
     }
     const online: Presence[] = [...windows].map(([uid, count]) => ({ uid, windows: count }));
@@ -708,12 +714,16 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
 
   /** Close the sockets of someone no longer in the chat. The app sees the close code and stops reconnecting. */
   disconnect(uid: string): void {
+    const closing = new Set<WebSocket>();
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
       if (this.#person(ws)?.uid !== uid) continue;
       void this.#detach(ws);
       send(ws, { type: "removed" });
       close(ws, SOCKET_NOT_A_MEMBER, "Removed from the chat");
+      closing.add(ws);
     }
+    // A close the chat makes itself may never come back as onWebSocketClose: the others hear of it now.
+    if (closing.size) this.#broadcastPresence(closing);
   }
 
   async onWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<boolean> {
@@ -742,7 +752,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
 
   async onWebSocketClose(ws: WebSocket): Promise<boolean> {
     if (!this.#person(ws)) return false;
-    this.#broadcastPresence(ws);
+    this.#broadcastPresence(new Set([ws]));
     await this.#detach(ws);
     return true;
   }
