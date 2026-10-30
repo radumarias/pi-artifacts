@@ -54,6 +54,8 @@ describe("chat reducer", () => {
           tools: [
             { callId: "a", name: "run_python", status: "running", output: "step 1\n" },
             { callId: "b", name: "run_bash", status: "pending" },
+            { callId: "c", name: "run_bash", status: "done", entry: "e1" },
+            { callId: "d", name: "run_bash", status: "done" },
           ],
           agent: {},
         },
@@ -62,6 +64,8 @@ describe("chat reducer", () => {
     expect(state.tools).toEqual([
       { toolCallId: "a", toolName: "run_python", output: "step 1\n", status: "running" },
       { toolCallId: "b", toolName: "run_bash", output: "", status: "pending" },
+      // Done without a result entry: it faulted or was orphaned.
+      { toolCallId: "d", toolName: "run_bash", output: "", status: "stopped" },
     ]);
   });
 
@@ -75,6 +79,9 @@ describe("chat reducer", () => {
     state = reduce(state, { type: "events", events: [{ type: "tool_execution_start", toolCallId: "b", ...call, args: {} }, { type: "tool_execution_end", toolCallId: "b", ...call, entry }] as never });
     expect(state.tools.map((t) => t.toolCallId)).toEqual(["a"]);
     expect(state.entries).toEqual([entry]);
+    // Orphaned before it started.
+    state = reduce(state, { type: "events", events: [{ type: "tool_execution_end", toolCallId: "c", ...call }] as never });
+    expect(state.tools.map((t) => [t.toolCallId, t.status])).toEqual([["a", "stopped"], ["c", "stopped"]]);
   });
 
   it("ignores message_start for user, system and tool-result messages", () => {

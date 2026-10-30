@@ -5,7 +5,7 @@ import { MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL } from "../../share
 import { clip } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { Spark } from "./Thinking.tsx";
-import type { RunningTool } from "./useChat.ts";
+import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
 /** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
 export interface StepResults {
@@ -13,15 +13,19 @@ export interface StepResults {
   calls: ReadonlySet<string>;
 }
 
-/** The calls of the current round, and whether a run is on. Changes with every chunk of tool output. */
+/**
+ * The calls of the current round, whether a run is on, and the newest assistant entry's calls still without a result
+ * (the ones a run has yet to start). Changes with every chunk of tool output.
+ */
 export interface StepsLive {
   tools: ReadonlyMap<string, RunningTool>;
   busy: boolean;
+  unanswered: ReadonlySet<string>;
 }
 
 // Two contexts, so a step that has its result never re-renders for another step's output.
 const ResultsContext = createContext<StepResults>({ results: new Map(), calls: new Set() });
-const LiveContext = createContext<StepsLive>({ tools: new Map(), busy: false });
+const LiveContext = createContext<StepsLive>({ tools: new Map(), busy: false, unanswered: new Set() });
 
 export function stepResults(entries: readonly EntryRecord[]): StepResults {
   const results = new Map<string, ToolResultMessage>();
@@ -36,14 +40,15 @@ export function stepResults(entries: readonly EntryRecord[]): StepResults {
   return { results, calls };
 }
 
-export function stepsLive(tools: readonly RunningTool[], busy: boolean): StepsLive {
-  return { tools: new Map(tools.map((tool) => [tool.toolCallId, tool])), busy };
+export function stepsLive(tools: readonly RunningTool[], busy: boolean, unanswered: ReadonlySet<string> = new Set()): StepsLive {
+  return { tools: new Map(tools.map((tool) => [tool.toolCallId, tool])), busy, unanswered };
 }
 
 /** What the step panels read from the chat. */
 export function StepsProvider({ entries, tools, busy, children }: { entries: readonly EntryRecord[]; tools: readonly RunningTool[]; busy: boolean; children: ReactNode }) {
   const results = useMemo(() => stepResults(entries), [entries]);
-  const live = useMemo(() => stepsLive(tools, busy), [tools, busy]);
+  const unanswered = useMemo(() => unansweredCalls(entries), [entries]);
+  const live = useMemo(() => stepsLive(tools, busy, unanswered), [tools, busy, unanswered]);
   return (
     <ResultsContext value={results}>
       <LiveContext value={live}>{children}</LiveContext>
@@ -57,12 +62,16 @@ export function StepsProvider({ entries, tools, busy, children }: { entries: rea
  */
 export type StepStatus = "writing" | "starting" | "running" | "done" | "error" | "stopped";
 
-/** Where a call without a result is: its slot in the current round, else what the run says. */
+/**
+ * Where a call without a result is: its slot in the current round, else what the run says. A call of an earlier
+ * round that never got a result (its run was stopped) stays stopped while a later run goes on.
+ */
 export function liveStatus(live: StepsLive, callId: string, streaming: boolean): StepStatus {
   const slot = live.tools.get(callId)?.status;
   if (slot) return slot === "pending" ? "starting" : slot;
   if (!live.busy) return "stopped";
-  return streaming ? "writing" : "starting";
+  if (streaming) return "writing";
+  return live.unanswered.has(callId) ? "starting" : "stopped";
 }
 
 /** Each status's text and icon (the spark when it has none), and its tone: color, and the shimmer while active. */
@@ -99,8 +108,11 @@ const INPUT_LABELS: Record<string, Record<string, string>> = {
 
 export function stepLabel(name: string): string {
   if (LABELS[name]) return LABELS[name];
-  const split = name.indexOf(MCP_TOOL_SEPARATOR);
-  return split > 0 ? `${name.slice(0, split)} › ${name.slice(split + MCP_TOOL_SEPARATOR.length)}` : name;
+  let split = name.indexOf(MCP_TOOL_SEPARATOR);
+  if (split <= 0) return name;
+  // A server slug can end in "_" ("Reports (beta)" is "reports_beta_"): the separator is the last two of the run.
+  while (name[split + MCP_TOOL_SEPARATOR.length] === "_") split++;
+  return `${name.slice(0, split)} › ${name.slice(split + MCP_TOOL_SEPARATOR.length)}`;
 }
 
 /** Lines that say nothing about what a script does: blank, a shebang, shell options. */
@@ -146,13 +158,13 @@ function seconds(ms: number): string {
   return ms < 1_000 ? `${Math.round(ms)} ms` : `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 }
 
+/** Panels the reader opened, by key: one stays open when its streaming message becomes an entry and remounts. */
+const opened = new Set<string>();
+
 /**
  * One step of the agent, collapsed to a line: an icon, what it is, a hint and where it is. Opened, it shows what the
  * step was given and what came back. The body is only rendered while open, so a long history of steps stays cheap.
  */
-/** Panels the reader opened, by key: one stays open when its streaming message becomes an entry and remounts. */
-const opened = new Set<string>();
-
 function Panel({ openKey, tone, icon, label, hint, status, children }: {
   openKey: string;
   tone?: "active" | "done" | "error";
@@ -216,8 +228,8 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
         const output = result ? resultText(result) : live!.tools.get(call.id)?.output;
         return (
           <>
-            {inputSections(call.name, call.arguments).map((section) => (
-              <Section key={section.label} {...section} />
+            {inputSections(call.name, call.arguments).map((section, i) => (
+              <Section key={i} {...section} />
             ))}
             {call.argumentsError && <Section label="Invalid arguments" text={call.argumentsError} error />}
             {output ? (

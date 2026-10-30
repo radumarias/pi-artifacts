@@ -50,9 +50,10 @@ export function reduce(state: ChatState, action: Action): ChatState {
             entries: [...event.entries],
             partial: event.generation?.message,
             // The round's unfinished calls when the socket (re)connected, with the output they have so far.
+            // A slot done without a result entry faulted or was orphaned: it stays in the round as stopped.
             tools: event.tools
-              .filter((t) => t.status !== "done")
-              .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "running" ? "running" : "pending" })),
+              .filter((t) => t.status !== "done" || t.entry === undefined)
+              .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "done" ? "stopped" : t.status })),
             busy: event.run !== undefined,
           },
           event.agent,
@@ -119,12 +120,19 @@ export function reduce(state: ChatState, action: Action): ChatState {
         };
         break;
       }
-      case "tool_execution_end":
-        // Without a result entry the call faulted or was orphaned: it stays in the round as stopped.
-        next = event.entry
-          ? { ...next, tools: next.tools.filter((t) => t.toolCallId !== event.toolCallId), entries: addEntry(next.entries, event.entry) }
-          : { ...next, tools: next.tools.map((t) => (t.toolCallId === event.toolCallId ? { ...t, status: "stopped" } : t)) };
+      case "tool_execution_end": {
+        if (event.entry) {
+          next = { ...next, tools: next.tools.filter((t) => t.toolCallId !== event.toolCallId), entries: addEntry(next.entries, event.entry) };
+          break;
+        }
+        if (event.parentToolCallId) break;
+        // Without a result entry the call faulted or was orphaned, maybe before it started: it stays in the round as stopped.
+        const stopped: RunningTool = { toolCallId: event.toolCallId, toolName: event.toolName, output: "", status: "stopped" };
+        next = next.tools.some((t) => t.toolCallId === event.toolCallId)
+          ? { ...next, tools: next.tools.map((t) => (t.toolCallId === event.toolCallId ? { ...t, status: "stopped" } : t)) }
+          : { ...next, tools: [...next.tools, stopped] };
         break;
+      }
       case "task_failed":
         next = { ...next, error: event.message };
         break;
@@ -142,16 +150,17 @@ function appendAt(value: unknown, path: readonly (string | number)[], delta: str
   return copy;
 }
 
-/** True when the newest assistant entry made a tool call that has no result yet. */
-function callPending(entries: readonly EntryRecord[]): boolean {
+/** The tool calls of the newest assistant entry that have no result yet: the round's calls still to come. */
+export function unansweredCalls(entries: readonly EntryRecord[]): Set<string> {
   const answered = new Set<string>();
   for (let i = entries.length - 1; i >= 0; i--) {
     const message = entries[i].model?.[0];
     if (message?.role === "toolResult") answered.add(message.toolCallId);
-    else if (message?.role === "assistant") return message.content.some((block) => block?.type === "toolCall" && !answered.has(block.id));
-    else if (message) return false;
+    else if (message?.role === "assistant") {
+      return new Set(message.content.flatMap((block) => (block?.type === "toolCall" && !answered.has(block.id) ? [block.id] : [])));
+    } else if (message) break;
   }
-  return false;
+  return new Set();
 }
 
 /**
@@ -160,7 +169,11 @@ function callPending(entries: readonly EntryRecord[]): boolean {
  */
 export function waitingOnModel(state: ChatState): boolean {
   if (!state.busy || state.tools.some((t) => t.status !== "stopped")) return false;
-  if (!state.partial) return !callPending(state.entries);
+  if (!state.partial) {
+    // A call that ended without a result is not one the run still waits on.
+    const stopped = new Set(state.tools.map((t) => t.toolCallId));
+    return [...unansweredCalls(state.entries)].every((id) => stopped.has(id));
+  }
   const last = state.partial.content.filter(Boolean).at(-1);
   if (last?.type === "toolCall") return false;
   return last?.type !== "text" || !last.text;

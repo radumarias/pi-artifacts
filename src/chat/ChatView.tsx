@@ -377,7 +377,9 @@ function release(item: Pending): void {
 function Assistant({ message, streaming = false }: { message: AssistantMessage; streaming?: boolean }) {
   return (
     <div className="assistant">
-      {blocks(message.content).map((block, i) => {
+      {/* By the block's own index, which stays the same once the message lands, so an opened thought stays open. */}
+      {message.content.map((block, i) => {
+        if (!block) return null;
         if (block.type === "text")
           return block.text ? (
             <div key={i} className="bubble bot markdown">

@@ -9,8 +9,6 @@ export function mcpToolName(server: string, tool: string): string {
   return `${server.toLowerCase().replace(/[^a-z0-9]+/g, "_")}${MCP_TOOL_SEPARATOR}${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`.slice(0, 64);
 }
 
-export { MCP_DISCOVER_TOOL };
-
 /** What one MCP server told the chat about itself. */
 export interface ServerCatalog {
   tools: ToolInfo[];

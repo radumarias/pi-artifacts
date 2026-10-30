@@ -31,6 +31,9 @@ describe("waiting on the model", () => {
     const call = { id: "a", kind: "pi.assistant", model: [{ role: "assistant", content: [{ type: "toolCall", id: "c", name: "run_python", arguments: {} }] }] };
     const result = { id: "r", kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "c", toolName: "run_python", content: [], isError: false }] };
     expect(waitingOnModel({ ...busy, entries: [call] } as unknown as ChatState)).toBe(false);
+    // Ended without a result: the model is up again.
+    const stopped = [{ toolCallId: "c", toolName: "run_python", output: "", status: "stopped" }];
+    expect(waitingOnModel({ ...busy, entries: [call], tools: stopped } as unknown as ChatState)).toBe(true);
     // Answered: the model is up again.
     expect(waitingOnModel({ ...busy, entries: [call, result] } as unknown as ChatState)).toBe(true);
   });
