@@ -31,6 +31,59 @@ describe("chat reducer", () => {
     expect(content.every((block) => block !== undefined)).toBe(true);
   });
 
+  it("streams a tool call's arguments into the call", () => {
+    const state = reduce(empty, {
+      type: "events",
+      events: [
+        { type: "message_start", message: assistant([{ type: "toolCall", id: "c", name: "run_python", arguments: { code: "import", files: ["sales"] } }]) },
+        { type: "message_update", usage: {}, changes: [{ type: "toolcall_delta", contentIndex: 0, path: ["code"], delta: " pandas" }] },
+        { type: "message_update", usage: {}, changes: [{ type: "toolcall_delta", contentIndex: 0, path: ["files", 0], delta: ".csv" }] },
+      ] as never,
+    });
+    expect(state.partial?.content[0]).toMatchObject({ arguments: { code: "import pandas", files: ["sales.csv"] } });
+  });
+
+  it("picks up the calls running when the socket connects", () => {
+    const state = reduce(empty, {
+      type: "events",
+      events: [
+        {
+          type: "snapshot",
+          entries: [],
+          run: { inputs: [] },
+          tools: [
+            { callId: "a", name: "run_python", status: "running", output: "step 1\n" },
+            { callId: "b", name: "run_bash", status: "pending" },
+            { callId: "c", name: "run_bash", status: "done", entry: "e1" },
+            { callId: "d", name: "run_bash", status: "done" },
+          ],
+          agent: {},
+        },
+      ] as never,
+    });
+    expect(state.tools).toEqual([
+      { toolCallId: "a", toolName: "run_python", output: "step 1\n", status: "running" },
+      { toolCallId: "b", toolName: "run_bash", output: "", status: "pending" },
+      // Done without a result entry: it faulted or was orphaned.
+      { toolCallId: "d", toolName: "run_bash", output: "", status: "stopped" },
+    ]);
+  });
+
+  it("follows a call from its start to its end, and keeps one that ended without a result as stopped", () => {
+    const call = { toolName: "run_python" };
+    let state = reduce(empty, { type: "events", events: [{ type: "tool_execution_start", toolCallId: "a", ...call, args: {} }] as never });
+    expect(state.tools).toEqual([{ toolCallId: "a", toolName: "run_python", output: "", status: "running" }]);
+    state = reduce(state, { type: "events", events: [{ type: "tool_execution_end", toolCallId: "a", ...call }] as never });
+    expect(state.tools[0].status).toBe("stopped");
+    const entry = { id: "r", kind: "pi.tool-result", model: [] };
+    state = reduce(state, { type: "events", events: [{ type: "tool_execution_start", toolCallId: "b", ...call, args: {} }, { type: "tool_execution_end", toolCallId: "b", ...call, entry }] as never });
+    expect(state.tools.map((t) => t.toolCallId)).toEqual(["a"]);
+    expect(state.entries).toEqual([entry]);
+    // Orphaned before it started.
+    state = reduce(state, { type: "events", events: [{ type: "tool_execution_end", toolCallId: "c", ...call }] as never });
+    expect(state.tools.map((t) => [t.toolCallId, t.status])).toEqual([["a", "stopped"], ["c", "stopped"]]);
+  });
+
   it("ignores message_start for user, system and tool-result messages", () => {
     const state = reduce(empty, {
       type: "events",

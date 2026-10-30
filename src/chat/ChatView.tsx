@@ -9,10 +9,10 @@ import { carriesFiles } from "../files/pick.ts";
 import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
 import { SharePanel } from "./SharePanel.tsx";
-import { useChat, waitingOnModel, type RunningTool } from "./useChat.ts";
-import { Linkified } from "./Linkified.tsx";
+import { useChat, waitingOnModel } from "./useChat.ts";
 import { Markdown } from "./Markdown.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
+import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
 
 interface Props {
@@ -133,23 +133,22 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
         )}
       </header>
       {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} />}
-      <div className="messages" ref={list} onScroll={onScroll}>
-        {state.entries.length === 0 && !state.busy && (
-          <div className="empty-chat">
-            <h2>What should we build?</h2>
-            <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
-          </div>
-        )}
-        {state.entries.map((entry) => (
-          <Entry key={entry.id} entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
-        ))}
-        {state.partial && <Assistant message={state.partial} />}
-        {state.tools.map((tool) => (
-          <Running key={tool.toolCallId} tool={tool} />
-        ))}
-        {waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
-        {state.error && <div className="chat-error">{state.error}</div>}
-      </div>
+      <StepsProvider entries={state.entries} tools={state.tools} busy={state.busy}>
+        <div className="messages" ref={list} onScroll={onScroll}>
+          {state.entries.length === 0 && !state.busy && (
+            <div className="empty-chat">
+              <h2>What should we build?</h2>
+              <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
+            </div>
+          )}
+          {state.entries.map((entry) => (
+            <Entry key={entry.id} entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
+          ))}
+          {state.partial && <Assistant message={state.partial} streaming />}
+          {waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
+          {state.error && <div className="chat-error">{state.error}</div>}
+        </div>
+      </StepsProvider>
       <ModelPicker
         model={state.model}
         thinkingLevel={state.thinkingLevel}
@@ -254,7 +253,7 @@ const Entry = memo(function Entry({
         </button>
       );
     }
-    return <ToolResult message={message} />;
+    return <OrphanResult message={message} />;
   }
   return null;
 });
@@ -374,44 +373,26 @@ function release(item: Pending): void {
   if (item.preview) URL.revokeObjectURL(item.preview);
 }
 
-function Assistant({ message }: { message: AssistantMessage }) {
+/** A reply: its text, and a collapsed panel for each thought and tool call in it. `streaming` while the model writes it. */
+function Assistant({ message, streaming = false }: { message: AssistantMessage; streaming?: boolean }) {
   return (
     <div className="assistant">
-      {blocks(message.content).map((block, i) => {
+      {/* By the block's own index, which stays the same once the message lands, so an opened thought stays open. */}
+      {message.content.map((block, i) => {
+        if (!block) return null;
         if (block.type === "text")
           return block.text ? (
             <div key={i} className="bubble bot markdown">
               <Markdown text={block.text} />
             </div>
           ) : null;
-        if (block.type === "toolCall") return <div key={i} className="tool-call">→ {block.name}</div>;
+        if (block.type === "toolCall") return <ToolStep key={i} call={block} streaming={streaming} />;
+        if (block.type === "thinking" && !block.redacted && block.thinking.trim())
+          return <ThoughtStep key={i} openKey={`${message.timestamp}:${i}`} text={block.thinking} />;
         return null;
       })}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
-    </div>
-  );
-}
-
-function ToolResult({ message }: { message: ToolResultMessage }) {
-  const text = blocks(message.content).map((b) => (b.type === "text" ? b.text : "[image]")).join("\n");
-  return (
-    <details className={message.isError ? "tool-result error" : "tool-result"}>
-      <summary>
-        {message.isError ? "✕" : "✓"} {message.toolName}
-      </summary>
-      <pre>
-        <Linkified text={text.length > 4_000 ? `${text.slice(0, 4_000)}…` : text} />
-      </pre>
-    </details>
-  );
-}
-
-function Running({ tool }: { tool: RunningTool }) {
-  return (
-    <div className="tool-call">
-      <span className="spinner" /> {tool.toolName}
-      {tool.output && <pre>{tool.output.slice(-600)}</pre>}
     </div>
   );
 }

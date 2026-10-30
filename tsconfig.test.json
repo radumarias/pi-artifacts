@@ -28,6 +28,8 @@
     "src/api.ts",
     "src/chat/Markdown.tsx",
     "src/chat/Thinking.tsx",
+    "src/chat/Steps.tsx",
+    "src/chat/Linkified.tsx",
     "src/artifact/viewport.tsx",
     "src/layout.tsx",
     "shared",

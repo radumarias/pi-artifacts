@@ -13,17 +13,30 @@ describe("waiting on the model", () => {
     expect(waitingOnModel(partial([]))).toBe(true);
   });
 
-  it("shows while the model thinks or writes a tool call", () => {
+  it("shows while the model thinks", () => {
     expect(waitingOnModel(partial([{ type: "thinking", thinking: "Plan" }]))).toBe(true);
-    expect(waitingOnModel(partial([{ type: "text", text: "Building it." }, { type: "toolCall", name: "publish", arguments: {} }]))).toBe(true);
     // A block the stream has not filled yet.
     expect(waitingOnModel(partial([{ type: "thinking", thinking: "" }, undefined]))).toBe(true);
   });
 
   it("hides as soon as reply text streams, while a tool runs, and when idle", () => {
     expect(waitingOnModel(partial([{ type: "thinking", thinking: "Plan" }, { type: "text", text: "I" }]))).toBe(false);
-    expect(waitingOnModel({ ...busy, tools: [{ toolCallId: "t", toolName: "run_python", output: "" }] })).toBe(false);
+    expect(waitingOnModel({ ...busy, tools: [{ toolCallId: "t", toolName: "run_python", output: "", status: "running" }] })).toBe(false);
+    // A call that ended without a result no longer holds the indicator back.
+    expect(waitingOnModel({ ...busy, tools: [{ toolCallId: "t", toolName: "run_python", output: "", status: "stopped" }] })).toBe(true);
     expect(waitingOnModel({ ...busy, busy: false })).toBe(false);
+  });
+
+  it("hides while a tool call is written or waits to start: its panel shows a spinner", () => {
+    expect(waitingOnModel(partial([{ type: "text", text: "Building it." }, { type: "toolCall", id: "c", name: "artifact_publish", arguments: {} }]))).toBe(false);
+    const call = { id: "a", kind: "pi.assistant", model: [{ role: "assistant", content: [{ type: "toolCall", id: "c", name: "run_python", arguments: {} }] }] };
+    const result = { id: "r", kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "c", toolName: "run_python", content: [], isError: false }] };
+    expect(waitingOnModel({ ...busy, entries: [call] } as unknown as ChatState)).toBe(false);
+    // Ended without a result: the model is up again.
+    const stopped = [{ toolCallId: "c", toolName: "run_python", output: "", status: "stopped" }];
+    expect(waitingOnModel({ ...busy, entries: [call], tools: stopped } as unknown as ChatState)).toBe(true);
+    // Answered: the model is up again.
+    expect(waitingOnModel({ ...busy, entries: [call, result] } as unknown as ChatState)).toBe(true);
   });
 });
 
@@ -67,7 +80,7 @@ describe("elapsed time", () => {
   it("takes a run already going on reconnect from the newest user message", () => {
     const user = (timestamp: number) => ({ id: `e${timestamp}`, kind: "pi.user", model: [{ role: "user", content: "hi", timestamp }] });
     const snapshot = (run: boolean, timestamps: number[]) =>
-      reduce(idle, { type: "events", events: [{ type: "snapshot", entries: timestamps.map(user), ...(run ? { run: { inputs: [] } } : {}) }] as never }, 10_000);
+      reduce(idle, { type: "events", events: [{ type: "snapshot", entries: timestamps.map(user), tools: [], ...(run ? { run: { inputs: [] } } : {}) }] as never }, 10_000);
     expect(snapshot(true, [1_000, 4_000]).runStartedAt).toBe(4_000);
     expect(snapshot(true, [12_000]).runStartedAt).toBe(10_000);
     expect(snapshot(true, []).runStartedAt).toBe(10_000);

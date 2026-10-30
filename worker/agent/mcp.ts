@@ -1,16 +1,13 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
-import { isReadOnly, type ToolInfo } from "../../shared/protocol.ts";
+import { isReadOnly, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, type ToolInfo } from "../../shared/protocol.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import { clip, text } from "./output.ts";
 
 /** Tool names the providers accept: the server's name as a slug, then the MCP tool's name. */
 export function mcpToolName(server: string, tool: string): string {
-  return `${server.toLowerCase().replace(/[^a-z0-9]+/g, "_")}__${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`.slice(0, 64);
+  return `${server.toLowerCase().replace(/[^a-z0-9]+/g, "_")}${MCP_TOOL_SEPARATOR}${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`.slice(0, 64);
 }
-
-/** The agent's tool that lists the MCP servers afresh. */
-export const MCP_DISCOVER_TOOL = "mcp_discover";
 
 /** What one MCP server told the chat about itself. */
 export interface ServerCatalog {

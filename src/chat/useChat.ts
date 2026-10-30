@@ -1,14 +1,16 @@
 import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { AgentEvent, AgentState, EntryRecord } from "@earendil-works/pi-durable";
+import type { AgentEvent, AgentState, EntryRecord, JsonObject } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AttachmentInput } from "../../shared/attachments.ts";
 import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
+/** A call of the current round: waiting its turn, running, or ended without a result (it faulted, or was orphaned). */
 export interface RunningTool {
   toolCallId: string;
   toolName: string;
   output: string;
+  status: "pending" | "running" | "stopped";
 }
 
 export interface ChatState {
@@ -55,8 +57,20 @@ export function reduce(state: ChatState, action: Action, now = Date.now()): Chat
     switch (event.type) {
       case "snapshot": {
         const busy = event.run !== undefined;
-        const runStartedAt = busy ? runStart(event.entries, now) : undefined;
-        next = withAgent({ entries: [...event.entries], partial: event.generation?.message, tools: [], busy, runStartedAt }, event.agent);
+        next = withAgent(
+          {
+            entries: [...event.entries],
+            partial: event.generation?.message,
+            // The round's unfinished calls when the socket (re)connected, with the output they have so far.
+            // A slot done without a result entry faulted or was orphaned: it stays in the round as stopped.
+            tools: event.tools
+              .filter((t) => t.status !== "done" || t.entry === undefined)
+              .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "done" ? "stopped" : t.status })),
+            busy,
+            runStartedAt: busy ? runStart(event.entries, now) : undefined,
+          },
+          event.agent,
+        );
         break;
       }
       case "agent_changed":
@@ -86,6 +100,10 @@ export function reduce(state: ChatState, action: Action, now = Date.now()): Chat
           } else if (change.type === "thinking_delta") {
             const block = content[change.contentIndex];
             if (block?.type === "thinking") content[change.contentIndex] = { ...block, thinking: block.thinking + change.delta };
+          } else if (change.type === "toolcall_delta") {
+            // A tool call's arguments as the model writes them, so its panel shows the code as it comes.
+            const block = content[change.contentIndex];
+            if (block?.type === "toolCall") content[change.contentIndex] = { ...block, arguments: appendAt(block.arguments, change.path, change.delta) as JsonObject };
           }
         }
         next = { ...next, partial: { ...next.partial, content } };
@@ -97,9 +115,12 @@ export function reduce(state: ChatState, action: Action, now = Date.now()): Chat
       case "entry_appended":
         next = { ...next, entries: addEntry(next.entries, event.entry) };
         break;
-      case "tool_execution_start":
-        if (!event.parentToolCallId) next = { ...next, tools: [...next.tools, { toolCallId: event.toolCallId, toolName: event.toolName, output: "" }] };
+      case "tool_execution_start": {
+        if (event.parentToolCallId) break;
+        const tool: RunningTool = { toolCallId: event.toolCallId, toolName: event.toolName, output: "", status: "running" };
+        next = { ...next, tools: [...next.tools.filter((t) => t.toolCallId !== event.toolCallId), tool] };
         break;
+      }
       case "tool_execution_update": {
         const out = event.output;
         if (!out) break;
@@ -113,13 +134,19 @@ export function reduce(state: ChatState, action: Action, now = Date.now()): Chat
         };
         break;
       }
-      case "tool_execution_end":
-        next = {
-          ...next,
-          tools: next.tools.filter((t) => t.toolCallId !== event.toolCallId),
-          entries: event.entry ? addEntry(next.entries, event.entry) : next.entries,
-        };
+      case "tool_execution_end": {
+        if (event.entry) {
+          next = { ...next, tools: next.tools.filter((t) => t.toolCallId !== event.toolCallId), entries: addEntry(next.entries, event.entry) };
+          break;
+        }
+        if (event.parentToolCallId) break;
+        // Without a result entry the call faulted or was orphaned, maybe before it started: it stays in the round as stopped.
+        const stopped: RunningTool = { toolCallId: event.toolCallId, toolName: event.toolName, output: "", status: "stopped" };
+        next = next.tools.some((t) => t.toolCallId === event.toolCallId)
+          ? { ...next, tools: next.tools.map((t) => (t.toolCallId === event.toolCallId ? { ...t, status: "stopped" } : t)) }
+          : { ...next, tools: [...next.tools, stopped] };
         break;
+      }
       case "task_failed":
         next = { ...next, error: event.message };
         break;
@@ -128,13 +155,41 @@ export function reduce(state: ChatState, action: Action, now = Date.now()): Chat
   return next;
 }
 
+/** `value` with `delta` appended to the string at `path`, copying only what is on the way there. */
+function appendAt(value: unknown, path: readonly (string | number)[], delta: string): unknown {
+  if (path.length === 0) return (typeof value === "string" ? value : "") + delta;
+  const [key, ...rest] = path;
+  const copy = (Array.isArray(value) ? [...value] : { ...(value as object) }) as Record<string | number, unknown>;
+  copy[key] = appendAt(copy[key], rest, delta);
+  return copy;
+}
+
+/** The tool calls of the newest assistant entry that have no result yet: the round's calls still to come. */
+export function unansweredCalls(entries: readonly EntryRecord[]): Set<string> {
+  const answered = new Set<string>();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const message = entries[i].model?.[0];
+    if (message?.role === "toolResult") answered.add(message.toolCallId);
+    else if (message?.role === "assistant") {
+      return new Set(message.content.flatMap((block) => (block?.type === "toolCall" && !answered.has(block.id) ? [block.id] : [])));
+    } else if (message) break;
+  }
+  return new Set();
+}
+
 /**
- * True while a run waits on the model: before its first token, between tool calls, and while it thinks or writes a
- * tool call. Not while a tool runs (that shows its own spinner) or while reply text streams.
+ * True while a run waits on the model: before its first token, between tool calls, and while it thinks. Not while
+ * it writes a tool call or the call runs (the call's panel shows its own spinner), or while reply text streams.
  */
 export function waitingOnModel(state: ChatState): boolean {
-  if (!state.busy || state.tools.length > 0) return false;
-  const last = state.partial?.content.filter(Boolean).at(-1);
+  if (!state.busy || state.tools.some((t) => t.status !== "stopped")) return false;
+  if (!state.partial) {
+    // A call that ended without a result is not one the run still waits on.
+    const stopped = new Set(state.tools.map((t) => t.toolCallId));
+    return [...unansweredCalls(state.entries)].every((id) => stopped.has(id));
+  }
+  const last = state.partial.content.filter(Boolean).at(-1);
+  if (last?.type === "toolCall") return false;
   return last?.type !== "text" || !last.text;
 }
 

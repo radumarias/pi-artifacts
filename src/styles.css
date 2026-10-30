@@ -164,11 +164,31 @@ body.resizing iframe { pointer-events: none; }
 .bubble.markdown th { background: var(--surface-2); }
 .assistant { display: flex; flex-direction: column; gap: 6px; }
 .tool-call { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); padding-left: 4px; }
-.tool-call pre { margin: 4px 0 0; max-height: 120px; overflow: auto; }
-.tool-result { font-size: 12px; color: var(--muted); padding-left: 4px; }
-.tool-result summary { cursor: pointer; font-family: ui-monospace, monospace; }
-.tool-result.error summary { color: var(--error); }
-.tool-result pre { max-height: 240px; overflow: auto; background: var(--surface-2); padding: 8px; border-radius: 6px; white-space: pre-wrap; }
+/* One step of the agent (Steps.tsx): a line with an icon, what it is, a hint and its status; opened, what went in and came out. */
+.step { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 13px; min-width: 0; }
+.step > summary { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; list-style: none; border-radius: 8px; }
+.step > summary::-webkit-details-marker { display: none; }
+.step > summary:hover { background: var(--surface-2); }
+.step > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.step[open] > summary { border-radius: 8px 8px 0 0; }
+.step-icon { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--muted); font-size: 12px; }
+.step-icon .thinking-spark { width: 14px; height: 14px; }
+.step.done .step-icon { color: var(--live); }
+.step.error .step-icon { color: var(--error); }
+.step-label { flex: none; font-weight: 600; white-space: nowrap; }
+.step-hint { flex: 1; min-width: 0; color: var(--muted); font: 12px/1.4 ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Opened, the body shows it all. */
+.step[open] .step-hint { visibility: hidden; }
+.step-status { flex: none; margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.step.error .step-status { color: var(--error); }
+.step-chevron { flex: none; width: 12px; height: 12px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.15s; }
+.step[open] .step-chevron { transform: rotate(90deg); }
+.step-body { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; border-top: 1px solid var(--border); }
+.step-section-label { margin-bottom: 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.step-section pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.step-section.error pre { color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }
+.step-note { margin: 0; color: var(--muted); }
+.step-thought { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
 /* Waiting on the model: pulsing dots, a rotating word with a light sweeping across it, and the elapsed time (Thinking.tsx). */
 .thinking { display: flex; align-items: center; gap: 10px; padding: 2px 4px; color: var(--muted); }
 /* The brightness passes from dot to dot, left to right. */
@@ -177,14 +197,29 @@ body.resizing iframe { pointer-events: none; }
 .thinking-dots i:nth-child(2) { animation-delay: 0.2s; }
 .thinking-dots i:nth-child(3) { animation-delay: 0.4s; }
 .thinking-time { margin-left: -2px; font-variant-numeric: tabular-nums; }
+/* A running step's icon: a spark that spins and morphs (Spark in Thinking.tsx). */
+/* The spark turns a quarter at a time (the easing applies per step) while its two sets of rays grow and shrink in turn. */
+.thinking-spark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  stroke: var(--accent);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  animation: thinking-spin 3.2s ease-in-out infinite;
+}
+.thinking-spark g { transform-origin: 12px 12px; animation: thinking-morph 1.6s ease-in-out infinite; }
+.thinking-spark .thinking-spark-short { animation-delay: -0.8s; }
 /* The gradient is 2.5× the word, so moving it from 100% to 0% carries the bright band from left of the word to right of it. */
-.thinking-word {
+.thinking-word, .step.active .step-status {
   background: linear-gradient(90deg, var(--muted) 40%, var(--text) 50%, var(--muted) 60%) 100% 0 / 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   animation: thinking-shimmer 2s linear infinite, thinking-in 0.3s ease-out;
 }
+@keyframes thinking-spin { 25% { transform: rotate(90deg); } 50% { transform: rotate(180deg); } 75% { transform: rotate(270deg); } to { transform: rotate(360deg); } }
+@keyframes thinking-morph { 50% { transform: scale(0.4); } }
 @keyframes thinking-pulse { 30% { opacity: 1; transform: scale(1.25); } 60%, 100% { opacity: 0.3; transform: none; } }
 @keyframes thinking-shimmer { to { background-position: 0 0; } }
 @keyframes thinking-in { from { opacity: 0; } }
@@ -193,9 +228,11 @@ body.resizing iframe { pointer-events: none; }
 .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .thinking-dots i, .thinking-word, .spinner { animation: none; }
+  .thinking-dots i, .thinking-spark, .thinking-spark g, .thinking-word, .step.active .step-status, .spinner { animation: none; }
   .thinking-dots i { opacity: 0.7; }
-  .thinking-word { background: none; color: var(--muted); }
+  .thinking-spark .thinking-spark-short { transform: scale(0.6); }
+  .thinking-word, .step.active .step-status { background: none; color: var(--muted); }
+  .step-chevron { transition: none; }
 }
 
 .artifact-card {
@@ -274,7 +311,7 @@ body.resizing iframe { pointer-events: none; }
 .viewport-picker button + button { border-left: 1px solid var(--border); }
 .viewport-picker button:hover { color: var(--text); }
 .viewport-picker button[aria-pressed="true"] { background: var(--surface-2); color: var(--accent); }
-.bubble a, .tool-result a { color: var(--accent); overflow-wrap: anywhere; }
+.bubble a, .step a { color: var(--accent); overflow-wrap: anywhere; }
 .clone-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: 13px; }
 .clone-box code { flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .clone-box small { flex-basis: 100%; color: var(--muted); }
