@@ -260,7 +260,9 @@ people: many people share one conversation with one agent, and their messages qu
   the model reads it as `name: text` (before that, no name reaches the model), and a system-prompt section says who
   is in the chat.
 - **Joining and leaving:** when someone joins, leaves or is removed, the chat writes a `chat.people` entry, and
-  everyone sees a line like "bob joined the chat". It is a passive pi write: placed at once, even mid-run, and the
+  everyone sees a line like "bob joined the chat". Someone already in the chat who opens an invite link again (the
+  owner trying their own, or a member in another window or on another device) shows as "joined again from another
+  window or device"; a reload shows nothing. It is a passive pi write: placed at once, even mid-run, and the
   model never reads it.
 - **Queued messages:** a message sent while the agent works waits in pi's inbox (`pi.inbox`). pi's event stream
   reports each change to the inbox by ids only, so the chat adds the waiting messages, read from the inbox, to that

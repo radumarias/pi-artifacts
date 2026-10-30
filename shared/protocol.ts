@@ -190,7 +190,8 @@ export interface ChatMessageData extends Person {
  */
 export const CHAT_PEOPLE_KIND = "chat.people";
 export interface ChatPeopleData extends Person {
-  event: "joined" | "left" | "removed";
+  /** `rejoined`: someone already in the chat opened an invite link to it, in another window or on another device. */
+  event: "joined" | "rejoined" | "left" | "removed";
 }
 
 /** A message waiting for the agent: sent while it was busy, in the order it will be answered. `id` is pi's submission id. */
