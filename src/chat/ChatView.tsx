@@ -169,7 +169,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
       </StepsProvider>
       <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
         {attachments.error && <div className="chat-error">{attachments.error}</div>}
-        <div className="composer-box" onClick={(e) => e.target === e.currentTarget && input.current?.focus()}>
+        {/* A click anywhere in the box but a button puts the cursor in the input. */}
+        <div className="composer-box" onClick={(e) => (e.target as Element).closest("button") || input.current?.focus()}>
           {attachments.pending.length > 0 && (
             <div className="pending-attachments">
               {attachments.pending.map((item) => (
