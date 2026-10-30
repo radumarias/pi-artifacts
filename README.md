@@ -270,7 +270,8 @@ people: many people share one conversation with one agent, and their messages qu
   failed request does not hold the others'. **Stop** withdraws the queued messages too, as pi's abort does.
 - **Access:** the Worker finds the chat through the user's index (their own chats and the ones shared with them), and
   the chat object checks membership again on every socket and prompt, and on page calls to servers that sign in each
-  user. Removing someone tells their sockets so and closes them at once (close code 4403), and the app stops reconnecting.
+  user. Removing someone tells their sockets so and closes them at once (close code 4403), and the app stops reconnecting;
+  the messages they left queued are withdrawn, so none runs as the owner after they are out.
 - **Pages:** people in the chat may load its pages' data from servers that sign in each user, since they see that
   data in the conversation anyway. A page's write tools stay the author's only.
 - Routes in `worker/chat-routes.ts`; members and invites in `worker/members.ts`, in the chat object's SQLite.

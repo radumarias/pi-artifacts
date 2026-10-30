@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEvent, type AgentEventStream, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -43,7 +43,7 @@ import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
 import { checkModelChoice, defaultModelChoice } from "./models.ts";
-import { inboxIds, queuedMessages } from "./queue.ts";
+import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
 
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
@@ -146,6 +146,8 @@ export class ChatAgent extends DurableObject<Env> {
   #filesInstalled: string | undefined;
   /** When members' sidebars were last bumped, and with which title. */
   #membersTouched = { title: "", at: 0 };
+  /** The last read of the queue, by the inbox ids it was for: every socket asks after the same commit. */
+  #queuedRead: { key: string; read: Promise<QueuedMessage[]> } | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -251,12 +253,34 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async queued(ids: readonly number[]): Promise<QueuedMessage[]> {
     if (!ids.length) return [];
+    // Inbox items never change while they wait, so the same ids have the same answer: the sockets share one read.
+    const key = ids.join(",");
+    if (this.#queuedRead?.key !== key) {
+      const read = this.#readView((view) => queuedMessages(view, ids));
+      this.#queuedRead = { key, read };
+      read.catch(() => {
+        if (this.#queuedRead?.read === read) this.#queuedRead = undefined;
+      });
+    }
+    return this.#queuedRead.read;
+  }
+
+  /** `read` of the conversation's view as it is now. */
+  async #readView<T>(read: (view: ConversationView) => T): Promise<T> {
     const view = await (await this.#root()).viewState(BACKGROUND_CONTEXT);
     try {
-      return queuedMessages(view.value, ids);
+      return read(view.value);
     } finally {
       view.dispose();
     }
+  }
+
+  /** Withdraw the messages someone left waiting in pi's inbox: once they are out of the chat, none of theirs is answered. */
+  async #withdrawQueued(uid: string): Promise<void> {
+    const ids = await this.#readView((view) => queuedIdsOf(view, uid));
+    if (!ids.length) return;
+    const pi = await this.harness.pi();
+    await Promise.all(ids.map(async (id) => (await pi.submission(id, BACKGROUND_CONTEXT))?.abort(BACKGROUND_CONTEXT)));
   }
 
   /**
@@ -504,6 +528,8 @@ export class ChatAgent extends DurableObject<Env> {
     this.sockets.disconnect(uid);
     this.sockets.broadcastPeople();
     this.#notePeople(member, by.uid === uid ? "left" : "removed");
+    // The agent acts as the owner: a removed person's queued requests must not run after they are out.
+    await this.#withdrawQueued(uid).catch((error: unknown) => console.error("withdraw queued:", errorMessage(error)));
     await this.#index(uid).removeSharedChat(this.chatId, this.uid);
     return null;
   }

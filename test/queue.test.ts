@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inboxIds, queuedMessages } from "../worker/queue.ts";
+import { inboxIds, queuedIdsOf, queuedMessages } from "../worker/queue.ts";
 
 const message = (uid: string, text: string) => ({ kind: "chat.message", data: { uid, name: `${uid}@example.com`, text } });
 
@@ -28,6 +28,13 @@ describe("queuedMessages", () => {
   it("leaves out an id no longer in the inbox, and is empty without one", () => {
     expect(queuedMessages(view, [10, 11])).toEqual([{ id: 10, uid: "bob", name: "bob@example.com", text: "two" }]);
     expect(queuedMessages({ docs: {} }, [7])).toEqual([]);
+  });
+});
+
+describe("queuedIdsOf", () => {
+  it("lists one person's waiting messages", () => {
+    expect(queuedIdsOf(view, "bob")).toEqual([10]);
+    expect(queuedIdsOf(view, "carol")).toEqual([]);
   });
 });
 
