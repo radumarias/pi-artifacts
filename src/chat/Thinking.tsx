@@ -54,10 +54,11 @@ export function Thinking({ since }: { since: number }) {
     const timer = setInterval(() => setWord((current) => nextWord(current)), WORD_MS);
     return () => clearInterval(timer);
   }, []);
+  // Tick on each whole second since the start, so the count turns over on time and never skips or repeats a second.
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, []);
+    const timer = setTimeout(() => setNow(Date.now()), 1_000 - ((((now - since) % 1_000) + 1_000) % 1_000));
+    return () => clearTimeout(timer);
+  }, [now, since]);
   return (
     <div className="thinking" role="status">
       <span className="thinking-dots" aria-hidden="true">

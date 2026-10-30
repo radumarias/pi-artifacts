@@ -30,8 +30,8 @@ export interface ChatState {
 const initial: ChatState = { entries: [], tools: [], busy: false };
 
 type Action =
-  /** `at`: when the batch arrived. `runStartedAt`: when the snapshot's run started, from the server. */
-  | { type: "events"; events: AgentEvent[]; at: number; runStartedAt?: number }
+  /** `at`: when the batch arrived. `runElapsedMs`: how long the snapshot's run had gone, from the server. */
+  | { type: "events"; events: AgentEvent[]; at: number; runElapsedMs?: number }
   | { type: "error"; message?: string }
   | { type: "reset" };
 
@@ -52,6 +52,9 @@ export function reduce(state: ChatState, action: Action): ChatState {
     switch (event.type) {
       case "snapshot": {
         const busy = event.run !== undefined;
+        // A duration from the server, applied to this clock: the two clocks need not agree. Without one (the server
+        // could not tell), a snapshot after an overflow keeps the start already known.
+        const started = action.runElapsedMs === undefined ? next.runStartedAt : action.at - Math.max(0, action.runElapsedMs);
         next = withAgent(
           {
             entries: [...event.entries],
@@ -62,8 +65,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
               .filter((t) => t.status !== "done" || t.entry === undefined)
               .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "done" ? "stopped" : t.status })),
             busy,
-            // Never later than now, in case the server's clock runs ahead.
-            runStartedAt: busy ? Math.min(action.runStartedAt ?? action.at, action.at) : undefined,
+            runStartedAt: busy ? (started ?? action.at) : undefined,
           },
           event.agent,
         );
@@ -224,7 +226,7 @@ export function useChat(chatId: string) {
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data) as ChatServerMessage;
-        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runStartedAt: message.runStartedAt });
+        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs });
         else if (message.type === "people") setPeople(message.people);
         else if (message.type === "removed") {
           stop();

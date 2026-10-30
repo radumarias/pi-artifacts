@@ -77,12 +77,18 @@ describe("elapsed time", () => {
   });
 
   it("takes a run already going on connect from the server, or else from when the snapshot came", () => {
-    const snapshot = (run: boolean, runStartedAt?: number) =>
-      reduce(idle, { type: "events", at: 10_000, runStartedAt, events: [{ type: "snapshot", entries: [], tools: [], ...(run ? { run: { inputs: [] } } : {}) }] as never });
-    expect(snapshot(true, 4_000).runStartedAt).toBe(4_000);
+    const snapshot = (run: boolean, runElapsedMs?: number) =>
+      reduce(idle, { type: "events", at: 10_000, runElapsedMs, events: [{ type: "snapshot", entries: [], tools: [], ...(run ? { run: { inputs: [] } } : {}) }] as never });
+    expect(snapshot(true, 6_000).runStartedAt).toBe(4_000);
     expect(snapshot(true).runStartedAt).toBe(10_000);
-    // A server clock running ahead never puts the start in the future.
-    expect(snapshot(true, 12_000).runStartedAt).toBe(10_000);
-    expect(snapshot(false, 4_000).runStartedAt).toBeUndefined();
+    // A negative duration never puts the start in the future.
+    expect(snapshot(true, -2_000).runStartedAt).toBe(10_000);
+    expect(snapshot(false, 6_000).runStartedAt).toBeUndefined();
+  });
+
+  it("keeps the start it knows when a later snapshot comes without one", () => {
+    const running = reduce(idle, { type: "events", at: 5_000, events: [{ type: "run_start", inputs: [] }] as never });
+    const again = reduce(running, { type: "events", at: 20_000, events: [{ type: "snapshot", entries: [], tools: [], run: { inputs: [] } }] as never });
+    expect(again.runStartedAt).toBe(5_000);
   });
 });

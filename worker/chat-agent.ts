@@ -683,11 +683,12 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     return stream;
   }
 
-  /** A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with its run's start. */
+  /** A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run has gone. */
   async #events(batch: readonly AgentEvent[]): Promise<ChatServerMessage> {
     const snapshot = batch.findLast((event) => event.type === "snapshot");
-    const runStartedAt = snapshot && (await this.#chat.runStartedAt(snapshot));
-    return { type: "events", events: batch.map(withoutImageData), runStartedAt };
+    const started = snapshot && (await this.#chat.runStartedAt(snapshot));
+    const runElapsedMs = started === undefined ? undefined : Math.max(0, Date.now() - started);
+    return { type: "events", events: batch.map(withoutImageData), runElapsedMs };
   }
 
   async #detach(ws: WebSocket): Promise<void> {
