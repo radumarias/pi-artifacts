@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { memo, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -9,10 +9,10 @@ import { carriesFiles } from "../files/pick.ts";
 import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
 import { SharePanel } from "./SharePanel.tsx";
-import { useChat, waitingOnModel, type RunningTool } from "./useChat.ts";
-import { Linkified } from "./Linkified.tsx";
+import { useChat, waitingOnModel } from "./useChat.ts";
 import { Markdown } from "./Markdown.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
+import { OrphanResult, StepsContext, stepsView, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
 
 interface Props {
@@ -45,6 +45,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   const input = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
+  const opened = useRef(new Set<string>()).current;
+  const steps = useMemo(() => stepsView(state.entries, state.tools, state.busy, opened), [state.entries, state.tools, state.busy, opened]);
 
   // Follow new output only while the reader is at the bottom; scrolling up to read stops it,
   // scrolling back down (or sending a message) resumes it. Scroll the list itself, never the page.
@@ -133,23 +135,22 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
         )}
       </header>
       {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} />}
-      <div className="messages" ref={list} onScroll={onScroll}>
-        {state.entries.length === 0 && !state.busy && (
-          <div className="empty-chat">
-            <h2>What should we build?</h2>
-            <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
-          </div>
-        )}
-        {state.entries.map((entry) => (
-          <Entry key={entry.id} entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
-        ))}
-        {state.partial && <Assistant message={state.partial} />}
-        {state.tools.map((tool) => (
-          <Running key={tool.toolCallId} tool={tool} />
-        ))}
-        {waitingOnModel(state) && <Thinking />}
-        {state.error && <div className="chat-error">{state.error}</div>}
-      </div>
+      <StepsContext value={steps}>
+        <div className="messages" ref={list} onScroll={onScroll}>
+          {state.entries.length === 0 && !state.busy && (
+            <div className="empty-chat">
+              <h2>What should we build?</h2>
+              <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
+            </div>
+          )}
+          {state.entries.map((entry) => (
+            <Entry key={entry.id} entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
+          ))}
+          {state.partial && <Assistant message={state.partial} streaming />}
+          {waitingOnModel(state) && <Thinking />}
+          {state.error && <div className="chat-error">{state.error}</div>}
+        </div>
+      </StepsContext>
       <ModelPicker
         model={state.model}
         thinkingLevel={state.thinkingLevel}
@@ -254,7 +255,7 @@ const Entry = memo(function Entry({
         </button>
       );
     }
-    return <ToolResult message={message} />;
+    return <OrphanResult message={message} />;
   }
   return null;
 });
@@ -374,7 +375,8 @@ function release(item: Pending): void {
   if (item.preview) URL.revokeObjectURL(item.preview);
 }
 
-function Assistant({ message }: { message: AssistantMessage }) {
+/** A reply: its text, and a collapsed panel for each thought and tool call in it. `streaming` while the model writes it. */
+function Assistant({ message, streaming = false }: { message: AssistantMessage; streaming?: boolean }) {
   return (
     <div className="assistant">
       {blocks(message.content).map((block, i) => {
@@ -384,34 +386,12 @@ function Assistant({ message }: { message: AssistantMessage }) {
               <Markdown text={block.text} />
             </div>
           ) : null;
-        if (block.type === "toolCall") return <div key={i} className="tool-call">→ {block.name}</div>;
+        if (block.type === "toolCall") return <ToolStep key={i} id={block.id} name={block.name} call={block} streaming={streaming} />;
+        if (block.type === "thinking" && !block.redacted && block.thinking.trim()) return <ThoughtStep key={i} text={block.thinking} />;
         return null;
       })}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
-    </div>
-  );
-}
-
-function ToolResult({ message }: { message: ToolResultMessage }) {
-  const text = blocks(message.content).map((b) => (b.type === "text" ? b.text : "[image]")).join("\n");
-  return (
-    <details className={message.isError ? "tool-result error" : "tool-result"}>
-      <summary>
-        {message.isError ? "✕" : "✓"} {message.toolName}
-      </summary>
-      <pre>
-        <Linkified text={text.length > 4_000 ? `${text.slice(0, 4_000)}…` : text} />
-      </pre>
-    </details>
-  );
-}
-
-function Running({ tool }: { tool: RunningTool }) {
-  return (
-    <div className="tool-call">
-      <span className="spinner" /> {tool.toolName}
-      {tool.output && <pre>{tool.output.slice(-600)}</pre>}
     </div>
   );
 }

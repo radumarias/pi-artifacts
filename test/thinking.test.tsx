@@ -12,9 +12,8 @@ describe("waiting on the model", () => {
     expect(waitingOnModel(partial([]))).toBe(true);
   });
 
-  it("shows while the model thinks or writes a tool call", () => {
+  it("shows while the model thinks", () => {
     expect(waitingOnModel(partial([{ type: "thinking", thinking: "Plan" }]))).toBe(true);
-    expect(waitingOnModel(partial([{ type: "text", text: "Building it." }, { type: "toolCall", name: "publish", arguments: {} }]))).toBe(true);
     // A block the stream has not filled yet.
     expect(waitingOnModel(partial([{ type: "thinking", thinking: "" }, undefined]))).toBe(true);
   });
@@ -23,6 +22,15 @@ describe("waiting on the model", () => {
     expect(waitingOnModel(partial([{ type: "thinking", thinking: "Plan" }, { type: "text", text: "I" }]))).toBe(false);
     expect(waitingOnModel({ ...busy, tools: [{ toolCallId: "t", toolName: "run_python", output: "" }] })).toBe(false);
     expect(waitingOnModel({ ...busy, busy: false })).toBe(false);
+  });
+
+  it("hides while a tool call is written or waits to start: its panel shows a spinner", () => {
+    expect(waitingOnModel(partial([{ type: "text", text: "Building it." }, { type: "toolCall", id: "c", name: "artifact_publish", arguments: {} }]))).toBe(false);
+    const call = { id: "a", kind: "pi.assistant", model: [{ role: "assistant", content: [{ type: "toolCall", id: "c", name: "run_python", arguments: {} }] }] };
+    const result = { id: "r", kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "c", toolName: "run_python", content: [], isError: false }] };
+    expect(waitingOnModel({ ...busy, entries: [call] } as unknown as ChatState)).toBe(false);
+    // Answered: the model is up again.
+    expect(waitingOnModel({ ...busy, entries: [call, result] } as unknown as ChatState)).toBe(true);
   });
 });
 
