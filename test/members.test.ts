@@ -13,7 +13,7 @@ function memorySql(): Sql & { db: DatabaseSync } {
         return { toArray: () => [], rowsWritten: 0 };
       }
       const statement = db.prepare(query);
-      if (/^\s*SELECT/i.test(query)) {
+      if (/^\s*SELECT|\bRETURNING\b/i.test(query)) {
         const rows = statement.all(...bindings) as Record<string, unknown>[];
         return { toArray: () => rows, rowsWritten: 0 };
       }
@@ -106,8 +106,8 @@ describe("ChatMembers", () => {
     await members.accept((await invited(members)).secret, ann, T0);
     members.rename({ uid: "ann", name: "ann@example.org" });
     expect(members.list()).toEqual([{ uid: "ann", name: "ann@example.org" }]);
-    expect(members.remove("ann")).toBe(true);
-    expect(members.remove("ann")).toBe(false);
+    expect(members.remove("ann")).toEqual({ uid: "ann", name: "ann@example.org" });
+    expect(members.remove("ann")).toBeUndefined();
     expect(members.list()).toEqual([]);
   });
 

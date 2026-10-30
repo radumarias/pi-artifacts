@@ -41,7 +41,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }: Props) {
-  const { state, connected, people, queued, gone, prompt, abort, setModel } = useChat(chatId);
+  const { state, connected, people, gone, prompt, abort, setModel } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
   const attachments = useAttachments(chatId);
@@ -60,7 +60,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   useEffect(() => {
     const el = list.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
-  }, [state.entries.length, state.partial, state.tools, queued.length]);
+  }, [state.entries.length, state.partial, state.tools, state.queued.length]);
 
   // A finished run may have renamed the chat or published artifacts: refresh the sidebar.
   const wasBusy = useRef(false);
@@ -165,7 +165,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
           {state.partial && <Assistant message={state.partial} streaming />}
           {state.runStartedAt !== undefined && waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
           {state.error && <div className="chat-error">{state.error}</div>}
-          <Queue queued={queued} uid={uid} />
+          <Queue queued={state.queued} uid={uid} />
         </div>
       </StepsProvider>
       <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
@@ -310,12 +310,15 @@ const PEOPLE_EVENTS: Record<ChatPeopleData["event"], string> = {
  * with their place when more than one waits. Each leaves the queue for the transcript when its turn comes.
  */
 function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
-  return queued.map((message, i) => (
-    <div key={message.id} className={message.uid === uid ? "queued mine" : "queued"}>
-      <User text={message.text} author={message.uid !== uid ? message.name : undefined} attachments={message.attachments} />
-      <small className="queued-label">{queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"}</small>
-    </div>
-  ));
+  return queued.map((message, i) => {
+    const mine = message.uid === uid;
+    return (
+      <div key={message.id} className={mine ? "queued mine" : "queued"}>
+        <User text={message.text} author={mine ? undefined : message.name} attachments={message.attachments} />
+        <small className="queued-label">{queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"}</small>
+      </div>
+    );
+  });
 }
 
 /** A message's blocks, skipping any slot a stream has not filled yet. */

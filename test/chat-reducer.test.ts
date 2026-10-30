@@ -1,12 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { reduce, type ChatState } from "../src/chat/useChat.ts";
 
-const empty: ChatState = { entries: [], tools: [], busy: false };
+const empty: ChatState = { entries: [], tools: [], busy: false, queued: [] };
 const assistant = (content: unknown[]) => ({ role: "assistant", content, api: "anthropic-messages", provider: "cloudflare", model: "m", usage: {}, stopReason: "stop", timestamp: 0 });
 
 // Event shapes as the deployed agent streams them: an assistant message can
 // open with blocks already in it, and later changes index past them.
 describe("chat reducer", () => {
+  it("moves a queued message into the transcript in one step, and keeps the queue across a snapshot", () => {
+    const queued = [{ id: 7, uid: "bob", name: "bob", text: "next" }];
+    const waiting = reduce(empty, { type: "events", at: 0, events: [{ type: "inbox_update", items: [{ id: 7, mode: "followUp" }] }] as never, queued });
+    expect(waiting.queued).toEqual(queued);
+    const entry = { id: 1, conversationId: 1, kind: "chat.message", data: queued[0] };
+    const placed = reduce(waiting, { type: "events", at: 0, events: [{ type: "entry_appended", entry }, { type: "inbox_update", items: [] }] as never, queued: [] });
+    expect(placed.queued).toEqual([]);
+    expect(placed.entries).toEqual([entry]);
+    // A batch that does not touch the inbox leaves the queue as it was.
+    expect(reduce(waiting, { type: "events", at: 0, events: [{ type: "run_start" }] as never }).queued).toEqual(queued);
+  });
+
   it("keeps the blocks an assistant message opens with", () => {
     const state = reduce(empty, {
       type: "events",
