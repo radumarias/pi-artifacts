@@ -1,10 +1,11 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api } from "../api.ts";
+import { Icon } from "../Icon.tsx";
 import { carriesFiles } from "../files/pick.ts";
 import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
@@ -121,7 +122,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   };
 
   // Dictated words join the draft with a space between them.
-  const dictated = (text: string) => setDraft((current) => (current && !/\s$/.test(current) ? `${current} ${text}` : current + text));
+  // Stable, so the memoized Dictation skips the re-render on every streamed token.
+  const dictated = useCallback((text: string) => setDraft((current) => (current && !/\s$/.test(current) ? `${current} ${text}` : current + text)), []);
 
   // The input grows with what is typed, up to its max-height in styles.css, then scrolls.
   // Browsers with field-sizing do this themselves, and also when the column is resized.
@@ -133,6 +135,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   }, [draft]);
 
   const isOwner = people?.owner.uid === uid;
+  const sendLabel = attachments.sending ? "Sending…" : "Send";
   const ownerName = people && !isOwner ? people.owner.name : undefined;
   const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid).map((person) => person.name).join(", ") : "";
   return (
@@ -193,22 +196,22 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
               rows={1}
             />
             {state.busy ? (
-              <button type="button" className="icon-button send stop" onClick={abort} title="Stop" aria-label="Stop">
-                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                  <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="currentColor" />
-                </svg>
+              <button type="button" className="icon-button" onClick={abort} title="Stop" aria-label="Stop">
+                <Icon>
+                  <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" stroke="none" />
+                </Icon>
               </button>
             ) : (
               <button
                 type="submit"
-                className="icon-button send"
+                className="icon-button"
                 disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
-                title={attachments.sending ? "Sending…" : "Send"}
-                aria-label={attachments.sending ? "Sending…" : "Send"}
+                title={sendLabel}
+                aria-label={sendLabel}
               >
-                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <Icon>
                   <path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4" />
-                </svg>
+                </Icon>
               </button>
             )}
           </div>
@@ -222,9 +225,9 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
             title="Attach images or files"
             aria-label="Attach images or files"
           >
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <Icon>
               <path d="M12 4v16M4 12h16" />
-            </svg>
+            </Icon>
           </button>
           <input
             ref={picker}
@@ -245,7 +248,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
             onChange={setModel}
           />
           {/* Always laid out, so the pickers don't move when a run starts or ends. */}
-          <span className={state.busy || attachments.sending ? "spinner working" : "spinner working idle"} aria-hidden="true" />
+          <span className={state.busy || attachments.sending ? "spinner" : "spinner idle"} aria-hidden="true" />
         </div>
       </form>
     </section>

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Icon } from "../Icon.tsx";
 import { useStoredState } from "../layout.tsx";
 
 /** A page size, in CSS pixels. A preset without a height is as tall as the pane allows, like a browser window, and cannot turn. */
@@ -92,11 +93,12 @@ export function layoutViewport(id: ViewportId, rotated: boolean, pane: { width: 
   return { width, height, scale: Math.min(1, roomW / width, roomH / height) };
 }
 
-function Icon({ children }: { children: ReactNode }) {
+/** The preview bar's icons, drawn in a 16-unit box. */
+function PreviewIcon({ children }: { children: ReactNode }) {
   return (
-    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <Icon size={15} box={16} stroke={1.4}>
       {children}
-    </svg>
+    </Icon>
   );
 }
 
@@ -109,17 +111,17 @@ export function ViewportPicker({ viewport }: { viewport: ReturnType<typeof useVi
         const label = size ? `${PRESETS[id].label} (${size.width}px wide)` : PRESETS[id].label;
         return (
           <button key={id} type="button" aria-pressed={viewport.id === id} title={label} aria-label={label} onClick={() => viewport.pick(id)}>
-            <Icon>{PRESETS[id].icon}</Icon>
+            <PreviewIcon>{PRESETS[id].icon}</PreviewIcon>
           </button>
         );
       })}
       {canTurn(viewport.id) && (
         <button type="button" aria-pressed={viewport.rotated} title="Turn the device" aria-label="Turn the device" onClick={viewport.turn}>
-          <Icon>
+          <PreviewIcon>
             <rect x="1.5" y="8" width="9.5" height="6.5" rx="1.2" />
             <path d="M5 4.5a3.5 3.5 0 0 1 3.5-3h1a4 4 0 0 1 4 4V7" />
             <path d="M11.5 5.5l2 2 2-2" />
-          </Icon>
+          </PreviewIcon>
         </button>
       )}
     </div>

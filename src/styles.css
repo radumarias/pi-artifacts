@@ -10,6 +10,7 @@
   --live: #15803d;
   --error: #b91c1c;
   --radius: 10px;
+  --radius-lg: 14px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -247,7 +248,7 @@ body.resizing iframe { pointer-events: none; }
   gap: 8px;
   padding: 8px 8px 8px 16px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   cursor: text;
   transition: border-color 0.15s;
@@ -269,14 +270,17 @@ body.resizing iframe { pointer-events: none; }
   line-height: 1.4;
 }
 .composer textarea::placeholder { color: var(--muted); }
-.icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text); }
-.icon-button:not(:disabled):hover { background: var(--surface-2); }
+/* Borderless controls that show a background only on hover: the composer's icon buttons and the model picker. */
+.icon-button, .model-picker select { border: 0; background: transparent; }
+:is(.icon-button, .model-picker select):not(:disabled):hover { background: var(--surface-2); }
+/* One size for every icon button, so Send and Stop swap without a shift. */
+.icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; }
+.icon-button:disabled { opacity: 0.35; }
 .icon-button.listening { color: var(--error); }
-/* Send and Stop share a size, so nothing shifts when a run starts or ends. */
-.composer .send:disabled { opacity: 0.35; }
 .composer-tools { display: flex; align-items: center; gap: 2px; padding: 0 4px; min-height: 32px; }
-.spinner.working { flex: none; width: 16px; height: 16px; margin: 0 6px 0 10px; border-width: 2px; border-top-color: var(--text); }
-.spinner.working.idle { visibility: hidden; }
+.composer-tools .spinner { flex: none; width: 16px; height: 16px; margin: 0 6px 0 10px; border-top-color: var(--text); }
+/* Always laid out so the pickers keep their place; not animated while hidden. */
+.composer-tools .spinner.idle { visibility: hidden; animation: none; }
 /* Above the app's drop target while files are dragged: a drop here attaches them to the message. */
 .workspace.dragging .composer { position: relative; z-index: 11; outline: 2px dashed var(--accent); outline-offset: -6px; border-radius: var(--radius); background: var(--bg); }
 .pending-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -303,10 +307,9 @@ body.resizing iframe { pointer-events: none; }
 /* The model and effort, as plain text at the right of the row under the input. */
 .model-picker { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; margin-left: auto; }
 /* Each select as wide as its chosen option where the browser can size it so; elsewhere as its longest one. */
-.model-picker select { appearance: none; field-sizing: content; max-width: 100%; border: 0; background: transparent; padding: 5px 8px; font-size: 14px; text-overflow: ellipsis; }
-.model-picker select:not(:disabled):hover { background: var(--surface-2); }
-.model-picker select:not(:first-child) { color: var(--muted); }
-.model-note { flex-basis: 100%; order: 1; text-align: right; padding: 0 8px; font-size: 13px; color: var(--muted); }
+.model-picker select { appearance: none; field-sizing: content; max-width: 100%; padding: 5px 8px; font-size: 14px; text-overflow: ellipsis; }
+.model-picker .effort { color: var(--muted); }
+.model-note { flex-basis: 100%; text-align: right; padding: 0 8px; font-size: 13px; color: var(--muted); }
 
 .artifact-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); min-width: 0; }
 .artifact-panel.full { border-left: 0; }

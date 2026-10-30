@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import { Icon } from "../Icon.tsx";
 
 // The DOM typings carry the speech events but not the recognizer itself.
 interface Recognizer {
@@ -23,14 +24,11 @@ const ERRORS: Record<string, string> = {
   network: "Dictation needs a network connection",
 };
 
-/** Dictates into the message with the browser's speech recognition; hidden where the browser has none. */
-export function Dictation({ disabled, onText }: { disabled: boolean; onText: (text: string) => void }) {
+/** Dictates into the message with the browser's speech recognition; hidden where the browser has none. Memoized: the chat re-renders on every streamed token. */
+export const Dictation = memo(function Dictation({ disabled, onText }: { disabled: boolean; onText: (text: string) => void }) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string>();
   const recognizer = useRef<Recognizer>(undefined);
-  // The latest callback, so a recognizer started earlier still writes into the current draft.
-  const write = useRef(onText);
-  write.current = onText;
   useEffect(() => () => recognizer.current?.abort(), []);
   if (!Recognition) return null;
 
@@ -41,9 +39,10 @@ export function Dictation({ disabled, onText }: { disabled: boolean; onText: (te
     next.interimResults = false;
     next.lang = navigator.language;
     next.onresult = (event) => {
+      // Without interim results, every result is final.
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const text = event.results[i].isFinal ? event.results[i][0].transcript.trim() : "";
-        if (text) write.current(text);
+        const text = event.results[i][0].transcript.trim();
+        if (text) onText(text);
       }
     };
     next.onerror = (event) => setError(ERRORS[event.error]);
@@ -60,10 +59,10 @@ export function Dictation({ disabled, onText }: { disabled: boolean; onText: (te
   const label = error ?? (listening ? "Stop dictation" : "Dictate");
   return (
     <button type="button" className={listening ? "icon-button listening" : "icon-button"} onClick={toggle} disabled={disabled && !listening} title={label} aria-label={label} aria-pressed={listening}>
-      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <Icon>
         <rect x="9" y="3" width="6" height="11" rx="3" />
         <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
-      </svg>
+      </Icon>
     </button>
   );
-}
+});

@@ -61,7 +61,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
         ))}
       </select>
       {current && current.efforts.length > 0 && thinkingLevel && (
-        <select aria-label="Effort" value={thinkingLevel} disabled={disabled} onChange={(e) => onChange(model, e.target.value as ModelThinkingLevel)}>
+        <select className="effort" aria-label="Effort" value={thinkingLevel} disabled={disabled} onChange={(e) => onChange(model, e.target.value as ModelThinkingLevel)}>
           {!current.efforts.includes(thinkingLevel) && <option value={thinkingLevel}>{EFFORT_LABELS[thinkingLevel]} effort</option>}
           {current.efforts.map((level) => (
             <option key={level} value={level}>
