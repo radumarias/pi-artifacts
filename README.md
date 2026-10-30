@@ -248,7 +248,9 @@ people: many people share one conversation with one agent, and their messages qu
 
 - **Invite:** **Share** in the chat header makes a single-use link, `/join/<token>`, valid for 7 days. The token names
   the chat and carries a random secret; the chat keeps only the secret's SHA-256 hash, so the link is shown once.
-  Whoever opens it, signed in, clicks **Join** and finds the chat in their sidebar. The owner sees who is in the chat
+  Whoever opens it, signed in, clicks **Join** and finds the chat in their sidebar; someone already in the chat (the
+  owner trying their own link, or a member opening it again) just lands in it, and the link stays unused. The same
+  person can have the chat open in several tabs or devices at once. The owner sees who is in the chat
   and the open links, removes people and revokes links; a member can leave. Only the owner invites.
 - **One agent, acting as the owner:** a shared chat stays the owner's `ChatAgent`. Whoever writes, the agent works
   with the owner's MCP connections and sign-ins, files, sandbox and skills, and what it publishes belongs to the

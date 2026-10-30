@@ -418,9 +418,13 @@ export class ChatAgent extends DurableObject<Env> {
     return null;
   }
 
-  /** Join by an invite's secret; the chat then shows in the new member's sidebar, under `title` from the owner's index. */
+  /**
+   * Join by an invite's secret; the chat then shows in the new member's sidebar, under `title` from the owner's index.
+   * Someone already in the chat (its owner trying their own link, or a member opening it again) just opens the chat,
+   * and the link stays unused for whoever it was meant for.
+   */
   async acceptInvite(secret: string, person: Person, title: string): Promise<ChatRefusal | null> {
-    if (person.uid === this.uid) return refuse(403, "This is your own chat.");
+    if (person.uid === this.uid) return null;
     const refused = await this.members.check(secret, person);
     if (refused) return refuse(403, refused.error);
     // The sidebar entry before the invite is used up: a member without one could not reach the chat.
