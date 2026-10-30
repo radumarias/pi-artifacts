@@ -17,6 +17,10 @@ describe("chat reducer", () => {
     expect(placed.entries).toEqual([entry]);
     // A batch that does not touch the inbox leaves the queue as it was.
     expect(reduce(waiting, { type: "events", at: 0, events: [{ type: "run_start" }] as never }).queued).toEqual(queued);
+    // A snapshot keeps it too, unless it comes with the queue as it now is.
+    const snapshot = { type: "snapshot", entries: [], tools: [], inbox: [{ id: 7, mode: "followUp" }], agent: {} };
+    expect(reduce(waiting, { type: "events", at: 0, events: [snapshot] as never }).queued).toEqual(queued);
+    expect(reduce(waiting, { type: "events", at: 0, events: [snapshot] as never, queued: [] }).queued).toEqual([]);
   });
 
   it("keeps the blocks an assistant message opens with", () => {

@@ -278,7 +278,8 @@ const Entry = memo(function Entry({
   }
   if (entry.kind === CHAT_PEOPLE_KIND) {
     const data = entry.data as unknown as ChatPeopleData;
-    return <div className="chat-notice">{`${data.uid === uid ? "You" : data.name} ${PEOPLE_EVENTS[data.event]}`}</div>;
+    const [them, you] = PEOPLE_EVENTS[data.event];
+    return <div className="chat-notice">{data.uid === uid ? `You ${you}` : `${data.name} ${them}`}</div>;
   }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
@@ -299,10 +300,11 @@ const Entry = memo(function Entry({
   return null;
 });
 
-const PEOPLE_EVENTS: Record<ChatPeopleData["event"], string> = {
-  joined: "joined the chat",
-  left: "left the chat",
-  removed: "was removed from the chat",
+/** Each notice as said of someone else, and of the viewer (who may have been removed and invited back). */
+const PEOPLE_EVENTS: Record<ChatPeopleData["event"], readonly [string, string]> = {
+  joined: ["joined the chat", "joined the chat"],
+  left: ["left the chat", "left the chat"],
+  removed: ["was removed from the chat", "were removed from the chat"],
 };
 
 /**
