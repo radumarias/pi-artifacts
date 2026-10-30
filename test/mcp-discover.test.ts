@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { MCP_DISCOVER_TOOL, mcpExtension } from "../worker/agent/mcp.ts";
+import { MCP_DISCOVER_TOOL } from "../shared/protocol.ts";
+import { mcpExtension } from "../worker/agent/mcp.ts";
 import { McpHub } from "../worker/mcp/hub.ts";
 
 describe("mcpExtension", () => {

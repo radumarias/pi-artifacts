@@ -14,7 +14,9 @@ const slot = (status: RunningTool["status"]): RunningTool => ({ toolCallId: "ope
 describe("step status", () => {
   it("follows a call without a result from written to ended", () => {
     expect(liveStatus(stepsLive([], true), "open", true)).toBe("writing");
-    expect(liveStatus(stepsLive([], true), "open", false)).toBe("starting");
+    expect(liveStatus(stepsLive([], true, new Set(["open"])), "open", false)).toBe("starting");
+    // A call of an earlier round that never got a result, while a later run goes on.
+    expect(liveStatus(stepsLive([], true), "open", false)).toBe("stopped");
     expect(liveStatus(stepsLive([slot("pending")], true), "open", false)).toBe("starting");
     expect(liveStatus(stepsLive([slot("running")], true), "open", false)).toBe("running");
     // Ended without a result while the run goes on (the tool faulted), or the run ended first.
@@ -33,6 +35,7 @@ describe("step header", () => {
   it("names built-in tools by what they do, and MCP tools by server and tool", () => {
     expect(stepLabel("run_python")).toBe("Python");
     expect(stepLabel("coingecko__get_price")).toBe("coingecko › get_price");
+    expect(stepLabel("reports_beta___run")).toBe("reports_beta_ › run");
     expect(stepLabel("something_new")).toBe("something_new");
   });
 
