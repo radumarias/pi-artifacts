@@ -192,9 +192,12 @@ export type ChatClientMessage =
   // Run the chat on another model or effort (shared/models.ts). The change reaches every socket as pi's agent_changed.
   | { type: "model"; model: string; thinkingLevel?: string };
 
-/** ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change. */
+/**
+ * ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change.
+ * A snapshot taken mid-run comes with `runStartedAt`: when the run's first message was sent (epoch ms), which the snapshot does not say.
+ */
 export type ChatServerMessage =
-  | { type: "events"; events: unknown[] }
+  | { type: "events"; events: unknown[]; runStartedAt?: number }
   | { type: "people"; people: ChatPeopleView }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }

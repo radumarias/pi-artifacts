@@ -10,6 +10,7 @@ describe("chat reducer", () => {
   it("keeps the blocks an assistant message opens with", () => {
     const state = reduce(empty, {
       type: "events",
+      at: 0,
       events: [
         { type: "message_start", message: assistant([{ type: "text", text: "I can build live" }]) },
         { type: "message_update", usage: {}, changes: [{ type: "text_delta", contentIndex: 0, delta: " dashboards." }] },
@@ -21,6 +22,7 @@ describe("chat reducer", () => {
   it("leaves no holes when a later block starts after the opening ones", () => {
     const state = reduce(empty, {
       type: "events",
+      at: 0,
       events: [
         { type: "message_start", message: assistant([{ type: "thinking", thinking: "Plan" }]) },
         { type: "message_update", usage: {}, changes: [{ type: "text_start", contentIndex: 1, block: { type: "text", text: "Done" } }] },
@@ -34,6 +36,7 @@ describe("chat reducer", () => {
   it("streams a tool call's arguments into the call", () => {
     const state = reduce(empty, {
       type: "events",
+      at: 0,
       events: [
         { type: "message_start", message: assistant([{ type: "toolCall", id: "c", name: "run_python", arguments: { code: "import", files: ["sales"] } }]) },
         { type: "message_update", usage: {}, changes: [{ type: "toolcall_delta", contentIndex: 0, path: ["code"], delta: " pandas" }] },
@@ -46,6 +49,7 @@ describe("chat reducer", () => {
   it("picks up the calls running when the socket connects", () => {
     const state = reduce(empty, {
       type: "events",
+      at: 0,
       events: [
         {
           type: "snapshot",
@@ -71,22 +75,23 @@ describe("chat reducer", () => {
 
   it("follows a call from its start to its end, and keeps one that ended without a result as stopped", () => {
     const call = { toolName: "run_python" };
-    let state = reduce(empty, { type: "events", events: [{ type: "tool_execution_start", toolCallId: "a", ...call, args: {} }] as never });
+    let state = reduce(empty, { type: "events", at: 0, events: [{ type: "tool_execution_start", toolCallId: "a", ...call, args: {} }] as never });
     expect(state.tools).toEqual([{ toolCallId: "a", toolName: "run_python", output: "", status: "running" }]);
-    state = reduce(state, { type: "events", events: [{ type: "tool_execution_end", toolCallId: "a", ...call }] as never });
+    state = reduce(state, { type: "events", at: 0, events: [{ type: "tool_execution_end", toolCallId: "a", ...call }] as never });
     expect(state.tools[0].status).toBe("stopped");
     const entry = { id: "r", kind: "pi.tool-result", model: [] };
-    state = reduce(state, { type: "events", events: [{ type: "tool_execution_start", toolCallId: "b", ...call, args: {} }, { type: "tool_execution_end", toolCallId: "b", ...call, entry }] as never });
+    state = reduce(state, { type: "events", at: 0, events: [{ type: "tool_execution_start", toolCallId: "b", ...call, args: {} }, { type: "tool_execution_end", toolCallId: "b", ...call, entry }] as never });
     expect(state.tools.map((t) => t.toolCallId)).toEqual(["a"]);
     expect(state.entries).toEqual([entry]);
     // Orphaned before it started.
-    state = reduce(state, { type: "events", events: [{ type: "tool_execution_end", toolCallId: "c", ...call }] as never });
+    state = reduce(state, { type: "events", at: 0, events: [{ type: "tool_execution_end", toolCallId: "c", ...call }] as never });
     expect(state.tools.map((t) => [t.toolCallId, t.status])).toEqual([["a", "stopped"], ["c", "stopped"]]);
   });
 
   it("ignores message_start for user, system and tool-result messages", () => {
     const state = reduce(empty, {
       type: "events",
+      at: 0,
       events: [
         { type: "message_start", message: { role: "user", content: "hi", timestamp: 0 } },
         { type: "message_start", message: { role: "system", content: "" } },
@@ -99,9 +104,9 @@ describe("chat reducer", () => {
 describe("chat model", () => {
   it("follows the agent state from the snapshot and its changes", () => {
     const agent = (modelId: string, thinkingLevel: string) => ({ model: { provider: "cloudflare", modelId }, thinkingLevel });
-    let state = reduce(empty, { type: "events", events: [{ type: "snapshot", entries: [], tools: [], agent: agent("anthropic/claude-opus-5.5", "high") }] as never });
+    let state = reduce(empty, { type: "events", at: 0, events: [{ type: "snapshot", entries: [], tools: [], agent: agent("anthropic/claude-opus-5.5", "high") }] as never });
     expect([state.model, state.thinkingLevel]).toEqual(["anthropic/claude-opus-5.5", "high"]);
-    state = reduce(state, { type: "events", events: [{ type: "agent_changed", agent: agent("openai/gpt-5.5", "medium") }] as never });
+    state = reduce(state, { type: "events", at: 0, events: [{ type: "agent_changed", agent: agent("openai/gpt-5.5", "medium") }] as never });
     expect([state.model, state.thinkingLevel]).toEqual(["openai/gpt-5.5", "medium"]);
   });
 });

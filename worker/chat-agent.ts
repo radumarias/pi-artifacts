@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEventStream } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEvent, type AgentEventStream, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -115,6 +115,7 @@ export class ChatAgent extends DurableObject<Env> {
   readonly members = new ChatMembers(this.ctx.storage.sql);
   readonly sockets = new ChatSockets({
     events: () => this.harness.session().events(),
+    runStartedAt: (snapshot) => this.runStartedAt(snapshot),
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
     prompt: (text, author, attachments) => this.prompt(text, author, attachments),
@@ -198,6 +199,24 @@ export class ChatAgent extends DurableObject<Env> {
   #agentChange({ model, thinkingLevel }: ModelChoice): AgentChange {
     const routed = this.ai(model);
     return { model: { provider: routed.provider, modelId: routed.id }, thinkingLevel };
+  }
+
+  /**
+   * When the snapshot's run started: the time of the message its first input placed in the transcript. Undefined when
+   * no run is going, or its start can't be found (the browser then counts from when it connected).
+   */
+  async runStartedAt(snapshot: SnapshotEvent): Promise<number | undefined> {
+    const first = snapshot.run?.inputs[0];
+    if (!first) return undefined;
+    try {
+      const submission = await (await this.harness.pi()).submission(first, BACKGROUND_CONTEXT);
+      const placed = (await submission?.status(BACKGROUND_CONTEXT))?.entry;
+      const message = snapshot.entries.find((entry) => entry.id === placed)?.model?.[0];
+      return message?.role === "user" ? message.timestamp : undefined;
+    } catch (error) {
+      console.error("run start:", errorMessage(error));
+      return undefined;
+    }
   }
 
   /**
@@ -532,6 +551,7 @@ export class ChatAgent extends DurableObject<Env> {
 /** What the chat's sockets need from the chat. */
 interface ChatSession {
   events(): Promise<AgentEventStream>;
+  runStartedAt(snapshot: SnapshotEvent): Promise<number | undefined>;
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
   prompt(text: string, author: Person, attachments: readonly AttachmentInput[]): Promise<void>;
@@ -649,9 +669,9 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     stream = (async () => {
       const events = await this.#chat.events();
       send(ws, { type: "people", people: this.#chat.peopleFor(this.#person(ws)!.uid) });
-      send(ws, { type: "events", events: [withoutImageData(events.snapshot)] });
+      send(ws, await this.#events([events.snapshot]));
       events.start(async (batch) => {
-        if (!send(ws, { type: "events", events: batch.map(withoutImageData) })) await this.#detach(ws);
+        if (!send(ws, await this.#events(batch))) await this.#detach(ws);
       });
       return events;
     })();
@@ -661,6 +681,13 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       send(ws, { type: "error", message: `Could not open the conversation: ${errorMessage(error)}` });
     });
     return stream;
+  }
+
+  /** A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with its run's start. */
+  async #events(batch: readonly AgentEvent[]): Promise<ChatServerMessage> {
+    const snapshot = batch.findLast((event) => event.type === "snapshot");
+    const runStartedAt = snapshot && (await this.#chat.runStartedAt(snapshot));
+    return { type: "events", events: batch.map(withoutImageData), runStartedAt };
   }
 
   async #detach(ws: WebSocket): Promise<void> {

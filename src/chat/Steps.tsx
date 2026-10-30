@@ -4,7 +4,6 @@ import { createContext, use, useMemo, useState, type ReactNode } from "react";
 import { MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL } from "../../shared/protocol.ts";
 import { clip } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
-import { Spark } from "./Thinking.tsx";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
 /** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
@@ -255,5 +254,19 @@ export function ThoughtStep({ openKey, text }: { openKey: string; text: string }
     <Panel openKey={openKey} icon="✻" label="Thought process" hint={stepHint({ text })}>
       {() => <div className="step-thought">{text.trim()}</div>}
     </Panel>
+  );
+}
+
+/**
+ * Twelve rounded rays in two sets of six that grow and shrink in turn while the whole spark turns, so it spins and
+ * changes shape at once: a running step's icon. styles.css sets its accent color and the motion.
+ */
+function Spark() {
+  const ray = (angle: number) => <line key={angle} x1="12" y1="3" x2="12" y2="21" transform={`rotate(${angle} 12 12)`} />;
+  return (
+    <svg className="thinking-spark" viewBox="0 0 24 24" aria-hidden="true">
+      <g className="thinking-spark-long">{[0, 60, 120].map(ray)}</g>
+      <g className="thinking-spark-short">{[30, 90, 150].map(ray)}</g>
+    </svg>
   );
 }

@@ -29,7 +29,11 @@ export interface ChatState {
 
 const initial: ChatState = { entries: [], tools: [], busy: false };
 
-type Action = { type: "events"; events: AgentEvent[] } | { type: "error"; message?: string } | { type: "reset" };
+type Action =
+  /** `at`: when the batch arrived. `runStartedAt`: when the snapshot's run started, from the server. */
+  | { type: "events"; events: AgentEvent[]; at: number; runStartedAt?: number }
+  | { type: "error"; message?: string }
+  | { type: "reset" };
 
 function withAgent(state: ChatState, agent: AgentState | undefined): ChatState {
   return { ...state, model: agent?.model?.modelId, thinkingLevel: agent?.thinkingLevel };
@@ -39,17 +43,8 @@ function addEntry(entries: EntryRecord[], entry: EntryRecord): EntryRecord[] {
   return entries.some((e) => e.id === entry.id) ? entries : [...entries, entry];
 }
 
-/**
- * A run already going when the socket (re)connects started with the newest user message: the snapshot does not say
- * when. Never later than now, in case the server's clock runs ahead.
- */
-function runStart(entries: readonly EntryRecord[], now: number): number {
-  const asked = entries.findLast((entry) => entry.model?.[0]?.role === "user")?.model?.[0];
-  return Math.min(asked?.role === "user" ? asked.timestamp : now, now);
-}
-
 /** Apply pi-durable's agent events to the view: a snapshot replaces everything, the rest are deltas on top of it. */
-export function reduce(state: ChatState, action: Action, now = Date.now()): ChatState {
+export function reduce(state: ChatState, action: Action): ChatState {
   if (action.type === "reset") return initial;
   if (action.type === "error") return { ...state, error: action.message };
   let next = state;
@@ -67,7 +62,8 @@ export function reduce(state: ChatState, action: Action, now = Date.now()): Chat
               .filter((t) => t.status !== "done" || t.entry === undefined)
               .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "done" ? "stopped" : t.status })),
             busy,
-            runStartedAt: busy ? runStart(event.entries, now) : undefined,
+            // Never later than now, in case the server's clock runs ahead.
+            runStartedAt: busy ? Math.min(action.runStartedAt ?? action.at, action.at) : undefined,
           },
           event.agent,
         );
@@ -77,7 +73,7 @@ export function reduce(state: ChatState, action: Action, now = Date.now()): Chat
         next = withAgent(next, event.agent);
         break;
       case "run_start":
-        next = { ...next, busy: true, runStartedAt: now, error: undefined };
+        next = { ...next, busy: true, runStartedAt: action.at, error: undefined };
         break;
       case "run_end":
         next = { ...next, busy: false, runStartedAt: undefined, partial: undefined, tools: [] };
@@ -198,7 +194,7 @@ export function waitingOnModel(state: ChatState): boolean {
  * It stops for good when the user is no longer in the chat (removed, or the chat is gone).
  */
 export function useChat(chatId: string) {
-  const [state, dispatch] = useReducer((current: ChatState, action: Action) => reduce(current, action), initial);
+  const [state, dispatch] = useReducer(reduce, initial);
   const [connected, setConnected] = useState(false);
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
   const [gone, setGone] = useState(false);
@@ -228,7 +224,7 @@ export function useChat(chatId: string) {
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data) as ChatServerMessage;
-        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[] });
+        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runStartedAt: message.runStartedAt });
         else if (message.type === "people") setPeople(message.people);
         else if (message.type === "removed") {
           stop();

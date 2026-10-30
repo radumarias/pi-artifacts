@@ -48,7 +48,7 @@ describe("thinking indicator", () => {
   });
 
   it("announces one steady status and hides the rotating word from screen readers", () => {
-    const html = renderToStaticMarkup(<Thinking />);
+    const html = renderToStaticMarkup(<Thinking since={Date.now()} />);
     expect(html).toContain('role="status"');
     expect(html).toContain('<span class="sr-only">Working…</span>');
     expect(html).toContain('<span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>');
@@ -68,22 +68,21 @@ describe("elapsed time", () => {
   it("shows next to the status word, counting from the run's start", () => {
     const html = renderToStaticMarkup(<Thinking since={Date.now() - 141_000} />);
     expect(html).toMatch(/<span class="thinking-time" aria-hidden="true">2m 2[12]s<\/span>/);
-    expect(renderToStaticMarkup(<Thinking />)).not.toContain("thinking-time");
   });
 
   it("starts when the run starts and stops when it ends", () => {
-    const running = reduce(idle, { type: "events", events: [{ type: "run_start", inputs: [] }] as never }, 5_000);
+    const running = reduce(idle, { type: "events", at: 5_000, events: [{ type: "run_start", inputs: [] }] as never });
     expect(running.runStartedAt).toBe(5_000);
-    expect(reduce(running, { type: "events", events: [{ type: "run_end", inputs: [] }] as never }, 9_000).runStartedAt).toBeUndefined();
+    expect(reduce(running, { type: "events", at: 9_000, events: [{ type: "run_end", inputs: [] }] as never }).runStartedAt).toBeUndefined();
   });
 
-  it("takes a run already going on reconnect from the newest user message", () => {
-    const user = (timestamp: number) => ({ id: `e${timestamp}`, kind: "pi.user", model: [{ role: "user", content: "hi", timestamp }] });
-    const snapshot = (run: boolean, timestamps: number[]) =>
-      reduce(idle, { type: "events", events: [{ type: "snapshot", entries: timestamps.map(user), tools: [], ...(run ? { run: { inputs: [] } } : {}) }] as never }, 10_000);
-    expect(snapshot(true, [1_000, 4_000]).runStartedAt).toBe(4_000);
-    expect(snapshot(true, [12_000]).runStartedAt).toBe(10_000);
-    expect(snapshot(true, []).runStartedAt).toBe(10_000);
-    expect(snapshot(false, [4_000]).runStartedAt).toBeUndefined();
+  it("takes a run already going on connect from the server, or else from when the snapshot came", () => {
+    const snapshot = (run: boolean, runStartedAt?: number) =>
+      reduce(idle, { type: "events", at: 10_000, runStartedAt, events: [{ type: "snapshot", entries: [], tools: [], ...(run ? { run: { inputs: [] } } : {}) }] as never });
+    expect(snapshot(true, 4_000).runStartedAt).toBe(4_000);
+    expect(snapshot(true).runStartedAt).toBe(10_000);
+    // A server clock running ahead never puts the start in the future.
+    expect(snapshot(true, 12_000).runStartedAt).toBe(10_000);
+    expect(snapshot(false, 4_000).runStartedAt).toBeUndefined();
   });
 });
