@@ -278,7 +278,10 @@ body.resizing iframe { pointer-events: none; }
 .icon-button:disabled { opacity: 0.35; }
 .icon-button.listening { color: var(--error); }
 .composer-tools { display: flex; align-items: center; gap: 2px; padding: 0 4px; min-height: 32px; }
-.composer-tools .spinner { flex: none; width: 16px; height: 16px; margin: 0 6px 0 10px; border-top-color: var(--text); }
+/* At the right edge, after the model picker or (before the models load) in its place. */
+.composer-tools .spinner { flex: none; width: 16px; height: 16px; margin: 0 6px 0 auto; border-top-color: var(--text); }
+.composer-tools .model-picker + .spinner { margin-left: 10px; }
+.dictation-error { min-width: 0; padding: 0 6px; font-size: 13px; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Always laid out so the pickers keep their place; not animated while hidden. */
 .composer-tools .spinner.idle { visibility: hidden; animation: none; }
 /* Above the app's drop target while files are dragged: a drop here attaches them to the message. */

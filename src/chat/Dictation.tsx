@@ -45,7 +45,10 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
         if (text) onText(text);
       }
     };
-    next.onerror = (event) => setError(ERRORS[event.error]);
+    // "aborted" and "no-speech" just end the session; anything else is shown next to the button.
+    next.onerror = (event) => {
+      if (event.error !== "aborted" && event.error !== "no-speech") setError(ERRORS[event.error] ?? `Dictation stopped (${event.error})`);
+    };
     next.onend = () => {
       recognizer.current = undefined;
       setListening(false);
@@ -56,13 +59,28 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     setListening(true);
   };
 
-  const label = error ?? (listening ? "Stop dictation" : "Dictate");
+  // A toggle keeps one name; aria-pressed says whether it is on.
   return (
-    <button type="button" className={listening ? "icon-button listening" : "icon-button"} onClick={toggle} disabled={disabled && !listening} title={label} aria-label={label} aria-pressed={listening}>
-      <Icon>
-        <rect x="9" y="3" width="6" height="11" rx="3" />
-        <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
-      </Icon>
-    </button>
+    <>
+      <button
+        type="button"
+        className={listening ? "icon-button listening" : "icon-button"}
+        onClick={toggle}
+        disabled={disabled && !listening}
+        title={listening ? "Stop dictation" : "Dictate"}
+        aria-label="Dictate"
+        aria-pressed={listening}
+      >
+        <Icon>
+          <rect x="9" y="3" width="6" height="11" rx="3" />
+          <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+        </Icon>
+      </button>
+      {error && (
+        <span className="dictation-error" role="status">
+          {error}
+        </span>
+      )}
+    </>
   );
 });
