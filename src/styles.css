@@ -249,7 +249,7 @@ body.resizing iframe { pointer-events: none; }
 .artifact-card small { display: block; color: var(--muted); }
 
 .composer { display: flex; flex-direction: column; gap: 6px; padding: 12px 20px 14px; }
-/* The input, the connection dot and Send/Stop sit in one rounded box; attach, dictation and the model under it. */
+/* The input and Send/Stop sit in one rounded box; attach, dictation and the model under it. */
 .composer-box {
   display: flex;
   flex-direction: column;
@@ -262,7 +262,7 @@ body.resizing iframe { pointer-events: none; }
   transition: border-color 0.15s;
 }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--muted) 60%, var(--border)); }
-/* Bottom-aligned, so the dot and Send stay by the last line as the input grows. */
+/* Bottom-aligned, so Send stays by the last line as the input grows. */
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
 .composer textarea {
   flex: 1;
@@ -278,8 +278,6 @@ body.resizing iframe { pointer-events: none; }
   line-height: 1.4;
 }
 .composer textarea::placeholder { color: var(--muted); }
-.connection-dot { flex: none; width: 8px; height: 8px; margin: 0 8px 12px; border-radius: 50%; background: var(--muted); opacity: 0.6; }
-.connection-dot.on { background: var(--live); opacity: 1; }
 .icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text); }
 .icon-button:not(:disabled):hover { background: var(--surface-2); }
 .icon-button.listening { color: var(--error); }
