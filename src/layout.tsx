@@ -1,11 +1,16 @@
 import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
-/** A layout setting kept in this browser. Storage can be missing or throw (private windows); the default then applies. */
-export function useStoredState<T>(key: string, fallback: T): [T, (value: T) => void] {
+/**
+ * A layout setting kept in this browser. Storage can be missing or throw (private windows), or hold
+ * a value `valid` rejects (an older build's); the default then applies.
+ */
+export function useStoredState<T>(key: string, fallback: T, valid?: (value: unknown) => value is T): [T, (value: T) => void] {
   const [value, setValue] = useState<T>(() => {
     try {
       const stored = localStorage.getItem(key);
-      return stored === null ? fallback : (JSON.parse(stored) as T);
+      if (stored === null) return fallback;
+      const parsed: unknown = JSON.parse(stored);
+      return !valid || valid(parsed) ? (parsed as T) : fallback;
     } catch {
       return fallback;
     }
