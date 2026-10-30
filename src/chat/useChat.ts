@@ -1,5 +1,5 @@
 import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { AgentEvent, AgentState, EntryRecord } from "@earendil-works/pi-durable";
+import type { AgentEvent, AgentState, EntryRecord, JsonObject } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AttachmentInput } from "../../shared/attachments.ts";
 import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
@@ -43,7 +43,16 @@ export function reduce(state: ChatState, action: Action): ChatState {
   for (const event of action.events) {
     switch (event.type) {
       case "snapshot":
-        next = withAgent({ entries: [...event.entries], partial: event.generation?.message, tools: [], busy: event.run !== undefined }, event.agent);
+        next = withAgent(
+          {
+            entries: [...event.entries],
+            partial: event.generation?.message,
+            // Calls running when the socket (re)connected, with the output they have so far.
+            tools: event.tools.filter((t) => t.status === "running").map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "" })),
+            busy: event.run !== undefined,
+          },
+          event.agent,
+        );
         break;
       case "agent_changed":
         next = withAgent(next, event.agent);
@@ -72,6 +81,10 @@ export function reduce(state: ChatState, action: Action): ChatState {
           } else if (change.type === "thinking_delta") {
             const block = content[change.contentIndex];
             if (block?.type === "thinking") content[change.contentIndex] = { ...block, thinking: block.thinking + change.delta };
+          } else if (change.type === "toolcall_delta") {
+            // A tool call's arguments as the model writes them, so its panel shows the code as it comes.
+            const block = content[change.contentIndex];
+            if (block?.type === "toolCall") content[change.contentIndex] = { ...block, arguments: appendAt(block.arguments, change.path, change.delta) as JsonObject };
           }
         }
         next = { ...next, partial: { ...next.partial, content } };
@@ -114,13 +127,36 @@ export function reduce(state: ChatState, action: Action): ChatState {
   return next;
 }
 
+/** `value` with `delta` appended to the string at `path`, copying only what is on the way there. */
+function appendAt(value: unknown, path: readonly (string | number)[], delta: string): unknown {
+  if (path.length === 0) return (typeof value === "string" ? value : "") + delta;
+  const [key, ...rest] = path;
+  const copy = (Array.isArray(value) ? [...value] : { ...(value as object) }) as Record<string | number, unknown>;
+  copy[key] = appendAt(copy[key], rest, delta);
+  return copy;
+}
+
+/** True when the newest assistant entry made a tool call that has no result yet. */
+function callPending(entries: readonly EntryRecord[]): boolean {
+  const answered = new Set<string>();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const message = entries[i].model?.[0];
+    if (message?.role === "toolResult") answered.add(message.toolCallId);
+    else if (message?.role === "assistant") return message.content.some((block) => block?.type === "toolCall" && !answered.has(block.id));
+    else if (message) return false;
+  }
+  return false;
+}
+
 /**
- * True while a run waits on the model: before its first token, between tool calls, and while it thinks or writes a
- * tool call. Not while a tool runs (that shows its own spinner) or while reply text streams.
+ * True while a run waits on the model: before its first token, between tool calls, and while it thinks. Not while
+ * it writes a tool call or the call runs (the call's panel shows its own spinner), or while reply text streams.
  */
 export function waitingOnModel(state: ChatState): boolean {
   if (!state.busy || state.tools.length > 0) return false;
-  const last = state.partial?.content.filter(Boolean).at(-1);
+  if (!state.partial) return !callPending(state.entries);
+  const last = state.partial.content.filter(Boolean).at(-1);
+  if (last?.type === "toolCall") return false;
   return last?.type !== "text" || !last.text;
 }
 

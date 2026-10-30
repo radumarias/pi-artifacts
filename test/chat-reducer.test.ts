@@ -31,6 +31,37 @@ describe("chat reducer", () => {
     expect(content.every((block) => block !== undefined)).toBe(true);
   });
 
+  it("streams a tool call's arguments into the call", () => {
+    const state = reduce(empty, {
+      type: "events",
+      events: [
+        { type: "message_start", message: assistant([{ type: "toolCall", id: "c", name: "run_python", arguments: { code: "import", files: ["sales"] } }]) },
+        { type: "message_update", usage: {}, changes: [{ type: "toolcall_delta", contentIndex: 0, path: ["code"], delta: " pandas" }] },
+        { type: "message_update", usage: {}, changes: [{ type: "toolcall_delta", contentIndex: 0, path: ["files", 0], delta: ".csv" }] },
+      ] as never,
+    });
+    expect(state.partial?.content[0]).toMatchObject({ arguments: { code: "import pandas", files: ["sales.csv"] } });
+  });
+
+  it("picks up the calls running when the socket connects", () => {
+    const state = reduce(empty, {
+      type: "events",
+      events: [
+        {
+          type: "snapshot",
+          entries: [],
+          run: { inputs: [] },
+          tools: [
+            { callId: "a", name: "run_python", status: "running", output: "step 1\n" },
+            { callId: "b", name: "run_bash", status: "pending" },
+          ],
+          agent: {},
+        },
+      ] as never,
+    });
+    expect(state.tools).toEqual([{ toolCallId: "a", toolName: "run_python", output: "step 1\n" }]);
+  });
+
   it("ignores message_start for user, system and tool-result messages", () => {
     const state = reduce(empty, {
       type: "events",
