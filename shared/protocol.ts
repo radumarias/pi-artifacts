@@ -199,6 +199,12 @@ export interface QueuedMessage extends ChatMessageData {
   id: number;
 }
 
+/** Someone with the chat open right now, and in how many windows (or devices). */
+export interface Presence {
+  uid: string;
+  windows: number;
+}
+
 /** Browser → ChatAgent over the chat WebSocket. */
 export type ChatClientMessage =
   // `attachments` were uploaded first, with POST /api/chats/:id/attachments; `text` may then be empty.
@@ -216,6 +222,8 @@ export type ChatServerMessage =
   /** `queued`, with a snapshot or a batch that changes pi's inbox: the people's messages waiting in it, oldest first. */
   | { type: "events"; events: unknown[]; runElapsedMs?: number; queued?: QueuedMessage[] }
   | { type: "people"; people: ChatPeopleView }
+  /** Who has the chat open: whenever a window opens or closes. */
+  | { type: "presence"; online: Presence[] }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
   | { type: "error"; message: string };

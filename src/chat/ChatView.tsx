@@ -41,7 +41,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }: Props) {
-  const { state, connected, people, gone, prompt, abort, setModel } = useChat(chatId);
+  const { state, connected, people, online, gone, prompt, abort, setModel } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
   const attachments = useAttachments(chatId);
@@ -137,12 +137,24 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   const isOwner = people?.owner.uid === uid;
   const sendLabel = attachments.sending ? "Sending…" : "Send";
   const ownerName = people && !isOwner ? people.owner.name : undefined;
-  const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid).map((person) => person.name).join(", ") : "";
+  // Each open window is a socket; someone no longer in the chat may still show for a moment, so only people in it count.
+  const windows = new Map(online.map((presence) => [presence.uid, presence.windows]));
+  const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid) : [];
+  const mine = windows.get(uid) ?? 0;
+  const othersTitle = others.map((person) => `${person.name}${windows.has(person.uid) ? " (here now)" : ""}`).join(", ");
   return (
     <section className="chat">
       <header className="chat-header">
-        <span className="chat-people" title={others}>
-          {others && `With ${others}`}
+        <span className="chat-people" title={othersTitle}>
+          {others.length > 0 && "With "}
+          {others.map((person, i) => (
+            <span key={person.uid}>
+              {i > 0 && ", "}
+              <span className={windows.has(person.uid) ? "person online" : "person"}>{person.name}</span>
+              {(windows.get(person.uid) ?? 0) > 1 && ` (${windows.get(person.uid)} windows)`}
+            </span>
+          ))}
+          {mine > 1 && `${others.length ? " · " : ""}Open in ${mine} of your windows`}
         </span>
         {people && (
           <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
