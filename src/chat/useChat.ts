@@ -5,10 +5,12 @@ import type { AttachmentInput } from "../../shared/attachments.ts";
 import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
+/** A call of the current round: waiting its turn, running, or ended without a result (it faulted, or was orphaned). */
 export interface RunningTool {
   toolCallId: string;
   toolName: string;
   output: string;
+  status: "pending" | "running" | "stopped";
 }
 
 export interface ChatState {
@@ -47,8 +49,10 @@ export function reduce(state: ChatState, action: Action): ChatState {
           {
             entries: [...event.entries],
             partial: event.generation?.message,
-            // Calls running when the socket (re)connected, with the output they have so far.
-            tools: event.tools.filter((t) => t.status === "running").map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "" })),
+            // The round's unfinished calls when the socket (re)connected, with the output they have so far.
+            tools: event.tools
+              .filter((t) => t.status !== "done")
+              .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "running" ? "running" : "pending" })),
             busy: event.run !== undefined,
           },
           event.agent,
@@ -96,9 +100,12 @@ export function reduce(state: ChatState, action: Action): ChatState {
       case "entry_appended":
         next = { ...next, entries: addEntry(next.entries, event.entry) };
         break;
-      case "tool_execution_start":
-        if (!event.parentToolCallId) next = { ...next, tools: [...next.tools, { toolCallId: event.toolCallId, toolName: event.toolName, output: "" }] };
+      case "tool_execution_start": {
+        if (event.parentToolCallId) break;
+        const tool: RunningTool = { toolCallId: event.toolCallId, toolName: event.toolName, output: "", status: "running" };
+        next = { ...next, tools: [...next.tools.filter((t) => t.toolCallId !== event.toolCallId), tool] };
         break;
+      }
       case "tool_execution_update": {
         const out = event.output;
         if (!out) break;
@@ -113,11 +120,10 @@ export function reduce(state: ChatState, action: Action): ChatState {
         break;
       }
       case "tool_execution_end":
-        next = {
-          ...next,
-          tools: next.tools.filter((t) => t.toolCallId !== event.toolCallId),
-          entries: event.entry ? addEntry(next.entries, event.entry) : next.entries,
-        };
+        // Without a result entry the call faulted or was orphaned: it stays in the round as stopped.
+        next = event.entry
+          ? { ...next, tools: next.tools.filter((t) => t.toolCallId !== event.toolCallId), entries: addEntry(next.entries, event.entry) }
+          : { ...next, tools: next.tools.map((t) => (t.toolCallId === event.toolCallId ? { ...t, status: "stopped" } : t)) };
         break;
       case "task_failed":
         next = { ...next, error: event.message };
@@ -153,7 +159,7 @@ function callPending(entries: readonly EntryRecord[]): boolean {
  * it writes a tool call or the call runs (the call's panel shows its own spinner), or while reply text streams.
  */
 export function waitingOnModel(state: ChatState): boolean {
-  if (!state.busy || state.tools.length > 0) return false;
+  if (!state.busy || state.tools.some((t) => t.status !== "stopped")) return false;
   if (!state.partial) return !callPending(state.entries);
   const last = state.partial.content.filter(Boolean).at(-1);
   if (last?.type === "toolCall") return false;

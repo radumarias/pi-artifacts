@@ -1,25 +1,29 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, use, useMemo, useState, type ReactNode } from "react";
+import { MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL } from "../../shared/protocol.ts";
+import { clip } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { Spark } from "./Thinking.tsx";
 import type { RunningTool } from "./useChat.ts";
 
-/** What the step panels read from the chat. Built once per change to the entries or the running tools, not per token. */
-export interface StepsView {
-  /** Each finished call's result, by call id. */
+/** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
+export interface StepResults {
   results: ReadonlyMap<string, ToolResultMessage>;
-  /** Every call some assistant entry made: a result without one shows on its own. */
   calls: ReadonlySet<string>;
-  running: ReadonlyMap<string, RunningTool>;
-  busy: boolean;
-  /** Panels the reader opened, so one stays open when its streaming message becomes an entry and remounts. */
-  opened: Set<string>;
 }
 
-export const StepsContext = createContext<StepsView>({ results: new Map(), calls: new Set(), running: new Map(), busy: false, opened: new Set() });
+/** The calls of the current round, and whether a run is on. Changes with every chunk of tool output. */
+export interface StepsLive {
+  tools: ReadonlyMap<string, RunningTool>;
+  busy: boolean;
+}
 
-export function stepsView(entries: readonly EntryRecord[], tools: readonly RunningTool[], busy: boolean, opened: Set<string>): StepsView {
+// Two contexts, so a step that has its result never re-renders for another step's output.
+const ResultsContext = createContext<StepResults>({ results: new Map(), calls: new Set() });
+const LiveContext = createContext<StepsLive>({ tools: new Map(), busy: false });
+
+export function stepResults(entries: readonly EntryRecord[]): StepResults {
   const results = new Map<string, ToolResultMessage>();
   const calls = new Set<string>();
   for (const entry of entries) {
@@ -29,39 +33,53 @@ export function stepsView(entries: readonly EntryRecord[], tools: readonly Runni
       for (const block of message.content) if (block?.type === "toolCall") calls.add(block.id);
     }
   }
-  return { results, calls, running: new Map(tools.map((tool) => [tool.toolCallId, tool])), busy, opened };
+  return { results, calls };
+}
+
+export function stepsLive(tools: readonly RunningTool[], busy: boolean): StepsLive {
+  return { tools: new Map(tools.map((tool) => [tool.toolCallId, tool])), busy };
+}
+
+/** What the step panels read from the chat. */
+export function StepsProvider({ entries, tools, busy, children }: { entries: readonly EntryRecord[]; tools: readonly RunningTool[]; busy: boolean; children: ReactNode }) {
+  const results = useMemo(() => stepResults(entries), [entries]);
+  const live = useMemo(() => stepsLive(tools, busy), [tools, busy]);
+  return (
+    <ResultsContext value={results}>
+      <LiveContext value={live}>{children}</LiveContext>
+    </ResultsContext>
+  );
 }
 
 /**
  * Where a call is. `writing`: the model is still streaming its arguments; `starting`: written, not started yet;
- * `stopped`: the run ended without a result (stopped, or the tool faulted).
+ * `stopped`: it ended without a result (stopped, or the tool faulted).
  */
 export type StepStatus = "writing" | "starting" | "running" | "done" | "error" | "stopped";
 
-export function stepStatus(view: StepsView, callId: string, streaming: boolean): StepStatus {
-  const result = view.results.get(callId);
-  if (result) return result.isError ? "error" : "done";
-  if (view.running.has(callId)) return "running";
-  if (!view.busy) return "stopped";
+/** Where a call without a result is: its slot in the current round, else what the run says. */
+export function liveStatus(live: StepsLive, callId: string, streaming: boolean): StepStatus {
+  const slot = live.tools.get(callId)?.status;
+  if (slot) return slot === "pending" ? "starting" : slot;
+  if (!live.busy) return "stopped";
   return streaming ? "writing" : "starting";
 }
 
-const STATUS: Record<StepStatus, string> = {
-  writing: "Writing…",
-  starting: "Starting…",
-  running: "Running…",
-  done: "Done",
-  error: "Failed",
-  stopped: "Stopped",
+/** Each status's text and icon (the spark when it has none), and its tone: color, and the shimmer while active. */
+const STATUS: Record<StepStatus, { text: string; icon?: string; tone?: "active" | "done" | "error" }> = {
+  writing: { text: "Writing…", tone: "active" },
+  starting: { text: "Starting…", tone: "active" },
+  running: { text: "Running…", tone: "active" },
+  done: { text: "Done", icon: "✓", tone: "done" },
+  error: { text: "Failed", icon: "✕", tone: "error" },
+  stopped: { text: "Stopped", icon: "■" },
 };
-
-const ACTIVE = new Set<StepStatus>(["writing", "starting", "running"]);
 
 /** The built-in tools by what they do; an MCP tool reads as its server and tool, anything else by its name. */
 const LABELS: Record<string, string> = {
   run_python: "Python",
   run_bash: "Bash",
-  artifact_publish: "Publish artifact",
+  [PUBLISH_TOOL]: "Publish artifact",
   artifact_read: "Read artifact",
   artifact_history: "Artifact history",
   artifact_diff: "Compare versions",
@@ -69,21 +87,20 @@ const LABELS: Record<string, string> = {
   files_read: "Read file",
   files_write: "Write file",
   skill_propose: "Propose skill",
-  mcp_discover: "List MCP servers",
+  [MCP_DISCOVER_TOOL]: "List MCP servers",
 };
 
 /** What a call's long text arguments are, where the key alone says less. */
 const INPUT_LABELS: Record<string, Record<string, string>> = {
   run_python: { code: "Python" },
   run_bash: { script: "Bash" },
-  artifact_publish: { html: "HTML" },
+  [PUBLISH_TOOL]: { html: "HTML" },
 };
 
 export function stepLabel(name: string): string {
   if (LABELS[name]) return LABELS[name];
-  // An MCP tool's agent name is the server's slug and the tool's name (worker/agent/mcp.ts).
-  const split = name.indexOf("__");
-  return split > 0 ? `${name.slice(0, split)} › ${name.slice(split + 2)}` : name;
+  const split = name.indexOf(MCP_TOOL_SEPARATOR);
+  return split > 0 ? `${name.slice(0, split)} › ${name.slice(split + MCP_TOOL_SEPARATOR.length)}` : name;
 }
 
 /** Lines that say nothing about what a script does: blank, a shebang, shell options. */
@@ -118,12 +135,8 @@ export function inputSections(name: string, args: Record<string, unknown> | unde
   return sections;
 }
 
-/** Most of a page or a long output is not worth the DOM it takes; the model saw at most 16 000 characters anyway. */
+/** A page or a long output is not worth all the DOM it takes. A tool's result is already cut to what the model saw. */
 const MAX_SHOWN = 20_000;
-
-function clipped(text: string): string {
-  return text.length <= MAX_SHOWN ? text : `${text.slice(0, MAX_SHOWN)}\n… ${text.length - MAX_SHOWN} more characters`;
-}
 
 function resultText(result: ToolResultMessage): string {
   return result.content.map((block) => (block.type === "text" ? block.text : "[image]")).join("\n");
@@ -137,28 +150,27 @@ function seconds(ms: number): string {
  * One step of the agent, collapsed to a line: an icon, what it is, a hint and where it is. Opened, it shows what the
  * step was given and what came back. The body is only rendered while open, so a long history of steps stays cheap.
  */
-function Panel({ id, tone, icon, label, hint, status, children }: {
-  id?: string;
-  /** Colors the icon and status, and makes an active status shimmer like the thinking indicator. */
-  tone?: "active" | "done" | "error" | "stopped";
+/** Panels the reader opened, by key: one stays open when its streaming message becomes an entry and remounts. */
+const opened = new Set<string>();
+
+function Panel({ openKey, tone, icon, label, hint, status, children }: {
+  openKey: string;
+  tone?: "active" | "done" | "error";
   icon: ReactNode;
   label: string;
-  hint?: string;
+  hint: string;
   status?: string;
   children: () => ReactNode;
 }) {
-  const view = useContext(StepsContext);
-  const [open, setOpen] = useState(() => id !== undefined && view.opened.has(id));
+  const [open, setOpen] = useState(() => opened.has(openKey));
   return (
     <details
       className={tone ? `step ${tone}` : "step"}
       open={open}
       onToggle={(event) => {
         const now = event.currentTarget.open;
-        if (id !== undefined) {
-          if (now) view.opened.add(id);
-          else view.opened.delete(id);
-        }
+        if (now) opened.add(openKey);
+        else opened.delete(openKey);
         setOpen(now);
       }}
     >
@@ -181,31 +193,33 @@ function Section({ label, text, error }: { label: string; text: string; error?: 
     <div className={error ? "step-section error" : "step-section"}>
       <div className="step-section-label">{label}</div>
       <pre>
-        <Linkified text={clipped(text)} />
+        <Linkified text={clip(text, MAX_SHOWN)} />
       </pre>
     </div>
   );
 }
 
-const ICONS: Partial<Record<StepStatus, string>> = { done: "✓", error: "✕", stopped: "■" };
+/** What a step is made from: a tool call, or for a result whose call is not in the chat, its id and name alone. */
+type StepCall = Pick<ToolCall, "id" | "name"> & Partial<Pick<ToolCall, "arguments" | "argumentsError">>;
 
-/** A tool call: code it runs, an MCP call, a publish. `call` is undefined for a result whose call is not in the chat. */
-export function ToolStep({ id, name, call, streaming = false }: { id: string; name: string; call?: ToolCall; streaming?: boolean }) {
-  const view = useContext(StepsContext);
-  const status = stepStatus(view, id, streaming);
-  const result = view.results.get(id);
-  const tone = ACTIVE.has(status) ? "active" : (status as "done" | "error" | "stopped");
+/** A tool call: code it runs, an MCP call, a publish. `streaming` while the model writes the message it is in. */
+export function ToolStep({ call, streaming = false }: { call: StepCall; streaming?: boolean }) {
+  const result = use(ResultsContext).results.get(call.id);
+  // Read only while the call is unfinished: a finished step does not follow the live output of others.
+  const live = result ? undefined : use(LiveContext);
+  const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
+  const { text, icon, tone } = STATUS[status];
   const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
   return (
-    <Panel id={id} tone={tone} icon={ICONS[status] ?? <Spark />} label={stepLabel(name)} hint={stepHint(call?.arguments)} status={STATUS[status] + time}>
+    <Panel openKey={call.id} tone={tone} icon={icon ?? <Spark />} label={stepLabel(call.name)} hint={stepHint(call.arguments)} status={text + time}>
       {() => {
-        const output = result ? resultText(result) : view.running.get(id)?.output;
+        const output = result ? resultText(result) : live!.tools.get(call.id)?.output;
         return (
           <>
-            {inputSections(name, call?.arguments).map((section) => (
+            {inputSections(call.name, call.arguments).map((section) => (
               <Section key={section.label} {...section} />
             ))}
-            {call?.argumentsError && <Section label="Invalid arguments" text={call.argumentsError} error />}
+            {call.argumentsError && <Section label="Invalid arguments" text={call.argumentsError} error />}
             {output ? (
               <Section label={status === "error" ? "Error" : "Output"} text={output} error={status === "error"} />
             ) : (
@@ -220,14 +234,13 @@ export function ToolStep({ id, name, call, streaming = false }: { id: string; na
 
 /** A result whose call no assistant entry holds: shown on its own, with what came back. Nothing when its call shows it. */
 export function OrphanResult({ message }: { message: ToolResultMessage }) {
-  const view = useContext(StepsContext);
-  return view.calls.has(message.toolCallId) ? null : <ToolStep id={message.toolCallId} name={message.toolName} />;
+  return use(ResultsContext).calls.has(message.toolCallId) ? null : <ToolStep call={{ id: message.toolCallId, name: message.toolName }} />;
 }
 
-/** What the model thought before answering, when the provider sends it. */
-export function ThoughtStep({ text }: { text: string }) {
+/** What the model thought before answering, when the provider sends it. `openKey` stays the same once the message lands. */
+export function ThoughtStep({ openKey, text }: { openKey: string; text: string }) {
   return (
-    <Panel icon="✻" label="Thought process" hint={text.trimStart().slice(0, 200).split("\n")[0]}>
+    <Panel openKey={openKey} icon="✻" label="Thought process" hint={stepHint({ text })}>
       {() => <div className="step-thought">{text.trim()}</div>}
     </Panel>
   );

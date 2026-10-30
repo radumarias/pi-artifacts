@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -12,7 +12,7 @@ import { SharePanel } from "./SharePanel.tsx";
 import { useChat, waitingOnModel } from "./useChat.ts";
 import { Markdown } from "./Markdown.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
-import { OrphanResult, StepsContext, stepsView, ThoughtStep, ToolStep } from "./Steps.tsx";
+import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
 
 interface Props {
@@ -45,8 +45,6 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   const input = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
-  const opened = useRef(new Set<string>()).current;
-  const steps = useMemo(() => stepsView(state.entries, state.tools, state.busy, opened), [state.entries, state.tools, state.busy, opened]);
 
   // Follow new output only while the reader is at the bottom; scrolling up to read stops it,
   // scrolling back down (or sending a message) resumes it. Scroll the list itself, never the page.
@@ -135,7 +133,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
         )}
       </header>
       {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} />}
-      <StepsContext value={steps}>
+      <StepsProvider entries={state.entries} tools={state.tools} busy={state.busy}>
         <div className="messages" ref={list} onScroll={onScroll}>
           {state.entries.length === 0 && !state.busy && (
             <div className="empty-chat">
@@ -150,7 +148,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
           {waitingOnModel(state) && <Thinking />}
           {state.error && <div className="chat-error">{state.error}</div>}
         </div>
-      </StepsContext>
+      </StepsProvider>
       <ModelPicker
         model={state.model}
         thinkingLevel={state.thinkingLevel}
@@ -386,8 +384,9 @@ function Assistant({ message, streaming = false }: { message: AssistantMessage; 
               <Markdown text={block.text} />
             </div>
           ) : null;
-        if (block.type === "toolCall") return <ToolStep key={i} id={block.id} name={block.name} call={block} streaming={streaming} />;
-        if (block.type === "thinking" && !block.redacted && block.thinking.trim()) return <ThoughtStep key={i} text={block.thinking} />;
+        if (block.type === "toolCall") return <ToolStep key={i} call={block} streaming={streaming} />;
+        if (block.type === "thinking" && !block.redacted && block.thinking.trim())
+          return <ThoughtStep key={i} openKey={`${message.timestamp}:${i}`} text={block.thinking} />;
         return null;
       })}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
