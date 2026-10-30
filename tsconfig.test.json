@@ -28,6 +28,7 @@
     "src/api.ts",
     "src/chat/Markdown.tsx",
     "src/chat/Thinking.tsx",
+    "src/artifact/viewport.tsx",
     "shared",
     "worker/mcp",
     "worker/agent/mcp.ts",

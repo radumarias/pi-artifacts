@@ -262,13 +262,25 @@ body.resizing iframe { pointer-events: none; }
 
 .artifact-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); min-width: 0; }
 .artifact-panel.full { border-left: 0; }
-.artifact-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.artifact-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .artifact-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .artifact-title strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.artifact-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.artifact-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
 .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); white-space: nowrap; }
 .pill.live { color: var(--live); }
 .artifact-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+.artifact-stage { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.artifact-device { flex: 1; display: flex; min-width: 0; }
+/* At a device size the frame keeps that viewport and is scaled down to the box around it. */
+.artifact-stage.device { flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: var(--surface-2); }
+.artifact-stage.device .artifact-device { flex: none; overflow: hidden; border-radius: 6px; box-shadow: 0 0 0 1px var(--border), 0 6px 24px rgb(0 0 0 / 0.12); }
+.artifact-stage.device .artifact-frame { flex: none; width: var(--device-w); height: var(--device-h); transform: scale(var(--device-scale)); transform-origin: 0 0; }
+.artifact-size { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 16px; }
+.viewport-picker { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.viewport-picker button { display: grid; place-items: center; border: 0; border-radius: 0; padding: 6px 8px; color: var(--muted); }
+.viewport-picker button + button { border-left: 1px solid var(--border); }
+.viewport-picker button:hover { color: var(--text); }
+.viewport-picker button[aria-pressed="true"] { background: var(--surface-2); color: var(--accent); }
 .bubble a, .tool-result a { color: var(--accent); overflow-wrap: anywhere; }
 .clone-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: 13px; }
 .clone-box code { flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
