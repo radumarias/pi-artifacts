@@ -244,6 +244,8 @@ export function useChat(chatId: string) {
       };
       ws.onclose = (event) => {
         setConnected(false);
+        // Who is here is unknown until the next socket hears it again.
+        setOnline([]);
         if (closed) return;
         if (event.code === SOCKET_NOT_A_MEMBER) return stop();
         timer = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 15_000));
