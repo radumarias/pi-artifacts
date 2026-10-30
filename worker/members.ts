@@ -138,7 +138,7 @@ export class ChatMembers {
   /**
    * Use an invite: `person` becomes a member and the invite is gone. Someone
    * already in the chat keeps the invite unused, so it can still go to whoever
-   * it was meant for. The chat refuses its owner before this. Null when they are in.
+   * it was meant for. The chat lets its owner in before this. Null when they are in.
    */
   async accept(secret: string, person: Person, now = Date.now()): Promise<{ error: string } | null> {
     const secretHash = await sha256Hex(secret);
