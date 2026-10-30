@@ -19,6 +19,8 @@ export interface ChatState {
   partial?: AssistantMessage;
   tools: RunningTool[];
   busy: boolean;
+  /** When the current run started, in epoch ms: for the elapsed time on the working indicator. */
+  runStartedAt?: number;
   error?: string;
   /** The model and effort the chat runs on, from pi's agent state. */
   model?: string;
@@ -27,7 +29,11 @@ export interface ChatState {
 
 const initial: ChatState = { entries: [], tools: [], busy: false };
 
-type Action = { type: "events"; events: AgentEvent[] } | { type: "error"; message?: string } | { type: "reset" };
+type Action =
+  /** `at`: when the batch arrived. `runElapsedMs`: how long the snapshot's run had gone, from the server. */
+  | { type: "events"; events: AgentEvent[]; at: number; runElapsedMs?: number }
+  | { type: "error"; message?: string }
+  | { type: "reset" };
 
 function withAgent(state: ChatState, agent: AgentState | undefined): ChatState {
   return { ...state, model: agent?.model?.modelId, thinkingLevel: agent?.thinkingLevel };
@@ -44,7 +50,11 @@ export function reduce(state: ChatState, action: Action): ChatState {
   let next = state;
   for (const event of action.events) {
     switch (event.type) {
-      case "snapshot":
+      case "snapshot": {
+        const busy = event.run !== undefined;
+        // A duration from the server, applied to this clock: the two clocks need not agree. Without one (the server
+        // could not tell), a snapshot after an overflow keeps the start already known.
+        const started = action.runElapsedMs === undefined ? next.runStartedAt : action.at - Math.max(0, action.runElapsedMs);
         next = withAgent(
           {
             entries: [...event.entries],
@@ -54,19 +64,21 @@ export function reduce(state: ChatState, action: Action): ChatState {
             tools: event.tools
               .filter((t) => t.status !== "done" || t.entry === undefined)
               .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "done" ? "stopped" : t.status })),
-            busy: event.run !== undefined,
+            busy,
+            runStartedAt: busy ? (started ?? action.at) : undefined,
           },
           event.agent,
         );
         break;
+      }
       case "agent_changed":
         next = withAgent(next, event.agent);
         break;
       case "run_start":
-        next = { ...next, busy: true, error: undefined };
+        next = { ...next, busy: true, runStartedAt: action.at, error: undefined };
         break;
       case "run_end":
-        next = { ...next, busy: false, partial: undefined, tools: [] };
+        next = { ...next, busy: false, runStartedAt: undefined, partial: undefined, tools: [] };
         break;
       case "message_start":
         // An assistant message can open with blocks already in it; later changes index into them.
@@ -214,7 +226,7 @@ export function useChat(chatId: string) {
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data) as ChatServerMessage;
-        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[] });
+        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs });
         else if (message.type === "people") setPeople(message.people);
         else if (message.type === "removed") {
           stop();

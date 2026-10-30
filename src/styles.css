@@ -189,9 +189,16 @@ body.resizing iframe { pointer-events: none; }
 .step-section.error pre { color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }
 .step-note { margin: 0; color: var(--muted); }
 .step-thought { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
-/* Waiting on the model: a spinning, morphing spark and a rotating word with a light sweeping across it (Thinking.tsx). */
+/* Waiting on the model: pulsing dots, a rotating word with a light sweeping across it, and the elapsed time (Thinking.tsx). */
 .thinking { display: flex; align-items: center; gap: 10px; padding: 2px 4px; color: var(--muted); }
-/* The spark turns a quarter at a time (the easing applies per step) while its two sets of rays grow and shrink in turn. */
+/* The brightness passes from dot to dot, left to right. */
+.thinking-dots { flex: none; display: inline-flex; gap: 3px; }
+.thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); opacity: 0.3; animation: thinking-pulse 1.2s ease-in-out infinite; }
+.thinking-dots i:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots i:nth-child(3) { animation-delay: 0.4s; }
+.thinking-time { margin-left: -2px; font-variant-numeric: tabular-nums; }
+/* A running step's icon (Spark in Steps.tsx): it turns a quarter at a time (the easing applies per step) while its two
+   sets of rays grow and shrink in turn. */
 .thinking-spark {
   flex: none;
   width: 16px;
@@ -213,6 +220,7 @@ body.resizing iframe { pointer-events: none; }
 }
 @keyframes thinking-spin { 25% { transform: rotate(90deg); } 50% { transform: rotate(180deg); } 75% { transform: rotate(270deg); } to { transform: rotate(360deg); } }
 @keyframes thinking-morph { 50% { transform: scale(0.4); } }
+@keyframes thinking-pulse { 30% { opacity: 1; transform: scale(1.25); } 60%, 100% { opacity: 0.3; transform: none; } }
 @keyframes thinking-shimmer { to { background-position: 0 0; } }
 @keyframes thinking-in { from { opacity: 0; } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -220,7 +228,8 @@ body.resizing iframe { pointer-events: none; }
 .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .thinking-spark, .thinking-spark g, .thinking-word, .step.active .step-status, .spinner { animation: none; }
+  .thinking-dots i, .thinking-spark, .thinking-spark g, .thinking-word, .step.active .step-status, .spinner { animation: none; }
+  .thinking-dots i { opacity: 0.7; }
   .thinking-spark .thinking-spark-short { transform: scale(0.6); }
   .thinking-word, .step.active .step-status { background: none; color: var(--muted); }
   .step-chevron { transition: none; }

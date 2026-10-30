@@ -145,7 +145,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
             <Entry key={entry.id} entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
           ))}
           {state.partial && <Assistant message={state.partial} streaming />}
-          {waitingOnModel(state) && <Thinking />}
+          {state.runStartedAt !== undefined && waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
           {state.error && <div className="chat-error">{state.error}</div>}
         </div>
       </StepsProvider>
