@@ -303,6 +303,7 @@ const Entry = memo(function Entry({
 /** Each notice as said of someone else, and of the viewer (who may have been removed and invited back). */
 const PEOPLE_EVENTS: Record<ChatPeopleData["event"], readonly [string, string]> = {
   joined: ["joined the chat", "joined the chat"],
+  rejoined: ["joined again from another window or device", "joined again from another window or device"],
   left: ["left the chat", "left the chat"],
   removed: ["was removed from the chat", "were removed from the chat"],
 };
