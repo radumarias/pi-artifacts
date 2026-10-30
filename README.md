@@ -262,9 +262,10 @@ people: many people share one conversation with one agent, and their messages qu
 - **Joining and leaving:** when someone joins, leaves or is removed, the chat writes a `chat.people` entry, and
   everyone sees a line like "bob joined the chat". It is a passive pi write: placed at once, even mid-run, and the
   model never reads it.
-- **Queued messages:** a message sent while the agent works waits in pi's inbox (`pi.inbox`). The chat watches that
-  inbox and sends the waiting messages to every socket, so everyone sees them at once, faded and marked "Queued"
-  (with "2 of 3" when more than one waits), below what the agent is doing. Each leaves the queue for the transcript
+- **Queued messages:** a message sent while the agent works waits in pi's inbox (`pi.inbox`). pi's event stream
+  reports each change to the inbox by ids only, so the chat adds the waiting messages, read from the inbox, to that
+  batch. Everyone sees them at once, faded and marked "Queued" (with "2 of 3" when more than one waits), below what
+  the agent is doing. Each leaves the queue for the transcript
   when its turn comes. A failed run goes on to the messages behind it (`afterFailedRun: "continue"`), so one person's
   failed request does not hold the others'. **Stop** withdraws the queued messages too, as pi's abort does.
 - **Access:** the Worker finds the chat through the user's index (their own chats and the ones shared with them), and

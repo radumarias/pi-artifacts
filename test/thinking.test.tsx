@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { THINKING_WORDS, Thinking, formatElapsed, nextWord } from "../src/chat/Thinking.tsx";
 import { reduce, waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
 
-const idle: ChatState = { entries: [], tools: [], busy: false };
+const idle: ChatState = { entries: [], tools: [], busy: false, queued: [] };
 const busy: ChatState = { ...idle, busy: true };
 const partial = (content: unknown[]) => ({ ...busy, partial: { role: "assistant", content } }) as unknown as ChatState;
 

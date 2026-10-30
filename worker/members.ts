@@ -92,8 +92,10 @@ export class ChatMembers {
     return this.#count("chat_members") >= MAX_MEMBERS ? { error: `This chat has ${MAX_MEMBERS} members, the most there can be.` } : null;
   }
 
-  remove(uid: string): boolean {
-    return this.#sql.exec("DELETE FROM chat_members WHERE uid = ?", uid).rowsWritten > 0;
+  /** The member removed, or undefined when `uid` was not one. */
+  remove(uid: string): Person | undefined {
+    const row = this.#sql.exec("DELETE FROM chat_members WHERE uid = ? RETURNING uid, name", uid).toArray()[0];
+    return row && { uid: row.uid as string, name: row.name as string };
   }
 
   /** The invites still open, oldest first. A read only: it runs on every connect; createInvite forgets the expired ones. */

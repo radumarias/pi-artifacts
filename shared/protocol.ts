@@ -207,16 +207,14 @@ export type ChatClientMessage =
   | { type: "model"; model: string; thinkingLevel?: string };
 
 /**
- * ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change,
- * `queue` on connect and whenever pi's inbox changes.
+ * ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change.
  * A snapshot taken mid-run comes with `runElapsedMs`: how long ago, by the server's clock, the run's first message was
  * placed, which the snapshot does not say. A duration rather than a time, so the browser's clock need not agree.
  */
 export type ChatServerMessage =
-  | { type: "events"; events: unknown[]; runElapsedMs?: number }
+  /** `queued`, with a snapshot or a batch that changes pi's inbox: the people's messages waiting in it, oldest first. */
+  | { type: "events"; events: unknown[]; runElapsedMs?: number; queued?: QueuedMessage[] }
   | { type: "people"; people: ChatPeopleView }
-  /** The messages waiting for the agent, oldest first: on connect and whenever the queue changes. Empty when none wait. */
-  | { type: "queue"; queued: QueuedMessage[] }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
   | { type: "error"; message: string };

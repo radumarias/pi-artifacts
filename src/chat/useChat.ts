@@ -22,16 +22,21 @@ export interface ChatState {
   /** When the current run started, in epoch ms: for the elapsed time on the working indicator. */
   runStartedAt?: number;
   error?: string;
+  /** Messages sent while the agent was busy, oldest first: they wait their turn in pi's inbox. */
+  queued: QueuedMessage[];
   /** The model and effort the chat runs on, from pi's agent state. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
 }
 
-const initial: ChatState = { entries: [], tools: [], busy: false };
+const initial: ChatState = { entries: [], tools: [], busy: false, queued: [] };
 
 type Action =
-  /** `at`: when the batch arrived. `runElapsedMs`: how long the snapshot's run had gone, from the server. */
-  | { type: "events"; events: AgentEvent[]; at: number; runElapsedMs?: number }
+  /**
+   * `at`: when the batch arrived. `runElapsedMs`: how long the snapshot's run had gone, from the server. `queued`: the
+   * messages waiting after the batch, when it changed them; in the same action, so one moves from queued to placed at once.
+   */
+  | { type: "events"; events: AgentEvent[]; at: number; runElapsedMs?: number; queued?: QueuedMessage[] }
   | { type: "error"; message?: string }
   | { type: "reset" };
 
@@ -66,6 +71,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
               .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "done" ? "stopped" : t.status })),
             busy,
             runStartedAt: busy ? (started ?? action.at) : undefined,
+            queued: next.queued,
           },
           event.agent,
         );
@@ -150,7 +156,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
         break;
     }
   }
-  return next;
+  return action.queued ? { ...next, queued: action.queued } : next;
 }
 
 /** `value` with `delta` appended to the string at `path`, copying only what is on the way there. */
@@ -199,14 +205,12 @@ export function useChat(chatId: string) {
   const [state, dispatch] = useReducer(reduce, initial);
   const [connected, setConnected] = useState(false);
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
-  const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const [gone, setGone] = useState(false);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     dispatch({ type: "reset" });
     setPeople(null);
-    setQueued([]);
     setGone(false);
     let closed = false;
     let attempt = 0;
@@ -228,9 +232,8 @@ export function useChat(chatId: string) {
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data) as ChatServerMessage;
-        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs });
+        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
         else if (message.type === "people") setPeople(message.people);
-        else if (message.type === "queue") setQueued(message.queued);
         else if (message.type === "removed") {
           stop();
           ws.close();
@@ -263,8 +266,6 @@ export function useChat(chatId: string) {
     state,
     connected,
     people,
-    /** Messages sent while the agent was busy, oldest first: they wait their turn in pi's inbox. */
-    queued,
     /** True once the chat refused this user's socket: they are not (or no longer) in it. */
     gone,
     prompt: (text: string, attachments?: AttachmentInput[]) => send({ type: "prompt", text, ...(attachments?.length && { attachments }) }),
