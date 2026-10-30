@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { THINKING_WORDS, Thinking, nextWord } from "../src/chat/Thinking.tsx";
-import { waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
+import { THINKING_WORDS, Thinking, formatElapsed, nextWord } from "../src/chat/Thinking.tsx";
+import { reduce, waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
 
-const busy: ChatState = { entries: [], tools: [], busy: true };
+const idle: ChatState = { entries: [], tools: [], busy: false };
+const busy: ChatState = { ...idle, busy: true };
 const partial = (content: unknown[]) => ({ ...busy, partial: { role: "assistant", content } }) as unknown as ChatState;
 
 describe("waiting on the model", () => {
@@ -37,8 +38,39 @@ describe("thinking indicator", () => {
     const html = renderToStaticMarkup(<Thinking />);
     expect(html).toContain('role="status"');
     expect(html).toContain('<span class="sr-only">Working…</span>');
-    expect(html).toContain('<svg class="thinking-spark" viewBox="0 0 24 24" aria-hidden="true">');
-    expect(html.match(/<line /g)).toHaveLength(6);
+    expect(html).toContain('<span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>');
     expect(html).toMatch(new RegExp(`<span class="thinking-word" aria-hidden="true">(${THINKING_WORDS.join("|")})</span>`));
+  });
+});
+
+describe("elapsed time", () => {
+  it("reads like a stopwatch", () => {
+    expect([0, 999, 12_400, 59_999].map(formatElapsed)).toEqual(["0s", "0s", "12s", "59s"]);
+    expect([60_000, 141_000, 150_500, 3_599_000].map(formatElapsed)).toEqual(["1m", "2m 21s", "2m 30s", "59m 59s"]);
+    expect([3_600_000, 3_900_000].map(formatElapsed)).toEqual(["1h", "1h 5m"]);
+    // A start stamped by a clock slightly ahead of this one.
+    expect(formatElapsed(-800)).toBe("0s");
+  });
+
+  it("shows next to the status word, counting from the run's start", () => {
+    const html = renderToStaticMarkup(<Thinking since={Date.now() - 141_000} />);
+    expect(html).toMatch(/<span class="thinking-time" aria-hidden="true">2m 2[12]s<\/span>/);
+    expect(renderToStaticMarkup(<Thinking />)).not.toContain("thinking-time");
+  });
+
+  it("starts when the run starts and stops when it ends", () => {
+    const running = reduce(idle, { type: "events", events: [{ type: "run_start", inputs: [] }] as never }, 5_000);
+    expect(running.runStartedAt).toBe(5_000);
+    expect(reduce(running, { type: "events", events: [{ type: "run_end", inputs: [] }] as never }, 9_000).runStartedAt).toBeUndefined();
+  });
+
+  it("takes a run already going on reconnect from the newest user message", () => {
+    const user = (timestamp: number) => ({ id: `e${timestamp}`, kind: "pi.user", model: [{ role: "user", content: "hi", timestamp }] });
+    const snapshot = (run: boolean, timestamps: number[]) =>
+      reduce(idle, { type: "events", events: [{ type: "snapshot", entries: timestamps.map(user), ...(run ? { run: { inputs: [] } } : {}) }] as never }, 10_000);
+    expect(snapshot(true, [1_000, 4_000]).runStartedAt).toBe(4_000);
+    expect(snapshot(true, [12_000]).runStartedAt).toBe(10_000);
+    expect(snapshot(true, []).runStartedAt).toBe(10_000);
+    expect(snapshot(false, [4_000]).runStartedAt).toBeUndefined();
   });
 });

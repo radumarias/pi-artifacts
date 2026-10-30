@@ -17,6 +17,8 @@ export interface ChatState {
   partial?: AssistantMessage;
   tools: RunningTool[];
   busy: boolean;
+  /** When the current run started, in epoch ms: for the elapsed time on the working indicator. */
+  runStartedAt?: number;
   error?: string;
   /** The model and effort the chat runs on, from pi's agent state. */
   model?: string;
@@ -35,24 +37,36 @@ function addEntry(entries: EntryRecord[], entry: EntryRecord): EntryRecord[] {
   return entries.some((e) => e.id === entry.id) ? entries : [...entries, entry];
 }
 
+/**
+ * A run already going when the socket (re)connects started with the newest user message: the snapshot does not say
+ * when. Never later than now, in case the server's clock runs ahead.
+ */
+function runStart(entries: readonly EntryRecord[], now: number): number {
+  const asked = entries.findLast((entry) => entry.model?.[0]?.role === "user")?.model?.[0];
+  return Math.min(asked?.role === "user" ? asked.timestamp : now, now);
+}
+
 /** Apply pi-durable's agent events to the view: a snapshot replaces everything, the rest are deltas on top of it. */
-export function reduce(state: ChatState, action: Action): ChatState {
+export function reduce(state: ChatState, action: Action, now = Date.now()): ChatState {
   if (action.type === "reset") return initial;
   if (action.type === "error") return { ...state, error: action.message };
   let next = state;
   for (const event of action.events) {
     switch (event.type) {
-      case "snapshot":
-        next = withAgent({ entries: [...event.entries], partial: event.generation?.message, tools: [], busy: event.run !== undefined }, event.agent);
+      case "snapshot": {
+        const busy = event.run !== undefined;
+        const runStartedAt = busy ? runStart(event.entries, now) : undefined;
+        next = withAgent({ entries: [...event.entries], partial: event.generation?.message, tools: [], busy, runStartedAt }, event.agent);
         break;
+      }
       case "agent_changed":
         next = withAgent(next, event.agent);
         break;
       case "run_start":
-        next = { ...next, busy: true, error: undefined };
+        next = { ...next, busy: true, runStartedAt: now, error: undefined };
         break;
       case "run_end":
-        next = { ...next, busy: false, partial: undefined, tools: [] };
+        next = { ...next, busy: false, runStartedAt: undefined, partial: undefined, tools: [] };
         break;
       case "message_start":
         // An assistant message can open with blocks already in it; later changes index into them.
@@ -129,7 +143,7 @@ export function waitingOnModel(state: ChatState): boolean {
  * It stops for good when the user is no longer in the chat (removed, or the chat is gone).
  */
 export function useChat(chatId: string) {
-  const [state, dispatch] = useReducer(reduce, initial);
+  const [state, dispatch] = useReducer((current: ChatState, action: Action) => reduce(current, action), initial);
   const [connected, setConnected] = useState(false);
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
   const [gone, setGone] = useState(false);

@@ -147,7 +147,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
         {state.tools.map((tool) => (
           <Running key={tool.toolCallId} tool={tool} />
         ))}
-        {waitingOnModel(state) && <Thinking />}
+        {waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
         {state.error && <div className="chat-error">{state.error}</div>}
       </div>
       <ModelPicker
