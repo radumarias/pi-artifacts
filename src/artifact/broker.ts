@@ -1,6 +1,6 @@
 import { callIdentity, stripCache, withCache } from "../../shared/canonical.ts";
 import { errorMessage, memoAsync } from "../../shared/util.ts";
-import { MIN_REFETCH_MS, type CallToolResult, type McpError, type DeclaredTool, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
+import { MIN_REFETCH_MS, type ArtifactManifest, type CallToolResult, type McpError, type DeclaredTool, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
 
 /** Sends one proxied call to the Worker. Swappable in tests. */
 export type Transport = (request: ProxyRequest) => Promise<ProxyResponse>;
@@ -9,7 +9,10 @@ export interface BrokerOptions {
   artifactId: string;
   version: number;
   transport: Transport;
+  /** The version's tools this viewer may call; a declared server the viewer may not load is left out. */
   describe: () => Promise<DeclaredTool[]>;
+  /** What the version declared: tells a tool withheld from this viewer (not_granted) from one never declared. */
+  manifest: ArtifactManifest;
   /** Browser cache namespace; include the viewer so accounts on one browser never share results. */
   cacheNamespace: string;
   storage?: Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length"> | null;
@@ -127,7 +130,12 @@ export class ArtifactBroker {
       } else if (method === "describe") {
         const tools = await this.#tools();
         const tool = tools.find((t) => t.server === params.server && t.name === params.tool);
-        if (!tool) return reply(false, { code: "not_in_manifest", server: params.server, message: `${params.server}/${params.tool} is not declared by this page.` });
+        if (!tool) {
+          const declared = this.#o.manifest.mcp?.servers.some((s) => s.server === params.server && s.tools.includes(params.tool));
+          return declared
+            ? reply(false, { code: "not_granted", server: params.server, message: `This page declared ${params.server}/${params.tool}, but it is not available to you here.` })
+            : reply(false, { code: "not_in_manifest", server: params.server, message: `${params.server}/${params.tool} is not declared by this page.` });
+        }
         reply(true, { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations });
       } else {
         reply(false, { code: "bad_request", message: `Unknown method ${method}` });

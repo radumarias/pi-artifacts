@@ -77,7 +77,8 @@ function parseChatAgentName(name: string): { uid: string; chatId: string } {
 
 interface ArtifactCall {
   artifactId: string;
-  viewer: string;
+  /** The signed-in viewer's uid, or null for someone viewing the page without signing in. */
+  viewer: string | null;
   request: ProxyRequest;
 }
 
@@ -554,12 +555,15 @@ export class ChatAgent extends DurableObject<Env> {
     await this.harness.abort();
   }
 
-  /** The tools an artifact version declared, with their schemas: what the page's describeTool reads. Null for a version this chat does not have. */
-  async artifactTools(artifactId: string, version: number): Promise<DeclaredTool[] | null> {
+  /**
+   * The tools an artifact version declared, with their schemas: what the page's describeTool reads. Null for a version
+   * this chat does not have. A viewer who may not call a server (see #mayLoad) does not get its tools either.
+   */
+  async artifactTools(artifactId: string, version: number, viewer: string | null): Promise<DeclaredTool[] | null> {
     const manifest = await this.#manifest(artifactId, version);
     if (!manifest) return null;
     const perServer = await Promise.all(
-      (manifest.mcp?.servers ?? []).map(async (entry) =>
+      (manifest.mcp?.servers ?? []).filter((entry) => this.#mayLoad(entry.server, viewer)).map(async (entry) =>
         (await this.hub.tools(entry.server).catch(() => [])).filter((tool) => entry.tools.includes(tool.name)).map((tool) => ({ ...tool, server: entry.server })),
       ),
     );
@@ -578,9 +582,7 @@ export class ChatAgent extends DurableObject<Env> {
       return fail({ code: "not_in_manifest", server, message: `This page did not declare ${server}/${tool} when it was published.` });
     }
 
-    // A page calls as its author. For a server that signs in each user, that would show the author's data to anyone with the link.
-    // People in the chat already see that data in the conversation, so they may load it too.
-    if (this.hub.server(server)?.auth === "oauth" && !this.isInChat(viewer)) {
+    if (!this.#mayLoad(server, viewer)) {
       return fail({ code: "not_granted", server, message: `${server} signs in each user, and this page calls as its author, so only people in its chat can load it.` });
     }
 
@@ -596,6 +598,7 @@ export class ChatAgent extends DurableObject<Env> {
         return { ok: true, result: read.result, storedAt: read.storedAt, nextRefreshAt: staleMs > 0 ? read.nextRefreshAt : undefined };
       }
 
+      // Not signed in (null) is never the author.
       if (!readOnly && viewer !== this.uid) {
         return fail({ code: "not_granted", server, message: `${tool} can change data, so only the page's author can call it.` });
       }
@@ -605,6 +608,15 @@ export class ChatAgent extends DurableObject<Env> {
       if (error instanceof McpFailure) return fail(error.error);
       return fail({ code: "upstream_error", server, message: errorMessage(error) });
     }
+  }
+
+  /**
+   * Whether this viewer may load a page's data from this server. A page calls as its author, so for a server that signs in
+   * each user that would show the author's data to anyone with the link; only people in the chat, who see that data in
+   * the conversation anyway, may load it. Anyone else, signed in or not, gets servers that do not sign in each user.
+   */
+  #mayLoad(server: string, viewer: string | null): boolean {
+    return this.hub.server(server)?.auth !== "oauth" || (viewer !== null && this.isInChat(viewer));
   }
 
   /** Versions never change once published, so their manifests cache for the object's lifetime. */

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ArtifactManifest } from "../../shared/protocol.ts";
+import { ANONYMOUS_VIEWER, type ArtifactManifest } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 import { ArtifactBroker } from "./broker.ts";
 
@@ -7,8 +7,8 @@ interface Props {
   artifactId: string;
   version: number;
   manifest: ArtifactManifest;
-  /** The signed-in viewer; keys the browser cache, so accounts on one browser never share results. */
-  uid: string;
+  /** The signed-in viewer, or null; keys the browser cache, so accounts on one browser never share results. */
+  uid: string | null;
   title: string;
 }
 
@@ -34,7 +34,8 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Pro
       version,
       transport: (call) => api.proxy(artifactId, call),
       describe: () => api.artifactTools(artifactId, version),
-      cacheNamespace: uid,
+      manifest,
+      cacheNamespace: uid ?? ANONYMOUS_VIEWER,
       storage: browserStorage(),
     });
 

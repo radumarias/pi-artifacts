@@ -9,7 +9,8 @@ interface Props {
   artifactId: string;
   /** The newest version this chat knows of; a change reloads the metadata and shows it. */
   latestKnown?: number;
-  uid: string;
+  /** The signed-in viewer, or null for someone viewing a shared link without signing in. */
+  uid: string | null;
   onClose?: () => void;
   fullPage?: boolean;
 }
@@ -21,6 +22,15 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
   const [reloads, setReloads] = useState(0);
   const [clone, setClone] = useState<{ command: string; expiresAt: string } | { error: string } | null>(null);
   const viewport = useViewport();
+
+  // A shared link is open to anyone, but not an invitation to index it: /a/<id> is the SPA's index.html, which the
+  // Worker never sees, so the page that renders it says so (the framed /u/ page sends X-Robots-Tag itself).
+  useEffect(() => {
+    if (!fullPage) return;
+    const robots = Object.assign(document.createElement("meta"), { name: "robots", content: "noindex, nofollow" });
+    document.head.append(robots);
+    return () => robots.remove();
+  }, [fullPage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +88,11 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
             <button type="button" onClick={() => (clone ? setClone(null) : void showClone())} title="Clone this artifact's Git repository">
               git
             </button>
+          )}
+          {uid === null && (
+            <a className="button" href="/" title="Sign in to chat with the agent and build your own">
+              Sign in
+            </a>
           )}
           {!fullPage && (
             <a className="button" href={`/a/${meta.id}`} target="_blank" rel="noreferrer" title="Open on its own page to share">

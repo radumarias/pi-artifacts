@@ -98,6 +98,15 @@ describe("McpHub.read", () => {
     expect(server.calls).toHaveLength(2);
   });
 
+  it("keeps viewers who are not signed in apart from every signed-in viewer, and shares one entry among them", async () => {
+    const server = fakeServer(() => text({}));
+    const hub = new McpHub([viewerScoped], server.connector);
+    await hub.read("Prices", "price", {}, { staleMs: 30_000, viewer: null });
+    await hub.read("Prices", "price", {}, { staleMs: 30_000, viewer: null });
+    await hub.read("Prices", "price", {}, { staleMs: 30_000, viewer: "ann" });
+    expect(server.calls).toHaveLength(2);
+  });
+
   it("shares one result across viewers on a shared-scoped server", async () => {
     const server = fakeServer(() => text({}));
     const hub = new McpHub([sharedScoped], server.connector);
