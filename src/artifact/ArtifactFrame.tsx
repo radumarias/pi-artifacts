@@ -7,10 +7,13 @@ interface Props {
   artifactId: string;
   version: number;
   manifest: ArtifactManifest;
-  /** The signed-in viewer; keys the browser cache, so accounts on one browser never share results. */
+  /** The signed-in viewer, or ANONYMOUS_VIEWER; keys the browser cache, so accounts on one browser never share results. */
   uid: string;
   title: string;
 }
+
+/** The browser-cache namespace of a viewer who is not signed in. Not a uid: it does not match UID_PATTERN. */
+export const ANONYMOUS_VIEWER = "~anonymous";
 
 function browserStorage(): Storage | null {
   try {

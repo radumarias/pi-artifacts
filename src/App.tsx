@@ -36,19 +36,20 @@ export function App() {
 
   if (!session) return null;
   const { me } = session;
-  // Deployed, Cloudflare Access signs people in before the app loads; a 401 here means the session lapsed.
-  if (me === null && session.auth === "access") return <AccessExpired />;
-  if (me === null) return <SignIn onSignedIn={(uid) => setSession({ me: { uid, auth: "demo" }, auth: "demo" })} />;
 
   const shared = path.match(/^\/a\/([a-z0-9]+)$/);
   if (shared) {
-    // A shared artifact: anyone the app lets in can view it by its link.
+    // A shared artifact: anyone with its link can view it, signed in or not. Chatting about it needs a sign-in.
     return (
       <ErrorBoundary what="this artifact">
-        <ArtifactPanel artifactId={shared[1]} uid={me.uid} fullPage />
+        <ArtifactPanel artifactId={shared[1]} uid={me?.uid ?? null} fullPage />
       </ErrorBoundary>
     );
   }
+
+  // Deployed, Cloudflare Access signs people in before the app loads; a 401 here means the session lapsed.
+  if (me === null && session.auth === "access") return <AccessExpired />;
+  if (me === null) return <SignIn onSignedIn={(uid) => setSession({ me: { uid, auth: "demo" }, auth: "demo" })} />;
 
   const join = path.match(/^\/join\/([a-z0-9.-]+)$/);
   if (join) return <Join token={join[1]} navigate={navigate} />;

@@ -78,58 +78,15 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!identity) return json({ error: "Not signed in", auth: env.AUTH_MODE }, 401);
     return json({ ...identity, auth: env.AUTH_MODE });
   }
-  // Everything else needs a verified identity: artifacts are shared by link, but only with people the app lets in.
+  // Published artifacts are public: anyone with a link may view a page and load its live data, signed in or not.
+  // Only what a page needs is here; the chat it came from, its owner and everything else need a sign-in below.
+  const viewer = identity?.uid ?? null;
+  const artifact = await artifactRoute(request, env, storage, viewer);
+  if (artifact) return artifact;
+
+  // Everything else needs a verified identity.
   if (!identity) return json({ error: "Not signed in" }, 401);
   const { uid } = identity;
-
-  // The artifact page itself, framed by the viewer.
-  const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)$/);
-  if (page && method === "GET") {
-    const [id, version] = [page[1], Number(page[2])];
-    if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
-    const etag = artifactETag(id, version);
-    const cached = notModified(request, etag);
-    if (cached) return cached;
-    const html = await storage.artifacts.readHtml(id, version);
-    return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html, etag);
-  }
-
-  // Artifact metadata and the MCP proxy.
-  const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone)?$/);
-  if (artifact && ID_PATTERN.test(artifact[1])) {
-    const id = artifact[1];
-    // A page's tool list and live calls go to the chat that published it.
-    if ((artifact[2] === "/tools" && method === "GET") || (artifact[2] === "/mcp" && method === "POST")) {
-      const name = await artifactChat(storage, id);
-      if (!name) return json({ error: "No such artifact" }, 404);
-      const chat = exports.ChatAgent.getByName(name);
-      if (artifact[2] === "/tools") {
-        const tools = await chat.artifactTools(id, Number(url.searchParams.get("version")));
-        return tools ? json(tools) : json({ error: "No such artifact version." }, 404);
-      }
-      const body = await request.json<ProxyRequest>();
-      if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
-        return json({ ok: false, error: { code: "bad_request", message: "Expected {version, mode, server, tool, input}." } }, 400);
-      }
-      // Counted per viewer and chat: a chat's pages share its Durable Object, whatever page they come from.
-      const { success } = await env.PAGE_CALLS.limit({ key: `${uid}:${name}` });
-      if (!success) return json({ ok: false, error: { code: "rate_limited", message: "Too many calls from this page.", retryAfterMs: 30_000 } }, 429);
-      return json(await chat.artifactCall({ artifactId: id, viewer: uid, request: body }));
-    }
-    const meta = await storage.artifacts.readMeta(id);
-    if (!meta) return json({ error: "No such artifact" }, 404);
-    if (!artifact[2] && method === "GET") {
-      const { chatId: _chatId, ...visible } = meta;
-      return json({ ...visible, isOwner: uid === meta.ownerUid } satisfies ArtifactView);
-    }
-    // A read-only Git token for the artifact's repo, for `git clone`. Only the owner gets one:
-    // the repo also holds the version history and the metadata.
-    if (artifact[2] === "/clone" && method === "POST") {
-      if (uid !== meta.ownerUid) return json({ error: "Only the artifact's owner can clone it." }, 403);
-      const access = await storage.artifacts.cloneAccess(meta.id);
-      return access ? json(access) : json({ error: "This artifact has no repository yet; it gets one when it is next published." }, 404);
-    }
-  }
 
   const mcp = await mcpRoute(request, env, uid);
   if (mcp) return mcp;
@@ -163,6 +120,69 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (files) return files;
 
   return json({ error: "Not found" }, 404);
+}
+
+/**
+ * A published page, its metadata, its declared tools and its live calls: open to viewers who are not signed in
+ * (`viewer` null). Undefined for any other path. Cloning the repo still needs the owner's sign-in.
+ */
+async function artifactRoute(request: Request, env: Env, storage: Storage, viewer: string | null): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method;
+
+  // The artifact page itself, framed by the viewer.
+  const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)$/);
+  if (page && method === "GET") {
+    const [id, version] = [page[1], Number(page[2])];
+    if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
+    const etag = artifactETag(id, version);
+    const cached = notModified(request, etag);
+    if (cached) return cached;
+    const html = await storage.artifacts.readHtml(id, version);
+    return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html, etag);
+  }
+
+  // Artifact metadata and the MCP proxy.
+  const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone)?$/);
+  if (!artifact || !ID_PATTERN.test(artifact[1])) return undefined;
+  const id = artifact[1];
+  // A page's tool list and live calls go to the chat that published it, which decides what this viewer may call.
+  if ((artifact[2] === "/tools" && method === "GET") || (artifact[2] === "/mcp" && method === "POST")) {
+    const name = await artifactChat(storage, id);
+    if (!name) return json({ error: "No such artifact" }, 404);
+    const chat = exports.ChatAgent.getByName(name);
+    if (artifact[2] === "/tools") {
+      const tools = await chat.artifactTools(id, Number(url.searchParams.get("version")), viewer);
+      return tools ? json(tools) : json({ error: "No such artifact version." }, 404);
+    }
+    const body = await request.json<ProxyRequest>();
+    if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
+      return json({ ok: false, error: { code: "bad_request", message: "Expected {version, mode, server, tool, input}." } }, 400);
+    }
+    // Counted per viewer and chat: a chat's pages share its Durable Object, whatever page they come from. Viewers who
+    // are not signed in are counted by IP address.
+    const who = viewer ?? `ip:${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
+    const { success } = await env.PAGE_CALLS.limit({ key: `${who}:${name}` });
+    if (!success) return json({ ok: false, error: { code: "rate_limited", message: "Too many calls from this page.", retryAfterMs: 30_000 } }, 429);
+    return json(await chat.artifactCall({ artifactId: id, viewer, request: body }));
+  }
+  const meta = await storage.artifacts.readMeta(id);
+  if (!meta) return json({ error: "No such artifact" }, 404);
+  if (!artifact[2] && method === "GET") {
+    // Not the chat it lives in, nor who owns it: only whether the viewer does.
+    const { chatId: _chatId, ownerUid: _ownerUid, ...visible } = meta;
+    return json({ ...visible, isOwner: viewer === meta.ownerUid } satisfies ArtifactView);
+  }
+  // A read-only Git token for the artifact's repo, for `git clone`. Only the owner gets one:
+  // the repo also holds the version history and the metadata.
+  if (artifact[2] === "/clone" && method === "POST") {
+    if (!viewer) return json({ error: "Not signed in" }, 401);
+    if (viewer !== meta.ownerUid) return json({ error: "Only the artifact's owner can clone it." }, 403);
+    const access = await storage.artifacts.cloneAccess(meta.id);
+    return access ? json(access) : json({ error: "This artifact has no repository yet; it gets one when it is next published." }, 404);
+  }
+  return undefined;
 }
 
 function demoCookie(url: URL, value: string, maxAge: number): string {

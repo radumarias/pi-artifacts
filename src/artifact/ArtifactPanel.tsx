@@ -2,14 +2,15 @@ import { useEffect, useState } from "react";
 import type { ArtifactView } from "../../shared/protocol.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
-import { ArtifactFrame } from "./ArtifactFrame.tsx";
+import { ANONYMOUS_VIEWER, ArtifactFrame } from "./ArtifactFrame.tsx";
 import { ViewportPicker, ViewportStage, useViewport } from "./viewport.tsx";
 
 interface Props {
   artifactId: string;
   /** The newest version this chat knows of; a change reloads the metadata and shows it. */
   latestKnown?: number;
-  uid: string;
+  /** The signed-in viewer, or null for someone viewing a shared link without signing in. */
+  uid: string | null;
   onClose?: () => void;
   fullPage?: boolean;
 }
@@ -79,6 +80,11 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
               git
             </button>
           )}
+          {uid === null && (
+            <a className="button" href="/" title="Sign in to chat with the agent and build your own">
+              Sign in
+            </a>
+          )}
           {!fullPage && (
             <a className="button" href={`/a/${meta.id}`} target="_blank" rel="noreferrer" title="Open on its own page to share">
               ↗
@@ -107,7 +113,7 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
         </div>
       )}
       <ViewportStage id={viewport.id} rotated={viewport.rotated}>
-        <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid} title={meta.title} />
+        <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid ?? ANONYMOUS_VIEWER} title={meta.title} />
       </ViewportStage>
     </section>
   );

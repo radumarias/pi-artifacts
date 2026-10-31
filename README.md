@@ -121,8 +121,8 @@ Where things live and who can use them:
   are still the ones that chat used.
 - **Pages that call such a server load only for people in their author's chat** (the author, and anyone they invited
   into it; see [Shared chats](#shared-chats)). A page calls through its author's chat, so it would otherwise show the
-  author's data to anyone with the link. Other viewers get `not_granted`. Claude's artifacts instead use each viewer's
-  own connectors.
+  author's data to anyone with the link. Other viewers, signed in or not, get `not_granted`, and the page's tool list
+  leaves that server's tools out for them. Claude's artifacts instead use each viewer's own connectors.
 - **Removing a server** from the list also removes everyone's stored sign-in for it, tokens included. This happens the
   next time each user's directory loads.
 - **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then. To end the portal's own session, sign out on the portal's home
@@ -359,7 +359,10 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
    (`anthropic/claude-opus-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
 4. Put the app behind Cloudflare Access: create a self-hosted Access application for the Worker's hostname with a
    policy listing who may sign in, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` (the application's audience tag) in
-   `cloudflare.config.ts`.
+   `cloudflare.config.ts`. To let people view shared artifacts without signing in, add a second self-hosted
+   application on the same hostname for the paths `a/*`, `u/*`, `assets/*` and `api/artifacts/*`, with one policy
+   whose action is **Bypass** and which includes **Everyone**. Access then lets those requests through, and the
+   Worker answers them for anyone: see [Viewing without signing in](#viewing-without-signing-in).
 5. Generate the file-encryption master key (`openssl rand -base64 32`, at least 32 bytes) and keep a copy somewhere
    safe: losing it makes every user's files unreadable, and changing it later needs a migration (see
    [How file encryption works](#how-file-encryption-works)). Pass it as a secret:
@@ -377,11 +380,27 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
   every key under that user's folder and rejects paths like `..` or absolute paths.
 - **Per-user encryption:** user files are stored with R2 customer-supplied keys (SSE-C), one key per user. See
   [How file encryption works](#how-file-encryption-works).
-- **Artifacts** are shared by link with anyone Access lets in, and are not encrypted per user. Only their owner's chat
-  can publish new versions, and only their owner can clone their repo. See
-  [Versions in Git](#versions-in-git).
+- **Artifacts** are shared by link with anyone, signed in or not, and are not encrypted per user. Only their owner's
+  chat can publish new versions, and only their owner can clone their repo. See
+  [Viewing without signing in](#viewing-without-signing-in) and [Versions in Git](#versions-in-git).
 - **Shared chats** open only to their owner and the people the owner invited, and everyone in one works through the
   owner's agent and connections. See [Shared chats](#shared-chats).
+
+### Viewing without signing in
+
+Anyone with an artifact's link (`/a/<id>`) can view it and its live data without signing in. Chatting, editing,
+publishing and everything else still need a sign-in.
+
+- **What is public** (`artifactRoute` in `worker/index.ts`), and nothing else: the page's HTML (`/u/<id>/v<n>`), its
+  metadata, the tools it declared and its live calls. The metadata leaves out the chat the artifact lives in and who
+  owns it; the app's own sign-in check (`identify`) still runs, so a signed-in owner sees the owner's controls.
+- **Live calls for viewers who are not signed in** are read-only, from servers that do not sign in each user, as for
+  any viewer outside the author's chat. They share one cache, and are rate-limited per IP address.
+- **Ids are the secret.** An artifact id is 64 random bits, so links cannot be guessed, but anyone a link reaches can
+  view the page. Pages are served with `X-Robots-Tag: noindex, nofollow`.
+- **Two gates.** Deployed, Cloudflare Access must let these paths through (a Bypass application; see
+  [Deploy](#deploy), step 4); the Worker decides on its own what each of them answers. Without the Bypass
+  application, Access keeps asking everyone to sign in, as before.
 
 ### Versions in Git
 
@@ -462,7 +481,8 @@ before reading R2. Changing the runtime or the CSP changes the fingerprint, so a
 
 ## Limits and what's next
 
-- **Access policy is per email.** Adding people means adding them to the Access policy. Per-viewer consent for live
+- **Access policy is per email.** Adding people means adding them to the Access policy. Viewing artifacts needs no
+  sign-in (see [Viewing without signing in](#viewing-without-signing-in)), and there is no per-artifact switch to keep one private yet. Per-viewer consent for live
   data (as in Claude's artifacts) is not built yet.
 - **Verified deployed with Claude Sonnet 5.5:** the agent built a live BTC/ETH/SOL dashboard from one prompt and, when
   told what was wrong, fixed it as version 2 of the same artifact.
