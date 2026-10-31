@@ -112,8 +112,11 @@ export interface ArtifactSummary {
   updatedAt: number;
 }
 
-/** An artifact as GET /api/artifacts/:id returns it: everything but the chat it lives in. */
-export type ArtifactView = Omit<ArtifactMeta, "chatId"> & { isOwner: boolean };
+/**
+ * An artifact as GET /api/artifacts/:id returns it, to anyone with the link, signed in or not: everything but the chat
+ * it lives in and who owns it.
+ */
+export type ArtifactView = Omit<ArtifactMeta, "chatId" | "ownerUid"> & { isOwner: boolean };
 
 /** A read-only Git token for one artifact's repo (POST /api/artifacts/:id/clone). */
 export interface CloneAccess {
@@ -238,3 +241,5 @@ export const MIN_REFETCH_MS = 30_000;
 export const ID_PATTERN = /^[a-z0-9]{8,32}$/;
 /** User ids: the hashed Cloudflare Access subject, or in demo mode a slug of the name typed at sign-in. */
 export const UID_PATTERN = /^[a-z0-9][a-z0-9-]{1,31}$/;
+/** Stands for every viewer who is not signed in, in cache keys: no uid starts with "~", so it never meets one. */
+export const ANONYMOUS_VIEWER = "~anonymous";

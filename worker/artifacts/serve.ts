@@ -69,6 +69,8 @@ const PAGE_HEADERS = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "cache-control": "private, no-cache",
+  // Anyone with a link may view a page, but a link someone shared is not an invitation to index it.
+  "x-robots-tag": "noindex, nofollow",
 };
 
 /** 304 when the browser already holds this exact page. */

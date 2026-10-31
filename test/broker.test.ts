@@ -20,6 +20,7 @@ function setup(answer: (request: ProxyRequest, now: number) => ProxyResponse) {
       return answer(request, now);
     },
     describe: async () => [],
+    manifest: { mcp: { servers: [{ server: "S", tools: ["t"] }] } },
     now: () => now,
     random: () => 0,
     setTimer: (fn, ms) => {
@@ -51,7 +52,7 @@ function setup(answer: (request: ProxyRequest, now: number) => ProxyResponse) {
     now = end;
   };
   const events = (watchId: number) => posted.filter((m) => m.type === "watch" && m.watchId === watchId).map((m) => m.event);
-  return { broker, send, flush, advance, requests, events, timers, clock: () => now };
+  return { broker, send, flush, advance, requests, posted, events, timers, clock: () => now };
 }
 
 const fresh = (now: number, staleMs = 30_000): ProxyResponse => ({
@@ -165,5 +166,16 @@ describe("ArtifactBroker calls", () => {
     t.send({ type: "request", id: 7, method: "call", params: { server: "S", tool: "t", input: { x: 1 } } });
     await t.flush();
     expect(t.requests[0]).toMatchObject({ mode: "call", staleMs: 0 });
+  });
+
+  it("describes a declared tool withheld from this viewer as not granted, and an undeclared one as not in the manifest", async () => {
+    // describe() lists nothing: the Worker leaves out a server this viewer may not load.
+    const t = setup((_, now) => fresh(now));
+    t.send({ type: "request", id: 1, method: "describe", params: { server: "S", tool: "t" } });
+    t.send({ type: "request", id: 2, method: "describe", params: { server: "S", tool: "other" } });
+    await t.flush();
+    const replies = t.posted.filter((m) => m.type === "reply");
+    expect(replies.find((m) => m.id === 1).error.code).toBe("not_granted");
+    expect(replies.find((m) => m.id === 2).error.code).toBe("not_in_manifest");
   });
 });
