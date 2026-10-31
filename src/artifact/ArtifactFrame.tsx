@@ -7,13 +7,10 @@ interface Props {
   artifactId: string;
   version: number;
   manifest: ArtifactManifest;
-  /** The signed-in viewer, or ANONYMOUS_VIEWER; keys the browser cache, so accounts on one browser never share results. */
-  uid: string;
+  /** The signed-in viewer, or null; keys the browser cache, so accounts on one browser never share results. */
+  uid: string | null;
   title: string;
 }
-
-/** The browser-cache namespace of a viewer who is not signed in. Not a uid: it does not match UID_PATTERN. */
-export const ANONYMOUS_VIEWER = "~anonymous";
 
 function browserStorage(): Storage | null {
   try {
@@ -37,7 +34,8 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Pro
       version,
       transport: (call) => api.proxy(artifactId, call),
       describe: () => api.artifactTools(artifactId, version),
-      cacheNamespace: uid,
+      // Viewers who are not signed in share one namespace, kept apart from every uid ("~" never starts one).
+      cacheNamespace: uid ?? "~anonymous",
       storage: browserStorage(),
     });
 

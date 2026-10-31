@@ -82,9 +82,6 @@ interface ArtifactCall {
   request: ProxyRequest;
 }
 
-/** Where the read cache keeps results for viewers who are not signed in. Not a uid: it does not match UID_PATTERN. */
-const ANONYMOUS_SCOPE = "~anonymous";
-
 /**
  * One chat: its Pi agent, its MCP connections, and the live calls of the
  * artifacts it published. Named `<uid>:<chatId>` after its owner.
@@ -597,7 +594,7 @@ export class ChatAgent extends DurableObject<Env> {
       if (mode === "read") {
         if (!readOnly) return fail({ code: "bad_request", server, message: `${tool} is not read-only, so it cannot be watched or cached; use callTool.` });
         const staleMs = Math.min(Math.max(Number(request.staleMs) || 0, 0), MAX_STALE_MS);
-        const read = await this.hub.read(server, tool, input, { staleMs, viewer: viewer ?? ANONYMOUS_SCOPE });
+        const read = await this.hub.read(server, tool, input, { staleMs, viewer });
         return { ok: true, result: read.result, storedAt: read.storedAt, nextRefreshAt: staleMs > 0 ? read.nextRefreshAt : undefined };
       }
 

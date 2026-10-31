@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ArtifactView } from "../../shared/protocol.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
-import { ANONYMOUS_VIEWER, ArtifactFrame } from "./ArtifactFrame.tsx";
+import { ArtifactFrame } from "./ArtifactFrame.tsx";
 import { ViewportPicker, ViewportStage, useViewport } from "./viewport.tsx";
 
 interface Props {
@@ -113,7 +113,7 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
         </div>
       )}
       <ViewportStage id={viewport.id} rotated={viewport.rotated}>
-        <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid ?? ANONYMOUS_VIEWER} title={meta.title} />
+        <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid} title={meta.title} />
       </ViewportStage>
     </section>
   );

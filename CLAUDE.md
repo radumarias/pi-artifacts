@@ -15,7 +15,7 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   `POST /api/dev/chats/:id/publish` (with `DEV_TOOLS=true` in the environment) publishes a page without the model.
 - `runtime/runtime.d.ts` is load-bearing twice: it documents the page API and is inlined into the agent's system
   prompt. Change it together with `runtime/pi-runtime.js`, `src/artifact/broker.ts` and `shared/protocol.ts`.
-- Artifact viewing is public: `artifactRoute` in `worker/index.ts` (page, metadata, declared tools, live calls) runs
+- Artifact viewing is public: `artifactPage` and `publicArtifactRoute` in `worker/index.ts` (page, metadata, declared tools, live calls) run
   before the sign-in check, with `viewer` null for anyone not signed in; everything after it needs a sign-in. Deployed,
   an Access Bypass application lets those paths through (README, Deploy step 4).
 - Identity comes only from a verified Cloudflare Access token (`worker/auth/`). Only `worker/storage/` may touch the R2

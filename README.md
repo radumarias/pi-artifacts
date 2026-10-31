@@ -391,7 +391,7 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
 Anyone with an artifact's link (`/a/<id>`) can view it and its live data without signing in. Chatting, editing,
 publishing and everything else still need a sign-in.
 
-- **What is public** (`artifactRoute` in `worker/index.ts`), and nothing else: the page's HTML (`/u/<id>/v<n>`), its
+- **What is public** (`artifactPage` and `publicArtifactRoute` in `worker/index.ts`), and nothing else: the page's HTML (`/u/<id>/v<n>`), its
   metadata, the tools it declared and its live calls. The metadata leaves out the chat the artifact lives in and who
   owns it; the app's own sign-in check (`identify`) still runs, so a signed-in owner sees the owner's controls.
 - **Live calls for viewers who are not signed in** are read-only, from servers that do not sign in each user, as for

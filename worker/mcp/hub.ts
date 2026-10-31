@@ -127,11 +127,12 @@ export class McpHub {
   /**
    * A read-only call through the cache. Serves an entry younger than
    * `staleMs`, otherwise executes; identical calls in flight share one
-   * execution. `viewer` keys the cache unless the server's scope is shared.
+   * execution. `viewer` keys the cache unless the server's scope is shared; viewers who are not signed in (null) share
+   * one entry, kept apart from every uid ("~" never starts one).
    */
-  async read(server: string, tool: string, input: unknown, options: { staleMs: number; viewer: string }): Promise<ReadResult> {
+  async read(server: string, tool: string, input: unknown, options: { staleMs: number; viewer: string | null }): Promise<ReadResult> {
     const config = this.#config(server);
-    const scope = config.cacheScope === "shared" ? "*" : options.viewer;
+    const scope = config.cacheScope === "shared" ? "*" : (options.viewer ?? "~anonymous");
     const key = `${scope}\u0000${callIdentity(server, tool, input)}`;
     const now = this.#now();
 
