@@ -54,9 +54,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   const method = request.method;
   const storage = new Storage(env);
 
-  // A form or script on another site could otherwise post as the signed-in user: run a page's write tools
-  // (a text/plain body still parses as JSON), upload files, or open a chat's socket. Browsers name the page
-  // a request comes from in Origin on all of these; requests without one (not from a browser) are not forms.
+  // A form or script on another site could otherwise post as the signed-in user: run a page's write tools, upload
+  // files, or open a chat's socket. Browsers name the page a request comes from in Origin on all of these; requests
+  // without one (not from a browser) are not forms.
   if ((method !== "GET" && method !== "HEAD") || request.headers.get("upgrade") === "websocket") {
     const origin = request.headers.get("origin");
     if (origin !== null && origin !== url.origin) return json({ error: "Cross-site request refused" }, 403);
@@ -151,12 +151,23 @@ async function artifactPage(request: Request, storage: Storage, id: string, vers
 
 /**
  * An artifact's metadata, its declared tools and its live calls (`sub` "", "/tools" or "/mcp"): open to viewers who
- * are not signed in (`viewer` null). Undefined for any other method.
+ * are not signed in (`viewer` null), counted per IP address. Undefined for any other method.
  */
 async function publicArtifactRoute(request: Request, url: URL, env: Env, storage: Storage, id: string, sub: string | undefined, viewer: string | null): Promise<Response | undefined> {
   const method = request.method;
+  const isTools = sub === "/tools" && method === "GET";
+  const isCall = sub === "/mcp" && method === "POST";
+  const isMeta = !sub && method === "GET";
+  if (!isTools && !isCall && !isMeta) return undefined;
+  // Viewers who are not signed in are counted by IP address.
+  const who = viewer ?? `ip:${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
+  // Anyone may ask for any id here, and an unknown one misses the R2 cache and looks for its repo: limit that per IP.
+  if (viewer === null && !isCall) {
+    const { success } = await env.PAGE_CALLS.limit({ key: `${who}:public` });
+    if (!success) return json({ error: "Too many requests." }, 429);
+  }
   // A page's tool list and live calls go to the chat that published it, which decides what this viewer may call.
-  if ((sub === "/tools" && method === "GET") || (sub === "/mcp" && method === "POST")) {
+  if (isTools || isCall) {
     const name = await artifactChat(storage, id);
     if (!name) return json({ error: "No such artifact" }, 404);
     const chat = exports.ChatAgent.getByName(name);
@@ -168,21 +179,16 @@ async function publicArtifactRoute(request: Request, url: URL, env: Env, storage
     if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
       return json({ ok: false, error: { code: "bad_request", message: "Expected {version, mode, server, tool, input}." } }, 400);
     }
-    // Counted per viewer and chat: a chat's pages share its Durable Object, whatever page they come from. Viewers who
-    // are not signed in are counted by IP address.
-    const who = viewer ?? `ip:${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
+    // Counted per viewer and chat: a chat's pages share its Durable Object, whatever page they come from.
     const { success } = await env.PAGE_CALLS.limit({ key: `${who}:${name}` });
     if (!success) return json({ ok: false, error: { code: "rate_limited", message: "Too many calls from this page.", retryAfterMs: 30_000 } }, 429);
     return json(await chat.artifactCall({ artifactId: id, viewer, request: body }));
   }
-  if (!sub && method === "GET") {
-    const meta = await storage.artifacts.readMeta(id);
-    if (!meta) return json({ error: "No such artifact" }, 404);
-    // Not the chat it lives in, nor who owns it: only whether the viewer does.
-    const { chatId: _chatId, ownerUid: _ownerUid, ...visible } = meta;
-    return json({ ...visible, isOwner: viewer === meta.ownerUid } satisfies ArtifactView);
-  }
-  return undefined;
+  const meta = await storage.artifacts.readMeta(id);
+  if (!meta) return json({ error: "No such artifact" }, 404);
+  // Not the chat it lives in, nor who owns it: only whether the viewer does.
+  const { chatId: _chatId, ownerUid: _ownerUid, ...visible } = meta;
+  return json({ ...visible, isOwner: viewer === meta.ownerUid } satisfies ArtifactView);
 }
 
 function demoCookie(url: URL, value: string, maxAge: number): string {

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ArtifactManifest } from "../../shared/protocol.ts";
+import { ANONYMOUS_VIEWER, type ArtifactManifest } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 import { ArtifactBroker } from "./broker.ts";
 
@@ -34,8 +34,8 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Pro
       version,
       transport: (call) => api.proxy(artifactId, call),
       describe: () => api.artifactTools(artifactId, version),
-      // Viewers who are not signed in share one namespace, kept apart from every uid ("~" never starts one).
-      cacheNamespace: uid ?? "~anonymous",
+      manifest,
+      cacheNamespace: uid ?? ANONYMOUS_VIEWER,
       storage: browserStorage(),
     });
 

@@ -395,9 +395,11 @@ publishing and everything else still need a sign-in.
   metadata, the tools it declared and its live calls. The metadata leaves out the chat the artifact lives in and who
   owns it; the app's own sign-in check (`identify`) still runs, so a signed-in owner sees the owner's controls.
 - **Live calls for viewers who are not signed in** are read-only, from servers that do not sign in each user, as for
-  any viewer outside the author's chat. They share one cache, and are rate-limited per IP address.
+  any viewer outside the author's chat. They share one cache, and are rate-limited per IP address, as are their
+  metadata and tool-list requests.
 - **Ids are the secret.** An artifact id is 64 random bits, so links cannot be guessed, but anyone a link reaches can
-  view the page. Pages are served with `X-Robots-Tag: noindex, nofollow`.
+  view the page. Pages are served with `X-Robots-Tag: noindex, nofollow`, and the `/a/<id>` view adds a robots
+  `noindex` meta tag.
 - **Two gates.** Deployed, Cloudflare Access must let these paths through (a Bypass application; see
   [Deploy](#deploy), step 4); the Worker decides on its own what each of them answers. Without the Bypass
   application, Access keeps asking everyone to sign in, as before.

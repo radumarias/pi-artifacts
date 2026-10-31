@@ -241,3 +241,5 @@ export const MIN_REFETCH_MS = 30_000;
 export const ID_PATTERN = /^[a-z0-9]{8,32}$/;
 /** User ids: the hashed Cloudflare Access subject, or in demo mode a slug of the name typed at sign-in. */
 export const UID_PATTERN = /^[a-z0-9][a-z0-9-]{1,31}$/;
+/** Stands for every viewer who is not signed in, in cache keys: no uid starts with "~", so it never meets one. */
+export const ANONYMOUS_VIEWER = "~anonymous";

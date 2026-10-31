@@ -23,6 +23,15 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
   const [clone, setClone] = useState<{ command: string; expiresAt: string } | { error: string } | null>(null);
   const viewport = useViewport();
 
+  // A shared link is open to anyone, but not an invitation to index it: /a/<id> is the SPA's index.html, which the
+  // Worker never sees, so the page that renders it says so (the framed /u/ page sends X-Robots-Tag itself).
+  useEffect(() => {
+    if (!fullPage) return;
+    const robots = Object.assign(document.createElement("meta"), { name: "robots", content: "noindex, nofollow" });
+    document.head.append(robots);
+    return () => robots.remove();
+  }, [fullPage]);
+
   useEffect(() => {
     let cancelled = false;
     api
