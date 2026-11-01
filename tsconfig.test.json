@@ -49,6 +49,7 @@
     "worker/queue.ts",
     "worker/agent/skills.ts",
     "worker/models.ts",
+    "worker/local-models.ts",
     "worker/agent/file-refs.ts",
     "worker/files-routes.ts",
     "worker/http.ts",

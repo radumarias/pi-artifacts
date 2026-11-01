@@ -13,6 +13,8 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
 - `pnpm test` (hub, broker, Access tokens, storage rules; `LIVE=1` also hits CoinGecko), `pnpm typecheck`,
   `AUTH_MODE=demo pnpm dev`. Without a Cloudflare login or Docker: `AUTH_MODE=demo PI_OFFLINE=1 PI_NO_DOCKER=1 pnpm dev`. Everything but the model and the sandbox (`run_python`, `run_bash`) then works, and
   `POST /api/dev/chats/:id/publish` (with `DEV_TOOLS=true` in the environment) publishes a page without the model.
+  `LOCAL_MODELS_URL=http://localhost:1234/v1` adds the models of a local OpenAI-compatible runtime (`worker/local-models.ts`),
+  as `local/<id>`; never set it for a deploy.
 - `runtime/runtime.d.ts` is load-bearing twice: it documents the page API and is inlined into the agent's system
   prompt. Change it together with `runtime/pi-runtime.js`, `src/artifact/broker.ts` and `shared/protocol.ts`.
 - Artifact viewing is public: `artifactPage` and `publicArtifactRoute` in `worker/index.ts` (page, metadata, declared tools, live calls) run

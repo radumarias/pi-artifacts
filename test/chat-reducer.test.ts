@@ -125,4 +125,10 @@ describe("chat model", () => {
     state = reduce(state, { type: "events", at: 0, events: [{ type: "agent_changed", agent: agent("openai/gpt-5.5", "medium") }] as never });
     expect([state.model, state.thinkingLevel]).toEqual(["openai/gpt-5.5", "medium"]);
   });
+
+  it("names a local runtime's model as the picker does, local/ and the runtime's id", () => {
+    const agent = { model: { provider: "local", modelId: "qwen/qwen3-32b" }, thinkingLevel: "off" };
+    const state = reduce(empty, { type: "events", at: 0, events: [{ type: "snapshot", entries: [], tools: [], agent }] as never });
+    expect(state.model).toBe("local/qwen/qwen3-32b");
+  });
 });

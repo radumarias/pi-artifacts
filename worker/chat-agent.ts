@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
@@ -29,7 +30,7 @@ import {
   type QueuedMessage,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
-import type { ModelChoice } from "../shared/models.ts";
+import { LOCAL_PREFIX, LOCAL_PROVIDER_ID, type ModelChoice } from "../shared/models.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
@@ -43,7 +44,8 @@ import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
-import { checkModelChoice, defaultModelChoice } from "./models.ts";
+import { localProvider } from "./local-models.ts";
+import { checkModelChoice, defaultModelChoice, modelSources, offlineModelChoice, type ModelSources } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
 
@@ -98,17 +100,20 @@ export class ChatAgent extends DurableObject<Env> {
   readonly storage = new Storage(this.env);
   readonly ai = createAI({ binding: this.env.AI, gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
   readonly registry = createRegistry();
+  /** The models pi runs on: the cloud's, through AI Gateway, and a local runtime's when `LOCAL_MODELS_URL` names one. */
+  readonly models = createModels();
+  /** The local runtime's list the provider in `models` was made from, so it is replaced only on a change. */
+  #localInstalled: readonly Model<Api>[] | undefined;
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
-      const models = createModels();
-      models.setProvider(this.ai.provider);
+      const sources = await this.#modelSources();
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again.
-      const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings: { afterFailedRun: "continue" } }, context);
+      const pi = await Harness.open(storage, { models: this.models, registry: this.registry, onWake, settings: { afterFailedRun: "continue" } }, context);
       try {
         // A new chat starts on the model its user last picked; PiHarness then finds the root and leaves it as it is.
         if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
-          const choice = await this.#savedModel();
+          const choice = (await this.#savedModel(sources)) ?? offlineModelChoice(this.env.MODEL, sources);
           if (choice) await pi.root(context, { agent: this.#agentChange(choice) });
         }
       } catch (error) {
@@ -153,6 +158,7 @@ export class ChatAgent extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.models.setProvider(this.ai.provider);
     const scope: ChatScope = (this.scope = {
       uid: this.uid,
       chatId: this.chatId,
@@ -193,10 +199,10 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /** The user's last pick, checked again: the list of models can change between deploys. On a failure, the deployment's default. */
-  async #savedModel(): Promise<ModelChoice | null> {
+  async #savedModel(sources: ModelSources): Promise<ModelChoice | null> {
     try {
       const saved = await this.#directory.modelChoice();
-      return saved && checkModelChoice(saved);
+      return saved && checkModelChoice(saved, sources);
     } catch (error) {
       console.error("model:", errorMessage(error));
       return null;
@@ -204,12 +210,31 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   #defaults({ model, thinkingLevel }: ModelChoice) {
-    return { model: this.ai(model), thinkingLevel };
+    return { model: this.#route(model), thinkingLevel };
   }
 
   #agentChange({ model, thinkingLevel }: ModelChoice): AgentChange {
-    const routed = this.ai(model);
+    const routed = this.#route(model);
     return { model: { provider: routed.provider, modelId: routed.id }, thinkingLevel };
+  }
+
+  /** Where a picked model runs: a local runtime's by the runtime's own id, any other through AI Gateway. */
+  #route(model: string): { provider: string; id: string } {
+    return model.startsWith(LOCAL_PREFIX) ? { provider: LOCAL_PROVIDER_ID, id: model.slice(LOCAL_PREFIX.length) } : this.ai(model);
+  }
+
+  /**
+   * What the picker offers now. pi finds a model by its provider's list (on every model call), so the local runtime's is
+   * set again to match: on a change only, and not with an empty list, so a runtime that fails to answer once (busy, or
+   * restarting) does not take a chat's model away mid-run.
+   */
+  async #modelSources(): Promise<ModelSources> {
+    const sources = await modelSources(this.env);
+    if (this.env.LOCAL_MODELS_URL && sources.local.length && sources.local !== this.#localInstalled) {
+      this.models.setProvider(localProvider(this.env.LOCAL_MODELS_URL, sources.local));
+      this.#localInstalled = sources.local;
+    }
+    return sources;
   }
 
   /**
@@ -236,7 +261,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void> {
     this.#requireInChat(by);
-    const choice = checkModelChoice(input);
+    const choice = checkModelChoice(input, await this.#modelSources());
     if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
     const conversation = await this.#root();
     await conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT);
