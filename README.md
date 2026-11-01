@@ -291,6 +291,13 @@ Each chat picks its model and effort above the message box. The picker (`src/cha
 - **Workers AI:** a few open models that run on Cloudflare and suit building pages (tool calling, a context of 128k
   tokens or more): Kimi K2.7 Code, GLM 5.3, DeepSeek V4, Qwen 3.8, GPT OSS 120B, Gemma 4. They need no provider
   key and use the account's free daily Workers AI allowance first, then Workers AI pricing.
+- **Local runtime (local development only):** with `LOCAL_MODELS_URL` set, the models an OpenAI-compatible runtime on
+  your machine serves (LM Studio, Ollama, llama.cpp's server, vLLM), listed first as `local/<id>`. The Worker asks the
+  runtime's `GET /models` again at most every 15 seconds, so a model you load shows up when you reload the page, with no
+  restart (`worker/local-models.ts`).
+
+The AI Gateway list is pi-ai's catalog, shipped with the package, not asked of the gateway: AI Gateway documents no API
+that lists the models it can reach, so the Anthropic and OpenAI choices change when pi-ai is updated.
 
 The effort picker shows only the levels the model takes, and nothing for a model that does not reason. The choice is
 the chat's own (pi's agent state, so a change reaches every open view of the chat) and applies from the next model
@@ -329,6 +336,11 @@ pnpm dev        # cf dev: needs a Cloudflare login (cf auth login; the AI bindin
   which only exists once deployed.
 - **Without a Cloudflare account or Docker:** run `AUTH_MODE=demo PI_OFFLINE=1 PI_NO_DOCKER=1 pnpm dev`. Everything
   works except the model and the sandbox (`run_python`, `run_bash`).
+- **With models on your machine:** start an OpenAI-compatible server (LM Studio's on port 1234, `ollama serve` on
+  11434) and add its URL, e.g. `LOCAL_MODELS_URL=http://localhost:1234/v1`, to either command above. The picker lists
+  its models first; with `PI_OFFLINE=1` it lists only them, and new chats start on the first. The agent needs tool
+  calling and room for its system prompt, page runtime and tools: load a model with tool support and a context of 32k
+  or more.
 - **Testing live data without the model:** start with `DEV_TOOLS=true` added to the command above, which enables a
   publish route, then publish the example page into a chat:
 

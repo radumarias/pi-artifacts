@@ -4,7 +4,8 @@ import { EFFORT_LABELS, VENDORS, type ModelInfo } from "../../shared/models.ts";
 import { memoAsync } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
-// The choices change only with a deploy, so every chat shares one fetch.
+// The cloud's choices change only with a deploy, so every chat shares one fetch; a local runtime's newly loaded model
+// shows up on a reload of the page.
 const loadCatalog = memoAsync(() => api.models());
 
 interface Props {

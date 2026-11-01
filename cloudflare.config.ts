@@ -48,6 +48,11 @@ export default defineConfig({
       // Alias of the provider keys stored in the gateway (Provider Keys), one each for Anthropic and OpenAI. Empty: the
       // keys aliased "default", else unified billing. Workers AI models need no key.
       AI_BYOK_ALIAS: bindings.text(""),
+      // Local development only: an OpenAI-compatible runtime on this machine (LM Studio, Ollama, llama.cpp, vLLM), as
+      // LOCAL_MODELS_URL=http://localhost:1234/v1 pnpm dev. The picker lists its models, asked for again every 15 seconds.
+      LOCAL_MODELS_URL: bindings.text(process.env.LOCAL_MODELS_URL?.replace(/\/+$/, "") ?? ""),
+      // Whether the picker lists the cloud's models (AI Gateway and Workers AI). Not with PI_OFFLINE=1: no AI binding.
+      CLOUD_MODELS: bindings.text(process.env.PI_OFFLINE === "1" ? "false" : "true"),
       SANDBOX_ENABLED: bindings.text(withSandbox ? "true" : "false"),
       // Who is signed in. "access" (the default, and the only mode to deploy): a verified Cloudflare Access token.
       // "demo" (AUTH_MODE=demo pnpm dev): a typed name in a cookie, for local development only.

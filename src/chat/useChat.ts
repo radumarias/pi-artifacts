@@ -2,6 +2,7 @@ import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai
 import type { AgentEvent, AgentState, EntryRecord, JsonObject } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AttachmentInput } from "../../shared/attachments.ts";
+import { pickerModelId } from "../../shared/models.ts";
 import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type Presence, type QueuedMessage } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 
@@ -41,7 +42,7 @@ type Action =
   | { type: "reset" };
 
 function withAgent(state: ChatState, agent: AgentState | undefined): ChatState {
-  return { ...state, model: agent?.model?.modelId, thinkingLevel: agent?.thinkingLevel };
+  return { ...state, model: agent?.model && pickerModelId(agent.model), thinkingLevel: agent?.thinkingLevel };
 }
 
 function addEntry(entries: EntryRecord[], entry: EntryRecord): EntryRecord[] {
