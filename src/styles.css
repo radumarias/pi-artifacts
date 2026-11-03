@@ -141,6 +141,8 @@ body.resizing iframe { pointer-events: none; }
 .chat-link:hover .chat-delete, .chat-delete:focus-visible { opacity: 1; }
 .chat-delete:hover { color: var(--error); }
 @media (hover: none) { .chat-delete { opacity: 1; } }
+/* With a mouse, the button shows over the chat's status icon on hover, so the icons line up with the other lists'. */
+@media (hover: hover) { .chat-delete { position: absolute; top: 0; right: 0; bottom: 0; border-radius: 0 6px 6px 0; background: var(--surface-2); } }
 .confirm-dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: 0 12px 40px rgb(0 0 0 / 0.2); }
 .confirm-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
 .confirm-dialog h2 { margin: 0 0 10px; font-size: 18px; }
