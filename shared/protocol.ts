@@ -156,7 +156,10 @@ export type CheckedDetails = {
   warnings: number;
 };
 
-/** The tool that lists the pages the agent checked or tried in a chat and has not published, and gets one back. */
+/** The tool that saves a page the agent writes, or its edits to one, as a draft for the check and the publish to take by id. */
+export const WRITE_TOOL = "artifact_write";
+
+/** The tool that lists the pages the agent wrote in a chat and has not published, and gets one back. */
 export const DRAFTS_TOOL = "artifact_drafts";
 
 /**

@@ -45,9 +45,12 @@ describe("step header", () => {
     expect(stepHint("run_python", { script: "set -e" })).toBe("set -e");
     expect(stepHint("run_python", { ids: ["bitcoin"], days: 7 })).toBe('{"ids":["bitcoin"],"days":7}');
     expect(stepHint("run_python", undefined)).toBe("");
-    // A page check's first argument is the page: its hint is how it checks.
+    // A page check's hint is how it checks; a write's, what it writes.
     expect(stepHint("artifact_check", { html: "<!doctype html>", tests: [{}, {}], viewport: "mobile" })).toBe("Mobile · 2 tests");
-    expect(stepHint("artifact_check", { html: "<!doctype html>" })).toBe("Desktop");
+    expect(stepHint("artifact_check", { draft_id: "0123456789abcdef" })).toBe("Desktop");
+    expect(stepHint("artifact_write", { html: "<!doctype html>" })).toBe("New page · 15 B");
+    expect(stepHint("artifact_write", { draft_id: "0123456789abcdef", edits: [{}, {}] })).toBe("2 edits to draft");
+    expect(stepHint("artifact_write", { artifact_id: "a1", edits: [{}] })).toBe("1 edit to published page");
   });
 });
 

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { ArtifactMeta } from "../shared/protocol.ts";
-import { applyEdits, artifactByTitle, checkInBrowser, FailedChecks, MAX_FAILED_CHECKS, publishChecked, type PublishScope } from "../worker/agent/publish.ts";
+import {
+  applyEdits,
+  artifactByTitle,
+  checkInBrowser,
+  FailedChecks,
+  MAX_FAILED_CHECKS,
+  publishChecked,
+  writeDraft,
+  type PublishScope,
+} from "../worker/agent/publish.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../worker/artifacts/browser.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
@@ -95,7 +104,7 @@ describe("publishChecked", () => {
     expect(await drafts.list()).toEqual([]);
 
     await drafts.save(page, { errors: 0, warnings: 0 });
-    await publishChecked(scope, { title: "Map", checkId: page.id });
+    await publishChecked(scope, { title: "Map", draftId: page.id });
     expect(checked).toEqual([]);
     expect(versions).toHaveLength(2);
   });
@@ -110,12 +119,17 @@ describe("publishChecked", () => {
     expect(checked).toEqual([fixed]);
   });
 
-  it("publishes by check id only a draft that passed", async () => {
-    const { scope, versions, drafts } = chat(errorsIn);
-    await expect(publishChecked(scope, { title: "Map", checkId: "0000000000000001" })).rejects.toThrow("No draft");
-    const { id } = await drafts.save({ id: await draftId(broken, {}), html: broken, manifest: {} }, { errors: 1, warnings: 0 });
-    await expect(publishChecked(scope, { title: "Map", checkId: id })).rejects.toThrow("has not passed a check");
-    expect(versions).toEqual([]);
+  it("publishes by draft id a draft that passed, checks one not checked yet, and refuses one with errors", async () => {
+    const { scope, versions, checked, drafts } = chat(errorsIn);
+    await expect(publishChecked(scope, { title: "Map", draftId: "0000000000000001" })).rejects.toThrow("No draft");
+    const bad = await drafts.save({ id: await draftId(broken, {}), html: broken, manifest: {} }, { errors: 1, warnings: 0 });
+    await expect(publishChecked(scope, { title: "Map", draftId: bad.id })).rejects.toThrow("has 1 error from its check");
+    expect(checked).toEqual([]);
+
+    const unchecked = await writeDraft(scope, { html: fixed, artifactId: "a1" });
+    expect((await publishChecked(scope, { title: "Map", draftId: unchecked.id })).meta?.id).toBe("a1");
+    expect(checked).toEqual([fixed]);
+    expect(versions).toEqual([{ id: "a1", html: fixed }]);
   });
 
   it("does not publish a page no browser could check, except in local development", async () => {
@@ -128,6 +142,35 @@ describe("publishChecked", () => {
     const local = chat(down, true);
     expect((await publishChecked(local.scope, { title: "Map", html: fixed })).meta).toBeDefined();
     expect(local.versions).toHaveLength(1);
+  });
+});
+
+describe("writeDraft", () => {
+  it("saves a new page unchecked, and a draft changed by edits as a new draft keeping its artifact", async () => {
+    const { scope, drafts, checked } = chat(() => report([]));
+    const first = await writeDraft(scope, { html: "<p>a</p>", artifactId: "a1" });
+    expect(first).toMatchObject({ id: await draftId("<p>a</p>", {}), errors: null, artifactId: "a1" });
+    const second = await writeDraft(scope, { draftId: first.id, edits: [{ old: "a", new: "b" }] });
+    expect(second).toMatchObject({ html: "<p>b</p>", artifactId: "a1", errors: null });
+    expect((await drafts.list()).map((d) => d.id)).toEqual([second.id, first.id]);
+    expect(checked).toEqual([]);
+    await expect(writeDraft(scope, { draftId: "0000000000000001", edits: [] })).rejects.toThrow("No draft");
+  });
+
+  it("keeps how a page's check went when the same page is written again", async () => {
+    const { scope, drafts } = chat(() => report([]));
+    const id = await draftId("<p>a</p>", {});
+    await drafts.save({ id, html: "<p>a</p>", manifest: {} }, { errors: 0, warnings: 1 });
+    expect(await writeDraft(scope, { html: "<p>a</p>" })).toMatchObject({ id, errors: 0, warnings: 1 });
+  });
+
+  it("edits the latest version of an artifact, keeping what it declared", async () => {
+    const { scope } = chat(() => report([]));
+    const meta = { id: "a1", latest: 2, versions: [{ version: 1 }, { version: 2 }] } as unknown as ArtifactMeta;
+    scope.artifacts.readMeta = async (id: string) => (id === "a1" ? meta : null);
+    scope.artifacts.readHtml = async (_id: string, version: number) => `<p>v${version}</p>`;
+    expect(await writeDraft(scope, { artifactId: "a1", edits: [{ old: "v2", new: "v3" }] })).toMatchObject({ html: "<p>v3</p>", artifactId: "a1" });
+    await expect(writeDraft(scope, { artifactId: "a2", edits: [] })).rejects.toThrow("No artifact a2");
   });
 });
 
@@ -152,7 +195,7 @@ describe("applyEdits", () => {
         { old: "nope", new: "" },
         { old: "", new: "y" },
       ]),
-    ).toThrow(/edit 2: its old text is not in the draft; edit 3: its old text is not in the draft \(it is empty\)/);
+    ).toThrow(/edit 2: its old text is not in the page; edit 3: its old text is not in the page \(it is empty\)/);
   });
 });
 
@@ -178,5 +221,18 @@ describe("FailedChecks", () => {
     checks.record(false);
     for (let n = 1; n < MAX_FAILED_CHECKS; n++) checks.record(true);
     expect(() => checks.allow()).not.toThrow();
+  });
+
+  it("names the draft the last check found errors in until a check passes or the user writes", () => {
+    const checks = new FailedChecks();
+    checks.record(true, "0000000000000001");
+    // A refused write, or a check no browser ran, counts without changing which draft is broken.
+    checks.record(true);
+    expect(checks.broken).toBe("0000000000000001");
+    checks.record(false);
+    expect(checks.broken).toBeUndefined();
+    checks.record(true, "0000000000000002");
+    checks.reset();
+    expect(checks.broken).toBeUndefined();
   });
 });

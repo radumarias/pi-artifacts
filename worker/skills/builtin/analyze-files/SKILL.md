@@ -1,7 +1,7 @@
 ---
 name: analyze-files
 description: Use when the user asks about the contents of their uploaded files (CSV, JSON, logs, spreadsheets exported as text), wants numbers computed from them, or wants a page built from a file rather than from live data.
-allowed-tools: files_list files_read run_python run_bash artifact_check artifact_drafts artifact_publish
+allowed-tools: files_list files_read run_python run_bash artifact_write artifact_check artifact_drafts artifact_publish
 ---
 Work from the file itself, never from what its name suggests.
 

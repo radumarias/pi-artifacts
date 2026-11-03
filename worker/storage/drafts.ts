@@ -29,7 +29,7 @@ export interface DraftCheck {
 }
 
 /**
- * A page the agent checked or tried to publish, kept until it is published: what a fix starts again from, and what a
+ * A page the agent wrote (artifact_write), kept until it is published: what a fix starts again from, and what a
  * passed check publishes by its id, also after the chat object restarted.
  */
 export type Draft = DraftPage & DraftCheck & { savedAt: number };

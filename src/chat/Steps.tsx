@@ -1,8 +1,8 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
-import { clip, plural } from "../../shared/util.ts";
+import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
+import { clip, formatBytes, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
@@ -88,6 +88,7 @@ const LABELS: Record<string, string> = {
   run_python: "Python",
   run_bash: "Bash",
   [PUBLISH_TOOL]: "Publish artifact",
+  [WRITE_TOOL]: "Write page",
   [CHECK_TOOL]: "Check page",
   [DRAFTS_TOOL]: "Drafts",
   artifact_read: "Read artifact",
@@ -104,8 +105,7 @@ const LABELS: Record<string, string> = {
 const INPUT_LABELS: Record<string, Record<string, string>> = {
   run_python: { code: "Python" },
   run_bash: { script: "Bash" },
-  [PUBLISH_TOOL]: { html: "HTML" },
-  [CHECK_TOOL]: { html: "HTML" },
+  [WRITE_TOOL]: { html: "HTML" },
 };
 
 export function stepLabel(name: string): string {
@@ -122,7 +122,12 @@ const BOILERPLATE = /^\s*($|#!|set -)/;
 
 /** Tools whose first text argument says little about the call, by a hint of their own. */
 const HINTS: Record<string, (args: Record<string, unknown> | undefined) => string> = {
-  // The page, whose first line is its doctype.
+  // A new page, whose first line is its doctype, or edits to one.
+  [WRITE_TOOL]: (args) => {
+    const edits = Array.isArray(args?.edits) ? args.edits.length : 0;
+    if (typeof args?.html === "string") return `New page · ${formatBytes(args.html.length)}`;
+    return edits ? `${plural(edits, "edit")} to ${args?.draft_id ? "draft" : "published page"}` : "";
+  },
   [CHECK_TOOL]: (args) => {
     const tests = Array.isArray(args?.tests) ? args.tests.length : 0;
     return [args?.viewport === "mobile" ? "Mobile" : "Desktop", tests && plural(tests, "test")].filter(Boolean).join(" · ");

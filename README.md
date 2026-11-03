@@ -174,7 +174,9 @@ await mcp.invalidate("CoinGecko");                                    // refetch
 
 The agent checks every page in a headless browser (Cloudflare Browser Rendering, the `BROWSER` binding) before it
 becomes a version, so the versions a user sees are pages that rendered without errors, and fixes along the way use up
-none. `artifact_check` (`worker/artifacts/check.ts`) renders the page as a viewer would: in a sandboxed frame under the
+none. The agent writes a page with `artifact_write`, which saves it as a draft (below) and returns its id; it then checks
+and publishes that draft by its id, so the page is written out once. `artifact_check` (`worker/artifacts/check.ts`)
+renders the draft as a viewer would: in a sandboxed frame under the
 page's CSP, with its live calls answered by the chat's MCP connections. It returns:
 
 - **errors:** uncaught exceptions and unhandled rejections (their lines mapped back to the page's own), `console.error`
@@ -188,21 +190,20 @@ page's CSP, with its live calls answered by the chat's MCP connections. It retur
 - the results of **tests** the agent passes: short scripts run in the page once its data arrived, such as "the price
   table has rows".
 
-A page that passes gets a `check_id`, and the agent publishes it by that id rather than writing the page out again. A
-publish without an `artifact_id` whose title matches one of the chat's artifacts becomes that artifact's next version
-(`new_artifact: true` makes a separate one), so a fix the model publishes without the id never turns into a second
-artifact stuck at version 1.
-`artifact_publish` runs the same check on a page sent as HTML that has not passed one, and refuses it while it has
-errors.
+A draft that passes is published by its `draft_id`. A publish without an `artifact_id` goes to the artifact the draft was
+written for, else to the chat's artifact whose title matches (`new_artifact: true` makes a separate one), so a fix the
+model publishes without the id never turns into a second artifact stuck at version 1. `artifact_publish` checks a draft
+that was not checked yet, and refuses one with errors.
 
-Until a page passes, it is a **draft**, not a version: every page the agent checks, or tries to publish, is saved as one
-of its chat's drafts (`worker/storage/drafts.ts`), so no attempt is lost and the Git repo only ever gets pages that
-passed. Drafts live in the chat owner's R2 folder (`users/<uid>/drafts/<chatId>/`), encrypted with the owner's key like
-their files but apart from them, keyed by a hash of the page and what it declares, so the same page is one draft. A
-chat keeps its newest 20; publishing a page drops its draft, and deleting the chat deletes them all. To fix a page the agent checks its draft again with
-`draft_id` and `edits` (text replaced exactly once each), so a fix costs the model only what changes, not the whole page
-again. The agent lists drafts and gets one back with `artifact_drafts` (an earlier attempt, or the page it was working on
-after the chat restarted), and a `check_id` is a draft's id, so a passed check can still be published after a restart.
+Until a page passes, it is a **draft**, not a version: every page the agent writes is saved as one of its chat's drafts
+(`worker/storage/drafts.ts`), so no attempt is lost and the Git repo only ever gets pages that passed. Drafts live in
+the chat owner's R2 folder (`users/<uid>/drafts/<chatId>/`), encrypted with the owner's key like their files but apart
+from them, keyed by a hash of the page and what it declares, so the same page is one draft. A chat keeps its newest 20;
+publishing a page drops its draft, and deleting the chat deletes them all. To fix a page, or to change a published one,
+the agent sends `artifact_write` a `draft_id` (or the `artifact_id`, for its latest version) and `edits` (text replaced
+exactly once each), so a fix costs the model only what changes, not the whole page again. Right after a check found
+errors, `artifact_write` refuses a whole new page: the model has to fix the draft by edits. The agent lists drafts and
+gets one back with `artifact_drafts` (an earlier attempt, or the page it was working on after the chat restarted).
 
 A check has hard limits, so it never holds a run: the browser gets 30 s to start, the whole check 60 s (loading and
 settling at most 15 s, the agent's tests 20 s together), and a page that holds the browser past that, such as one stuck
