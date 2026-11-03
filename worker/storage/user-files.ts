@@ -53,6 +53,13 @@ export class UserFiles {
     return key.slice(this.#prefix.length);
   }
 
+  /** Delete files by their paths; a path with no file is skipped. */
+  async delete(paths: readonly string[]): Promise<void> {
+    const keys = paths.map((path) => this.#objectKey(path));
+    // R2 deletes at most 1,000 keys a call.
+    for (let i = 0; i < keys.length; i += 1000) await this.#bucket.delete(keys.slice(i, i + 1000));
+  }
+
   #objectKey(path: string): string {
     return this.#prefix + normalisePath(path);
   }

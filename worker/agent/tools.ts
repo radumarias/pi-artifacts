@@ -2,7 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { exports } from "cloudflare:workers";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
-import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails } from "../../shared/protocol.ts";
+import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type SavedFilesDetails } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
@@ -105,7 +105,7 @@ export function filesExtension(scope: ChatScope): Extension {
         parameters: Type.Object({ path: Type.String(), content: Type.String() }),
         execute: async (args) => {
           const path = await (await scope.files()).put(args.path, args.content, "text/plain; charset=utf-8");
-          return { output: text(`Wrote ${path} (${args.content.length} characters).`) };
+          return { output: text(`Wrote ${path} (${args.content.length} characters).`), details: { saved: [path] } satisfies SavedFilesDetails };
         },
       }),
     ],
@@ -162,6 +162,11 @@ function tooMuch(bytes: number): string {
   return `Those files hold ${formatBytes(bytes)}; one run takes at most ${formatBytes(MAX_SANDBOX_BYTES)}. Pass fewer.`;
 }
 
+/** The name of a chat's sandbox object. */
+export function sandboxName(uid: string, chatId: string): string {
+  return `${uid}-${chatId}`;
+}
+
 /**
  * Copy the named user files in, run in this chat's sandbox, save ./out back to
  * the user's files. The files go through the user's UserFiles, so they are
@@ -170,7 +175,7 @@ function tooMuch(bytes: number): string {
 async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
   const inputs = await sandboxInputs(files, refs ?? []);
-  const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
+  const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs);
   const toSave = new Map<string, ArrayBuffer>();
   const skipped = [];
   for (const output of result.outputs) {
@@ -194,7 +199,7 @@ async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (
     saved.length && `saved: ${saved.join(", ")}`,
     skipped.length && `not saved: ${skipped.join("; ")}`,
   ];
-  return { output: text(clip(report.filter(Boolean).join("\n\n"))), isError: result.exitCode !== 0 };
+  return { output: text(clip(report.filter(Boolean).join("\n\n"))), details: { saved } satisfies SavedFilesDetails, isError: result.exitCode !== 0 };
 }
 
 const inputFiles = Type.Optional(

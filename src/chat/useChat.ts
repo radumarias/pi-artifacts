@@ -225,10 +225,10 @@ export function useChat(chatId: string) {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     // Not in the chat: stop for good.
-    const stop = () => {
+    const stop = (why = "You are not in this chat.") => {
       closed = true;
       setGone(true);
-      dispatch({ type: "error", message: "You are not in this chat." });
+      dispatch({ type: "error", message: why });
     };
 
     const open = () => {
@@ -243,8 +243,8 @@ export function useChat(chatId: string) {
         if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
         else if (message.type === "people") setPeople(message.people);
         else if (message.type === "presence") setOnline(message.online);
-        else if (message.type === "removed") {
-          stop();
+        else if (message.type === "removed" || message.type === "deleted") {
+          stop(message.type === "deleted" ? "This chat was deleted." : undefined);
           ws.close();
         } else dispatch({ type: "error", message: message.message });
       };

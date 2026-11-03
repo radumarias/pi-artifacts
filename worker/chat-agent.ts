@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type Cursor, type EntryRecord, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -14,6 +14,7 @@ import {
   SOCKET_NOT_A_MEMBER,
   type ArtifactManifest,
   type ChatClientMessage,
+  type ChatDeletion,
   type ChatInvite,
   type ChatMessageData,
   type ChatPeople,
@@ -36,7 +37,8 @@ import { filesIndex } from "./agent/file-refs.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
-import { artifactExtension, filesExtension, filesIndexExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput } from "./agent/tools.ts";
+import { artifactExtension, filesExtension, filesIndexExtension, publishArtifact, sandboxExtension, sandboxName, skillsExtension, type ChatScope, type PublishInput } from "./agent/tools.ts";
+import { chatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
@@ -56,6 +58,8 @@ export interface ChatRefusal {
 function refuse(status: ChatRefusal["status"], error: string): ChatRefusal {
   return { error, status };
 }
+
+const DELETED = "This chat was deleted.";
 
 const SOCKET_TAG = "chat";
 const OWNER = "chat-sockets";
@@ -150,6 +154,8 @@ export class ChatAgent extends DurableObject<Env> {
   #membersTouched = { title: "", at: 0 };
   /** The last read of the queue, by the inbox ids it was for: every socket asks after the same commit. */
   #queuedRead: { key: string; read: Promise<QueuedMessage[]> } | undefined;
+  /** Set while the owner deletes the chat: from then on nobody is in it. */
+  #deleting = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -391,7 +397,7 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** The owner, or a member: who may open this chat, prompt it and load its pages' per-user data. */
   isInChat(uid: string): boolean {
-    return uid === this.uid || this.members.has(uid);
+    return !this.#deleting && (uid === this.uid || this.members.has(uid));
   }
 
   /** For what a socket sends: its person may have been removed since it opened. */
@@ -405,6 +411,7 @@ export class ChatAgent extends DurableObject<Env> {
    * chat they are no longer in goes when they next try to open it.
    */
   admit(person: Person): boolean {
+    if (this.#deleting) return false;
     if (person.uid === this.uid) {
       this.members.setOwnerName(person);
       return true;
@@ -485,6 +492,7 @@ export class ChatAgent extends DurableObject<Env> {
   /** A single-use link's token, shown once to the owner. The chat itself decides who may: only its owner. */
   async createInvite(by: Person): Promise<(ChatInvite & { token: string }) | ChatRefusal> {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can invite people.");
+    if (this.#deleting) return refuse(404, DELETED);
     this.members.setOwnerName(by);
     const created = await this.members.createInvite();
     if ("error" in created) return refuse(409, created.error);
@@ -506,6 +514,7 @@ export class ChatAgent extends DurableObject<Env> {
    * sees that they joined again, from another window or device.
    */
   async acceptInvite(secret: string, person: Person, title: string): Promise<ChatRefusal | null> {
+    if (this.#deleting) return refuse(404, DELETED);
     if (this.isInChat(person.uid)) {
       // A member whose sidebar entry went missing gets it back, as joining by link always gave it.
       if (person.uid !== this.uid) {
@@ -542,6 +551,70 @@ export class ChatAgent extends DurableObject<Env> {
     await this.#withdrawQueued(uid).catch((error: unknown) => console.error("withdraw queued:", errorMessage(error)));
     await this.#index(uid).removeSharedChat(this.chatId, this.uid);
     return null;
+  }
+
+  /** What deleting the chat would delete with it, for the owner to confirm. */
+  async deletionPreview(by: Person): Promise<ChatDeletion | ChatRefusal> {
+    if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
+    const [traces, title] = await Promise.all([this.#traces(), this.#directory.chatTitle(this.chatId)]);
+    // Only the files still there; a listing stops at MAX_LISTED files, which deleteChat does not rely on.
+    const stored = new Set((await (await this.scope.files()).list()).map((entry) => entry.path));
+    return { title: title ?? "", artifacts: traces.artifacts, files: traces.files.filter((path) => stored.has(path)), members: this.members.list().length };
+  }
+
+  /**
+   * Delete the chat for good, for its owner: everyone's sockets close and it leaves the members' sidebars; its
+   * artifacts, its sandbox and, when `withFiles`, the files its messages attached or its agent saved go; then everything
+   * this object stores (the conversation, its cost, members and invites). The Worker then takes it off the owner's
+   * list. Each step can run again, so after a failure the owner deletes it again. Returns the artifacts deleted.
+   */
+  async deleteChat(by: Person, { withFiles }: { withFiles: boolean }): Promise<{ artifacts: string[] } | ChatRefusal> {
+    if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
+    this.#deleting = true;
+    try {
+      // Nothing may publish or save while its traces are read.
+      await this.harness.abort().catch((error: unknown) => console.error("delete, abort:", errorMessage(error)));
+      const traces = await this.#traces();
+      const members = this.members.list();
+      this.sockets.disconnect();
+      await Promise.all(members.map((member) => this.#index(member.uid).removeSharedChat(this.chatId, this.uid)));
+      await Promise.all(traces.artifacts.map(({ id }) => this.storage.artifacts.delete(id, this.uid, this.chatId)));
+      if (withFiles && traces.files.length) await (await this.scope.files()).delete(traces.files);
+      if (this.env.SANDBOX_ENABLED === "true") await exports.Sandbox.getByName(sandboxName(this.uid, this.chatId)).destroy();
+      await this.lifecycle.disableAlarms();
+      await this.lifecycle.dispose();
+      await this.ctx.storage.deleteAll();
+      // Start again from nothing should anything wake this object: nothing it holds in memory belongs to a chat any more.
+      setTimeout(() => this.ctx.abort(DELETED), 0);
+      return { artifacts: traces.artifacts.map(({ id }) => id) };
+    } catch (error) {
+      this.#deleting = false;
+      throw error;
+    }
+  }
+
+  /**
+   * What this chat left outside its object: the artifacts it published (by the owner's list and by its transcript, so
+   * one the list missed goes too), each checked to be this chat's, and the files it attached or saved.
+   */
+  async #traces(): Promise<{ artifacts: { id: string; title: string }[]; files: string[] }> {
+    const [traces, listed] = await Promise.all([this.#history().then(chatTraces), this.#directory.chatArtifactIds(this.chatId)]);
+    const metas = await Promise.all([...new Set([...listed, ...traces.artifacts])].map((id) => this.storage.artifacts.readMeta(id)));
+    const artifacts = metas.filter((meta) => meta && isOwnedBy(meta, this.uid, this.chatId)).map((meta) => ({ id: meta!.id, title: meta!.title }));
+    return { artifacts, files: [...traces.files] };
+  }
+
+  /** Every entry of the conversation, compacted ones included. */
+  async #history(): Promise<EntryRecord[]> {
+    const root = await this.#root();
+    const entries: EntryRecord[] = [];
+    let cursor: Cursor | undefined;
+    do {
+      const page = await root.entries({ order: "ascending" }, 500, cursor, BACKGROUND_CONTEXT);
+      entries.push(...page.items);
+      cursor = page.next;
+    } while (cursor);
+    return entries;
   }
 
   /** Publish without the model, through the same checks as the agent's tool. Only routed when DEV_TOOLS is on. */
@@ -724,14 +797,17 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     for (const ws of sockets) send(ws, { type: "presence", online });
   }
 
-  /** Close the sockets of someone no longer in the chat. The app sees the close code and stops reconnecting. */
-  disconnect(uid: string): void {
+  /**
+   * Close the sockets of someone no longer in the chat, or with no `uid` everyone's, as the chat is deleted. The app
+   * sees the close code and stops reconnecting.
+   */
+  disconnect(uid?: string): void {
     const closing = new Set<WebSocket>();
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) {
-      if (this.#person(ws)?.uid !== uid) continue;
+      if (uid !== undefined && this.#person(ws)?.uid !== uid) continue;
       void this.#detach(ws);
-      send(ws, { type: "removed" });
-      close(ws, SOCKET_NOT_A_MEMBER, "Removed from the chat");
+      send(ws, { type: uid === undefined ? "deleted" : "removed" });
+      close(ws, SOCKET_NOT_A_MEMBER, uid === undefined ? "Chat deleted" : "Removed from the chat");
       closing.add(ws);
     }
     // A close the chat makes itself may never come back as onWebSocketClose: the others hear of it now.

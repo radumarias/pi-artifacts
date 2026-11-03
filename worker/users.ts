@@ -124,6 +124,17 @@ export class UserDirectory extends DurableObject<Env> {
     return this.ctx.storage.sql.exec<{ title: string }>("SELECT title FROM chats WHERE id = ?", id).toArray()[0]?.title ?? null;
   }
 
+  /** The ids of the artifacts this user published from one of their chats. */
+  chatArtifactIds(chatId: string): string[] {
+    return this.ctx.storage.sql.exec<{ id: string }>("SELECT id FROM artifacts WHERE chat_id = ?", chatId).toArray().map((row) => row.id);
+  }
+
+  /** Take a deleted chat, and the artifacts it published, out of this user's lists. The chat deletes the rest first. */
+  forgetChat(id: string): void {
+    this.ctx.storage.sql.exec("DELETE FROM artifacts WHERE chat_id = ?", id);
+    this.ctx.storage.sql.exec("DELETE FROM chats WHERE id = ?", id);
+  }
+
   listArtifacts(): ArtifactSummary[] {
     return this.ctx.storage.sql
       .exec<{ id: string; title: string; chat_id: string; latest: number; updated_at: number }>("SELECT * FROM artifacts ORDER BY updated_at DESC")
