@@ -75,14 +75,13 @@ body.resizing iframe { pointer-events: none; }
   gap: 6px;
   padding: 14px;
   background: var(--surface);
-  /* Chats and the rest scroll in .sidebar-scroll; the files panel and the footer stay at the bottom. */
+  /* Chats and artifacts scroll in .sidebar-scroll; skills, the files panel and the footer stay at the bottom. */
   overflow: hidden;
   min-width: 0;
 }
 .sidebar-scroll { flex: 1 1 0; min-height: 48px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 0 -14px; padding: 0 14px; }
 /* Skills, kept in view between the scrolling chats and the files panel. */
 .sidebar-pinned { flex: none; display: flex; flex-direction: column; gap: 6px; margin: 0 -14px; padding: 0 14px 6px; border-top: 1px solid var(--border); }
-.sidebar-pinned h3 { margin-top: 10px; }
 .files-panel { flex: none; display: flex; flex-direction: column; gap: 2px; min-height: 0; margin: 0 -14px; padding: 6px 14px 0; border-top: 1px solid var(--border); }
 /* Open, the panel takes what its files need, up to most of the sidebar; its tree scrolls inside. */
 .files-panel.open { flex: 0 1 auto; max-height: 60%; }
@@ -111,6 +110,8 @@ body.resizing iframe { pointer-events: none; }
 .sidebar.rail { align-items: center; padding: 14px 8px; }
 .sidebar.rail button { width: 36px; padding: 6px 0; }
 .sidebar h3 { margin: 14px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+/* After .sidebar h3, whose margin shorthand would otherwise win at equal specificity. */
+.sidebar .sidebar-pinned h3 { margin-top: 10px; }
 .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
 .sidebar nav a, .sidebar nav span {
   color: inherit;
@@ -477,7 +478,7 @@ a.mention-chip:hover { text-decoration: underline; }
   .resize-handle { display: none; }
   .sidebar.rail { flex-direction: row; justify-content: flex-start; }
   .sidebar { border-bottom: 1px solid var(--border); max-height: 40vh; }
-  /* Stacked above the chat and short, the sidebar scrolls as a whole: chats first, then the files. */
+  /* Stacked above the chat and short, the sidebar scrolls as a whole: chats first, then skills and the files. */
   .sidebar:not(.rail) { overflow-y: auto; }
   .sidebar-scroll, .files-panel.open, .files-panel .files { flex: none; overflow: visible; max-height: none; }
   .workspace.with-preview .main { display: none; }

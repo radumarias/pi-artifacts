@@ -177,7 +177,7 @@ in `uploads/`, a folder keeping its layout (`reports/q3/sales.csv` is `uploads/r
 whose names start with a dot (`.git`, `.DS_Store`) are left out of a folder. A file may be up to 10 MB; the app splits a
 big pick into requests of at most 50 files and 40 MB (`shared/uploads.ts`, `worker/files-routes.ts`).
 
-Your files sit in a panel at the bottom of the sidebar that opens and closes (chats and artifacts scroll above it and the skills link). An image's name
+Your files sit in a panel at the bottom of the sidebar that opens and closes (the skills link sits just above it, and chats and artifacts scroll above both). An image's name
 opens it in a new tab, and every file and folder has a download button. A folder
 downloads as a zip named after it with the folder itself at its root (`q3.zip` holds `q3/sales.csv`, `q3/2024/…`),
 streamed by the Worker and stored uncompressed (`worker/zip.ts`), up to 1 GB and 2,000 files. Files are served with
