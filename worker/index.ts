@@ -19,9 +19,7 @@ export { UserDirectory } from "./users.ts";
 /**
  * Which chat each artifact lives in. That never changes once an artifact
  * exists, so a page's live calls, the hottest path, skip the R2 read after
- * the first one in this isolate. A deleted chat's artifacts leave it, in the
- * isolate that deleted them; elsewhere a call reaches the emptied chat, which
- * no longer has the artifact.
+ * the first one in this isolate.
  */
 const artifactChats = new Map<string, string>();
 const MAX_ARTIFACT_CHATS = 5_000;
@@ -121,13 +119,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (skills) return skills;
 
   // A chat's Durable Object is named after its owner's verified uid; others reach it only once they joined by an invite.
-  const chat = await chatRoute(
-    request,
-    directory,
-    { uid, name: identity.email ?? uid },
-    (owner) => storage.userFiles(owner),
-    (ids) => ids.forEach((id) => artifactChats.delete(id)),
-  );
+  const chat = await chatRoute(request, directory, { uid, name: identity.email ?? uid }, (owner) => storage.userFiles(owner));
   if (chat) return chat;
 
   // Publish a page without the model, to try the live-data path locally. Needs DEV_TOOLS=true.

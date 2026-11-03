@@ -1,5 +1,22 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
+import { firstText } from "../shared/canonical.ts";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails, type SavedFilesDetails } from "../shared/protocol.ts";
+
+/** The agent's tools that write the user's files (worker/agent/tools.ts), and how their results say what they saved. */
+export const FILES_WRITE_TOOL = "files_write";
+export const RUN_PYTHON_TOOL = "run_python";
+export const RUN_BASH_TOOL = "run_bash";
+/** Where a sandbox run saves what it wrote to ./out. */
+export const SANDBOX_OUT = "out/";
+
+export function wroteReport(path: string, characters: number): string {
+  return `Wrote ${path} (${characters} characters).`;
+}
+
+/** A sandbox report's last parts: what it saved, then what it could not. Nothing of the script's own output comes after them. */
+export function savedReport(saved: readonly string[], skipped: readonly string[]): string[] {
+  return [saved.length ? `saved: ${saved.join(", ")}` : "", skipped.length ? `not saved: ${skipped.join("; ")}` : ""];
+}
 
 /** What a chat left outside its own object, as its transcript records it: the artifacts it published and the files it attached or saved. */
 export interface ChatTraces {
@@ -7,15 +24,12 @@ export interface ChatTraces {
   files: Set<string>;
 }
 
-const SANDBOX_TOOLS = new Set(["run_python", "run_bash"]);
-
 /**
- * The artifacts and files `entries` (a chat's whole history, oldest first or not) name: files attached to people's
+ * Add the artifacts and files `entries` (some or all of a chat's history) name to `traces`: files attached to people's
  * messages, and those the agent's tools say they saved. Tool results carry what they saved in their details; results
- * from before they did are read from their text, which those tools write in a fixed shape.
+ * from before they did are read from their text (see wroteReport and savedReport).
  */
-export function chatTraces(entries: Iterable<EntryRecord>): ChatTraces {
-  const traces: ChatTraces = { artifacts: new Set(), files: new Set() };
+export function chatTraces(entries: Iterable<EntryRecord>, traces: ChatTraces = { artifacts: new Set(), files: new Set() }): ChatTraces {
   for (const entry of entries) {
     if (entry.kind === CHAT_MESSAGE_KIND) {
       for (const attachment of (entry.data as unknown as ChatMessageData | undefined)?.attachments ?? []) traces.files.add(attachment.path);
@@ -24,28 +38,20 @@ export function chatTraces(entries: Iterable<EntryRecord>): ChatTraces {
       if (message.role !== "toolResult") continue;
       const details = message.details as Partial<PublishedDetails & SavedFilesDetails> | undefined;
       if (message.toolName === PUBLISH_TOOL && typeof details?.artifactId === "string") traces.artifacts.add(details.artifactId);
-      const saved = Array.isArray(details?.saved) ? details.saved : savedInText(message.toolName, textOf(message.content));
+      const saved = Array.isArray(details?.saved) ? details.saved : savedInText(message.toolName, firstText(message.content) ?? "");
       for (const path of saved) if (typeof path === "string") traces.files.add(path);
     }
   }
   return traces;
 }
 
-function textOf(content: readonly { type: string; text?: string }[]): string {
-  return content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
-}
-
-/**
- * The files an older tool result says it saved. files_write's text starts "Wrote <path> (", and a sandbox run's ends
- * with "saved: <paths>" (and "not saved: …"): only that end is read, since the script's own output comes before it.
- * Sandbox runs save only under out/.
- */
+/** The files an older result says it saved. Of a sandbox run's report only the end is read: the script's output comes before it. */
 function savedInText(tool: string, text: string): string[] {
-  if (tool === "files_write") {
+  if (tool === FILES_WRITE_TOOL) {
     const path = text.match(/^Wrote (.+) \(\d+ characters\)\.$/)?.[1];
     return path ? [path] : [];
   }
-  if (!SANDBOX_TOOLS.has(tool)) return [];
+  if (tool !== RUN_PYTHON_TOOL && tool !== RUN_BASH_TOOL) return [];
   const list = text.match(/\n\nsaved: ([^\n]+)(?:\n\nnot saved: [^\n]*)?$/)?.[1];
-  return list ? list.split(", ").filter((path) => path.startsWith("out/")) : [];
+  return list ? list.split(", ").filter((path) => path.startsWith(SANDBOX_OUT)) : [];
 }

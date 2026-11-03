@@ -26,7 +26,7 @@ export function DeleteChat({ chatId, onClose, onDeleted }: Props) {
     setDeleting(true);
     setError(null);
     try {
-      await api.deleteChat(chatId, withFiles && Boolean(plan?.files.length));
+      await api.deleteChat(chatId, withFiles);
       onDeleted();
     } catch (e) {
       setError(errorMessage(e));

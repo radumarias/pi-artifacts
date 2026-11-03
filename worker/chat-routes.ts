@@ -25,7 +25,6 @@ export async function chatRoute(
   directory: DurableObjectStub<UserDirectory>,
   person: Person,
   filesOf: (uid: string) => Promise<UserFiles>,
-  onArtifactsDeleted: (ids: readonly string[]) => void,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
@@ -69,11 +68,10 @@ export async function chatRoute(
   }
   if (!what && method === "DELETE") {
     const withFiles = (await readJson<{ files?: unknown }>(request))?.files === true;
-    const deleted = await chat.deleteChat(person, { withFiles });
-    if ("status" in deleted) return answer(deleted);
+    const refused = await chat.deleteChat(person, { withFiles });
+    if (refused) return answer(refused);
     // Last, once the chat holds nothing: until then it stays in the owner's list, to delete again should a step fail.
     await directory.forgetChat(chatId);
-    onArtifactsDeleted(deleted.artifacts);
     return json({});
   }
   if (what === "deletion" && method === "GET" && !item) {
