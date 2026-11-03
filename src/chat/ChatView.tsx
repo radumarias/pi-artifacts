@@ -20,6 +20,7 @@ import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
+import { useRevealedText } from "./reveal.ts";
 
 interface Props {
   chatId: string;
@@ -66,6 +67,16 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     const el = list.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, [state.entries.length, state.partial, state.tools, state.queued.length]);
+  // A streaming answer also grows between the steps it arrives in (useRevealedText): follow that too.
+  useEffect(() => {
+    const el = list.current;
+    if (!el) return;
+    const observer = new MutationObserver(() => {
+      if (following.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, []);
 
   // A finished run may have saved files (run_python): read them again. The rest of the sidebar follows on its own
   // (useSidebarSocket).
@@ -486,6 +497,11 @@ function release(item: Pending): void {
 }
 
 /** A reply: its text, and a collapsed panel for each thought and tool call in it. `streaming` while the model writes it. */
+/** A streaming answer's text, revealed a little at a time between the steps it arrives in. */
+function RevealedMarkdown({ text }: { text: string }) {
+  return <Markdown text={useRevealedText(text)} />;
+}
+
 function Assistant({ message, streaming = false }: { message: AssistantMessage; streaming?: boolean }) {
   return (
     <div className="assistant">
@@ -495,7 +511,7 @@ function Assistant({ message, streaming = false }: { message: AssistantMessage; 
         if (block.type === "text")
           return block.text ? (
             <div key={i} className="bubble bot markdown">
-              <Markdown text={block.text} />
+              {streaming ? <RevealedMarkdown text={block.text} /> : <Markdown text={block.text} />}
             </div>
           ) : null;
         if (block.type === "toolCall") return <ToolStep key={i} call={block} streaming={streaming} />;

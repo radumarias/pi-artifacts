@@ -27,6 +27,7 @@
     "src/artifact/broker.ts",
     "src/chat/useChat.ts",
     "src/chat/spend.ts",
+    "src/chat/reveal.ts",
     "scripts/prices.ts",
     "src/api.ts",
     "src/chat/Markdown.tsx",

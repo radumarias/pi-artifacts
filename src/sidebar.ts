@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SidebarList } from "../shared/protocol.ts";
+import { SOCKET_PING, type SidebarList } from "../shared/protocol.ts";
 import { api } from "./api.ts";
 
-/** How often the sidebar's socket pings: proxies close a socket that stays quiet for long. */
-const PING_MS = 30_000;
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
 const LOAD_DELAY_MS = 150;
 const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills"];
@@ -69,7 +67,8 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>): void
       ws.onopen = () => {
         attempt = 0;
         LISTS.forEach(load);
-        ping = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send("ping"), PING_MS);
+        // Proxies close a socket that stays quiet for long.
+        ping = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send(SOCKET_PING.request), SOCKET_PING.everyMs);
       };
       ws.onmessage = (event) => {
         if (LISTS.includes(event.data)) load(event.data);

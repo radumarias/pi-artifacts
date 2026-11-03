@@ -290,6 +290,12 @@ export type ChatServerMessage =
 /** The close code of a chat socket whose user is not (or no longer) in the chat: the app stops reconnecting. */
 export const SOCKET_NOT_A_MEMBER = 4403;
 
+/**
+ * The keep-alive a chat or sidebar socket sends while it is quiet, and the answer it gets. The Durable Object's
+ * runtime answers it (setWebSocketAutoResponse), so it never wakes the object.
+ */
+export const SOCKET_PING = { request: "ping", response: "pong", everyMs: 30_000 } as const;
+
 /** The minimum polling interval a page can ask for, as at Claude. */
 export const MIN_REFETCH_MS = 30_000;
 

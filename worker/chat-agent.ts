@@ -13,6 +13,7 @@ import {
   isReadOnly,
   manifestOf,
   SOCKET_NOT_A_MEMBER,
+  SOCKET_PING,
   type ArtifactManifest,
   type ChatClientMessage,
   type ChatDeletion,
@@ -96,6 +97,12 @@ const MEMBERS_TOUCH_MS = 60_000;
  * after, and the spinner should not blink between them.
  */
 const SETTLE_MS = 1_500;
+/**
+ * How often pi commits a streaming answer and running tool output, which is how they reach the browsers. Each commit
+ * writes about seven SQLite rows; at pi's default of 100 ms a question wrote some 8,600. Once a second writes about a
+ * tenth of that, and the app reveals each step's new text over the second until the next (useRevealedText).
+ */
+const PROGRESS = { partialIntervalMs: 1_000, outputIntervalMs: 1_000 };
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
 const STATUS_KEY = "status";
 
@@ -151,7 +158,8 @@ export class ChatAgent extends DurableObject<Env> {
       const models = piModels(this.ai.provider);
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again.
-      const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings: { afterFailedRun: "continue" } }, context);
+      const settings = { afterFailedRun: "continue" as const, progress: PROGRESS };
+      const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
         // A new chat starts on the model its user last picked; PiHarness then finds the root and leaves it as it is.
         if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
@@ -212,6 +220,10 @@ export class ChatAgent extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // An open chat stays quiet for hours between questions, and proxies close a quiet socket. The app pings to keep it
+    // open; answered here, a ping neither wakes the object nor makes the app reconnect (which would wake it and send
+    // everyone's app the whole conversation again).
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(SOCKET_PING.request, SOCKET_PING.response));
     const scope: ChatScope = (this.scope = {
       uid: this.uid,
       chatId: this.chatId,
@@ -251,14 +263,18 @@ export class ChatAgent extends DurableObject<Env> {
     return this.#index(this.uid);
   }
 
-  /** Called by Lifecycle once capabilities have started, including after an eviction. */
+  /**
+   * Called by Lifecycle once capabilities have started, including after an eviction, and on every wake from
+   * hibernation (a socket opening, a page's call, an alarm). Only a run the object resumes needs the agent's tools
+   * now; otherwise the next prompt refreshes them, and a wake stays short: no MCP connections, no listing of files.
+   */
   onStart(): void {
-    if (this.#gone) return;
+    // The sidebars show the chat working: the object restarted mid-run. Follow the run it resumes, or tell them it is over.
+    if (this.#gone || this.#status() !== "running") return;
     void this.refreshMcpTools();
     void this.refreshSkills();
     void this.refreshFiles();
-    // The object restarted while the sidebars show it working: follow the run it resumes, or tell them it is over.
-    if (this.#status() === "running") void this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
+    void this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
   }
 
   /** The models a chat can pick, as AI Gateway's providers last listed them. */

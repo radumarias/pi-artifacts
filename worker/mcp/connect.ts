@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import type { ToolInfo } from "../../shared/protocol.ts";
@@ -40,6 +41,21 @@ function callFailure(server: string, tool: string, error: unknown): unknown {
 }
 
 /**
+ * `fetch`, except for the standalone stream the SDK opens after connecting (a GET to the server's URL with no
+ * Last-Event-ID), which it answers itself as a server without one does: 405. That stream is an outgoing request that
+ * stays open for as long as the server keeps it, and the SDK reopens it whenever it ends, so a chat object holding one
+ * never hibernates: it stays awake, and billed, for hours after its last message. Nothing here listens for what a
+ * server sends unasked (tool lists are listed again by age), and an answer still comes back on its own request. A GET
+ * that resumes a request's interrupted answer carries Last-Event-ID and goes through.
+ */
+export function withoutStandaloneStream(url: URL): FetchLike {
+  return (input, init) => {
+    const standalone = init?.method === "GET" && new URL(input).href === url.href && !new Headers(init.headers).has("last-event-id");
+    return standalone ? Promise.resolve(new Response(null, { status: 405 })) : fetch(input, init);
+  };
+}
+
+/**
  * Opens a Streamable HTTP session with the MCP SDK. Workers cannot run Ajv, so
  * validation uses @cfworker/json-schema. With `authProvider`, the SDK adds the
  * user's token to every request and refreshes it when it expires.
@@ -57,7 +73,8 @@ export async function connectStreamableHttp(server: McpServerConfig, authProvide
     { name: "pi-artifacts", version: "0.1.0" },
     { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
   );
-  await signedIn(() => client.connect(new StreamableHTTPClientTransport(new URL(server.url), { authProvider })));
+  const url = new URL(server.url);
+  await signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: withoutStandaloneStream(url) })));
 
   const connection: McpConnection = {
     instructions: client.getInstructions(),

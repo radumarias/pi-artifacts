@@ -1,6 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelChoice } from "../shared/models.ts";
-import type { ArtifactSummary, ChatStatus, ChatSummary, SidebarList } from "../shared/protocol.ts";
+import { SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type SidebarList } from "../shared/protocol.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
 import { titleFromMessage, UNNAMED_CHAT } from "./agent/title.ts";
@@ -50,7 +50,7 @@ export class UserDirectory extends DurableObject<Env> {
     // The newest version of each artifact its owner opened. Artifacts from before count as seen.
     if (this.#addColumn("artifacts", "seen", "INTEGER NOT NULL DEFAULT 0")) ctx.storage.sql.exec("UPDATE artifacts SET seen = latest");
     // A sidebar's socket stays open for hours: answer its keep-alive pings without waking this object.
-    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(SOCKET_PING.request, SOCKET_PING.response));
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = mcpServers(env).map((server) => server.name);
     const placeholders = configured.map(() => "?").join(", ");
