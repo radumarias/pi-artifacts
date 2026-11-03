@@ -119,6 +119,17 @@ body.resizing iframe { pointer-events: none; }
   font-size: 14px;
 }
 .sidebar nav a:hover, .sidebar nav a.active { background: var(--surface-2); }
+/* A chat: its name, and on the right what its agent is doing (ChatList.tsx). */
+.sidebar nav a.chat-link { display: flex; align-items: center; gap: 8px; }
+.sidebar nav .chat-title { flex: 1; min-width: 0; padding: 0; overflow: hidden; text-overflow: ellipsis; }
+.sidebar nav a.unread .chat-title { font-weight: 600; }
+.sidebar nav .chat-status { flex: none; padding: 0; overflow: visible; }
+.sidebar nav .spinner.chat-status { width: 12px; height: 12px; vertical-align: 0; }
+.sidebar nav .chat-waiting {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-text); font-size: 11px; font-weight: 700; line-height: 1;
+}
+.sidebar nav .chat-unread { width: 8px; height: 8px; margin: 0 4px; border-radius: 50%; background: var(--accent); }
 .sidebar small { color: var(--muted); }
 .sidebar .upload { padding: 5px 8px; color: var(--accent); cursor: pointer; font-size: 14px; }
 .sidebar .upload:has(input:disabled) { opacity: 0.5; cursor: default; }

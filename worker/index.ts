@@ -109,6 +109,11 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (mcp) return mcp;
 
   const directory = exports.UserDirectory.getByName(uid);
+  // The sidebar's socket: it hears when the chat list changes (worker/users.ts).
+  if (path === "/api/me/ws" && method === "GET") {
+    if (request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade" }, 426);
+    return directory.fetch(request);
+  }
   if (path === "/api/chats" && method === "GET") return json(await directory.listChats());
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());

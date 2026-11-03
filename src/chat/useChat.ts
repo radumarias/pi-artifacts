@@ -212,14 +212,12 @@ export function useChat(chatId: string) {
   const [connected, setConnected] = useState(false);
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
   const [online, setOnline] = useState<Presence[]>([]);
-  const [gone, setGone] = useState(false);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     dispatch({ type: "reset" });
     setPeople(null);
     setOnline([]);
-    setGone(false);
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -227,7 +225,6 @@ export function useChat(chatId: string) {
     // Not in the chat: stop for good.
     const stop = () => {
       closed = true;
-      setGone(true);
       dispatch({ type: "error", message: "You are not in this chat." });
     };
 
@@ -281,8 +278,6 @@ export function useChat(chatId: string) {
     people,
     /** Who has the chat open right now, and in how many windows. */
     online,
-    /** True once the chat refused this user's socket: they are not (or no longer) in it. */
-    gone,
     prompt: (text: string, attachments?: AttachmentInput[]) => send({ type: "prompt", text, ...(attachments?.length && { attachments }) }),
     abort: () => send({ type: "abort" }),
     setModel,

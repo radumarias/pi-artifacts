@@ -50,6 +50,8 @@
     "worker/auth/access.ts",
     "worker/members.ts",
     "worker/queue.ts",
+    "worker/chat-status.ts",
+    "worker/agent/title.ts",
     "worker/agent/skills.ts",
     "worker/models.ts",
     "worker/prices.json",

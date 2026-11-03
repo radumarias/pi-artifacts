@@ -39,6 +39,8 @@ function uploadForm(files: readonly { file: File; path: string }[]): FormData {
   return form;
 }
 
+const socketUrl = (path: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;
+
 const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
 const send = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -56,6 +58,8 @@ export const api = {
   signOut: () => request<object>("/api/session", { method: "DELETE" }),
   chats: () => request<ChatSummary[]>("/api/chats"),
   createChat: () => request<ChatSummary>("/api/chats", { method: "POST" }),
+  /** The user has seen the chat: it is no longer unread in their sidebar. */
+  markSeen: (chatId: string) => request<object>(`/api/chats/${chatId}/seen`, { method: "POST" }),
   createInvite: (chatId: string) => request<CreatedInvite>(`/api/chats/${chatId}/invites`, post({})),
   revokeInvite: (chatId: string, inviteId: string) => request<object>(`/api/chats/${chatId}/invites/${inviteId}`, { method: "DELETE" }),
   /** The owner removes a member; a member passes their own uid to leave. */
@@ -91,5 +95,7 @@ export const api = {
   /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */
   attach: (chatId: string, files: readonly { file: File; path: string }[]) =>
     request<{ paths: string[] }>(`/api/chats/${chatId}/attachments`, { method: "POST", body: uploadForm(files) }),
-  chatSocketUrl: (chatId: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/chats/${chatId}/ws`,
+  chatSocketUrl: (chatId: string) => socketUrl(`/api/chats/${chatId}/ws`),
+  /** The sidebar's socket, which says when the chat list changed. */
+  sidebarSocketUrl: () => socketUrl("/api/me/ws"),
 };

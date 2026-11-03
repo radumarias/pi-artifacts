@@ -139,6 +139,12 @@ export interface PublishedDetails {
   title: string;
 }
 
+/**
+ * What a chat's agent is up to, as the sidebar shows it: "running" while it works (or messages wait for it), "waiting"
+ * when its last reply ended on a question to the people in the chat. Null where it is neither.
+ */
+export type ChatStatus = "running" | "waiting";
+
 export interface ChatSummary {
   id: string;
   title: string;
@@ -146,7 +152,13 @@ export interface ChatSummary {
   updatedAt: number;
   /** Set on a chat someone else owns and invited you to: their name. */
   sharedBy?: string;
+  status?: ChatStatus;
+  /** Set when the chat has a reply, or someone else's message, that this user has not seen yet. */
+  unread?: true;
 }
+
+/** What the sidebar's socket (GET /api/me/ws) sends: the chat list changed, so read it again. */
+export const SIDEBAR_CHATS_CHANGED = "chats";
 
 /** Someone in a chat: a verified uid, and the name the others see (their email, or the demo name). */
 export interface Person {

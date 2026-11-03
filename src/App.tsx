@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
-import type { ChatSummary, PublishedDetails } from "../shared/protocol.ts";
+import type { PublishedDetails } from "../shared/protocol.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
+import { ChatList, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
@@ -168,7 +169,7 @@ const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
 function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: WorkspaceProps) {
-  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const chats = useChatList(chatId);
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
@@ -189,16 +190,14 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       (e: Error) => setSkillsError(e.message),
     );
   }, []);
-  const loadChats = useCallback(() => void api.chats().then(setChats, () => {}), []);
   const loadArtifacts = useCallback(() => void api.artifacts().then(setArtifacts, () => {}), []);
   const loadFiles = useCallback(() => void api.files().then(setFiles, () => {}), []);
-  // After a run: it may have named the chat, published, saved files (run_python) or proposed a skill.
+  // After a run: it may have published, saved files (run_python) or proposed a skill. The chat list follows on its own.
   const refresh = useCallback(() => {
-    loadChats();
     loadArtifacts();
     loadFiles();
     loadSkills();
-  }, [loadChats, loadArtifacts, loadFiles, loadSkills]);
+  }, [loadArtifacts, loadFiles, loadSkills]);
   useEffect(refresh, [refresh]);
   useEffect(() => setPreview(null), [chatId]);
 
@@ -207,7 +206,6 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
 
   const newChat = async () => {
     const chat = await api.createChat();
-    loadChats();
     navigate(`/c/${chat.id}`);
   };
 
@@ -289,23 +287,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           {/* Chats, artifacts and skills scroll here, above the files panel. */}
           <div className="sidebar-scroll">
           <h3>Chats</h3>
-          <nav>
-            {chats.map((chat) => (
-              <a
-                key={chat.id}
-                href={`/c/${chat.id}`}
-                className={chat.id === chatId ? "active" : ""}
-                title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate(`/c/${chat.id}`);
-                }}
-              >
-                {chat.title}
-                {chat.sharedBy && <small> · {chat.sharedBy}</small>}
-              </a>
-            ))}
-          </nav>
+          <ChatList chats={chats} openId={chatId} navigate={navigate} />
           <h3>Artifacts</h3>
           <nav>
             {artifacts.map((a) => (
@@ -359,11 +341,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               uid={uid}
               onArtifact={onArtifact}
               onActivity={refresh}
-              onGone={loadChats}
-              onLeft={() => {
-                loadChats();
-                navigate("/");
-              }}
+              onLeft={() => navigate("/")}
             />
           </ErrorBoundary>
         ) : (

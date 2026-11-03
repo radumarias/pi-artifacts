@@ -15,6 +15,7 @@ import type { UserDirectory } from "./users.ts";
  *   DELETE /api/chats/:id/invites/:inviteId   (owner) revoke an invite
  *   DELETE /api/chats/:id/members/:uid        (owner) remove a member, or (member) leave
  *   POST   /api/chats/:id/attachments         files for a message, as POST /api/files takes them, into the owner's files
+ *   POST   /api/chats/:id/seen                this user has seen the chat: it is no longer unread in their sidebar
  *   POST   /api/invites/accept                {token}: join the chat an invite link is for
  * Returns null for any other path.
  */
@@ -37,11 +38,16 @@ export async function chatRoute(
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/(ws|invites|members|attachments)(?:\/([a-z0-9-]+))?$/);
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/(ws|invites|members|attachments|seen)(?:\/([a-z0-9-]+))?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
   if (isSocket && request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade" }, 426);
+  // Only this user's own sidebar entry changes, so it needs no chat object.
+  if (what === "seen" && method === "POST" && !item) {
+    await directory.markSeen(chatId);
+    return json({});
+  }
   // Own chats and chats shared with this user.
   const ownerUid = await directory.chatOwner(chatId);
   if (!ownerUid) return isSocket ? closedSocket(SOCKET_NOT_A_MEMBER, "No such chat") : json({ error: "No such chat" }, 404);

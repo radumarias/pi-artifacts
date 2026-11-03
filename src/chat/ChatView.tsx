@@ -26,8 +26,6 @@ interface Props {
   /** Called with the newest artifact this chat published, on load and on every publish. */
   onArtifact: (artifact: PublishedDetails) => void;
   onActivity: () => void;
-  /** Called when the user is no longer in this chat (removed, or it is gone): its sidebar entry went too. */
-  onGone: () => void;
   /** Called once the user left this chat. */
   onLeft: () => void;
 }
@@ -42,8 +40,8 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
-export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }: Props) {
-  const { state, connected, people, online, gone, prompt, abort, setModel } = useChat(chatId);
+export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
+  const { state, connected, people, online, prompt, abort, setModel } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
   const attachments = useAttachments(chatId);
@@ -64,16 +62,13 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, [state.entries.length, state.partial, state.tools, state.queued.length]);
 
-  // A finished run may have renamed the chat or published artifacts: refresh the sidebar.
+  // A finished run may have published artifacts, saved files or proposed skills: refresh the sidebar. (The chat list
+  // follows on its own: see useChatList.)
   const wasBusy = useRef(false);
   useEffect(() => {
     if (wasBusy.current && !state.busy) onActivity();
     wasBusy.current = state.busy;
   }, [state.busy, onActivity]);
-
-  useEffect(() => {
-    if (gone) onGone();
-  }, [gone, onGone]);
 
   useEffect(() => {
     const latest = state.entries.map(published).filter(Boolean).pop();

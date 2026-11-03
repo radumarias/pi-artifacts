@@ -1,5 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
+import type { Provider } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
@@ -20,6 +21,7 @@ import {
   type ChatPeopleData,
   type ChatPeopleView,
   type ChatServerMessage,
+  type ChatStatus,
   type DeclaredTool,
   type McpError,
   type Person,
@@ -35,6 +37,8 @@ import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown 
 import { filesIndex } from "./agent/file-refs.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
+import { titleFor } from "./agent/title.ts";
+import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, publishArtifact, sandboxExtension, skillsExtension, type ChatScope, type PublishInput } from "./agent/tools.ts";
 import { Storage } from "./storage/index.ts";
@@ -63,6 +67,20 @@ const OWNER = "chat-sockets";
 export const PERSON_HEADER = "x-pi-person";
 const MAX_STALE_MS = 24 * 60 * 60_000;
 const MEMBERS_TOUCH_MS = 60_000;
+/**
+ * How long a chat must stay idle before the sidebars hear its run ended: the next queued message starts its run right
+ * after, and the spinner should not blink between them.
+ */
+const SETTLE_MS = 1_500;
+/** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
+const STATUS_KEY = "status";
+
+/** pi-ai's models, through the chat's AI Gateway, at the vendors' current prices. */
+function piModels(provider: Provider) {
+  const models = createModels();
+  models.setProvider(withCurrentPrices(provider));
+  return models;
+}
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
 export function chatAgentName(uid: string, chatId: string): string {
@@ -98,10 +116,11 @@ export class ChatAgent extends DurableObject<Env> {
   readonly storage = new Storage(this.env);
   readonly ai = createAI({ binding: this.env.AI, gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
   readonly registry = createRegistry();
+  /** For the one call that names a chat (#nameChat), made when it is needed. */
+  #titleModels: ReturnType<typeof piModels> | undefined;
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
-      const models = createModels();
-      models.setProvider(withCurrentPrices(this.ai.provider));
+      const models = piModels(this.ai.provider);
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again.
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings: { afterFailedRun: "continue" } }, context);
@@ -148,6 +167,12 @@ export class ChatAgent extends DurableObject<Env> {
   #filesInstalled: string | undefined;
   /** When members' sidebars were last bumped, and with which title. */
   #membersTouched = { title: "", at: 0 };
+  /** The pi event stream the chat's status comes from while it may change: from a prompt until its runs settle. */
+  #runWatch: Promise<AgentEventStream> | undefined;
+  /** Publishes an idle status once the chat has stayed idle for SETTLE_MS. */
+  #settle: ReturnType<typeof setTimeout> | undefined;
+  /** Status writes to the sidebars, in order: a later status must not land before an earlier one. */
+  #statusWrites: Promise<unknown> = Promise.resolve();
   /** The last read of the queue, by the inbox ids it was for: every socket asks after the same commit. */
   #queuedRead: { key: string; read: Promise<QueuedMessage[]> } | undefined;
 
@@ -190,6 +215,8 @@ export class ChatAgent extends DurableObject<Env> {
     void this.refreshMcpTools();
     void this.refreshSkills();
     void this.refreshFiles();
+    // The object restarted while the sidebars show it working: follow the run it resumes, or tell them it is over.
+    if (this.#status() === "running") void this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
   }
 
   /** The user's last pick, checked again: the list of models can change between deploys. On a failure, the deployment's default. */
@@ -444,6 +471,9 @@ export class ChatAgent extends DurableObject<Env> {
     ]);
     // Again after the refreshes, which can take seconds: the author may have been removed meanwhile.
     this.#requireInChat(author);
+    // Watching before the input goes in, so the sidebars hear the run start. Not alongside the refreshes: an idle watch
+    // lets go after SETTLE_MS, which they can outlast. Only a view: the prompt goes on without it.
+    await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
     const said = this.members.hasAny() ? `${author.name}: ${text}` : text;
     const content = attached ? [...attached.content, ...(text ? [{ type: "text" as const, text: said }] : [])] : said;
     await this.harness.submit(content, {
@@ -465,17 +495,105 @@ export class ChatAgent extends DurableObject<Env> {
   };
 
   /**
-   * Move the chat up in everyone's sidebar. touchChat only names a chat still called "New chat", so the first prompt names it.
+   * Move the chat up in everyone's sidebar, marked unread for all but the author. touchChat names a chat that has no
+   * name yet after the prompt, so the first prompt names it, and a small model then gives it a better title.
    * Members' sidebars get a new title at once, but in a busy chat the others' are bumped at most once a minute: each is
    * another object. The author's own always is.
    */
   async #touchIndexes(text: string, authorUid: string): Promise<void> {
-    const title = await this.#directory.touchChat(this.chatId, text);
+    const { title, named } = await this.#directory.touchChat(this.chatId, text, authorUid !== this.uid);
+    if (named && text) void this.#nameChat(text, title).catch((error: unknown) => console.error("chat title:", errorMessage(error)));
     const now = Date.now();
     const all = title !== this.#membersTouched.title || now - this.#membersTouched.at >= MEMBERS_TOUCH_MS;
     if (all) this.#membersTouched = { title, at: now };
     const members = this.members.list().filter((member) => all || member.uid === authorUid);
-    await Promise.allSettled(members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title)));
+    await Promise.allSettled(members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== authorUid)));
+  }
+
+  /**
+   * Give the chat a short title from its first message, by the deployment's TITLE_MODEL, in place of `placeholder` (the
+   * message cut to fit), in everyone's sidebar. A chat renamed meanwhile keeps its name.
+   */
+  async #nameChat(message: string, placeholder: string): Promise<void> {
+    const title = await titleFor((this.#titleModels ??= piModels(this.ai.provider)), this.ai(this.env.TITLE_MODEL), message);
+    if (!title || title === placeholder) return;
+    const indexes = [this.#directory, ...this.members.list().map((member) => this.#index(member.uid))];
+    await Promise.allSettled(indexes.map((index) => index.nameChat(this.chatId, this.uid, title, placeholder)));
+  }
+
+  /** The status the sidebars last heard. */
+  #status(): ChatStatus | null {
+    return this.ctx.storage.kv.get<ChatStatus>(STATUS_KEY) ?? null;
+  }
+
+  #cancelSettle(): void {
+    clearTimeout(this.#settle);
+    this.#settle = undefined;
+  }
+
+  /**
+   * Follow the chat's pi events while its status may change, so the sidebars show it working, waiting on someone, or
+   * neither (RunTracker). Attached before every prompt, and after a restart while the chat was working; it lets go once
+   * the chat has settled (SETTLE_MS), so an idle chat holds no stream.
+   */
+  #watchRuns(): Promise<AgentEventStream> {
+    this.#cancelSettle();
+    if (this.#runWatch) return this.#runWatch;
+    const watch = (async () => {
+      const events = await this.harness.session().events();
+      const tracker = new RunTracker(events.snapshot);
+      let shown = tracker.status;
+      this.#onStatus(shown);
+      events.start(async (batch) => {
+        tracker.apply(batch);
+        // Most batches are streamed tokens, which change nothing here.
+        if (this.#runWatch !== watch || tracker.status === shown) return;
+        shown = tracker.status;
+        this.#onStatus(shown);
+      });
+      // A stream pi closed delivers nothing more: the next prompt attaches a new one.
+      void events.closed
+        .catch(() => {})
+        .then(() => {
+          if (this.#runWatch === watch) this.#runWatch = undefined;
+        });
+      return events;
+    })();
+    this.#runWatch = watch;
+    watch.catch(() => {
+      if (this.#runWatch === watch) this.#runWatch = undefined;
+    });
+    return watch;
+  }
+
+  /** A working chat shows at once; an idle one once it has stayed idle for SETTLE_MS, and the watch then ends. */
+  #onStatus(status: ChatStatus | null): void {
+    this.#cancelSettle();
+    if (status === "running") return this.#publishStatus(status);
+    this.#settle = setTimeout(() => {
+      this.#settle = undefined;
+      const watch = this.#runWatch;
+      this.#runWatch = undefined;
+      this.#publishStatus(status);
+      void watch?.then((events) => events.stop()).catch(() => {});
+    }, SETTLE_MS);
+  }
+
+  /**
+   * Tell the owner's and the members' sidebars the chat's new status. A run that ended leaves a reply, unread for
+   * everyone until they look. Only a view: a failure is logged.
+   */
+  #publishStatus(status: ChatStatus | null): void {
+    const previous = this.#status();
+    if (status === previous) return;
+    this.ctx.storage.kv.put(STATUS_KEY, status);
+    const replied = previous === "running";
+    const indexes = [this.#directory, ...this.members.list().map((member) => this.#index(member.uid))];
+    this.#statusWrites = this.#statusWrites.then(() =>
+      Promise.allSettled(indexes.map((index) => index.setChatStatus(this.chatId, this.uid, status, replied))).then((results) => {
+        for (const result of results) if (result.status === "rejected") console.error("chat status:", errorMessage(result.reason));
+      }),
+    );
   }
 
   #index(uid: string) {
@@ -509,7 +627,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (this.isInChat(person.uid)) {
       // A member whose sidebar entry went missing gets it back, as joining by link always gave it.
       if (person.uid !== this.uid) {
-        await this.#index(person.uid).addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
+        await this.#index(person.uid).addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title, status: this.#status() });
       }
       this.#notePeople(person, "rejoined");
       return null;
@@ -518,7 +636,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (refused) return refuse(403, refused.error);
     // The sidebar entry before the invite is used up: a member without one could not reach the chat.
     const index = this.#index(person.uid);
-    await index.addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title });
+    await index.addSharedChat({ id: this.chatId, ownerUid: this.uid, ownerName: this.members.ownerName(this.uid), title, status: this.#status() });
     const failed = await this.members.accept(secret, person);
     if (failed) {
       // Used by someone else meanwhile: the entry goes again. Should that fail too, admit removes it.

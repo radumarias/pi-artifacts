@@ -42,6 +42,11 @@ export function firstText(content: readonly { type: string; text?: string }[]): 
   return content.find((block) => block.type === "text")?.text;
 }
 
+/** The text of all of a message's text blocks, joined by `separator`. */
+export function textOf(content: readonly { type: string; text?: string }[], separator = "\n"): string {
+  return content.flatMap((block) => (block.type === "text" && block.text !== undefined ? [block.text] : [])).join(separator);
+}
+
 /** A result as served from a cache: stamped with when it was produced and whether a fresh one is on its way. */
 export function withCache(result: CallToolResult, storedAt: number, revalidating: boolean): CallToolResult {
   return { ...result, cache: { storedAt, revalidating } };
