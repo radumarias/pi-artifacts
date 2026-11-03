@@ -103,8 +103,15 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
           <details key={sub.path} className="file-folder" open={depth === 0}>
             <summary title={sub.path}>
               {sub.name}/ <small>{sub.count}</small>
-              {/* Without an href when the folder is too big to zip: the link is then inert, and says why. */}
-              <a className="file-action" href={refusal ? undefined : api.folderZipUrl(sub.path)} download={`${sub.name}.zip`} title={refusal ?? `Download ${sub.name} as a zip`} aria-disabled={!!refusal}>
+              {/* Without an href when the folder is too big to zip, so it says why and does nothing; without preventDefault its click would open or close the folder. */}
+              <a
+                className="file-action"
+                href={refusal ? undefined : api.folderZipUrl(sub.path)}
+                download={`${sub.name}.zip`}
+                title={refusal ?? `Download ${sub.name} as a zip`}
+                aria-disabled={!!refusal}
+                onClick={refusal ? (event) => event.preventDefault() : undefined}
+              >
                 <DownloadIcon />
               </a>
             </summary>

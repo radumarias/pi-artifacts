@@ -26,13 +26,15 @@ function readZip(zip: Uint8Array): Map<string, string> {
     const crc = view.getUint32(at + 16, true);
     const size = view.getUint32(at + 24, true);
     const nameLength = view.getUint16(at + 28, true);
+    const extraLength = view.getUint16(at + 30, true);
     const local = view.getUint32(at + 42, true);
     const name = decoder.decode(zip.subarray(at + 46, at + 46 + nameLength));
     expect(view.getUint32(local, true)).toBe(0x04034b50);
-    const data = zip.subarray(local + 30 + nameLength, local + 30 + nameLength + size);
+    const start = local + 30 + nameLength + view.getUint16(local + 28, true);
+    const data = zip.subarray(start, start + size);
     expect(crc32(data)).toBe(crc);
     files.set(name, decoder.decode(data));
-    at += 46 + nameLength;
+    at += 46 + nameLength + extraLength;
   }
   return files;
 }
@@ -92,6 +94,16 @@ describe("zipStream", () => {
       { name: "b.txt", modified: new Date(), open: async () => ({ size: 1, body: ahead }) },
     ]);
     const reader = zip.getReader();
+    await reader.read();
+    await reader.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cancelled).toBe(true);
+  });
+
+  it("gives back the file being written when the reader goes away after its header", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({ cancel: () => void (cancelled = true) });
+    const reader = zipStream([{ name: "a.txt", modified: new Date(), open: async () => ({ size: 1, body }) }]).getReader();
     await reader.read();
     await reader.cancel();
     await new Promise((resolve) => setTimeout(resolve, 0));
