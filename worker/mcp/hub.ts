@@ -1,4 +1,4 @@
-import { ANONYMOUS_VIEWER, type CallToolResult, type McpError, type ToolInfo } from "../../shared/protocol.ts";
+import type { CallToolResult, McpError, ToolInfo } from "../../shared/protocol.ts";
 import { callIdentity, derivePayload, firstText, withCache } from "../../shared/canonical.ts";
 import { errorMessage } from "../../shared/util.ts";
 import type { McpServerConfig } from "./servers.ts";
@@ -127,12 +127,11 @@ export class McpHub {
   /**
    * A read-only call through the cache. Serves an entry younger than
    * `staleMs`, otherwise executes; identical calls in flight share one
-   * execution. `viewer` keys the cache unless the server's scope is shared; viewers who are not signed in (null) share
-   * one entry (ANONYMOUS_VIEWER).
+   * execution. `viewer` keys the cache unless the server's scope is shared.
    */
-  async read(server: string, tool: string, input: unknown, options: { staleMs: number; viewer: string | null }): Promise<ReadResult> {
+  async read(server: string, tool: string, input: unknown, options: { staleMs: number; viewer: string }): Promise<ReadResult> {
     const config = this.#config(server);
-    const scope = config.cacheScope === "shared" ? "*" : (options.viewer ?? ANONYMOUS_VIEWER);
+    const scope = config.cacheScope === "shared" ? "*" : options.viewer;
     const key = `${scope}\u0000${callIdentity(server, tool, input)}`;
     const now = this.#now();
 
