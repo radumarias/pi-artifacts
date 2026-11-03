@@ -53,12 +53,17 @@ describe("prompt time", () => {
 
   it("runs from the person's message to the last reply or tool result, and says how long models and tools ran", () => {
     const first = [prompt(1_000), answered(1_500, 2_000), ran(6_000, 2_500), answered(6_100, 3_900)];
-    // Placed together: the prompt starts at the first of them. A reply from before pi timed replies counts from its start.
-    const second = [prompt(20_000), prompt(20_010), answered(20_100), ran(21_000, 800)];
+    // Placed together, at one time. A reply from before pi timed replies counts from its start.
+    const second = [prompt(20_000), prompt(20_000), answered(20_100), ran(21_000, 800)];
     const spend = promptSpend([...first, ...second], false);
     expect(spend.get(first[3].id)!.time).toEqual({ ms: 9_000, modelMs: 5_900, toolMs: 2_500, replies: 2, tools: 1, prompts: 1 });
     expect(spend.get(second[3].id)!.time).toEqual({ ms: 1_000, modelMs: 0, toolMs: 800, replies: 1, tools: 1, prompts: 1 });
     expect(totalTime(spend.values())).toEqual({ ms: 10_000, modelMs: 5_900, toolMs: 3_300, replies: 3, tools: 2, prompts: 2 });
+  });
+
+  it("starts at the newest message when an earlier one's run failed before any reply", () => {
+    const entries = [prompt(1_000), prompt(600_000), answered(600_500, 1_500)];
+    expect(promptSpend(entries, false).get(entries[2].id)!.time.ms).toBe(2_000);
   });
 
   it("counts from the first reply when the message has no time", () => {

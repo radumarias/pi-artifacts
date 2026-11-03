@@ -51,7 +51,7 @@ function plusTime(a: Timing, b: Timing): Timing {
  * message up to the next one. Keyed by the id of the prompt's last reply or tool result, which is where the app shows
  * it. Messages placed together (sent while the agent was busy) make one prompt; one the model never answered is left
  * out. While `running`, the newest prompt no one has written after is left out too: it may cost more yet. Its time
- * runs from when its first message was placed (where the app's run timer starts too) to when its last reply or tool
+ * runs from when its messages were placed (where the app's run timer starts too) to when its last reply or tool
  * result came in.
  */
 export function promptSpend(entries: readonly EntryRecord[], running: boolean): Map<number, PromptSpend> {
@@ -60,16 +60,15 @@ export function promptSpend(entries: readonly EntryRecord[], running: boolean): 
   let [modelMs, toolMs, replies, tools, end] = [0, 0, 0, 0, 0];
   let start: number | undefined;
   let at: number | undefined;
-  // Whether the last person's message has had an answer yet: until then, more messages join its prompt.
-  let answered = true;
   for (const entry of entries) {
     const message = entry.model?.[0];
     // A person's message: a prompt starts. `pi.user` is one from before chats were shared.
     if (entry.kind === CHAT_MESSAGE_KIND || entry.kind === "pi.user") {
       total = NONE;
       [modelMs, toolMs, replies, tools, end] = [0, 0, 0, 0, 0];
-      if (answered) start = message?.role === "user" ? message.timestamp : undefined;
-      answered = false;
+      // Messages placed together share one time, so the newest one's is the prompt's. An earlier one whose run failed
+      // before any reply is not part of it: the person wrote again later.
+      start = message?.role === "user" ? message.timestamp : undefined;
       at = undefined;
       continue;
     }
@@ -87,7 +86,6 @@ export function promptSpend(entries: readonly EntryRecord[], running: boolean): 
       tools++;
       end = Math.max(end, message.timestamp);
     } else continue;
-    answered = true;
     if (usage) total = plus(total, spendOf(usage));
     if (at !== undefined) spend.delete(at);
     at = entry.id;
