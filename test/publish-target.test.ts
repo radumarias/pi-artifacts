@@ -5,18 +5,18 @@ const artifact = (id: string, title: string, updatedAt: number) => ({ id, title,
 
 describe("artifactByTitle", () => {
   const artifacts = [
-    artifact("a", "Hotel Budget & Forecast Dashboard", 1),
     artifact("b", "Prices", 3),
-    artifact("c", "hotel budget &  forecast dashboard ", 2),
+    artifact("c", "weather &  forecast dashboard ", 2),
+    artifact("a", "Weather & Forecast Dashboard", 1),
   ];
 
-  it("finds this chat's newest artifact with the title, whatever its case and spacing", () => {
-    expect(artifactByTitle(artifacts, "Hotel Budget & Forecast Dashboard")?.id).toBe("c");
+  it("finds the newest of this chat's artifacts (listed newest first) with the title, whatever its case and spacing", () => {
+    expect(artifactByTitle(artifacts, "Weather & Forecast Dashboard")?.id).toBe("c");
     expect(artifactByTitle(artifacts, "  PRICES ")?.id).toBe("b");
   });
 
   it("finds none for a new title", () => {
-    expect(artifactByTitle(artifacts, "Hotel Budget")).toBeUndefined();
+    expect(artifactByTitle(artifacts, "Weather")).toBeUndefined();
     expect(artifactByTitle([], "Prices")).toBeUndefined();
   });
 });

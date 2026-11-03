@@ -13,6 +13,8 @@ export function mcpAuthStore(uid: string, server: string): McpAuthStore {
   return { get: () => directory.mcpAuth(server), update: (change) => directory.updateMcpAuth(server, change) };
 }
 
+type ArtifactRow = { id: string; title: string; chat_id: string; latest: number; updated_at: number; seen: number };
+
 type SkillRow = {
   name: string;
   description: string;
@@ -238,9 +240,11 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   listArtifacts(): ArtifactSummary[] {
-    return this.ctx.storage.sql
-      .exec<{ id: string; title: string; chat_id: string; latest: number; updated_at: number; seen: number }>("SELECT * FROM artifacts ORDER BY updated_at DESC")
-      .toArray()
+    return this.#artifactSummaries(this.ctx.storage.sql.exec<ArtifactRow>("SELECT * FROM artifacts ORDER BY updated_at DESC").toArray());
+  }
+
+  #artifactSummaries(rows: ArtifactRow[]): ArtifactSummary[] {
+    return rows
       .map((row) => ({
         id: row.id,
         title: row.title,
@@ -253,7 +257,7 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** The artifacts one chat published, newest first: where a publish by title finds the artifact it revises. */
   listChatArtifacts(chatId: string): ArtifactSummary[] {
-    return this.listArtifacts().filter((artifact) => artifact.chatId === chatId);
+    return this.#artifactSummaries(this.ctx.storage.sql.exec<ArtifactRow>("SELECT * FROM artifacts WHERE chat_id = ? ORDER BY updated_at DESC", chatId).toArray());
   }
 
   /** The owner opened `version` of an artifact: it and the ones before are no longer unread. */

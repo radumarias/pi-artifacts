@@ -286,6 +286,13 @@ async function ownArtifact(scope: ChatScope, id: string): Promise<ArtifactMeta> 
   return meta;
 }
 
+/** An artifact of this chat, the only kind a publish can add a version to (ArtifactStore.publishVersion). */
+async function chatArtifact(scope: ChatScope, id: string): Promise<ArtifactMeta> {
+  const meta = await scope.artifacts.readMeta(id);
+  if (!meta || !isOwnedBy(meta, scope.uid, scope.chatId)) throw new Error(`No artifact ${id} in this chat to publish a new version of. Check the page without artifact_id to make a new artifact.`);
+  return meta;
+}
+
 const mcpParameter = Type.Optional(
   Type.Array(Type.Object({ server: Type.String(), tools: Type.Array(Type.String()) }), {
     description: 'e.g. [{"server": "CoinGecko", "tools": ["execute"]}]',
@@ -330,10 +337,14 @@ export interface PublishOutcome {
   byTitle?: boolean;
 }
 
-/** The artifact a publish goes to: the one it names, else this chat's by its title (artifactByTitle), else a new one. */
-async function artifactFor(scope: ChatScope, input: PublishInput): Promise<{ id?: string; byTitle?: boolean }> {
+/**
+ * The artifact a publish goes to: the one it names; a new one with newArtifact; else the one the page was checked as a
+ * version of (`checkedFor`); else this chat's by its title (artifactByTitle); else a new one.
+ */
+async function artifactFor(scope: ChatScope, input: PublishInput, checkedFor?: string): Promise<{ id?: string; byTitle?: boolean }> {
   if (input.artifactId !== undefined) return { id: input.artifactId };
   if (input.newArtifact) return {};
+  if (checkedFor !== undefined) return { id: checkedFor };
   const same = artifactByTitle(await scope.chatArtifacts(), input.title);
   return same ? { id: same.id, byTitle: true } : {};
 }
@@ -345,8 +356,9 @@ async function artifactFor(scope: ChatScope, input: PublishInput): Promise<{ id?
 export async function publishChecked(scope: ChatScope, input: PublishInput, checked = new CheckedPages()): Promise<PublishOutcome> {
   const manifest = await validPage(scope, input.html, input.mcp, "Not published.");
   const id = await CheckedPages.id(input.html, manifest);
+  const checkedFor = checked.get(id)?.artifactId;
   const publish = async (outcome: Omit<PublishOutcome, "meta" | "byTitle">): Promise<PublishOutcome> => {
-    const target = await artifactFor(scope, input);
+    const target = await artifactFor(scope, input, checkedFor);
     const meta = await publishArtifact(scope, { ...input, artifactId: target.id }, manifest);
     return { ...outcome, meta, byTitle: target.byTitle };
   };
@@ -408,9 +420,10 @@ export function artifactExtension(scope: ChatScope): Extension {
             ),
           ),
           viewport: Type.Optional(Type.Union([Type.Literal("desktop"), Type.Literal("mobile")], { description: "desktop (1280 wide, the default) or mobile (390 wide)." })),
-          artifact_id: Type.Optional(Type.String({ description: "The artifact this page is a new version of: publishing it by its check_id goes there." })),
+          artifact_id: Type.Optional(Type.String({ description: "The artifact of this chat this page is a new version of: publishing the page goes there, unless the publish names another or new_artifact." })),
         }),
         execute: async (args) => {
+          if (args.artifact_id !== undefined) await chatArtifact(scope, args.artifact_id);
           const manifest = await validPage(scope, args.html, args.mcp, "Not checked.");
           let report: CheckReport;
           try {
@@ -449,15 +462,15 @@ export function artifactExtension(scope: ChatScope): Extension {
           mcp: mcpParameter,
         }),
         execute: async (args): Promise<ToolExecutionResult<Partial<PublishedDetails>>> => {
-          let page: { html: string; mcp: PublishInput["mcp"]; artifactId?: string };
+          let page: { html: string; mcp: PublishInput["mcp"] };
           if (args.check_id !== undefined) {
             if (args.html !== undefined || args.mcp !== undefined) throw new Error("Pass check_id alone, or the page as html with its mcp: not both.");
             const passed = checked.get(args.check_id);
             if (!passed) throw new Error(`No passed check "${args.check_id}" is kept any more. Send the page as html, with its mcp.`);
-            page = { html: passed.html, mcp: passed.manifest.mcp?.servers, artifactId: passed.artifactId };
+            page = { html: passed.html, mcp: passed.manifest.mcp?.servers };
           } else if (args.html !== undefined) page = { html: args.html, mcp: args.mcp };
           else throw new Error("Pass check_id, or the page as html.");
-          const input = { title: args.title, message: args.message, newArtifact: args.new_artifact, ...page, artifactId: args.artifact_id ?? page.artifactId };
+          const input = { title: args.title, artifactId: args.artifact_id, newArtifact: args.new_artifact, message: args.message, ...page };
           const outcome = await publishChecked(scope, input, checked);
           const { meta, report } = outcome;
           if (!meta) {
