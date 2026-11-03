@@ -866,6 +866,7 @@ export class ChatAgent extends DurableObject<Env> {
     const { id } = await writeDraft(this.scope, { html, mcp });
     const { report, unchecked } = await checkDraft(this.scope, id, {});
     if (report?.errors.length) throw new Error(`The check found errors:\n${report.errors.join("\n")}`);
+    if (!report && !this.scope.publishUnchecked) throw new Error(`Not checked, so not published: ${unchecked}`);
     const { meta } = await publishDraft(this.scope, { ...target, draftId: id });
     return { artifactId: meta.id, version: meta.latest, checked: report ? { errors: 0, warnings: report.warnings } : { unchecked } };
   }

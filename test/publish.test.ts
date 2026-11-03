@@ -133,6 +133,17 @@ describe("write, check, publish", () => {
     expect(await publishDraft(local.scope, { title: "Map", draftId: page.id })).toMatchObject({ unchecked: true });
     expect(local.versions).toHaveLength(1);
   });
+
+  it("checks a draft no check saw before publishing it in local development, when a browser can", async () => {
+    const local = chat(errorsIn, true);
+    const bad = await writeDraft(local.scope, { html: broken });
+    await expect(publishDraft(local.scope, { title: "Map", draftId: bad.id })).rejects.toThrow("found 1 error");
+    expect(await local.drafts.get(bad.id)).toMatchObject({ errors: 1 });
+    const good = await writeDraft(local.scope, { html: fixed });
+    expect(await publishDraft(local.scope, { title: "Map", draftId: good.id })).not.toHaveProperty("unchecked");
+    expect(local.checked).toEqual([broken, fixed]);
+    expect(local.versions).toHaveLength(1);
+  });
 });
 
 describe("writeDraft", () => {
@@ -211,16 +222,21 @@ describe("FailedChecks", () => {
     expect(() => checks.allow()).not.toThrow();
   });
 
-  it("names the draft the last check found errors in until a check passes or the user writes", () => {
+  it("refuses a whole new page once after a check found errors, until a check passes or the user writes", () => {
     const checks = new FailedChecks();
+    expect(checks.refuseRewrite()).toBeUndefined();
     checks.record(true, "0000000000000001");
-    // A refused write, or a check no browser ran, counts without changing which draft is broken.
+    // A check no browser ran counts without changing which draft is broken.
     checks.record(true);
-    expect(checks.broken).toBe("0000000000000001");
-    checks.record(false);
-    expect(checks.broken).toBeUndefined();
+    expect(checks.refuseRewrite()).toBe("0000000000000001");
+    expect(checks.refuseRewrite()).toBeUndefined();
     checks.record(true, "0000000000000002");
+    expect(checks.refuseRewrite()).toBe("0000000000000002");
+    checks.record(true, "0000000000000003");
+    checks.record(false);
+    expect(checks.refuseRewrite()).toBeUndefined();
+    checks.record(true, "0000000000000004");
     checks.reset();
-    expect(checks.broken).toBeUndefined();
+    expect(checks.refuseRewrite()).toBeUndefined();
   });
 });

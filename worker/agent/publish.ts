@@ -98,9 +98,10 @@ export interface WriteInput {
 }
 
 /** A draft of the chat by its id; else throws, starting with `what`. */
-async function draftNamed(drafts: ChatDrafts, id: string, what: string): Promise<Draft> {
+export async function draftNamed(drafts: ChatDrafts, id: string, what = ""): Promise<Draft> {
   const draft = await drafts.get(id);
-  if (!draft) throw new Error(`${what} No draft "${id}" in this chat: it was published, or dropped as one of the oldest. List them with ${DRAFTS_TOOL}.`);
+  if (!draft)
+    throw new Error(`${what && `${what} `}No draft "${id}" in this chat: it was published, or dropped as one of the oldest. List them with ${DRAFTS_TOOL}.`);
   return draft;
 }
 
@@ -169,6 +170,8 @@ export class FailedChecks {
   #count = 0;
   /** The draft the last check found errors in, while no check has passed since. */
   #draft: string | undefined;
+  /** The broken draft a whole new page was refused for already. */
+  #refused: string | undefined;
 
   /** Throws once MAX_FAILED_CHECKS failed in a row, before another page is written or checked. */
   allow(what = "Not checked"): void {
@@ -181,11 +184,14 @@ export class FailedChecks {
   }
 
   /**
-   * The draft the last check found errors in, when the one before a pass: it is fixed by edits to it, not by writing
-   * the whole page again. Undefined once a check passed or the user wrote.
+   * The draft the last check found errors in, the first time a whole new page is written after it (until a check
+   * passes or the user writes): it is fixed by edits to it, not by writing the page again. Once only, since a new page
+   * can also be one the user asked for besides the broken one.
    */
-  get broken(): string | undefined {
-    return this.#draft;
+  refuseRewrite(): string | undefined {
+    const draft = this.#draft === this.#refused ? undefined : this.#draft;
+    this.#refused = this.#draft;
+    return draft;
   }
 
   /**
@@ -256,11 +262,13 @@ async function artifactFor(scope: PublishScope, target: PublishTarget, writtenFo
 
 /**
  * Publish a draft as a version, but only one that passed its check: also in local development
- * (PublishScope.publishUnchecked), one no browser checked. A published draft goes: its version holds it now.
+ * (PublishScope.publishUnchecked), one no browser checked, which is checked here first when a browser can, so a page
+ * with errors is never published. A published draft goes: its version holds it now.
  */
-export async function publishDraft(scope: PublishScope, input: PublishInput): Promise<Published> {
+export async function publishDraft(scope: PublishScope, input: PublishInput, signal?: AbortSignal): Promise<Published> {
   const drafts = await scope.drafts();
-  const draft = await draftNamed(drafts, input.draftId, "Not published.");
+  let draft = await draftNamed(drafts, input.draftId, "Not published.");
+  if (draft.errors === null && scope.publishUnchecked) draft = (await checkDraft(scope, draft.id, {}, signal)).draft;
   const unchecked = draft.errors === null;
   if (draft.errors)
     throw new Error(

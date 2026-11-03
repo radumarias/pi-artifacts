@@ -202,7 +202,7 @@ from them, keyed by a hash of the page and what it declares, so the same page is
 publishing a page drops its draft, and deleting the chat deletes them all. To fix a page, or to change a published one,
 the agent sends `artifact_write` a `draft_id` (or the `artifact_id`, for its latest version or `version`) and `edits` (text replaced
 exactly once each), so a fix costs the model only what changes, not the whole page again. Right after a check found
-errors, `artifact_write` refuses a whole new page: the model has to fix the draft by edits. The agent lists drafts and
+errors, `artifact_write` refuses the first whole new page, telling the model to fix the draft by edits. The agent lists drafts and
 gets one back with `artifact_drafts` (an earlier attempt, or the page it was working on after the chat restarted).
 
 A check has hard limits, so it never holds a run: the browser gets 30 s to start, the whole check 60 s (loading and

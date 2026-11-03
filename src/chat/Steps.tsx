@@ -106,6 +106,9 @@ const INPUT_LABELS: Record<string, Record<string, string>> = {
   run_python: { code: "Python" },
   run_bash: { script: "Bash" },
   [WRITE_TOOL]: { html: "HTML" },
+  // Older chats sent the page to these.
+  [PUBLISH_TOOL]: { html: "HTML" },
+  [CHECK_TOOL]: { html: "HTML" },
 };
 
 export function stepLabel(name: string): string {

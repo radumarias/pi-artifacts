@@ -20,7 +20,7 @@ import { describeReport, type CheckReport } from "../artifacts/check.ts";
 import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
 import { literalPath, MAX_DRAFTS, normalisePath, PathError, type FileEntry, type UserFiles } from "../storage/index.ts";
-import { checkDraft, draftLine, FailedChecks, publishDraft, writeDraft, type PublishScope } from "./publish.ts";
+import { checkDraft, draftLine, draftNamed, FailedChecks, publishDraft, writeDraft, type PublishScope } from "./publish.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
@@ -301,17 +301,16 @@ export function artifactExtension(scope: ChatScope): Extension {
         }),
         execute: async (args) => {
           scope.failedChecks.allow("Not saved");
-          const broken = scope.failedChecks.broken;
-          if (args.html !== undefined && broken) {
-            // A model that cannot find its error tends to write the page out again, at the cost of the whole page each time;
-            // counted, so one that keeps doing it stops at the cap.
-            const stop = scope.failedChecks.record(true);
+          const broken = args.html === undefined ? undefined : scope.failedChecks.refuseRewrite();
+          if (broken) {
+            // A model that cannot find its error tends to write the page out again, at the cost of the whole page each time.
             throw new Error(
               `Not saved: the check just found errors in draft "${broken}". Fix that draft with draft_id "${broken}" and edits for just what changes, ` +
-                `rather than writing the whole page again (${DRAFTS_TOOL} with its draft_id shows the page).${stop}`,
+                `rather than writing the whole page again (${DRAFTS_TOOL} with its draft_id shows the page). Only a page that is not that one goes as html.`,
             );
           }
-          const artifact = args.artifact_id === undefined ? undefined : await chatArtifact(scope, args.artifact_id);
+          // Opening the drafts (memoised) while the artifact is read, rather than after.
+          const [artifact] = await Promise.all([args.artifact_id === undefined ? undefined : chatArtifact(scope, args.artifact_id), scope.drafts()]);
           const draft = await writeDraft(scope, { html: args.html, draftId: args.draft_id, edits: args.edits, mcp: args.mcp, artifact, version: args.version });
           const next =
             draft.errors === null
@@ -382,9 +381,9 @@ export function artifactExtension(scope: ChatScope): Extension {
             Type.String({ description: "One line on what this version changes, e.g. \"Add a 7-day sparkline\". It becomes the version's commit message." }),
           ),
         }),
-        execute: async (args): Promise<ToolExecutionResult<PublishedDetails>> => {
+        execute: async (args, _api, context): Promise<ToolExecutionResult<PublishedDetails>> => {
           const target = { title: args.title, artifactId: args.artifact_id, newArtifact: args.new_artifact, message: args.message };
-          const { meta, byTitle, unchecked } = await publishDraft(scope, { ...target, draftId: args.draft_id });
+          const { meta, byTitle, unchecked } = await publishDraft(scope, { ...target, draftId: args.draft_id }, context.abortSignal);
           const done =
             `Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.` +
             (byTitle
@@ -409,8 +408,7 @@ export function artifactExtension(scope: ChatScope): Extension {
             const lines = list.length ? `${plural(list.length, "draft")}, newest first:\n${list.map(draftLine).join("\n")}` : "This chat has no drafts.";
             return { output: text(lines) };
           }
-          const draft = await drafts.get(args.draft_id);
-          if (!draft) throw new Error(`No draft "${args.draft_id}" in this chat. List them without draft_id.`);
+          const draft = await draftNamed(drafts, args.draft_id);
           const declared = JSON.stringify(draft.manifest.mcp?.servers ?? []);
           return { output: text(`Draft ${draftLine(draft)}, mcp ${declared}:\n\n${draft.html}`) };
         },
