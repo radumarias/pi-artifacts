@@ -193,12 +193,25 @@ describe("file and folder downloads", () => {
     ]);
     expect(across.headers.get("content-disposition")).toBe('attachment; filename="files.zip"');
     expect([...readZip(new Uint8Array(await across.arrayBuffer())).keys()]).toEqual(["out/report.json", "uploads/q3/chart.png"]);
+    // A folder inside another picked folder is listed once.
+    const nested = await pick(b, [
+      ["folder", "uploads/q3"],
+      ["folder", "uploads/q3/2024"],
+      ["folder", "uploads/q3"],
+    ]);
+    expect(nested.headers.get("content-disposition")).toBe('attachment; filename="q3.zip"');
+    expect([...readZip(new Uint8Array(await nested.arrayBuffer())).keys()]).toEqual(["q3/2024/old sales.csv", "q3/chart.png", "q3/sales.csv"]);
   });
 
   it("refuses an empty pick, one that climbs, or one of only missing files", async () => {
     expect((await pick(bucket(), [])).status).toBe(400);
     await expect(pick(bucket(), [["file", "../bob/files/secret.csv"]])).rejects.toThrow(/not allowed|Invalid/);
     expect((await pick(bucket(), [["folder", "uploads/nope"]])).status).toBe(404);
+    // A file sent as a folder field is no path, not the top of every file.
+    const form = new FormData();
+    form.append("folder", new File(["x"], "x.txt"));
+    const files = new UserFiles(bucket().r2, "ada", await deriveUserKey(MASTER, "ada"));
+    await expect(filesRoute(new Request(`https://app.test${ZIP_ROUTE}`, { method: "POST", body: form }), async () => files)).rejects.toThrow(/empty/);
   });
 
   it("names a pick after the deepest folder holding it all", () => {

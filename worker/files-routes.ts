@@ -145,8 +145,11 @@ async function serveSelection(request: Request, files: UserFiles): Promise<Respo
   if (Number(request.headers.get("content-length")) > MAX_SELECTION_FORM) return json({ error: "Too many files picked." }, 413);
   const form = await request.formData().catch(() => null);
   if (!form) return json({ error: "Expected a form of file and folder fields." }, 400);
-  const fields = (name: string) => form.getAll(name).map((value) => (typeof value === "string" ? normalisePath(value) : ""));
-  const [picked, folders] = [fields("file"), fields("folder")];
+  // A field that is not a string (an uploaded file) is no path: normalisePath refuses it as an empty one.
+  const fields = (name: string) => form.getAll(name).map((value) => normalisePath(typeof value === "string" ? value : ""));
+  const picked = fields("file");
+  // A folder inside another picked folder is in it already: listing it again would count its files twice.
+  const folders = [...new Set(fields("folder"))].filter((folder, _, all) => !all.some((other) => folder.startsWith(`${other}/`)));
   const count = picked.length + folders.length;
   if (count === 0) return json({ error: "Pick at least one file or folder." }, 400);
   const tooMany = zipRefusal(count, 0);
