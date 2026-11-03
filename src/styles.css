@@ -46,7 +46,7 @@ button, .button, select {
   text-decoration: none;
 }
 button:disabled { opacity: 0.5; cursor: default; }
-button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+button.primary, .button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
 button.danger { background: var(--error); color: var(--surface); border-color: transparent; }
 
 .workspace {

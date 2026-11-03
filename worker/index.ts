@@ -118,9 +118,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     const meta = await storage.artifacts.readMeta(id);
     if (!meta) return json({ error: "No such artifact" }, 404);
     if (!artifact[2] && method === "GET") {
-      // Not the chat it lives in, nor who owns it: only whether the viewer does.
-      const { chatId: _chatId, ownerUid: _ownerUid, ...visible } = meta;
-      return json({ ...visible, isOwner: uid === meta.ownerUid } satisfies ArtifactView);
+      // Not who owns it, only whether the viewer does; and the chat it lives in only for people in that chat, so the
+      // viewer can go back to building it there. The chat itself still checks membership when they open it.
+      const { chatId, ownerUid: _ownerUid, ...visible } = meta;
+      const inChat = (await exports.UserDirectory.getByName(uid).chatOwner(chatId)) === meta.ownerUid;
+      return json({ ...visible, isOwner: uid === meta.ownerUid, ...(inChat && { chatId }) } satisfies ArtifactView);
     }
     // A read-only Git token for the artifact's repo, for `git clone`. Only the owner gets one:
     // the repo also holds the version history and the metadata.

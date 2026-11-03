@@ -25,6 +25,8 @@ interface Props {
   chatId: string;
   /** The signed-in user: their own messages show without a name. */
   uid: string;
+  /** The artifact the chat was opened for: on load, its newest version stands in for the chat's newest artifact. */
+  opening?: string;
   /** Called with the newest artifact this chat published, on load and on every publish. */
   onArtifact: (artifact: PublishedDetails) => void;
   onActivity: () => void;
@@ -42,7 +44,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
-export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
+export function ChatView({ chatId, uid, opening, onArtifact, onActivity, onLeft }: Props) {
   const { state, connected, people, online, prompt, abort, setModel } = useChat(chatId);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
@@ -74,13 +76,21 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   }, [state.busy, onActivity]);
 
   useEffect(() => {
-    const latest = state.entries.map(published).filter(Boolean).pop();
+    const all = state.entries.map(published).filter((p) => p !== undefined);
+    const latest = all.at(-1);
     if (!latest) return;
     const key = `${latest.artifactId}:${latest.version}`;
     if (key === lastArtifact.current) return;
+    const loading = lastArtifact.current === "";
     lastArtifact.current = key;
-    onArtifact(latest);
-  }, [state.entries, onArtifact]);
+    if (loading && opening) {
+      // Opened for one artifact: show its newest version. One the transcript no longer shows stays as it was opened.
+      const wanted = all.findLast((p) => p.artifactId === opening);
+      if (wanted) onArtifact(wanted);
+    } else {
+      onArtifact(latest);
+    }
+  }, [state.entries, opening, onArtifact]);
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();

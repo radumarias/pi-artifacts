@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
-import type { PublishedDetails } from "../shared/protocol.ts";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
+import { ID_PATTERN } from "../shared/protocol.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
@@ -14,22 +14,25 @@ import { isBoolean, ResizeHandle, SectionHead, useStoredState } from "./layout.t
 import { useLatest, useSidebarSocket } from "./sidebar.ts";
 import { SkillsView } from "./skills/SkillsView.tsx";
 
-function usePath(): [string, (path: string) => void] {
-  const [path, setPath] = useState(location.pathname);
+/** The app's location, path and query, and a way to go elsewhere in it without loading the page again. */
+function usePath(): [URL, (path: string) => void] {
+  const [href, setHref] = useState(location.href);
   useEffect(() => {
-    const onPop = () => setPath(location.pathname);
+    const onPop = () => setHref(location.href);
     addEventListener("popstate", onPop);
     return () => removeEventListener("popstate", onPop);
   }, []);
   const navigate = useCallback((next: string) => {
-    if (next !== location.pathname) history.pushState(null, "", next);
-    setPath(next);
+    const url = new URL(next, location.href);
+    if (url.href !== location.href) history.pushState(null, "", url);
+    setHref(url.href);
   }, []);
-  return [path, navigate];
+  return [useMemo(() => new URL(href), [href]), navigate];
 }
 
 export function App() {
-  const [path, navigate] = usePath();
+  const [url, navigate] = usePath();
+  const path = url.pathname;
   // Who is signed in, and how this deployment signs people in. Undefined until the Worker answers.
   const [session, setSession] = useState<{ me: Me | null; auth: Me["auth"] }>();
 
@@ -48,7 +51,7 @@ export function App() {
     // A shared artifact: anyone the app lets in can view it by its link.
     return (
       <ErrorBoundary what="this artifact">
-        <ArtifactPanel artifactId={shared[1]} uid={me.uid} fullPage />
+        <ArtifactPanel artifactId={shared[1]} uid={me.uid} fullPage navigate={navigate} />
       </ErrorBoundary>
     );
   }
@@ -57,11 +60,14 @@ export function App() {
   if (join) return <Join token={join[1]} navigate={navigate} />;
 
   const chatId = path.match(/^\/c\/([a-z0-9]+)$/)?.[1];
+  // An artifact's page links back to the chat that builds it, with the artifact open beside it.
+  const opening = url.searchParams.get("artifact");
   return (
     <Workspace
       uid={me.uid}
       label={me.email ?? me.uid}
       chatId={chatId}
+      opening={chatId && opening && ID_PATTERN.test(opening) ? opening : undefined}
       showSkills={path === "/skills"}
       navigate={navigate}
       onSignOut={async () => {
@@ -156,10 +162,18 @@ interface WorkspaceProps {
   /** What the sidebar shows for the signed-in user: their email, or the demo name. */
   label: string;
   chatId: string | undefined;
+  /** The artifact to show beside the chat when it opens, rather than the newest one it published. */
+  opening: string | undefined;
   /** The skills page in place of a chat. */
   showSkills: boolean;
   navigate: (path: string) => void;
   onSignOut: () => void;
+}
+
+/** The artifact beside the chat, and the newest version the chat knows of, once it does. */
+interface Preview {
+  artifactId: string;
+  version?: number;
 }
 
 const SIDEBAR_DEFAULT = 240;
@@ -169,13 +183,13 @@ const RAIL_WIDTH = 52;
 const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
-function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: WorkspaceProps) {
+function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
   const { chats, load: loadChats } = useChatList(chatId);
   const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
   const [files, loadFiles] = useLatest<FileInfo[]>(api.files, []);
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [skills, loadSkills] = useLatest<SkillInfo[] | null>(api.skills, null, (e) => setSkillsError(e?.message ?? null));
-  const [preview, setPreview] = useState<PublishedDetails | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false, isBoolean);
@@ -193,7 +207,8 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   // Chats, artifacts and skills live in the user's directory, which says when they change. Files are not in it: a run
   // may have saved some (run_python), so they are read again after each one.
   useSidebarSocket({ chats: loadChats, artifacts: loadArtifacts, skills: loadSkills });
-  useEffect(() => setPreview(null), [chatId]);
+  // Another chat shows its own artifacts: the one asked for at once, else the newest it published once it loads.
+  useEffect(() => setPreview(opening ? { artifactId: opening } : null), [chatId, opening]);
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
   const proposed = (skills ?? []).filter((s) => s.origin === "agent" && !s.enabled).length;
@@ -339,6 +354,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
             <ChatView
               chatId={chatId}
               uid={uid}
+              opening={opening}
               onArtifact={setPreview}
               onActivity={loadFiles}
               onLeft={() => navigate("/")}

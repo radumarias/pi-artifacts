@@ -12,10 +12,12 @@ interface Props {
   latestKnown?: number;
   uid: string;
   onClose?: () => void;
+  /** On its own page: the app's navigation, to go back to the chat that builds it. */
   fullPage?: boolean;
+  navigate?: (path: string) => void;
 }
 
-export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage }: Props) {
+export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage, navigate }: Props) {
   const [meta, setMeta] = useState<ArtifactView | null>(null);
   const [version, setVersion] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +67,8 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
   if (!meta || version === undefined) return <div className="panel-empty">Loading…</div>;
   const entry = meta.versions.find((v) => v.version === version) ?? meta.versions[meta.versions.length - 1];
   const servers = entry.manifest.mcp?.servers ?? [];
+  // Only people in the chat that builds it are told which chat that is.
+  const chatHref = fullPage && meta.chatId ? `/c/${meta.chatId}?artifact=${meta.id}` : undefined;
 
   return (
     <section className={fullPage ? "artifact-panel full" : "artifact-panel"}>
@@ -91,6 +95,20 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
             <button type="button" onClick={() => (clone ? setClone(null) : void showClone())} title="Clone this artifact's Git repository">
               git
             </button>
+          )}
+          {chatHref && (
+            <a
+              className="button primary"
+              href={chatHref}
+              title="Open the chat that builds this artifact, with it beside the chat"
+              onClick={(e) => {
+                if (!navigate || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                navigate(chatHref);
+              }}
+            >
+              Edit in chat
+            </a>
           )}
           {!fullPage && (
             <a className="button" href={`/a/${meta.id}`} target="_blank" rel="noreferrer" title="Open on its own page to share">

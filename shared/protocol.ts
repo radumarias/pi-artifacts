@@ -118,8 +118,11 @@ export interface ArtifactSummary {
   unread?: true;
 }
 
-/** An artifact as GET /api/artifacts/:id returns it: everything but the chat it lives in and who owns it. */
-export type ArtifactView = Omit<ArtifactMeta, "chatId" | "ownerUid"> & { isOwner: boolean };
+/**
+ * An artifact as GET /api/artifacts/:id returns it: everything but who owns it, and the chat it lives in only for
+ * people in that chat, who can open it there to keep building it.
+ */
+export type ArtifactView = Omit<ArtifactMeta, "chatId" | "ownerUid"> & { isOwner: boolean; chatId?: string };
 
 /** A read-only Git token for one artifact's repo (POST /api/artifacts/:id/clone). */
 export interface CloneAccess {
