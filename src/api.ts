@@ -1,5 +1,5 @@
 import type { MentionOptions } from "../shared/mentions.ts";
-import type { ModelInfo } from "../shared/models.ts";
+import type { ModelCatalog } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import { FILE_ROUTE, ZIP_ROUTE } from "../shared/uploads.ts";
 import type { ArtifactSummary, ArtifactView, ChatDeletion, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
@@ -71,7 +71,9 @@ export const api = {
   removeMember: (chatId: string, uid: string) => request<object>(`/api/chats/${chatId}/members/${uid}`, { method: "DELETE" }),
   acceptInvite: (token: string) => request<{ chatId: string }>("/api/invites/accept", post({ token })),
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
-  models: () => request<ModelInfo[]>("/api/models"),
+  models: () => request<ModelCatalog>("/api/models"),
+  /** Ask AI Gateway's providers for their models again now (at most once a minute; sooner gives the last answer). */
+  refreshModels: () => request<ModelCatalog>("/api/models", { method: "POST" }),
   /** `withChat`: also the chat that builds it, if the user is in that chat, to go back to it. */
   artifact: (id: string, withChat = false) => request<ArtifactView>(`/api/artifacts/${id}${withChat ? "?chat" : ""}`),
   /** The owner opened `version` of their artifact: it is no longer new in their sidebar. */

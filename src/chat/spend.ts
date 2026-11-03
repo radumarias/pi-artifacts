@@ -1,5 +1,6 @@
 import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
+import { modelKeyOfLedger } from "../../shared/models.ts";
 import { CHAT_MESSAGE_KIND } from "../../shared/protocol.ts";
 
 /**
@@ -153,8 +154,8 @@ export function chatSpend(usage: UsageState | undefined, entries: readonly Entry
   // Entries that open with a head marker (a summary's) start there: the replies before it are left out.
   const everyReply = entries[0]?.head === undefined;
   const models = [
-    // Keyed `provider/modelId`; every model comes through the one provider, so its name says nothing.
-    ...Object.entries(usage?.models ?? {}).flatMap(([key, value]) => byEffort(key.slice(key.indexOf("/") + 1), spendOf(value as Usage), replies.get(key), everyReply)),
+    // Keyed `provider/modelId`: named as the picker names the model.
+    ...Object.entries(usage?.models ?? {}).flatMap(([key, value]) => byEffort(modelKeyOfLedger(key), spendOf(value as Usage), replies.get(key), everyReply)),
     ...Object.entries(usage?.tools ?? {}).map(([model, value]): Share => ({ ...spendOf(value as Usage), model })),
   ]
     .filter((spend) => spend.cost > 0 || spend.input + spend.output > 0)

@@ -1,9 +1,13 @@
-// The models' prices, from the vendors' own price pages, kept in worker/prices.json for the Worker to price replies
-// with. A build refreshes the file once it is a week old, and fails rather than ship prices it could not read.
-// `node --experimental-strip-types scripts/prices.ts` (pnpm prices) refreshes it now.
+// The models' prices, kept in worker/prices.json for the Worker to price replies with: Anthropic's, OpenAI's and
+// Workers AI's from their own price pages, and every other AI Gateway provider's from models.dev (the catalog pi-ai's
+// own model data comes from). A build asks Cloudflare which providers the gateway holds keys for, and prices their
+// models; it refreshes the file once it is a week old or when those providers change, and fails rather than ship
+// prices it could not read. `node --experimental-strip-types scripts/prices.ts` (pnpm prices) refreshes it now.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { Plugin } from "vite";
+import { PROVIDERS } from "../shared/models.ts";
 
 /** Dollars per million tokens, as pi-ai's model `cost` has them. A tier applies to prompts over `inputTokensAbove`. */
 export interface Price {
@@ -17,7 +21,12 @@ export interface Price {
 export interface PriceList {
   /** When the pages were read, ISO 8601. */
   checkedAt: string;
-  /** By pi-ai model id: anthropic/claude-opus-5.5, openai/gpt-5.5, @cf/zai-org/glm-5.3. */
+  /** The AI Gateway providers priced from models.dev, as the gateway names them. Absent in a list from before them. */
+  providers?: string[];
+  /**
+   * By the model picker's id: an AI Gateway catalog id (anthropic/claude-opus-5.5, openai/gpt-5.5), a Workers AI id
+   * (@cf/zai-org/glm-5.3), or `<gateway provider>/<the provider's id>` (google-ai-studio/gemini-2.5-flash).
+   */
   models: Record<string, Price>;
 }
 
@@ -30,6 +39,30 @@ export const SOURCES = {
   openai: "https://developers.openai.com/api/docs/pricing.md",
   "workers-ai": "https://developers.cloudflare.com/workers-ai/platform/pricing/index.md",
 } as const;
+
+/** Every provider's models and prices, as JSON: the source of the providers without a price page read above. */
+export const MODELS_DEV = "https://models.dev/api.json";
+
+/** The AI Gateway providers priced from models.dev, by gateway name, with models.dev's name for each. */
+export const MODELS_DEV_PROVIDERS: Record<string, string> = {
+  "google-ai-studio": "google",
+  grok: "xai",
+  mistral: "mistral",
+  deepseek: "deepseek",
+  groq: "groq",
+  cerebras: "cerebras",
+  cohere: "cohere",
+  openrouter: "openrouter",
+  huggingface: "huggingface",
+};
+
+// Every provider the app can list models from (shared/models.ts) has a price source here.
+for (const provider of Object.keys(PROVIDERS)) {
+  if (!["anthropic", "openai", "workers-ai"].includes(provider) && !MODELS_DEV_PROVIDERS[provider]) throw new Error(`No price source for ${provider}`);
+}
+
+/** The AI Gateway the deployment uses (AI_GATEWAY_ID in cloudflare.config.ts). */
+export const AI_GATEWAY = process.env.AI_GATEWAY_ID ?? "pi-artifacts";
 
 class PriceError extends Error {}
 
@@ -148,12 +181,85 @@ export function parseWorkersAI(md: string): Record<string, Price> {
   return nonEmpty(models, "workers-ai");
 }
 
+/** A models.dev price, or undefined for one that is not a number of dollars. */
+function modelsDevPrice(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * The prices of `providers`' chat models (those that call tools) in models.dev's catalog, keyed as the picker names
+ * them: `<gateway provider>/<model id>`. A tier by context length is a long-prompt price, as pi-ai has it. A provider
+ * models.dev does not have fails: its page or its name has changed.
+ */
+export function parseModelsDev(json: string, providers: readonly string[]): Record<string, Price> {
+  const catalog = JSON.parse(json) as Record<string, { models?: Record<string, { tool_call?: boolean; cost?: Record<string, unknown> }> }>;
+  const models: Record<string, Price> = {};
+  for (const provider of providers) {
+    const listed = catalog[MODELS_DEV_PROVIDERS[provider]]?.models;
+    if (!listed) throw new PriceError(`models.dev: no ${MODELS_DEV_PROVIDERS[provider]} models`);
+    for (const [id, model] of Object.entries(listed)) {
+      const price = (cost: Record<string, unknown> = {}) => {
+        const [input, output] = [modelsDevPrice(cost.input), modelsDevPrice(cost.output)];
+        // No cached price: the model caches nothing, so any cached token is priced as input. No write price: writes are free.
+        return input === undefined || output === undefined ? undefined : { input, output, cacheRead: modelsDevPrice(cost.cache_read) ?? input, cacheWrite: modelsDevPrice(cost.cache_write) ?? 0 };
+      };
+      const base = model.tool_call === false ? undefined : price(model.cost);
+      if (!base) continue;
+      const tiers = (Array.isArray(model.cost?.tiers) ? (model.cost.tiers as Record<string, unknown>[]) : []).flatMap((tier) => {
+        const at = tier.tier as { type?: string; size?: unknown } | undefined;
+        const tierPrice = price(tier);
+        return at?.type === "context" && typeof at.size === "number" && tierPrice ? [{ inputTokensAbove: at.size, ...tierPrice }] : [];
+      });
+      models[`${provider}/${id}`] = tiers.length ? { ...base, tiers } : base;
+    }
+  }
+  return models;
+}
+
 const PARSERS = { anthropic: parseAnthropic, openai: parseOpenAI, "workers-ai": parseWorkersAI } as const;
 
-/** Read every page and parse it; any page that cannot be fetched or read fails the whole refresh. */
-export async function fetchPrices(fetchPage: (url: string) => Promise<string> = fetchText): Promise<Record<string, Price>> {
-  const parts = await Promise.all(Object.entries(SOURCES).map(async ([vendor, url]) => PARSERS[vendor as keyof typeof SOURCES](await fetchPage(url))));
+/**
+ * Read every page and parse it, and models.dev for `providers`; any source that cannot be fetched or read fails the
+ * whole refresh.
+ */
+export async function fetchPrices(fetchPage: (url: string) => Promise<string> = fetchText, providers: readonly string[] = []): Promise<Record<string, Price>> {
+  const parts = await Promise.all([
+    ...Object.entries(SOURCES).map(async ([vendor, url]) => PARSERS[vendor as keyof typeof SOURCES](await fetchPage(url))),
+    providers.length ? fetchPage(MODELS_DEV).then((json) => parseModelsDev(json, providers)) : {},
+  ]);
   return Object.fromEntries(parts.flatMap((part) => Object.entries(part)).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/**
+ * The AI Gateway providers the deployment's gateway holds keys for (and the app can list models from), asked of
+ * Cloudflare with the `cf` CLI as signed in for the deploy. Undefined when it cannot tell (not signed in, offline): then
+ * every provider is priced.
+ */
+export function keyedProviders(gateway = AI_GATEWAY): string[] | undefined {
+  const cf = new URL("../node_modules/.bin/cf", import.meta.url).pathname;
+  const run = spawnSync(cf, ["ai-gateway", "gateways", "providers", "list", "--gateway-id", gateway, "--per-page", "100"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
+  });
+  if (run.status !== 0) return undefined;
+  return providersIn(run.stdout);
+}
+
+/** The providers named in `cf ai-gateway gateways providers list`'s output (JSON: a list, or the API's envelope). */
+export function providersIn(output: string): string[] | undefined {
+  const start = output.search(/[[{]/);
+  if (start < 0) return undefined;
+  let body: unknown;
+  try {
+    body = JSON.parse(output.slice(start));
+  } catch {
+    return undefined;
+  }
+  const list = Array.isArray(body) ? body : (body as { result?: unknown })?.result;
+  if (!Array.isArray(list)) return undefined;
+  const names = list.map((item: Record<string, unknown>) => item?.provider_slug ?? item?.providerSlug ?? item?.provider);
+  return [...new Set(names.filter((name): name is string => typeof name === "string" && Object.hasOwn(MODELS_DEV_PROVIDERS, name)))].sort();
 }
 
 async function fetchText(url: string): Promise<string> {
@@ -184,22 +290,29 @@ export function describeChanges(before: Record<string, Price>, after: Record<str
   });
 }
 
+/** Every provider priced from models.dev: what a build prices when it cannot tell which ones the gateway has keys for. */
+export const ALL_PROVIDERS = Object.keys(MODELS_DEV_PROVIDERS).sort();
+
 /**
- * Refresh worker/prices.json when it is older than a week (or `force`), and return what changed. Throws when the file
- * cannot be read, or when it is due and a page cannot be fetched or parsed: the build then fails instead of using
- * prices that may be wrong.
+ * Refresh worker/prices.json when it is older than a week, when it prices other providers than `providers` (or
+ * `force`), and return what changed. Without `providers` (no one could tell which have keys), the ones the file prices
+ * stay, so a build that is not signed in does not undo the last signed-in one. Throws when the file cannot be read, or when it is due and a source cannot be
+ * fetched or parsed: the build then fails instead of using prices that may be wrong.
  */
 export async function refreshPrices({
   file = PRICES_FILE,
   force = false,
   now = Date.now(),
+  providers: wanted,
   fetchPage,
-}: { file?: URL | string; force?: boolean; now?: number; fetchPage?: (url: string) => Promise<string> } = {}) {
+}: { file?: URL | string; force?: boolean; now?: number; providers?: readonly string[]; fetchPage?: (url: string) => Promise<string> } = {}) {
   // A first run (forced) starts the file; a build without it fails.
-  const current = force && !existsSync(file) ? { checkedAt: new Date(0).toISOString(), models: {} } : readPrices(readFileSync(file, "utf8"));
-  if (!force && now - Date.parse(current.checkedAt) < MAX_AGE_MS) return { refreshed: false, changes: [] as string[] };
-  const models = await fetchPrices(fetchPage);
-  const next: PriceList = { checkedAt: new Date(now).toISOString(), models };
+  const current: PriceList = force && !existsSync(file) ? { checkedAt: new Date(0).toISOString(), models: {} } : readPrices(readFileSync(file, "utf8"));
+  const providers = [...(wanted ?? current.providers ?? ALL_PROVIDERS)].sort();
+  const sameProviders = JSON.stringify(current.providers ?? []) === JSON.stringify(providers);
+  if (!force && sameProviders && now - Date.parse(current.checkedAt) < MAX_AGE_MS) return { refreshed: false, changes: [] as string[] };
+  const models = await fetchPrices(fetchPage, providers);
+  const next: PriceList = { checkedAt: new Date(now).toISOString(), providers, models };
   writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`);
   return { refreshed: true, changes: describeChanges(current.models, models) };
 }
@@ -211,9 +324,15 @@ export function pricesPlugin(): Plugin {
     name: "pi-artifacts:prices",
     apply: "build",
     async buildStart() {
-      const { refreshed, changes } = await (run ??= refreshPrices());
+      const keyed = process.env.PI_OFFLINE === "1" ? undefined : keyedProviders();
+      this.info(
+        keyed
+          ? `AI Gateway ${AI_GATEWAY} holds keys for: ${keyed.length ? keyed.join(", ") : "no provider beyond Anthropic and OpenAI"}.`
+          : `Could not ask Cloudflare which providers AI Gateway ${AI_GATEWAY} holds keys for (sign in with cf auth login): pricing the providers worker/prices.json prices.`,
+      );
+      const { refreshed, changes } = await (run ??= refreshPrices({ providers: keyed }));
       if (!refreshed) return;
-      this.info(`Read the vendors' prices into worker/prices.json: ${changes.length ? `\n${changes.join("\n")}` : "no changes"}`);
+      this.info(`Read the prices into worker/prices.json: ${changes.length ? `\n${changes.join("\n")}` : "no changes"}`);
       // Even with no changes: the new date keeps the next builds from reading the pages again.
       this.warn("worker/prices.json was refreshed: commit it, so the repository has the prices this build uses.");
     },
@@ -221,6 +340,8 @@ export function pricesPlugin(): Plugin {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { changes } = await refreshPrices({ force: true });
+  const keyed = keyedProviders();
+  console.log(keyed ? `AI Gateway ${AI_GATEWAY} holds keys for: ${keyed.join(", ") || "no provider beyond Anthropic and OpenAI"}.` : "Could not ask Cloudflare which providers have keys: pricing the ones the file prices, else all.");
+  const { changes } = await refreshPrices({ force: true, providers: keyed });
   console.log(changes.length ? changes.join("\n") : "No price changes.");
 }

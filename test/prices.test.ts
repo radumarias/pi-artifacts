@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { MAX_AGE_MS, parseAnthropic, parseOpenAI, parseWorkersAI, PRICES_FILE, readPrices, refreshPrices, SOURCES } from "../scripts/prices.ts";
+import { ALL_PROVIDERS, MAX_AGE_MS, MODELS_DEV, parseAnthropic, parseModelsDev, parseOpenAI, parseWorkersAI, PRICES_FILE, providersIn, readPrices, refreshPrices, SOURCES } from "../scripts/prices.ts";
 import { PRICES, withCurrentPrices } from "../worker/models.ts";
 
 // Excerpts of the vendors' Markdown price pages, in their layout as of 2026-11-03.
@@ -98,19 +98,76 @@ describe("price pages", () => {
   });
 });
 
+// An excerpt of models.dev's catalog, in its layout as of 2026-11-03.
+const MODELS = JSON.stringify({
+  google: {
+    models: {
+      "gemini-2.5-flash": { tool_call: true, cost: { input: 0.3, output: 2.5, cache_read: 0.03 } },
+      "gemini-3-pro": { tool_call: true, cost: { input: 2, output: 12, cache_read: 0.2, tiers: [{ input: 4, output: 18, cache_read: 0.4, tier: { type: "context", size: 200000 } }] } },
+      "gemini-tts": { tool_call: false, cost: { input: 1, output: 2 } },
+      "gemini-free": { tool_call: true },
+    },
+  },
+  groq: { models: { "llama-3.3-70b-versatile": { tool_call: true, cost: { input: 0.59, output: 0.79 } } } },
+});
+
+describe("models.dev prices", () => {
+  it("reads the chat models of the providers asked for, keyed by AI Gateway provider, with long-prompt tiers", () => {
+    expect(parseModelsDev(MODELS, ["google-ai-studio", "groq"])).toEqual({
+      "google-ai-studio/gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+      "google-ai-studio/gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0, tiers: [{ inputTokensAbove: 200000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 }] },
+      "groq/llama-3.3-70b-versatile": { input: 0.59, output: 0.79, cacheRead: 0.59, cacheWrite: 0 },
+    });
+    expect(parseModelsDev(MODELS, ["groq"])).toEqual({ "groq/llama-3.3-70b-versatile": { input: 0.59, output: 0.79, cacheRead: 0.59, cacheWrite: 0 } });
+  });
+
+  it("fails on a provider models.dev does not have", () => {
+    expect(() => parseModelsDev(MODELS, ["mistral"])).toThrow(/no mistral models/);
+  });
+});
+
+describe("providers with keys", () => {
+  it("reads the providers from the CLI's listing of the gateway's keys, leaving out ones the app cannot list", () => {
+    const listing = JSON.stringify([
+      { id: "a", provider_slug: "google-ai-studio", alias: "default" },
+      { id: "b", provider_slug: "groq", alias: "default" },
+      { id: "c", provider_slug: "anthropic", alias: "default" },
+      { id: "d", provider_slug: "groq", alias: "team" },
+    ]);
+    expect(providersIn(listing)).toEqual(["google-ai-studio", "groq"]);
+    expect(providersIn(`Fetching…\n${JSON.stringify({ success: true, result: [{ provider_slug: "mistral" }] })}`)).toEqual(["mistral"]);
+    expect(providersIn("Not signed in")).toBeUndefined();
+  });
+});
+
 describe("price list", () => {
-  const page = async (url: string) => ({ [SOURCES.anthropic]: ANTHROPIC, [SOURCES.openai]: OPENAI, [SOURCES["workers-ai"]]: WORKERS_AI })[url]!;
-  const file = (checkedAt: string) => {
+  const page = async (url: string) => ({ [SOURCES.anthropic]: ANTHROPIC, [SOURCES.openai]: OPENAI, [SOURCES["workers-ai"]]: WORKERS_AI, [MODELS_DEV]: MODELS })[url]!;
+  const file = (checkedAt: string, providers?: string[]) => {
     const path = join(mkdtempSync(join(tmpdir(), "prices-")), "prices.json");
-    writeFileSync(path, JSON.stringify({ checkedAt, models: { "anthropic/claude-opus-5.5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 } } }));
+    writeFileSync(path, JSON.stringify({ checkedAt, providers, models: { "anthropic/claude-opus-5.5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 } } }));
     return path;
   };
 
+  it("reads the prices again when the providers with keys change, and keeps the file's providers when no one can tell", async () => {
+    const now = Date.parse("2026-11-10T00:00:00Z");
+    const fresh = file(new Date(now - 60_000).toISOString(), ["groq"]);
+    expect(await refreshPrices({ file: fresh, now, fetchPage: page })).toEqual({ refreshed: false, changes: [] });
+    expect(await refreshPrices({ file: fresh, now, providers: ["groq"], fetchPage: page })).toEqual({ refreshed: false, changes: [] });
+    const { refreshed, changes } = await refreshPrices({ file: fresh, now, providers: ["groq", "google-ai-studio"], fetchPage: page });
+    expect(refreshed).toBe(true);
+    expect(changes).toContain('+ google-ai-studio/gemini-2.5-flash {"input":0.3,"output":2.5,"cacheRead":0.03,"cacheWrite":0}');
+    const written = readPrices(readFileSync(fresh, "utf8"));
+    expect(written.providers).toEqual(["google-ai-studio", "groq"]);
+    expect(written.models["groq/llama-3.3-70b-versatile"]?.input).toBe(0.59);
+    // A list from before providers were priced, with no one to tell: every provider.
+    expect(ALL_PROVIDERS).toContain("groq");
+  });
+
   it("leaves a list younger than a week alone, and reads the pages again once it is older", async () => {
     const now = Date.parse("2026-11-10T00:00:00Z");
-    const fresh = file(new Date(now - MAX_AGE_MS + 60_000).toISOString());
+    const fresh = file(new Date(now - MAX_AGE_MS + 60_000).toISOString(), ["groq"]);
     expect(await refreshPrices({ file: fresh, now, fetchPage: page })).toEqual({ refreshed: false, changes: [] });
-    const stale = file(new Date(now - MAX_AGE_MS - 60_000).toISOString());
+    const stale = file(new Date(now - MAX_AGE_MS - 60_000).toISOString(), ["groq"]);
     const { refreshed, changes } = await refreshPrices({ file: stale, now, fetchPage: page });
     expect(refreshed).toBe(true);
     expect(changes).toContain('~ anthropic/claude-opus-5.5 {"input":5,"output":25,"cacheRead":0.5,"cacheWrite":6.25} → {"input":4,"output":20,"cacheRead":0.2,"cacheWrite":5}');
@@ -120,7 +177,7 @@ describe("price list", () => {
   });
 
   it("fails, and keeps the list as it was, when a page cannot be fetched or read", async () => {
-    const stale = file("2026-01-01T00:00:00Z");
+    const stale = file("2026-01-01T00:00:00Z", ["groq"]);
     const before = readFileSync(stale, "utf8");
     await expect(refreshPrices({ file: stale, fetchPage: async () => "<html>Not found</html>" })).rejects.toThrow();
     await expect(refreshPrices({ file: stale, fetchPage: async () => Promise.reject(new Error("offline")) })).rejects.toThrow(/offline/);
@@ -136,6 +193,7 @@ describe("price list", () => {
     readPrices(readFileSync(PRICES_FILE, "utf8"));
     const models = createModels();
     models.setProvider(withCurrentPrices(createAI({ binding: {} as never }).provider));
+    expect(readPrices(readFileSync(PRICES_FILE, "utf8")).providers?.length).toBeGreaterThan(0);
     for (const id of ["anthropic/claude-opus-5.5", "anthropic/claude-sonnet-5.5", "openai/gpt-5.5", "@cf/zai-org/glm-5.3"]) {
       expect(models.getModel("cloudflare", id)?.cost, id).toEqual(PRICES.get(id));
     }

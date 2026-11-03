@@ -36,7 +36,7 @@ export const PromptCost = memo(function PromptCost({ spend }: { spend: PromptSpe
 export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage?: UsageState; entries: readonly EntryRecord[]; time: Timing }) {
   const [open, setOpen] = useState(false);
   const catalog = useCatalog();
-  const models = useMemo(() => new Map(catalog.map((model) => [model.id, model])), [catalog]);
+  const models = useMemo(() => new Map(catalog.models.map((model) => [model.id, model])), [catalog]);
   // Only the open panel splits models by effort: the button shows totals, and the entries change with every message.
   const split = open ? entries : undefined;
   const spend = useMemo(() => chatSpend(usage, split), [usage, split]);
@@ -56,6 +56,8 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
   if (spend.models.length === 0) return null;
   // By id, not the catalog: a deployment's default can be a Workers AI model the picker does not list.
   const workersAi = spend.models.some((share) => share.model.startsWith("@cf/"));
+  // Listed models with no known price: their replies were priced at nothing.
+  const unpriced = spend.models.filter((share) => models.has(share.model) && !models.get(share.model)!.price);
   return (
     <div className="chat-cost" ref={box}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} title={`AI cost of this chat: ${describeTokens(spend.total)}`}>
@@ -70,7 +72,7 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
               <li key={`${share.model} ${share.effort}`} title={describeTokens(share)}>
                 <span>{shareName(share, models)}</span>
                 <small>{shortTokens(share)}</small>
-                <span className="cost-amount">{formatCost(share.cost)}</span>
+                <span className="cost-amount">{unpriced.includes(share) ? "unknown" : formatCost(share.cost)}</span>
               </li>
             ))}
             {time.ms > 0 && (
@@ -86,6 +88,8 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
           <small>
             At the providers' list prices, from the tokens each reply reports.
             {workersAi && " Workers AI is free up to Cloudflare's daily allowance, so its share may cost nothing."}
+            {unpriced.length > 0 &&
+              ` No price is known for ${[...new Set(unpriced.map((share) => models.get(share.model)!.name))].join(", ")}, so the total leaves out ${unpriced.length === 1 ? "its" : "their"} replies.`}
           </small>
         </div>
       )}

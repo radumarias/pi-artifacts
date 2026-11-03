@@ -1,4 +1,4 @@
-import { exports } from "cloudflare:workers";
+import { exports, waitUntil } from "cloudflare:workers";
 import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
@@ -7,7 +7,7 @@ import { filesRoute } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
 import { chatRoute } from "./chat-routes.ts";
 import { mcpRoute } from "./mcp-routes.ts";
-import { modelCatalog } from "./models.ts";
+import { loadCatalog } from "./models.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
@@ -145,8 +145,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/chats" && method === "GET") return json(await directory.listChats());
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());
-  // The model picker's choices. They change only with a deploy.
-  if (path === "/api/models" && method === "GET") return json(modelCatalog(), 200, { "cache-control": "private, max-age=3600" });
+  // The model picker's choices: the models AI Gateway's providers list (for those it holds a key for), and Workers AI's.
+  // POST asks the providers again now, for a key added since.
+  if (path === "/api/models" && (method === "GET" || method === "POST")) {
+    const source = { cache: storage.models, ai: env.AI, gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined, waitUntil };
+    return json(await loadCatalog(source, { refresh: method === "POST" }), 200, { "cache-control": "private, no-cache" });
+  }
 
   const skills = await skillsRoute(request, directory);
   if (skills) return skills;

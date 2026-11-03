@@ -55,7 +55,7 @@ import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
-import { checkModelChoice, defaultModelChoice, withCurrentPrices, withEffortRecorded } from "./models.ts";
+import { currentCatalog, defaultModelChoice, listedProviders, loadCatalog, withCurrentPrices, withEffortRecorded, type Catalog } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
 
@@ -99,10 +99,15 @@ const SETTLE_MS = 1_500;
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
 const STATUS_KEY = "status";
 
-/** pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort. */
+/**
+ * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort: AI
+ * Gateway's catalog and Workers AI's through `provider`, and the models the providers list (as this isolate's catalog
+ * has them now) through one pi provider each.
+ */
 function piModels(provider: Provider) {
   const models = createModels();
   models.setProvider(withCurrentPrices(provider));
+  for (const listed of listedProviders(provider, currentCatalog)) models.setProvider(listed);
   return withEffortRecorded(models);
 }
 
@@ -141,6 +146,8 @@ export class ChatAgent extends DurableObject<Env> {
   readonly registry = createRegistry();
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
+      // The chat's model may be one a provider listed: have the list before pi looks the model up.
+      await this.#catalog();
       const models = piModels(this.ai.provider);
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again.
@@ -254,11 +261,22 @@ export class ChatAgent extends DurableObject<Env> {
     if (this.#status() === "running") void this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
   }
 
-  /** The user's last pick, checked again: the list of models can change between deploys. On a failure, the deployment's default. */
+  /** The models a chat can pick, as AI Gateway's providers last listed them. */
+  #catalog(): Promise<Catalog> {
+    return loadCatalog({
+      cache: this.storage.models,
+      ai: this.env.AI,
+      gateway: this.env.AI_GATEWAY_ID,
+      byokAlias: this.env.AI_BYOK_ALIAS || undefined,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
+  }
+
+  /** The user's last pick, checked again: the list of models can change. On a failure, the deployment's default. */
   async #savedModel(): Promise<ModelChoice | null> {
     try {
       const saved = await this.#directory.modelChoice();
-      return saved && checkModelChoice(saved);
+      return saved && (await this.#catalog()).check(saved);
     } catch (error) {
       console.error("model:", errorMessage(error));
       return null;
@@ -269,8 +287,9 @@ export class ChatAgent extends DurableObject<Env> {
     return { model: this.ai(model), thinkingLevel };
   }
 
+  /** A choice as pi takes it: the model's provider and id (a provider's own model is not in AI Gateway's catalog). */
   #agentChange({ model, thinkingLevel }: ModelChoice): AgentChange {
-    const routed = this.ai(model);
+    const routed = currentCatalog().model(model) ?? this.ai(model);
     return { model: { provider: routed.provider, modelId: routed.id }, thinkingLevel };
   }
 
@@ -298,7 +317,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void> {
     this.#requireInChat(by);
-    const choice = checkModelChoice(input);
+    const choice = (await this.#catalog()).check(input);
     if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
     const conversation = await this.#root();
     await conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT);

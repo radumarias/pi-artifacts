@@ -344,8 +344,18 @@ people: many people share one conversation with one agent, and their messages qu
 Each chat picks its model and effort above the message box. The picker (`src/chat/ModelPicker.tsx`, choices from
 `GET /api/models`, built in `worker/models.ts`) lists:
 
-- **Anthropic and OpenAI:** every chat model in pi-ai's AI Gateway catalog for the two, newest first. Calls go through
-  the `pi-artifacts` AI Gateway, which holds the keys (Provider Keys, BYOK) or bills them (unified billing).
+- **Every provider the `pi-artifacts` AI Gateway holds a key for** (Provider Keys, BYOK), among Anthropic, OpenAI,
+  Google AI Studio, xAI, Mistral, DeepSeek, Groq, Cerebras, Cohere, OpenRouter and Hugging Face, with the models
+  each one's own list offers that can chat and call tools. `worker/gateway-models.ts` asks each provider's list through
+  the gateway (the gateway adds its key, so the Worker holds none and needs no Cloudflare token): a list that comes
+  back means a key; a refusal (401/403) means none. The answer is kept in R2 (`models/discovered.json`) for every
+  isolate and chat, asked again in the background once it is an hour old, and by hand from the picker's refresh button
+  (at most once a minute); a list that cannot be read keeps its last models. A model AI Gateway's own catalog has
+  (most Claude and GPT models) runs through it as before; any other runs on the provider's own path through the
+  gateway, as `<provider>/<id>` (`groq/llama-3.3-70b-versatile`), with pi-ai's metadata where pi-ai knows the model
+  and the list's (or safe defaults) where not. Google and Mistral models go through their OpenAI-compatible APIs.
+  Until their lists are read, and when they cannot be, Anthropic and OpenAI show pi-ai's AI Gateway catalog (they may
+  be on unified billing, with no key of the gateway's own).
 - **Workers AI:** a few open models that run on Cloudflare and suit building pages (tool calling, a context of 128k
   tokens or more): Kimi K2.7 Code, GLM 5.3, DeepSeek V4, Qwen 3.8, GPT OSS 120B, Gemma 4. They need no provider
   key and use the account's free daily Workers AI allowance first, then Workers AI pricing.
@@ -356,6 +366,12 @@ request. Everyone in a [shared chat](#shared-chats) can change it. The latest pi
 of whoever made it (kept in their `UserDirectory`): a chat takes it when it is first opened and keeps its model from
 then on, even before its first message, until someone changes it. Before a user has picked anything, chats start on
 `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at high effort).
+
+With many providers the list is long, so the picker is a searchable menu: a search box over every model (by name, id
+or provider), then the user's favorites (the star on each row) and recent picks, then each provider's models in a
+section that opens and closes (the current model's open at first). Each row shows the context window, the price per
+million input / output tokens (or "price unknown") and whether the model sees images. Arrow keys move, Enter picks,
+Escape closes. Favorites, recent picks and open sections are kept in the browser.
 
 ### What a chat costs
 
@@ -368,11 +384,16 @@ comes in, from the tokens the provider reports and its model's prices per millio
 and writes, and the higher rates of a long prompt where a model has them), and stores the price with the reply; pi
 keeps a ledger of the conversation's spend by model, which the total comes from, so it also counts the calls that
 summarize a long conversation. The prices come from the vendors' own price pages (Anthropic, OpenAI and Workers AI,
-read as Markdown), kept in `worker/prices.json` and applied to every model in place of pi-ai's. A build reads the
-pages again once the file is a week old (`scripts/prices.ts`, a Vite plugin) and fails if a page cannot be fetched or
-read, or the file is not a valid price list, rather than ship prices that may be wrong; commit the file it writes.
-`pnpm prices` reads them now. A model none of the pages lists keeps pi-ai's price. They are list prices: Workers AI's
-free daily allowance, and any discount the account has, are not taken off. Everyone in a shared chat sees them.
+read as Markdown) and, for the other providers, from models.dev's catalog (the source of pi-ai's own model data),
+kept in `worker/prices.json` and applied to every model in place of pi-ai's. A build first asks Cloudflare which
+providers the gateway holds keys for (`cf ai-gateway gateways providers list`, signed in as for the deploy) and prices
+those providers' models; signed out, it keeps the providers the file already prices. It reads the sources again once
+the file is a week old or when those providers change (`scripts/prices.ts`, a Vite plugin), and fails if a source
+cannot be fetched or read, or the file is not a valid price list, rather than ship prices that may be wrong; commit
+the file it writes. `pnpm prices` reads them now. A live list's own price (OpenRouter's, Hugging Face's) goes first;
+a model no source prices keeps pi-ai's, and one pi-ai does not know either counts as free, which the picker and the
+cost panel say ("price unknown"). They are list prices: Workers AI's free daily allowance, and any discount the
+account has, are not taken off. Everyone in a shared chat sees them.
 
 ## Layout
 
@@ -381,7 +402,7 @@ free daily allowance, and any discount the account has, are not taken off. Every
 | `worker/index.ts`, `worker/files-routes.ts` | Routes: identity, chats, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files and uploads |
 | `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall`, members |
 | `worker/chat-routes.ts`, `worker/members.ts` | Shared chats: the chat socket, people, invite links and their routes |
-| `worker/models.ts`, `worker/prices.json`, `scripts/prices.ts` | The models a chat can pick, the check on a pick, and their prices, read from the vendors' pages at build time |
+| `worker/models.ts`, `worker/gateway-models.ts`, `worker/prices.json`, `scripts/prices.ts` | The models a chat can pick (asked of AI Gateway's providers, kept in R2 by `worker/storage/model-cache.ts`), the check on a pick, and their prices, read at build time |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
 | `worker/skills/`, `worker/skills-routes.ts` | Built-in skills, the SKILL.md format, and the `/api/skills` routes |
@@ -429,8 +450,9 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
    The Artifacts namespace `pi-artifacts` needs no setup: it is created with the first repo. Artifacts needs the
    Workers Paid plan.
 3. Create an AI Gateway named `pi-artifacts` and store an Anthropic key and an OpenAI key in it (Provider Keys,
-   BYOK), or use unified billing. Without an OpenAI key, OpenAI models answer with the gateway's error and everything
-   else works. `MODEL` in `cloudflare.config.ts`, what new chats start on, is a pi-ai gateway specifier
+   BYOK), or use unified billing. Keys for other providers (Google AI Studio, xAI, Mistral, DeepSeek, Groq, Cerebras,
+   Cohere, OpenRouter, Hugging Face) add their models to the picker within the hour, or at once with its refresh
+   button; no redeploy is needed. `MODEL` in `cloudflare.config.ts`, what new chats start on, is a pi-ai gateway specifier
    (`anthropic/claude-opus-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
 4. Put the app behind Cloudflare Access: create a self-hosted Access application for the Worker's hostname with a
    policy listing who may sign in, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` (the application's audience tag) in

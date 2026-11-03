@@ -2,12 +2,14 @@ import { UID_PATTERN } from "../../shared/protocol.ts";
 import { ArtifactStore } from "./artifacts.ts";
 import { ChatDrafts } from "./drafts.ts";
 import { deriveUserKey } from "./keys.ts";
+import { ModelCache } from "./model-cache.ts";
 import { UserFiles } from "./user-files.ts";
 
 export { newId } from "./artifacts.ts";
 export type { ArtifactStore } from "./artifacts.ts";
 export { draftId, MAX_DRAFTS, passed, type ChatDrafts, type Draft, type DraftSummary } from "./drafts.ts";
 export type { FileEntry, UserFiles } from "./user-files.ts";
+export type { ModelCache } from "./model-cache.ts";
 export { literalPath, normalisePath, PathError } from "./paths.ts";
 
 /**
@@ -18,11 +20,14 @@ export { literalPath, normalisePath, PathError } from "./paths.ts";
  */
 export class Storage {
   readonly artifacts: ArtifactStore;
+  /** The models AI Gateway's providers last listed. */
+  readonly models: ModelCache;
   readonly #env: Env;
 
   constructor(env: Env) {
     this.#env = env;
     this.artifacts = new ArtifactStore(env.REPOS, env.FILES);
+    this.models = new ModelCache(env.FILES);
   }
 
   /** One user's files. `uid` must come from a verified identity, never from a request body or a model. */

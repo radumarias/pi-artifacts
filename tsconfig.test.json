@@ -49,6 +49,8 @@
     "worker/storage/user-files.ts",
     "worker/storage/drafts.ts",
     "worker/storage/r2.ts",
+    "worker/storage/model-cache.ts",
+    "worker/gateway-models.ts",
     "worker/artifacts/browser.ts",
     "worker/artifacts/manifest.ts",
     "worker/auth/access.ts",
