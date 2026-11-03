@@ -48,7 +48,7 @@ import { artifactExtension, filesExtension, filesIndexExtension, sandboxExtensio
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
-import { chatTraces } from "./chat-traces.ts";
+import { chatOutFolder, chatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
@@ -382,7 +382,10 @@ export class ChatAgent extends DurableObject<Env> {
    */
   readonly refreshFiles = singleFlight(async () => {
     try {
-      const index = filesIndex(await (await this.scope.files()).list(), { sandbox: this.env.SANDBOX_ENABLED === "true" });
+      const index = filesIndex(await (await this.scope.files()).list(), {
+        sandbox: this.env.SANDBOX_ENABLED === "true",
+        outFolder: chatOutFolder(this.chatId),
+      });
       if (index === this.#filesInstalled) return;
       this.registry.install(filesIndexExtension(index));
       this.#filesInstalled = index;

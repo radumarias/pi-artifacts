@@ -255,28 +255,34 @@ body.resizing iframe { pointer-events: none; }
 .bubble.markdown table { border-collapse: collapse; font-size: 0.95em; }
 .bubble.markdown th, .bubble.markdown td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
 .bubble.markdown th { background: var(--surface-2); }
-.assistant { display: flex; flex-direction: column; gap: 6px; }
-.tool-call { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); padding-left: 4px; }
-/* One step of the agent (Steps.tsx): a line with an icon, what it is, a hint and its status; opened, what went in and came out. */
-.step { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 13px; min-width: 0; }
-.step > summary { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; list-style: none; border-radius: 8px; }
+.assistant { display: flex; flex-direction: column; gap: 4px; }
+.tool-call { color: var(--muted); font-size: 13px; }
+/* One step of the agent (Steps.tsx): a plain line with an icon, what it is, a hint and its status. An arrow after the
+   hint opens what went in and came out, beside a thin guide line; a step with nothing more to show has no arrow. */
+.step { font-size: 13px; min-width: 0; }
+.step-line { display: flex; align-items: flex-start; gap: 8px; margin: 0 -6px; padding: 3px 6px; border-radius: 6px; line-height: 20px; list-style: none; }
+.step > summary { cursor: pointer; }
 .step > summary::-webkit-details-marker { display: none; }
 .step > summary:hover { background: var(--surface-2); }
 .step > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.step[open] > summary { border-radius: 8px 8px 0 0; }
-.step-icon { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--muted); font-size: 12px; }
+.step-icon { flex: none; display: grid; place-items: center; width: 16px; height: 20px; color: var(--muted); font-size: 12px; }
 .step-icon .thinking-spark { width: 14px; height: 14px; }
 .step.done .step-icon { color: var(--live); }
 .step.error .step-icon { color: var(--error); }
-.step-label { flex: none; font-weight: 600; white-space: nowrap; }
-.step-hint { flex: 1; min-width: 0; color: var(--muted); font: 12px/1.4 ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step-label { flex: none; font-weight: 500; white-space: nowrap; }
+/* Cut to one line, except on a step that has nothing to open, where it is the whole detail. */
+.step-hint { flex: 0 1 auto; min-width: 0; color: var(--muted); font: 12px/20px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step-hint.prose { font: inherit; }
+.step.static .step-hint { flex: 1; white-space: normal; overflow-wrap: anywhere; }
+.step.error.static .step-hint { color: var(--error); }
 /* Opened, the body shows it all. */
-.step[open] .step-hint { visibility: hidden; }
-.step-status { flex: none; margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.step[open] .step-hint { display: none; }
+.step-status { flex: none; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .step.error .step-status { color: var(--error); }
-.step-chevron { flex: none; width: 12px; height: 12px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.15s; }
+.step-chevron { flex: none; align-self: center; width: 12px; height: 12px; margin-left: -4px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.15s; }
+.step > summary:hover .step-chevron { stroke: var(--text); }
 .step[open] .step-chevron { transform: rotate(90deg); }
-.step-body { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; border-top: 1px solid var(--border); }
+.step-body { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 6px 7px; padding: 4px 0 4px 16px; border-left: 1px solid var(--border); }
 .step-section-label { margin-bottom: 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .step-section pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .step-section.error pre { color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }

@@ -17,11 +17,11 @@ import {
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome, plural } from "../../shared/util.ts";
 import { describeReport, type CheckReport } from "../artifacts/check.ts";
-import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
+import { chatOutFolder, FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, savedReport, wroteReport } from "../chat-traces.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import { literalPath, MAX_DRAFTS, normalisePath, PathError, type FileEntry, type UserFiles } from "../storage/index.ts";
+import { literalPath, MAX_DRAFTS, type FileEntry, type UserFiles } from "../storage/index.ts";
 import { checkDraft, draftLine, draftNamed, FailedChecks, publishDraft, writeDraft, type PublishScope } from "./publish.ts";
-import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
+import { FileRefError, MAX_SANDBOX_BYTES, outputPaths, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
 /** What the tools need from the chat they run in. */
@@ -90,7 +90,7 @@ export function filesExtension(scope: ChatScope): Extension {
           let path = literal;
           let object = path === undefined ? null : await files.get(path, range);
           if (!object) {
-            const found = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref)]);
+            const found = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref, chatOutFolder(scope.chatId))]);
             path = found.paths[0];
             // The listing did not match it either and fell back to the path just read: it is not there.
             object = path === literal ? null : await files.get(path, range);
@@ -102,7 +102,9 @@ export function filesExtension(scope: ChatScope): Extension {
       }),
       defineTool({
         name: FILES_WRITE_TOOL,
-        description: "Write a UTF-8 text file into the user's files, replacing any file at that path.",
+        description:
+          "Write a UTF-8 text file into the user's files, replacing any file at that path. " +
+          "Keep files you make for this chat, such as notes or an intermediate CSV, in this chat's folder under out/ (named with the user's files): the user's other chats save to their own.",
         parameters: Type.Object({ path: Type.String(), content: Type.String() }),
         execute: async (args) => {
           const path = await (await scope.files()).put(args.path, args.content, "text/plain; charset=utf-8");
@@ -120,15 +122,15 @@ export function filesIndexExtension(index: string): Extension {
 
 const SANDBOX_FILES =
   "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
-  "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/report.csv is ./files/out/report.csv). " +
-  "Anything written to ./out/ (top level, not subfolders) is saved back to the user's files under out/. " +
+  "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/<chat>/report.csv is ./files/out/<chat>/report.csv). " +
+  "Anything written to ./out/ (top level, not subfolders) is saved back to this chat's folder under out/ in the user's files (named with them). " +
   "Each run starts with fresh ./files and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
   "Returns exit code, stdout and stderr.";
 
 /** The files `refs` name, read, keyed by where they go under ./files/ (see sandboxLayout). */
-async function sandboxInputs(files: UserFiles, refs: readonly string[]): Promise<SandboxFile[]> {
+async function sandboxInputs(files: UserFiles, refs: readonly string[], ownFolder: string): Promise<SandboxFile[]> {
   if (refs.length === 0) return [];
-  const { entries, paths, missing } = await findFiles(files, refs, resolveRef);
+  const { entries, paths, missing } = await findFiles(files, refs, (entries, ref) => resolveRef(entries, ref, ownFolder));
   const layout = sandboxLayout(paths);
   const sizes = new Map(entries.map((e) => [e.path, e.size]));
   const listedBytes = paths.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
@@ -170,27 +172,15 @@ export function sandboxName(uid: string, chatId: string): string {
 
 /**
  * Copy the named user files in, run in this chat's sandbox, save ./out back to
- * the user's files. The files go through the user's UserFiles, so they are
+ * this chat's folder in the user's files (chatOutFolder). The files go through the user's UserFiles, so they are
  * decrypted on the way in and encrypted with the user's key on the way out.
  */
 async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
-  const inputs = await sandboxInputs(files, refs ?? []);
+  const folder = chatOutFolder(scope.chatId);
+  const inputs = await sandboxInputs(files, refs ?? [], folder);
   const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs);
-  const toSave = new Map<string, ArrayBuffer>();
-  const skipped = [];
-  for (const output of result.outputs) {
-    // A name the user's files do not allow must not throw away the run's output and the files already saved.
-    try {
-      // Names that differ only in what normalising trims ("a.csv" and "a.csv ") would overwrite each other.
-      const path = normalisePath(`${SANDBOX_OUT}${output.name}`);
-      if (toSave.has(path)) skipped.push(`${output.name} (same file as ${path})`);
-      else toSave.set(path, output.bytes);
-    } catch (error) {
-      if (!(error instanceof PathError)) throw error;
-      skipped.push(`${output.name} (${error.message})`);
-    }
-  }
+  const { toSave, skipped } = outputPaths(folder, result.outputs);
   const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
   const report = [
     inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,

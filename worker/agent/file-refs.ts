@@ -1,5 +1,7 @@
 import { underUploads } from "../../shared/uploads.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
+import { SANDBOX_OUT } from "../chat-traces.ts";
+import { normalisePath, PathError } from "../storage/paths.ts";
 import type { FileEntry } from "../storage/user-files.ts";
 
 /**
@@ -7,13 +9,14 @@ import type { FileEntry } from "../storage/user-files.ts";
  * "sales.csv" or "q3/sales.csv"; the file is uploads/q3/sales.csv. A path
  * names itself; otherwise a name or the end of a path names the one file it
  * ends, and a folder names every file under it. Throws when nothing, or more
- * than one thing, matches.
+ * than one thing, matches. A name that this chat's folder (`ownFolder`, see
+ * chatOutFolder) and only other folders under out/ hold names this chat's file.
  */
-function match(entries: readonly FileEntry[], ref: string): { file: string } | { folder: string[] } {
+function match(entries: readonly FileEntry[], ref: string, ownFolder?: string): { file: string } | { folder: string[] } {
   const paths = entries.map((e) => e.path);
   for (const wanted of variants(ref)) {
     // "data/" asks for the folder even when a file is also called "data".
-    const file = ref.trim().endsWith("/") ? undefined : matchFile(paths, wanted);
+    const file = ref.trim().endsWith("/") ? undefined : matchFile(paths, wanted, ownFolder);
     if (file) return { file };
     const folder = matchFolder(paths, wanted);
     if (folder.length) return { folder };
@@ -22,15 +25,15 @@ function match(entries: readonly FileEntry[], ref: string): { file: string } | {
 }
 
 /** The one file `ref` names: for tools that read a single file. */
-export function resolveFile(entries: readonly FileEntry[], ref: string): string {
-  const found = match(entries, ref);
+export function resolveFile(entries: readonly FileEntry[], ref: string, ownFolder?: string): string {
+  const found = match(entries, ref, ownFolder);
   if ("folder" in found) throw new FileRefError(`"${ref}" is a folder; name one of its files, or list it with files_list.`);
   return found.file;
 }
 
 /** The file `ref` names, or every file in the folder it names. */
-export function resolveRef(entries: readonly FileEntry[], ref: string): string[] {
-  const found = match(entries, ref);
+export function resolveRef(entries: readonly FileEntry[], ref: string, ownFolder?: string): string[] {
+  const found = match(entries, ref, ownFolder);
   return "folder" in found ? found.folder : [found.file];
 }
 
@@ -44,7 +47,7 @@ function variants(ref: string): string[] {
   return path.startsWith("files/") ? [path, path.slice("files/".length)] : [path];
 }
 
-function matchFile(paths: readonly string[], wanted: string): string | undefined {
+function matchFile(paths: readonly string[], wanted: string, ownFolder?: string): string | undefined {
   if (!wanted) return undefined;
   if (paths.includes(wanted)) return wanted;
   const lower = wanted.toLowerCase();
@@ -54,6 +57,9 @@ function matchFile(paths: readonly string[], wanted: string): string | undefined
   if (exact.length > 1) throw new FileRefError(`"${wanted}" could be any of ${list(exact)}. Pass the exact path.`);
   const ending = paths.filter((p) => p.toLowerCase().endsWith(`/${lower}`));
   if (ending.length === 1) return ending[0];
+  // Each chat saves under its own folder: "chart.png" in a chat that saved one is its own, not another chat's (or an older one at out/).
+  const own = ownFolder ? ending.filter((p) => p.startsWith(ownFolder)) : [];
+  if (own.length === 1 && ending.every((p) => p === own[0] || p.startsWith(SANDBOX_OUT))) return own[0];
   if (ending.length > 1) {
     throw new FileRefError(`"${wanted}" could be any of ${list(ending)}. Pass the full path, or ask the user which one.`);
   }
@@ -103,14 +109,17 @@ const INDEX_MAX_FOLDERS = 40;
 /**
  * The prompt's list of the user's files, newest first, so the agent can match
  * what the user calls a file to its path without a tool call. A long list is
- * cut; then it names the folders, with how many files each holds.
+ * cut; then it names the folders, with how many files each holds. It also names
+ * this chat's folder (chatOutFolder): here rather than in the tool descriptions,
+ * so the tools stay the same for all of a user's chats and share a prompt cache.
  */
-export function filesIndex(entries: readonly FileEntry[], { sandbox = true } = {}): string {
+export function filesIndex(entries: readonly FileEntry[], { sandbox = true, outFolder }: { sandbox?: boolean; outFolder: string }): string {
   const intro =
     "The user's files (uploads, and files your scripts saved). When the user names a file or folder, match it here and use its path. " +
     (sandbox
-      ? "files_read, run_python and run_bash also take a file's name or the end of its path when only one file matches, and a folder for all the files in it."
-      : "files_read also takes a file's name or the end of its path when only one file matches.");
+      ? "files_read, run_python and run_bash also take a file's name or the end of its path when only one file matches, and a folder for all the files in it. "
+      : "files_read also takes a file's name or the end of its path when only one file matches. ") +
+    `This chat's folder is ${outFolder}: ${sandbox ? "sandbox runs save ./out there, and " : ""}files you write for this chat go there too.`;
   if (entries.length === 0) return `${intro}\nThe user has no files yet; they upload them from the sidebar, or by dropping them on the app.`;
   const newest = [...entries].sort((a, b) => +b.uploaded - +a.uploaded);
   const lines: string[] = [];
@@ -125,7 +134,9 @@ export function filesIndex(entries: readonly FileEntry[], { sandbox = true } = {
   if (rest === 0) return `${intro}\n${lines.join("\n")}`;
   const counts = new Map<string, number>();
   for (const { path } of entries) {
-    const folder = path.split("/").slice(0, -1).slice(0, 2).join("/") || "(top level)";
+    const top = path.split("/").slice(0, -1).slice(0, 2).join("/") || "(top level)";
+    // Other chats' folders count as one: out/ sorts before uploads/, and a folder per chat would crowd the others out.
+    const folder = top.startsWith(SANDBOX_OUT) && `${top}/` !== outFolder ? SANDBOX_OUT.slice(0, -1) : top;
     counts.set(folder, (counts.get(folder) ?? 0) + 1);
   }
   // Capped like the list itself: a user with many folders must not fill the prompt with them.
@@ -162,4 +173,26 @@ export function sandboxLayout(paths: readonly string[]): Map<string, string> {
     }
   }
   return layout;
+}
+
+/**
+ * Where a run's outputs are saved: each under `folder` (chatOutFolder), and those whose names the user's files do not
+ * allow, or that would land on one path, skipped with why.
+ */
+export function outputPaths<T>(folder: string, outputs: readonly { name: string; bytes: T }[]): { toSave: Map<string, T>; skipped: string[] } {
+  const toSave = new Map<string, T>();
+  const skipped: string[] = [];
+  for (const output of outputs) {
+    // A name the user's files do not allow must not throw away the run's output and the files already saved.
+    try {
+      // Names that differ only in what normalising trims ("a.csv" and "a.csv ") would overwrite each other.
+      const path = normalisePath(`${folder}${output.name}`);
+      if (toSave.has(path)) skipped.push(`${output.name} (same file as ${path})`);
+      else toSave.set(path, output.bytes);
+    } catch (error) {
+      if (!(error instanceof PathError)) throw error;
+      skipped.push(`${output.name} (${error.message})`);
+    }
+  }
+  return { toSave, skipped };
 }

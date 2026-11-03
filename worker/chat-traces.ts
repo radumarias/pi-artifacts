@@ -6,8 +6,16 @@ import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDe
 export const FILES_WRITE_TOOL = "files_write";
 export const RUN_PYTHON_TOOL = "run_python";
 export const RUN_BASH_TOOL = "run_bash";
-/** Where a sandbox run saves what it wrote to ./out. */
+/** The folder of the user's files that chats save their outputs under, each in its own (see chatOutFolder). */
 export const SANDBOX_OUT = "out/";
+
+/**
+ * This chat's folder in the user's files: where its sandbox runs save what they wrote to ./out, so two chats of one
+ * user running at once never overwrite each other's outputs. The agent is asked to keep files it writes there too.
+ */
+export function chatOutFolder(chatId: string): string {
+  return `${SANDBOX_OUT}${chatId}/`;
+}
 
 export function wroteReport(path: string, characters: number): string {
   return `Wrote ${path} (${characters} characters).`;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, underUploads, uploadBatches, uploadPath, uploadTargets } from "../shared/uploads.ts";
-import { FileRefError, filesIndex, MAX_SANDBOX_FILES, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
+import { FileRefError, filesIndex, MAX_SANDBOX_FILES, outputPaths, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath } from "../worker/storage/paths.ts";
@@ -113,6 +113,13 @@ describe("resolveFile", () => {
     expect(() => resolveFile(cased, "uploads/REPORT.csv")).toThrow(/could be any of "uploads\/Report.csv", "uploads\/report.csv"/);
   });
 
+  it("takes this chat's file for a name other chats' folders also hold, but not over an upload", () => {
+    const outputs = [entry("out/c1/chart.png"), entry("out/c2/chart.png"), entry("out/chart.png")];
+    expect(resolveFile(outputs, "chart.png", "out/c1/")).toBe("out/c1/chart.png");
+    expect(() => resolveFile(outputs, "chart.png")).toThrow(/could be any of/);
+    expect(() => resolveFile([...outputs, entry("uploads/chart.png")], "chart.png", "out/c1/")).toThrow(/could be any of/);
+  });
+
   it("does not match part of a name", () => {
     expect(() => resolveFile(files, "ices.csv")).toThrow(FileRefError);
   });
@@ -169,30 +176,43 @@ describe("sandboxLayout", () => {
 });
 
 describe("filesIndex", () => {
+  const OUT = { outFolder: "out/0123456789abcdef/" };
+
   it("lists the files newest first, with sizes", () => {
-    const index = filesIndex(files);
+    const index = filesIndex(files, OUT);
     const lines = index.split("\n").slice(1);
     expect(lines[0]).toBe("out/summary.json\t10 B");
     expect(lines.at(-1)).toBe("uploads/prices.csv\t10 B");
   });
 
   it("says when there are none", () => {
-    expect(filesIndex([])).toContain("no files yet");
+    expect(filesIndex([], OUT)).toContain("no files yet");
   });
 
   it("mentions the sandbox tools only when there is a sandbox", () => {
-    expect(filesIndex(files)).toContain("run_python");
-    expect(filesIndex(files, { sandbox: false })).not.toContain("run_python");
+    expect(filesIndex(files, OUT)).toContain("run_python");
+    expect(filesIndex(files, { ...OUT, sandbox: false })).not.toContain("run_python");
+  });
+
+  it("names this chat's folder, also when there are no files", () => {
+    expect(filesIndex(files, OUT)).toContain("This chat's folder is out/0123456789abcdef/");
+    expect(filesIndex([], { ...OUT, sandbox: false })).toContain("This chat's folder is out/0123456789abcdef/: files you write");
   });
 
   it("cuts a long list and counts the files per folder", () => {
     const many = Array.from({ length: 400 }, (_, i) => entry(`uploads/batch/${i}.csv`, 2048, i));
-    const index = filesIndex([...many, entry("uploads/one.csv")]);
+    const index = filesIndex([...many, entry("uploads/one.csv")], OUT);
     expect(index).toContain("uploads/batch/399.csv\t2.0 KB");
     expect(index).not.toContain("uploads/batch/0.csv");
     expect(index).toMatch(/and \d+ more/);
     expect(index).toContain("uploads/batch (400), uploads (1)");
     expect(index.length).toBeLessThan(8_000);
+  });
+
+  it("counts other chats' folders as one", () => {
+    const many = Array.from({ length: 400 }, (_, i) => entry(`out/chat${i}/a.csv`, 2048, i));
+    const index = filesIndex([...many, entry("out/0123456789abcdef/b.csv"), entry("uploads/q3/c.csv")], OUT);
+    expect(index).toContain("All files by folder: out (400), out/0123456789abcdef (1), uploads/q3 (1).");
   });
 });
 
@@ -237,5 +257,23 @@ describe("filesRoute", () => {
   it("leaves other routes alone", async () => {
     const { storage } = await setup();
     expect(await filesRoute(new Request("https://app.test/api/chats"), storage)).toBeUndefined();
+  });
+});
+
+describe("outputPaths", () => {
+  const output = (name: string) => ({ name, bytes: name });
+
+  it("saves a run's outputs under the chat's folder", () => {
+    const { toSave, skipped } = outputPaths("out/0123456789abcdef/", [output("budget.html"), output("chart.png")]);
+    expect([...toSave.keys()]).toEqual(["out/0123456789abcdef/budget.html", "out/0123456789abcdef/chart.png"]);
+    expect(skipped).toEqual([]);
+  });
+
+  it("skips names the user's files do not allow, and names that land on one path, keeping the rest", () => {
+    const { toSave, skipped } = outputPaths("out/c1/", [output("a.csv"), output("a.csv "), output("bad*name"), output("b.csv")]);
+    expect([...toSave.keys()]).toEqual(["out/c1/a.csv", "out/c1/b.csv"]);
+    expect(skipped).toHaveLength(2);
+    expect(skipped[0]).toBe("a.csv  (same file as out/c1/a.csv)");
+    expect(skipped[1]).toMatch(/^bad\*name \(/);
   });
 });

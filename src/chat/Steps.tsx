@@ -182,22 +182,51 @@ function seconds(ms: number): string {
 const opened = new Set<string>();
 
 /**
- * One step of the agent, collapsed to a line: an icon, what it is, a hint and where it is. Opened, it shows what the
- * step was given and what came back. The body is only rendered while open, so a long history of steps stays cheap.
+ * One step of the agent as a plain line: an icon, what it is, a hint and where it is. With more to show than the line
+ * holds, an arrow opens it on what the step was given and what came back; the body is only rendered while open, so a
+ * long history of steps stays cheap. Without (`children` left out), the line is all there is, and its hint wraps.
  */
-function Panel({ openKey, tone, icon, label, hint, status, children }: {
+function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
   openKey: string;
   tone?: "active" | "done" | "error";
   icon: ReactNode;
   label: string;
   hint: string;
+  /** The hint is words (a thought), not code. */
+  prose?: boolean;
   status?: string;
-  children: () => ReactNode;
+  children?: () => ReactNode;
 }) {
   const [open, setOpen] = useState(() => opened.has(openKey));
+  const className = ["step", tone, !children && "static"].filter(Boolean).join(" ");
+  const line = (
+    <>
+      <span className="step-icon">{icon}</span>
+      <span className="step-label">{label}</span>
+      {hint && (
+        <span className={prose ? "step-hint prose" : "step-hint"}>
+          {/* Whole on a line with nothing to open, where its links are the only way to follow them. */}
+          {children ? hint : <Linkified text={hint} />}
+        </span>
+      )}
+      {children && (
+        <svg className="step-chevron" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M6 4l4 4-4 4" />
+        </svg>
+      )}
+      {status && <span className="step-status">{status}</span>}
+    </>
+  );
+  if (!children) {
+    return (
+      <div className={className}>
+        <div className="step-line">{line}</div>
+      </div>
+    );
+  }
   return (
     <details
-      className={tone ? `step ${tone}` : "step"}
+      className={className}
       open={open}
       onToggle={(event) => {
         const now = event.currentTarget.open;
@@ -206,18 +235,41 @@ function Panel({ openKey, tone, icon, label, hint, status, children }: {
         setOpen(now);
       }}
     >
-      <summary>
-        <span className="step-icon">{icon}</span>
-        <span className="step-label">{label}</span>
-        {hint && <span className="step-hint">{hint}</span>}
-        {status && <span className="step-status">{status}</span>}
-        <svg className="step-chevron" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M6 4l4 4-4 4" />
-        </svg>
-      </summary>
+      <summary className="step-line">{line}</summary>
       {open && <div className="step-body">{children()}</div>}
     </details>
   );
+}
+
+/** Up to this many characters, a thought or a one-line output shows whole on its line, with nothing to open. */
+const SHORT_DETAIL = 200;
+
+/** The first sentence, when it ends within the short length: a few words at least, and not at an ellipsis. */
+const FIRST_SENTENCE = new RegExp(`^.{12,${SHORT_DETAIL - 2}}?[^.][.!?:](?=\\s|$)`);
+
+/** `text` trimmed, when it is short enough to show whole. Measured raw first: this runs on every streamed chunk. */
+function short(text: string): string | undefined {
+  if (text.length > 2 * SHORT_DETAIL) return undefined;
+  const trimmed = text.trim();
+  return trimmed.length <= SHORT_DETAIL ? trimmed : undefined;
+}
+
+/**
+ * A thought on one line: the whole of it when it is short (`whole`; words, so its line breaks may go), else its first
+ * sentence, which the line cuts to fit, and the rest behind the arrow.
+ */
+export function thoughtLine(text: string): { line: string; whole: boolean } {
+  const whole = short(text);
+  if (whole !== undefined) return { line: whole.replace(/\s+/g, " "), whole: true };
+  // Only the head: the line shows a sentence at most.
+  const flat = text.slice(0, 3 * SHORT_DETAIL).trim().replace(/\s+/g, " ");
+  return { line: FIRST_SENTENCE.exec(flat)?.[0] ?? flat.slice(0, SHORT_DETAIL), whole: false };
+}
+
+/** An output said on the step's line itself: short, and one line (its line breaks may matter). Empty when there is none. */
+export function shortOutput(output: string): string | undefined {
+  const line = short(output);
+  return line !== undefined && !line.includes("\n") ? line : undefined;
 }
 
 function Section({ label, text, error }: { label: string; text: string; error?: boolean }) {
@@ -242,11 +294,20 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
   const { text, icon, tone } = STATUS[status];
   const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
+  const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label: stepLabel(call.name), status: text + time };
+  const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
+  // Only when it is needed: a result can be long, and finished steps re-render as the chat grows.
+  const output = () => (result ? resultText(result) : live!.tools.get(call.id)?.output) ?? "";
+  // A call without arguments whose output is a short line (or which has none) is said on its line alone. Not while the
+  // model writes it: its arguments are empty until the first one lands, and the line would turn into a panel then.
+  if (status !== "writing" && !check && !call.argumentsError && Object.keys(call.arguments ?? {}).length === 0) {
+    const line = shortOutput(output());
+    if (line !== undefined) return <Panel {...props} hint={line} />;
+  }
   return (
-    <Panel openKey={call.id} tone={tone} icon={icon ?? <Spark />} label={stepLabel(call.name)} hint={stepHint(call.name, call.arguments)} status={text + time}>
+    <Panel {...props} hint={stepHint(call.name, call.arguments)}>
       {() => {
-        const output = result ? resultText(result) : live!.tools.get(call.id)?.output;
-        const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
+        const shown = output();
         return (
           <>
             {check && <CheckShot check={check} />}
@@ -254,8 +315,8 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
               <Section key={i} {...section} />
             ))}
             {call.argumentsError && <Section label="Invalid arguments" text={call.argumentsError} error />}
-            {output ? (
-              <Section label={status === "error" ? "Error" : "Output"} text={output} error={status === "error"} />
+            {shown ? (
+              <Section label={status === "error" ? "Error" : "Output"} text={shown} error={status === "error"} />
             ) : (
               status === "stopped" && <p className="step-note">Stopped before it finished.</p>
             )}
@@ -281,11 +342,15 @@ export function OrphanResult({ message }: { message: ToolResultMessage }) {
   return use(ResultsContext).calls.has(message.toolCallId) ? null : <ToolStep call={{ id: message.toolCallId, name: message.toolName }} />;
 }
 
-/** What the model thought before answering, when the provider sends it. `openKey` stays the same once the message lands. */
+/**
+ * What the model thought before answering, when the provider sends it: a short thought whole on its line, a longer one
+ * by its first sentence, opening on all of it. `openKey` stays the same once the message lands.
+ */
 export function ThoughtStep({ openKey, text }: { openKey: string; text: string }) {
+  const { line, whole } = thoughtLine(text);
   return (
-    <Panel openKey={openKey} icon="✻" label="Thought process" hint={stepHint("", { text })}>
-      {() => <div className="step-thought">{text.trim()}</div>}
+    <Panel openKey={openKey} icon="✻" label="Thought" hint={line} prose>
+      {whole ? undefined : () => <div className="step-thought">{text.trim()}</div>}
     </Panel>
   );
 }
