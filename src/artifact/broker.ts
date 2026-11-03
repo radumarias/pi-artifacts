@@ -11,7 +11,7 @@ export interface BrokerOptions {
   transport: Transport;
   /** The version's tools this viewer may call; a declared server the viewer may not load is left out. */
   describe: () => Promise<DeclaredTool[]>;
-  /** What the version declared: tells a tool withheld from this viewer (not_granted) from one never declared. */
+  /** What the version declared: tells a tool withheld from this viewer or not listed (not_granted) from one never declared. */
   manifest: ArtifactManifest;
   /** Browser cache namespace; include the viewer so accounts on one browser never share results. */
   cacheNamespace: string;
