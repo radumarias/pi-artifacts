@@ -185,7 +185,7 @@ export class ChatAgent extends DurableObject<Env> {
   /** The last read of the queue, by the inbox ids it was for: every socket asks after the same commit. */
   #queuedRead: { key: string; read: Promise<QueuedMessage[]> } | undefined;
   /** Set once the owner starts deleting the chat, and kept as its only record after: from then on nobody is in it. */
-  #gone = this.ctx.storage.kv.get(GONE_KEY) === true;
+  #gone = this.#deleted();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -736,6 +736,8 @@ export class ChatAgent extends DurableObject<Env> {
   /** What deleting the chat would delete with it, for the owner to confirm. */
   async deletionPreview(by: Person): Promise<ChatDeletion | ChatRefusal> {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
+    // Deleted already, with only the owner's list entry left: nothing else goes, and the conversation must not reopen.
+    if (this.#deleted()) return { title: (await this.#directory.chatTitle(this.chatId)) ?? "", artifacts: [], files: [], members: 0 };
     const [traces, title, stored] = await Promise.all([
       this.#traces(),
       this.#directory.chatTitle(this.chatId),
@@ -760,6 +762,8 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async deleteChat(by: Person, { files }: { files: readonly string[] }): Promise<ChatRefusal | null> {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
+    // A try whose answer was lost deleted it already: the Worker only has the owner's list left to update.
+    if (this.#deleted()) return null;
     this.#gone = true;
     // The abort below ends the run: no status may be published while the chat is deleted.
     this.#unwatchRuns();
@@ -792,9 +796,14 @@ export class ChatAgent extends DurableObject<Env> {
       if (disposed) setTimeout(() => this.ctx.abort(errorMessage(error)), 0);
       throw error;
     }
-    // Drop everything held in memory; should anything wake the object again, the mark keeps it shut.
-    setTimeout(() => this.ctx.abort(DELETED), 0);
+    // Not ctx.abort(): this answer waits for the mark to be stored, and an abort meanwhile would fail it, leaving the
+    // chat in the owner's list. The object is idle from here, and the mark keeps it shut once it is evicted.
     return null;
+  }
+
+  /** Whether the chat was deleted: its storage holds only the mark deleteChat leaves. */
+  #deleted(): boolean {
+    return this.ctx.storage.kv.get(GONE_KEY) === true;
   }
 
   /**
