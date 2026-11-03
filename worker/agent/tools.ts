@@ -89,7 +89,7 @@ export function filesExtension(scope: ChatScope): Extension {
           let path = literal;
           let object = path === undefined ? null : await files.get(path, range);
           if (!object) {
-            const found = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref)]);
+            const found = await findFiles(files, [args.path], (entries, ref) => [resolveFile(entries, ref, chatOutFolder(scope.chatId))]);
             path = found.paths[0];
             // The listing did not match it either and fell back to the path just read: it is not there.
             object = path === literal ? null : await files.get(path, range);
@@ -127,9 +127,9 @@ const SANDBOX_FILES =
   "Returns exit code, stdout and stderr.";
 
 /** The files `refs` name, read, keyed by where they go under ./files/ (see sandboxLayout). */
-async function sandboxInputs(files: UserFiles, refs: readonly string[]): Promise<SandboxFile[]> {
+async function sandboxInputs(files: UserFiles, refs: readonly string[], ownFolder: string): Promise<SandboxFile[]> {
   if (refs.length === 0) return [];
-  const { entries, paths, missing } = await findFiles(files, refs, resolveRef);
+  const { entries, paths, missing } = await findFiles(files, refs, (entries, ref) => resolveRef(entries, ref, ownFolder));
   const layout = sandboxLayout(paths);
   const sizes = new Map(entries.map((e) => [e.path, e.size]));
   const listedBytes = paths.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
@@ -176,9 +176,10 @@ export function sandboxName(uid: string, chatId: string): string {
  */
 async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
-  const inputs = await sandboxInputs(files, refs ?? []);
+  const folder = chatOutFolder(scope.chatId);
+  const inputs = await sandboxInputs(files, refs ?? [], folder);
   const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs);
-  const { toSave, skipped } = outputPaths(chatOutFolder(scope.chatId), result.outputs);
+  const { toSave, skipped } = outputPaths(folder, result.outputs);
   const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
   const report = [
     inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,

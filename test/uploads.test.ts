@@ -113,6 +113,13 @@ describe("resolveFile", () => {
     expect(() => resolveFile(cased, "uploads/REPORT.csv")).toThrow(/could be any of "uploads\/Report.csv", "uploads\/report.csv"/);
   });
 
+  it("takes this chat's file for a name other chats' folders also hold, but not over an upload", () => {
+    const outputs = [entry("out/c1/chart.png"), entry("out/c2/chart.png"), entry("out/chart.png")];
+    expect(resolveFile(outputs, "chart.png", "out/c1/")).toBe("out/c1/chart.png");
+    expect(() => resolveFile(outputs, "chart.png")).toThrow(/could be any of/);
+    expect(() => resolveFile([...outputs, entry("uploads/chart.png")], "chart.png", "out/c1/")).toThrow(/could be any of/);
+  });
+
   it("does not match part of a name", () => {
     expect(() => resolveFile(files, "ices.csv")).toThrow(FileRefError);
   });
@@ -200,6 +207,12 @@ describe("filesIndex", () => {
     expect(index).toMatch(/and \d+ more/);
     expect(index).toContain("uploads/batch (400), uploads (1)");
     expect(index.length).toBeLessThan(8_000);
+  });
+
+  it("counts other chats' folders as one", () => {
+    const many = Array.from({ length: 400 }, (_, i) => entry(`out/chat${i}/a.csv`, 2048, i));
+    const index = filesIndex([...many, entry("out/0123456789abcdef/b.csv"), entry("uploads/q3/c.csv")], OUT);
+    expect(index).toContain("All files by folder: out (400), out/0123456789abcdef (1), uploads/q3 (1).");
   });
 });
 
