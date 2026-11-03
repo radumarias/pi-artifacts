@@ -269,7 +269,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               «
             </button>
           </div>
-          {/* Chats, artifacts and skills scroll here, above the files panel. */}
+          {/* Chats and artifacts scroll here; skills and the files panel stay below them. */}
           <div className="sidebar-scroll">
           <h3>Chats</h3>
           <ChatList chats={chats} openId={chatId} navigate={navigate} onDelete={setDeleting} />
@@ -284,24 +284,26 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               </a>
             ))}
           </nav>
-          <h3>Skills</h3>
-          <nav>
-            <a
-              href="/skills"
-              className={["nav-item", showSkills && "active", proposed > 0 && "unread"].filter(Boolean).join(" ")}
-              onClick={(e) => {
-                e.preventDefault();
-                navigate("/skills");
-              }}
-            >
-              <span className="nav-title">
-                {(skills ?? []).filter(isActive).length} on, {skills?.length ?? 0} in all
-                {proposed > 0 && <small> · {proposed} to review</small>}
-              </span>
-              {proposed > 0 && <UnreadDot label="Proposed skills to review" />}
-            </a>
-          </nav>
           </div>
+          <section className="sidebar-pinned">
+            <h3>Skills</h3>
+            <nav>
+              <a
+                href="/skills"
+                className={["nav-item", showSkills && "active", proposed > 0 && "unread"].filter(Boolean).join(" ")}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigate("/skills");
+                }}
+              >
+                <span className="nav-title">
+                  {(skills ?? []).filter(isActive).length} on, {skills?.length ?? 0} in all
+                  {proposed > 0 && <small> · {proposed} to review</small>}
+                </span>
+                {proposed > 0 && <UnreadDot label="Proposed skills to review" />}
+              </a>
+            </nav>
+          </section>
           <FilesNav files={files} status={uploadStatus} upload={upload} />
           <footer>
             <span title={label}>{label}</span>
