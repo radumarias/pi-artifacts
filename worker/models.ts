@@ -59,9 +59,10 @@ export function withCurrentPrices(provider: Provider): Provider {
 }
 
 /**
- * `models`, with each reply marked with the effort it was asked at: pi-ai's `thinkingLevel` on the message, which only
- * pi's own agent loop sets, and pi-durable does not. The chat's cost panel shows it next to the model. A request that
- * asks for no reasoning is "off".
+ * `models`, with each reply of a model that reasons marked with the effort it was asked at: pi-ai's `thinkingLevel` on
+ * the message, which only pi's own agent loop sets, and pi-durable does not (until it does, this stands in). The chat's
+ * cost panel shows it next to the model. A request that asks for no reasoning is "off". Replies fetched later
+ * (`fetchDeferred`, which this app does not use) are not marked.
  */
 export function withEffortRecorded(models: Models): Models {
   const streamSimple = models.streamSimple.bind(models);
@@ -69,10 +70,10 @@ export function withEffortRecorded(models: Models): Models {
   models.streamSimple = (model, context, options) => {
     const stream = streamSimple(model, context, options);
     const result = stream.result.bind(stream);
-    const effort = options?.reasoning ?? "off";
+    const effort = model.reasoning ? (options?.reasoning ?? "off") : undefined;
     stream.result = async () => {
       const message = await result();
-      message.thinkingLevel ??= effort;
+      if (effort) message.thinkingLevel ??= effort;
       return message;
     };
     return stream;

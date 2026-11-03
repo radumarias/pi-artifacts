@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
+import { fauxAssistantMessage, fauxProvider, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai/models";
 import { checkModelChoice, defaultModelChoice, modelCatalog, withEffortRecorded } from "../worker/models.ts";
 
 // The real catalog, as the Worker builds it from pi-ai.
@@ -70,31 +70,32 @@ describe("default model", () => {
 });
 
 describe("effort per reply", () => {
-  /** Models whose every reply is `reply`, done at once. */
-  const answering = (reply: () => AssistantMessage) =>
-    withEffortRecorded({
-      streamSimple() {
-        const stream = new AssistantMessageEventStream();
-        stream.push({ type: "done", reason: "stop", message: reply() });
-        return stream;
-      },
-      async completeSimple(this: Models, ...args: Parameters<Models["streamSimple"]>) {
-        return this.streamSimple(...args).result();
-      },
-    } as unknown as Models);
-  const message = (extra: Partial<AssistantMessage> = {}) => ({ role: "assistant", content: [], usage: {}, stopReason: "stop", timestamp: 0, ...extra }) as unknown as AssistantMessage;
-  const model = {} as Model<never>;
+  /** Real pi-ai models over a stand-in provider that answers with `replies`, in turn. */
+  const answering = (...replies: AssistantMessage[]) => answeringAs(true, ...replies);
+  const answeringAs = (reasoning: boolean, ...replies: AssistantMessage[]) => {
+    const faux = fauxProvider({ models: [{ id: "m", reasoning }] });
+    faux.setResponses(replies);
+    const models = createModels();
+    models.setProvider(faux.provider);
+    return { models: withEffortRecorded(models), model: faux.getModel() };
+  };
+  const context = { messages: [] };
 
   it("marks each reply with the effort it was asked at, and one asked for no reasoning as off", async () => {
-    const models = answering(() => message());
-    expect((await models.streamSimple(model, { messages: [] }, { reasoning: "high" }).result()).thinkingLevel).toBe("high");
+    const { models, model } = answering(fauxAssistantMessage("a"), fauxAssistantMessage("b"), fauxAssistantMessage("c"));
+    expect((await models.streamSimple(model, context, { reasoning: "high" }).result()).thinkingLevel).toBe("high");
     // Summaries of a long conversation come through completeSimple.
-    expect((await models.completeSimple(model, { messages: [] }, { reasoning: "low" })).thinkingLevel).toBe("low");
-    expect((await models.completeSimple(model, { messages: [] })).thinkingLevel).toBe("off");
+    expect((await models.completeSimple(model, context, { reasoning: "low" })).thinkingLevel).toBe("low");
+    expect((await models.completeSimple(model, context)).thinkingLevel).toBe("off");
+  });
+
+  it("marks no effort on a model that does not reason", async () => {
+    const { models, model } = answeringAs(false, fauxAssistantMessage("a"));
+    expect((await models.streamSimple(model, context, { reasoning: "high" }).result()).thinkingLevel).toBeUndefined();
   });
 
   it("keeps an effort the reply already says", async () => {
-    const models = answering(() => message({ thinkingLevel: "medium" }));
-    expect((await models.streamSimple(model, { messages: [] }, { reasoning: "high" }).result()).thinkingLevel).toBe("medium");
+    const { models, model } = answering({ ...fauxAssistantMessage("a"), thinkingLevel: "medium" });
+    expect((await models.streamSimple(model, context, { reasoning: "high" }).result()).thinkingLevel).toBe("medium");
   });
 });

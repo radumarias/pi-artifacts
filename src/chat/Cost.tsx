@@ -1,6 +1,6 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { EFFORT_LABELS, type ModelInfo } from "../../shared/models.ts";
+import { effortLabel, type ModelInfo } from "../../shared/models.ts";
 import { useCatalog } from "./ModelPicker.tsx";
 import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
 import { formatElapsed } from "./Thinking.tsx";
@@ -14,10 +14,8 @@ function describeTime(time: Timing): string {
 
 /** A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name. */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
-  const model = models.get(share.model);
-  const name = model?.name ?? share.model;
-  // A model that does not reason is asked for no effort: nothing to say.
-  return share.effort && (share.effort !== "off" || model?.efforts.length) ? `${name} · ${EFFORT_LABELS[share.effort]} effort` : name;
+  const name = models.get(share.model)?.name ?? share.model;
+  return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;
 }
 
 /** What one prompt's model calls cost and how long it took, under the agent's last reply to it. Memoized: the chat re-renders on every streamed token. */
@@ -39,7 +37,9 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
   const [open, setOpen] = useState(false);
   const catalog = useCatalog();
   const models = useMemo(() => new Map(catalog.map((model) => [model.id, model])), [catalog]);
-  const spend = useMemo(() => chatSpend(usage, entries), [usage, entries]);
+  // Only the open panel splits models by effort: the button shows totals, and the entries change with every message.
+  const split = open ? entries : undefined;
+  const spend = useMemo(() => chatSpend(usage, split), [usage, split]);
   const box = useRef<HTMLDivElement>(null);
   // A click anywhere else, or Escape, closes the panel.
   useEffect(() => {

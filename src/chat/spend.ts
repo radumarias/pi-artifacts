@@ -110,33 +110,33 @@ export function totalTime(prompts: Iterable<PromptSpend>): Timing {
 /** One row of a chat's spend: a model at one effort (none for replies from before efforts were recorded), or a tool. */
 export type Share = Spend & { model: string; effort?: ModelThinkingLevel };
 
-/** What each model's replies in `entries` cost at each effort, the effort used last last. */
-function replySpend(entries: readonly EntryRecord[]): Map<string, Map<ModelThinkingLevel | undefined, Spend>> {
-  const models = new Map<string, Map<ModelThinkingLevel | undefined, Spend>>();
+/** What a model's replies cost at each effort. */
+type EffortSpend = Map<ModelThinkingLevel | undefined, Spend>;
+
+/** What each model's replies in `entries` cost at each effort. */
+function replySpend(entries: readonly EntryRecord[]): Map<string, EffortSpend> {
+  const models = new Map<string, EffortSpend>();
   for (const entry of entries) {
     const message = entry.model?.[0];
     if (entry.kind !== "pi.assistant" || message?.role !== "assistant") continue;
     let efforts = models.get(message.model);
     if (!efforts) models.set(message.model, (efforts = new Map()));
-    const sum = plus(efforts.get(message.thinkingLevel) ?? NONE, spendOf(message.usage));
-    // Moved to the end: the effort used last comes last.
-    efforts.delete(message.thinkingLevel);
-    efforts.set(message.thinkingLevel, sum);
+    efforts.set(message.thinkingLevel, plus(efforts.get(message.thinkingLevel) ?? NONE, spendOf(message.usage)));
   }
   return models;
 }
 
 /**
  * A model's share of the ledger, by the effort its replies were asked at. The ledger also counts calls that are no
- * reply (those that summarize a long conversation, at the chat's effort then): what the replies leave over goes to the
- * effort used last.
+ * reply (those that summarize a long conversation, at the chat's effort then). When the replies all ran at one effort,
+ * those did too; otherwise which one is not known, and they go with the replies whose effort is not known either.
  */
-function byEffort(model: string, total: Spend, efforts: Map<ModelThinkingLevel | undefined, Spend> | undefined): Share[] {
-  if (!efforts?.size) return [{ ...total, model }];
-  const shares: Share[] = [...efforts].map(([effort, spend]) => ({ ...spend, model, ...(effort && { effort }) }));
-  const last = shares.length - 1;
-  shares[last] = { ...shares[last], ...plus(shares[last], minus(total, shares.reduce<Spend>(plus, NONE))) };
-  return shares;
+function byEffort(model: string, total: Spend, efforts: EffortSpend | undefined): Share[] {
+  if (!efforts) return [{ ...total, model }];
+  const rest = minus(total, [...efforts.values()].reduce(plus, NONE));
+  const to = efforts.size === 1 ? efforts.keys().next().value : undefined;
+  const shares = new Map(efforts).set(to, plus(efforts.get(to) ?? NONE, rest));
+  return [...shares].map(([effort, spend]) => ({ ...spend, model, effort }));
 }
 
 /**

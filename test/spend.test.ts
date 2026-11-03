@@ -88,12 +88,16 @@ describe("chat spend", () => {
     expect(chatSpend(undefined).models).toEqual([]);
   });
 
-  it("splits a model's share by the effort its replies were asked at, the rest of its ledger going to the effort used last", () => {
+  it("splits a model's share by the effort its replies were asked at", () => {
     const answer = (model: string, cost: number, thinkingLevel?: string) =>
       entry("pi.assistant", { role: "assistant", model, content: [], usage: usage({ input: 10 }, cost), ...(thinkingLevel && { thinkingLevel }) });
     const ledger = {
-      // Opus: 0.1 + 0.3 + 0.2 in replies, and 0.05 summarizing the conversation.
-      models: { "cloudflare/anthropic/claude-opus-5.5": usage({ input: 35 }, 0.65), "cloudflare/openai/gpt-5.5": usage({ input: 20 }, 0.4) },
+      // Each model: its replies, and 0.05 summarizing the conversation.
+      models: {
+        "cloudflare/anthropic/claude-opus-5.5": usage({ input: 35 }, 0.65),
+        "cloudflare/openai/gpt-5.5": usage({ input: 25 }, 0.45),
+        "cloudflare/@cf/zai-org/glm-5.3": usage({ input: 10 }, 0.01),
+      },
       tools: {},
     } as unknown as UsageState;
     const entries = [
@@ -101,18 +105,22 @@ describe("chat spend", () => {
       answer("anthropic/claude-opus-5.5", 0.1, "high"),
       answer("anthropic/claude-opus-5.5", 0.3, "medium"),
       answer("anthropic/claude-opus-5.5", 0.2, "high"),
-      answer("openai/gpt-5.5", 0.4),
+      answer("openai/gpt-5.5", 0.4, "high"),
+      // A model that does not reason has no effort.
+      answer("@cf/zai-org/glm-5.3", 0.01),
     ];
-    const { total, models: rows } = chatSpend(ledger, entries);
-    expect(rows.map(({ model, effort, input }) => ({ model, effort, input }))).toEqual([
-      { model: "openai/gpt-5.5", effort: undefined, input: 20 },
-      { model: "anthropic/claude-opus-5.5", effort: "high", input: 25 },
-      { model: "anthropic/claude-opus-5.5", effort: "medium", input: 10 },
+    const rows = (entries: EntryRecord[]) => chatSpend(ledger, entries).models.map(({ model, effort, input, cost }) => ({ model, effort, input, cost: +cost.toFixed(4) }));
+    // At one effort, the summaries ran at it too; at several, which one is not known.
+    expect(rows(entries)).toEqual([
+      { model: "openai/gpt-5.5", effort: "high", input: 25, cost: 0.45 },
+      { model: "anthropic/claude-opus-5.5", effort: "high", input: 20, cost: 0.3 },
+      { model: "anthropic/claude-opus-5.5", effort: "medium", input: 10, cost: 0.3 },
+      { model: "anthropic/claude-opus-5.5", effort: undefined, input: 5, cost: 0.05 },
+      { model: "@cf/zai-org/glm-5.3", effort: undefined, input: 10, cost: 0.01 },
     ]);
-    expect(rows.map((row) => row.cost)).toEqual([0.4, expect.closeTo(0.35), expect.closeTo(0.3)]);
-    expect(total.cost).toBeCloseTo(1.05);
-    // Replies from before efforts were recorded, and a model with no replies in view, keep one row without an effort.
-    expect(chatSpend(ledger, [entries[4]]).models.map((row) => row.effort)).toEqual([undefined, undefined]);
+    expect(chatSpend(ledger, entries).total.cost).toBeCloseTo(1.11);
+    // Without the replies (the panel is closed), one row a model.
+    expect(rows([]).map((row) => row.effort)).toEqual([undefined, undefined, undefined]);
   });
 
   it("formats small costs to two significant digits and larger ones to the cent", () => {

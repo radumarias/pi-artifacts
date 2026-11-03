@@ -1,6 +1,6 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { memo, useEffect, useMemo, useState } from "react";
-import { EFFORT_LABELS, VENDORS, type ModelInfo } from "../../shared/models.ts";
+import { effortLabel, VENDORS, type ModelInfo } from "../../shared/models.ts";
 import { memoAsync } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
@@ -68,10 +68,10 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
       </select>
       {current && current.efforts.length > 0 && thinkingLevel && (
         <select className="effort" aria-label="Effort" value={thinkingLevel} disabled={disabled} onChange={(e) => onChange(model, e.target.value as ModelThinkingLevel)}>
-          {!current.efforts.includes(thinkingLevel) && <option value={thinkingLevel}>{EFFORT_LABELS[thinkingLevel]} effort</option>}
+          {!current.efforts.includes(thinkingLevel) && <option value={thinkingLevel}>{effortLabel(thinkingLevel)}</option>}
           {current.efforts.map((level) => (
             <option key={level} value={level}>
-              {EFFORT_LABELS[level]} effort
+              {effortLabel(level)}
             </option>
           ))}
         </select>

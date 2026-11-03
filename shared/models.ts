@@ -36,3 +36,8 @@ export const EFFORT_LABELS: Record<ModelThinkingLevel, string> = {
   xhigh: "Extra high",
   max: "Max",
 };
+
+/** How the app names an effort: "High effort". */
+export function effortLabel(level: ModelThinkingLevel): string {
+  return `${EFFORT_LABELS[level]} effort`;
+}
