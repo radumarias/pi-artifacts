@@ -86,7 +86,7 @@ body.resizing iframe { pointer-events: none; }
 }
 .sidebar-scroll { flex: 1 1 0; min-height: 48px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 0 -14px; padding: 0 14px; }
 /* Artifacts and skills, kept in view between the scrolling chats and the files panel. */
-.sidebar-pinned { flex: 0 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 6px; margin: 0 -14px; padding: 0 14px 6px; border-top: 1px solid var(--border); }
+.sidebar-pinned { flex: 0 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 6px; margin: 0 -14px; padding: 2px 14px 6px; border-top: 1px solid var(--border); }
 /* A long artifact list scrolls inside a few rows' height rather than pushing skills and files down; in a short sidebar it
    shrinks first, alongside the open files panel (the section clips rather than drawing over the panel). */
 .sidebar-pinned .artifact-list { flex: 0 1 auto; min-height: 0; max-height: min(30vh, 240px); overflow-y: auto; margin: 0 -14px; padding: 0 14px; }
@@ -94,34 +94,19 @@ body.resizing iframe { pointer-events: none; }
 /* Open, the panel takes what its files need, up to most of the sidebar; its tree scrolls inside. */
 .files-panel.open { flex: 0 1 auto; max-height: 60%; }
 .files-panel .files { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
-/* A section heading that opens and closes it (artifacts, files). Its text lines up with the other headings (.sidebar h3);
-   its hover background reaches out to the rows' edges. */
-.section-head {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-  margin: 0 -8px;
-  padding: 8px 8px 6px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
+/* A section heading that opens and closes it (artifacts, files), styled as the other headings. Its text lines up with
+   theirs; its hover background reaches out to the rows' edges. */
+.section-head { display: flex; flex: none; align-items: center; gap: 6px; margin: 0 -8px; padding: 8px 8px 6px; border: 0; border-radius: 6px; background: none; }
 .section-head:hover { background: var(--surface-2); color: var(--text); }
 .section-head small { font-weight: 400; letter-spacing: 0; }
 .section-head svg { margin-left: auto; transition: transform 0.15s; }
 .section-head[aria-expanded="true"] svg { transform: rotate(180deg); }
-.sidebar-pinned .section-head { margin-top: 2px; }
 .sidebar-top { display: flex; gap: 6px; }
 .sidebar-top .primary { flex: 1; }
 .sidebar.rail { align-items: center; padding: 14px 8px; }
 .sidebar.rail button { width: 36px; padding: 6px 0; }
-.sidebar h3 { margin: 14px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.sidebar h3 { margin: 14px 0 2px; }
+.sidebar h3, .section-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 /* After .sidebar h3, whose margin shorthand would otherwise win at equal specificity. */
 .sidebar .sidebar-pinned h3 { margin-top: 10px; }
 .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
@@ -149,7 +134,7 @@ body.resizing iframe { pointer-events: none; }
   display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
   background: var(--accent); color: var(--accent-text); font-size: 11px; font-weight: 700; line-height: 1;
 }
-.sidebar .nav-unread { width: 8px; height: 8px; margin: 0 4px; border-radius: 50%; background: var(--accent); }
+.sidebar .nav-unread { flex: none; padding: 0; width: 8px; height: 8px; margin: 0 4px; border-radius: 50%; background: var(--accent); }
 /* A chat in the list, with its delete button: shown on hover or focus, and always on touch screens. */
 .chat-link { position: relative; display: flex; border-radius: 6px; }
 .chat-link > a { flex: 1; min-width: 0; }

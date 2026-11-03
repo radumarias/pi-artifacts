@@ -10,7 +10,7 @@ import { DeleteChat } from "./chat/DeleteChat.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
-import { ResizeHandle, SectionHead, useStoredState } from "./layout.tsx";
+import { isBoolean, ResizeHandle, SectionHead, useStoredState } from "./layout.tsx";
 import { useLatest, useSidebarSocket } from "./sidebar.ts";
 import { SkillsView } from "./skills/SkillsView.tsx";
 
@@ -179,7 +179,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
-  const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", true, (value) => typeof value === "boolean");
+  const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", true, isBoolean);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.
   const [chatWidth, setChatWidth] = useStoredState<number | null>("layout.chatWidth", null);
@@ -276,7 +276,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           <ChatList chats={chats} openId={chatId} navigate={navigate} onDelete={setDeleting} />
           </div>
           <section className="sidebar-pinned">
-            <SectionHead name="Artifacts" count={artifacts.length} open={artifactsOpen} onToggle={() => setArtifactsOpen(!artifactsOpen)}>
+            <SectionHead name="Artifacts" count={artifacts.length} open={artifactsOpen} onToggle={setArtifactsOpen}>
               {/* Closed, the section still shows that an artifact has a version the user has not opened. */}
               {!artifactsOpen && artifacts.some((a) => a.unread) && <UnreadDot label="New versions you have not opened" />}
             </SectionHead>

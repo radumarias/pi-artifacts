@@ -4,7 +4,7 @@ import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, u
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
-import { SectionHead, useStoredState } from "../layout.tsx";
+import { isBoolean, SectionHead, useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
@@ -282,7 +282,7 @@ function ensureDownloadFrame(): void {
  * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
  */
 export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
-  const [open, setOpen] = useStoredState("layout.filesOpen", true, (value) => typeof value === "boolean");
+  const [open, setOpen] = useStoredState("layout.filesOpen", true, isBoolean);
   const [query, setQuery] = useState("");
   // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
   const search = useDeferredValue(query).trim().toLowerCase();
@@ -318,7 +318,7 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
   };
   return (
     <section className={open ? "files-panel open" : "files-panel"}>
-      <SectionHead name="Files" count={files.length} open={open} onToggle={() => setOpen(!open)}>
+      <SectionHead name="Files" count={files.length} open={open} onToggle={setOpen} upward>
         {/* Closed, the panel still shows that an upload is going. */}
         {!open && status?.busy && <span className="spinner" />}
       </SectionHead>

@@ -30,21 +30,27 @@ export function useStoredState<T>(key: string, fallback: T, valid?: (value: unkn
   return [value, store];
 }
 
+/** The check for a stored open/closed (or on/off) setting. */
+export const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+
 /**
- * The heading of a sidebar section that opens and closes: its name and count, then whatever else it shows (closed, the
- * files panel shows that an upload is going), then a chevron (down while it is open, as the files panel opens upward).
+ * The heading of a sidebar section that opens and closes: its name and count, then whatever else it shows (an
+ * indicator while closed), then a chevron pointing the way the section opens, flipped while it is open.
  */
 export function SectionHead({
   name,
   count,
   open,
   onToggle,
+  upward = false,
   children,
 }: {
   name: string;
   count: number;
   open: boolean;
-  onToggle: () => void;
+  onToggle: (open: boolean) => void;
+  /** The section opens above its heading (a panel at the bottom of the sidebar). */
+  upward?: boolean;
   children?: ReactNode;
 }) {
   return (
@@ -52,13 +58,13 @@ export function SectionHead({
       type="button"
       className="section-head"
       aria-expanded={open}
-      onClick={onToggle}
+      onClick={() => onToggle(!open)}
       title={`${open ? "Hide" : "Show"} your ${name.toLowerCase()}`}
     >
       {name} <small>{count.toLocaleString("en")}</small>
       {children}
       <Icon size={14} box={16} stroke={1.8}>
-        <path d="M4 10l4-4 4 4" />
+        <path d={upward ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
       </Icon>
     </button>
   );

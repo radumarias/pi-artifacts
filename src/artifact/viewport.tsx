@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon.tsx";
-import { useStoredState } from "../layout.tsx";
+import { isBoolean, useStoredState } from "../layout.tsx";
 
 /** A page size, in CSS pixels. A preset without a height is as tall as the pane allows, like a browser window, and cannot turn. */
 interface Size {
@@ -55,7 +55,7 @@ const canTurn = (id: ViewportId) => sizeOf(id)?.height !== undefined;
 /** The picked size and whether it is turned, remembered in this browser. A newly picked device starts upright. */
 export function useViewport() {
   const [id, setId] = useStoredState<ViewportId>("preview.viewport", "fit", isViewportId);
-  const [rotated, setRotated] = useStoredState("preview.rotated", false, (value): value is boolean => typeof value === "boolean");
+  const [rotated, setRotated] = useStoredState("preview.rotated", false, isBoolean);
   return {
     id,
     rotated: rotated && canTurn(id),
