@@ -15,7 +15,7 @@ import {
 import { formatBytes } from "../shared/util.ts";
 import { json } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
-import type { UserFiles } from "./storage/user-files.ts";
+import type { FileEntry, UserFiles } from "./storage/user-files.ts";
 import { zipStream } from "./zip.ts";
 
 /** Room for the multipart boundaries and headers around the files themselves. */
@@ -154,7 +154,12 @@ async function serveSelection(request: Request, files: UserFiles): Promise<Respo
   if (count === 0) return json({ error: "Pick at least one file or folder." }, 400);
   const tooMany = zipRefusal(count, 0);
   if (tooMany) return json({ error: tooMany }, 413);
-  const inFolders = (await Promise.all(folders.map((folder) => files.list(folder, MAX_ZIP_FILES + 1)))).flat();
+  // One budget for all the folders, one more than a zip may hold: past it the pick is refused, so listing further is waste.
+  const inFolders: FileEntry[] = [];
+  for (const folder of folders) {
+    inFolders.push(...(await files.list(folder, MAX_ZIP_FILES + 1 - inFolders.length)));
+    if (inFolders.length > MAX_ZIP_FILES) break;
+  }
   // A file or folder inside a picked folder is in it once. Files picked one by one count towards the size as they are
   // read (zipStream's maxBytes): the sidebar checked them against its listing already.
   const paths = [...new Set([...inFolders.map((entry) => entry.path), ...picked])].sort();

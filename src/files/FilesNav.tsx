@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useDeferredValue, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { baseName } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, ZIP_ROUTE, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
@@ -252,27 +252,30 @@ function SelectionBar({
 }
 
 /**
- * The hidden frame the picked set's zip downloads into, kept by FilesNav whatever the panel shows: removed before the
- * Worker answers (Done right after Download, or the panel closed), it would take the download with it.
- * A saved zip loads nothing here; an error page does, and says why.
+ * The hidden frame the picked set's zip downloads into. It lives on document.body, outside React: removed before the
+ * Worker answers (the panel closed or the sidebar collapsed right after Download), it would take the download with it.
+ * A saved zip loads nothing here; an error page does, and says why, to the FilesNav mounted at the time.
  */
-const DownloadFrame = memo(function DownloadFrame({ onError }: { onError: (error: string) => void }) {
-  return (
-    <iframe
-      name={DOWNLOAD_FRAME}
-      title="Downloads"
-      hidden
-      onLoad={(event) => {
-        try {
-          const text = event.currentTarget.contentDocument?.body?.textContent;
-          if (text) onError((JSON.parse(text) as { error?: string }).error ?? text);
-        } catch {
-          // Not readable or not JSON: nothing to say.
-        }
-      }}
-    />
-  );
-});
+let downloadFrame: HTMLIFrameElement | undefined;
+let reportZipError: ((error: string) => void) | undefined;
+
+function ensureDownloadFrame(): void {
+  if (downloadFrame) return;
+  const frame = document.createElement("iframe");
+  frame.name = DOWNLOAD_FRAME;
+  frame.title = "Downloads";
+  frame.hidden = true;
+  frame.addEventListener("load", () => {
+    try {
+      const text = frame.contentDocument?.body?.textContent;
+      if (text) reportZipError?.((JSON.parse(text) as { error?: string }).error ?? text);
+    } catch {
+      // Not readable or not JSON: nothing to say.
+    }
+  });
+  document.body.append(frame);
+  downloadFrame = frame;
+}
 
 const Chevron = () => (
   <Icon size={14} box={16} stroke={1.8}>
@@ -292,6 +295,12 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
   const root = useMemo(() => tree(files, search), [files, search]);
   const [picked, setPicked] = useState<ReadonlyMap<string, Kind> | null>(null);
   const [zipError, setZipError] = useState<string | null>(null);
+  useEffect(() => {
+    reportZipError = setZipError;
+    return () => {
+      if (reportZipError === setZipError) reportZipError = undefined;
+    };
+  }, []);
   const selection = useMemo<Selection | null>(
     () =>
       picked && {
@@ -315,7 +324,6 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
   };
   return (
     <section className={open ? "files-panel open" : "files-panel"}>
-      <DownloadFrame onError={setZipError} />
       <button type="button" className="files-panel-head" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? "Hide your files" : "Show your files"}>
         Files <small>{files.length.toLocaleString("en")}</small>
         {/* Closed, the panel still shows that an upload is going. */}
@@ -340,7 +348,16 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
             )}
           </div>
           {picked && (
-            <SelectionBar files={files} picked={picked} error={zipError} onSubmit={() => setZipError(null)} onDone={() => setPicked(null)} />
+            <SelectionBar
+              files={files}
+              picked={picked}
+              error={zipError}
+              onSubmit={() => {
+                ensureDownloadFrame();
+                setZipError(null);
+              }}
+              onDone={() => setPicked(null)}
+            />
           )}
           <nav className="files">
             <SelectionContext.Provider value={selection}>
