@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeQuery, keptMentions, matchMentions, parseMentions, splitMentions, type Mention, type MentionChoice } from "../shared/mentions.ts";
-import { ID_PATTERN, type ArtifactMeta } from "../shared/protocol.ts";
+import type { ArtifactMeta } from "../shared/protocol.ts";
 import { resolveMentions } from "../worker/agent/mentions.ts";
 
 const file = (path: string): MentionChoice => ({ mention: { kind: "file", path }, detail: "" });
@@ -85,20 +85,19 @@ describe("parseMentions", () => {
           { kind: "artifact", id: "abcdefgh" },
           { kind: "file", path: "uploads/a.csv" },
         ],
-        ID_PATTERN,
       ),
     ).toEqual([
       { kind: "file", path: "uploads/a.csv" },
       { kind: "artifact", id: "abcdefgh" },
     ]);
-    expect(parseMentions(undefined, ID_PATTERN)).toEqual([]);
+    expect(parseMentions(undefined)).toEqual([]);
   });
 
   it("refuses anything else", () => {
-    expect(() => parseMentions("x", ID_PATTERN)).toThrow();
-    expect(() => parseMentions([{ kind: "artifact", id: "../x" }], ID_PATTERN)).toThrow();
-    expect(() => parseMentions([{ kind: "user", id: "ada" }], ID_PATTERN)).toThrow();
-    expect(() => parseMentions(Array.from({ length: 21 }, (_, i) => ({ kind: "file", path: `a${i}` })), ID_PATTERN)).toThrow();
+    expect(() => parseMentions("x")).toThrow();
+    expect(() => parseMentions([{ kind: "artifact", id: "../x" }])).toThrow();
+    expect(() => parseMentions([{ kind: "user", id: "ada" }])).toThrow();
+    expect(() => parseMentions(Array.from({ length: 21 }, (_, i) => ({ kind: "file", path: `a${i}` })))).toThrow();
   });
 });
 
@@ -113,7 +112,7 @@ describe("resolveMentions", () => {
   const scope = (byOwner: boolean) => ({ ownerUid: "ada", chatId: "chat1", byOwner, readMeta: async (id: string) => metas.get(id) ?? null });
 
   it("names files by path and the owner's artifacts by id for the model", async () => {
-    const { mentions, note } = await resolveMentions(
+    const { mentions, note, broughtIn } = await resolveMentions(
       [
         { kind: "file", path: " uploads/a.csv" },
         { kind: "artifact", id: "herechat" },
@@ -128,7 +127,8 @@ describe("resolveMentions", () => {
     ]);
     expect(note).toContain("the file uploads/a.csv");
     expect(note).toContain('the artifact "Page herechat" (artifact_id herechat, version 3, published in this chat)');
-    expect(note).toContain("published in another chat; read it with artifact_read");
+    expect(note).toContain('"Page elsewher" (artifact_id elsewher, version 3, from another chat)');
+    expect(broughtIn).toEqual(["elsewher"]);
   });
 
   it("drops another user's artifacts, bad paths, and for a member the owner's other chats", async () => {
@@ -139,7 +139,9 @@ describe("resolveMentions", () => {
       { kind: "artifact" as const, id: "elsewher" },
       { kind: "artifact" as const, id: "herechat" },
     ];
-    expect((await resolveMentions(inputs, scope(false))).mentions).toEqual([{ kind: "artifact", id: "herechat", title: "Page herechat" }]);
+    const { mentions, broughtIn } = await resolveMentions(inputs, scope(false));
+    expect(mentions).toEqual([{ kind: "artifact", id: "herechat", title: "Page herechat" }]);
+    expect(broughtIn).toEqual([]);
     expect((await resolveMentions([], scope(true))).note).toBe("");
   });
 });

@@ -1,5 +1,6 @@
 import { exports } from "cloudflare:workers";
 import type { MentionOptions } from "../shared/mentions.ts";
+import { mentionable } from "./agent/mentions.ts";
 import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type CreatedInvite, type Person } from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
 import { storeUpload } from "./files-routes.ts";
@@ -66,16 +67,15 @@ export async function chatRoute(
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
     return storeUpload(request, () => filesOf(ownerUid));
   }
-  // What the agent can open: the owner's files, and the owner's artifacts. Someone else in the chat is offered only this
-  // chat's artifacts: the owner's other chats are theirs, and a message from anyone else cannot name them (resolveMentions).
+  // What the agent can open: the owner's files, and the owner's artifacts that this person may name (mentionable).
   if (what === "mentions" && method === "GET" && !item) {
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
     const [files, artifacts] = await Promise.all([filesOf(ownerUid).then((f) => f.list()), exports.UserDirectory.getByName(ownerUid).listArtifacts()]);
     return json({
       files: files.sort((a, b) => +b.uploaded - +a.uploaded).map(({ path, size }) => ({ path, size })),
       artifacts: artifacts
-        .filter((a) => person.uid === ownerUid || a.chatId === chatId)
-        .map(({ id, title, latest, chatId: where }) => ({ id, title, latest, chatId: where })),
+        .filter((a) => mentionable(a, chatId, person.uid === ownerUid))
+        .map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId })),
     } satisfies MentionOptions);
   }
   if (what === "invites" && method === "DELETE" && item) return answer(await chat.revokeInvite(person, item));

@@ -8,7 +8,6 @@ import { DurableObject, exports } from "cloudflare:workers";
 import {
   CHAT_MESSAGE_KIND,
   CHAT_PEOPLE_KIND,
-  ID_PATTERN,
   isOwnedBy,
   isReadOnly,
   manifestOf,
@@ -49,6 +48,9 @@ import { ChatMembers, formatInviteToken } from "./members.ts";
 import { checkModelChoice, defaultModelChoice, withCurrentPrices } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
+
+/** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
+const MAX_BROUGHT_IN = 200;
 
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
 export interface ChatRefusal {
@@ -164,6 +166,7 @@ export class ChatAgent extends DurableObject<Env> {
       // Deriving the user's key is not free, so derive it once per object.
       files: memoAsync(() => this.storage.userFiles(this.uid)),
       onPublished: (artifact) => this.#directory.recordArtifact({ ...artifact, chatId: this.chatId }),
+      broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
     });
     this.registry.install(promptExtension);
@@ -398,6 +401,21 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /** For what a socket sends: its person may have been removed since it opened. */
+  /**
+   * Artifacts from the owner's other chats that the owner named here with "@": the agent may read them in this chat
+   * (ChatScope.broughtIn). Kept in the chat's storage, so they stay readable for later messages; newest last, at most
+   * MAX_BROUGHT_IN.
+   */
+  #broughtIn(): string[] {
+    return this.ctx.storage.kv.get<string[]>("broughtIn") ?? [];
+  }
+
+  #bringIn(ids: readonly string[]): void {
+    if (!ids.length) return;
+    const kept = [...this.#broughtIn().filter((id) => !ids.includes(id)), ...ids].slice(-MAX_BROUGHT_IN);
+    this.ctx.storage.kv.put("broughtIn", kept);
+  }
+
   #requireInChat(person: Person): void {
     if (!this.isInChat(person.uid)) throw new Error("You are no longer in this chat.");
   }
@@ -440,7 +458,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async prompt(text: string, author: Person, attachments: readonly AttachmentInput[] = [], mentionInputs: readonly MentionInput[] = []): Promise<void> {
     this.#requireInChat(author);
-    const [attached, { mentions, note }] = await Promise.all([
+    const [attached, { mentions, note, broughtIn }] = await Promise.all([
       attachments.length ? this.scope.files().then((files) => attachmentContent(attachments, files, this.#toMarkdown)) : undefined,
       resolveMentions(mentionInputs, {
         ownerUid: this.uid,
@@ -454,6 +472,7 @@ export class ChatAgent extends DurableObject<Env> {
     ]);
     // Again after the refreshes, which can take seconds: the author may have been removed meanwhile.
     this.#requireInChat(author);
+    this.#bringIn(broughtIn);
     const written = note ? `${text}\n\n${note}` : text;
     const said = this.members.hasAny() ? `${author.name}: ${written}` : written;
     const content = attached ? [...attached.content, ...(written ? [{ type: "text" as const, text: said }] : [])] : said;
@@ -768,7 +787,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     try {
       if (message.type === "prompt") {
         const attachments = parseAttachments(message.attachments);
-        const mentions = parseMentions(message.mentions, ID_PATTERN);
+        const mentions = parseMentions(message.mentions);
         const text = String(message.text ?? "").trim().slice(0, 20_000);
         if (text || attachments.length) await this.#chat.prompt(text, person, attachments, mentions);
       }

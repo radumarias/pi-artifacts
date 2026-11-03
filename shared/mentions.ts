@@ -1,3 +1,7 @@
+import { baseName } from "./attachments.ts";
+import { ID_PATTERN } from "./protocol.ts";
+import { MAX_PATH } from "./uploads.ts";
+
 /**
  * Files and artifacts named in a message with "@". The composer offers them as
  * the user types "@", puts `@<path>` or `@<title>` in the text, and sends the
@@ -66,23 +70,20 @@ export interface MentionChoice {
  */
 export function matchMentions(choices: readonly MentionChoice[], query: string, limit = 6): MentionChoice[] {
   const q = query.trim().toLowerCase();
+  // Artifacts first: there are fewer of them, and a page is often what a message is about.
+  const kind = (c: MentionChoice) => (c.mention.kind === "artifact" ? 0 : 1);
   const scored = choices
     .map((choice, order) => ({ choice, order, score: score(mentionLabel(choice.mention), q) }))
     .filter((c) => c.score > 0)
-    .sort((a, b) => b.score - a.score || a.order - b.order);
-  const kept: MentionChoice[] = [];
+    .sort((a, b) => kind(a.choice) - kind(b.choice) || b.score - a.score || a.order - b.order);
   const counts = { file: 0, artifact: 0 };
-  for (const { choice } of scored) {
-    if (counts[choice.mention.kind]++ < limit) kept.push(choice);
-  }
-  // Artifacts first: there are fewer of them, and a page is often what a message is about.
-  return [...kept.filter((c) => c.mention.kind === "artifact"), ...kept.filter((c) => c.mention.kind === "file")];
+  return scored.filter(({ choice }) => counts[choice.mention.kind]++ < limit).map(({ choice }) => choice);
 }
 
 function score(label: string, q: string): number {
   if (!q) return 1;
   const lower = label.toLowerCase();
-  const name = lower.slice(lower.lastIndexOf("/") + 1);
+  const name = baseName(lower);
   if (name.startsWith(q)) return 4;
   if (lower.split(/[\s/_.-]+/).some((word) => word.startsWith(q))) return 3;
   if (name.includes(q)) return 2;
@@ -99,35 +100,32 @@ export function keptMentions<T extends Mention>(text: string, mentions: readonly
  * mentions as chips. The longest token wins where two start at one place.
  */
 export function splitMentions(text: string, mentions: readonly Mention[]): (string | Mention)[] {
-  const tokens = [...mentions].sort((a, b) => mentionToken(b).length - mentionToken(a).length);
+  const tokens = mentions.map((mention) => ({ mention, token: mentionToken(mention) })).sort((a, b) => b.token.length - a.token.length);
   const parts: (string | Mention)[] = [];
-  let plain = "";
-  for (let i = 0; i < text.length; ) {
-    const found = text[i] === "@" ? tokens.find((m) => text.startsWith(mentionToken(m), i)) : undefined;
-    if (found) {
-      if (plain) parts.push(plain);
-      plain = "";
-      parts.push(found);
-      i += mentionToken(found).length;
-    } else {
-      plain += text[i++];
-    }
+  let plain = 0;
+  for (let at = text.indexOf("@"); at >= 0; at = text.indexOf("@", at + 1)) {
+    const found = tokens.find(({ token }) => text.startsWith(token, at));
+    if (!found) continue;
+    if (at > plain) parts.push(text.slice(plain, at));
+    parts.push(found.mention);
+    plain = at + found.token.length;
+    at = plain - 1;
   }
-  if (plain) parts.push(plain);
+  if (plain < text.length) parts.push(text.slice(plain));
   return parts;
 }
 
 /** The mentions in a prompt message, checked for shape only; the chat checks what they name. Throws on a malformed list. */
-export function parseMentions(raw: unknown, idPattern: RegExp): MentionInput[] {
+export function parseMentions(raw: unknown): MentionInput[] {
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) throw new Error("Mentions must be a list.");
   if (raw.length > MAX_MENTIONS) throw new Error(`A message takes at most ${MAX_MENTIONS} mentions.`);
   const parsed: MentionInput[] = [];
   for (const item of raw as Partial<{ kind: string; path: unknown; id: unknown }>[]) {
     const mention: MentionInput | null =
-      item?.kind === "file" && typeof item.path === "string" && item.path.length > 0 && item.path.length <= 200
+      item?.kind === "file" && typeof item.path === "string" && item.path.length > 0 && item.path.length <= MAX_PATH
         ? { kind: "file", path: item.path }
-        : item?.kind === "artifact" && typeof item.id === "string" && idPattern.test(item.id)
+        : item?.kind === "artifact" && typeof item.id === "string" && ID_PATTERN.test(item.id)
           ? { kind: "artifact", id: item.id }
           : null;
     if (!mention) throw new Error("Each mention is a file with its path or an artifact with its id.");

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { baseName } from "../../shared/attachments.ts";
 import {
   activeQuery,
   keptMentions,
@@ -47,39 +48,42 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
     if (!typing) setDismissedAt(null);
   }, [typing]);
 
-  const choices = useMemo(() => {
-    if (!query || !options) return [];
-    const all: MentionChoice[] = [
-      ...options.artifacts.map((a) => ({
-        mention: { kind: "artifact" as const, id: a.id, title: a.title },
-        detail: `artifact · v${a.latest}${a.chatId === chatId ? " · this chat" : ""}`,
-      })),
-      ...options.files.map((f) => ({ mention: { kind: "file" as const, path: f.path }, detail: formatBytes(f.size) })),
-    ];
-    return matchMentions(all, query.query);
-  }, [options, query?.query, chatId]);
+  const all = useMemo<MentionChoice[]>(
+    () =>
+      options
+        ? [
+            ...options.artifacts.map((a) => ({
+              mention: { kind: "artifact" as const, id: a.id, title: a.title },
+              detail: `artifact · v${a.latest}${a.chatId === chatId ? " · this chat" : ""}`,
+            })),
+            ...options.files.map((f) => ({ mention: { kind: "file" as const, path: f.path }, detail: formatBytes(f.size) })),
+          ]
+        : [],
+    [options, chatId],
+  );
+  const choices = useMemo(() => (query ? matchMentions(all, query.query) : []), [all, query?.query]);
   // An "@" in running text ("@ the team") matches nothing once a space follows: then it was not a mention.
   const open = query !== null && !(options && choices.length === 0 && /\s/.test(query.query));
-  useEffect(() => setActive(0), [query?.query]);
 
-  const pick = useCallback(
-    (choice: MentionChoice) => {
-      if (!query) return;
-      const token = `${mentionToken(choice.mention)} `;
-      const next = draft.slice(0, query.start) + token + draft.slice(caret);
-      const at = query.start + token.length;
-      setDraft(next);
-      setPicked((current) => (current.some((m) => sameMention(m, choice.mention)) ? current : [...current, choice.mention]));
-      setCaret(at);
-      // The "@" is done: its text still reads as a query, but the list should not reopen for it.
-      setDismissedAt(query.start);
-      requestAnimationFrame(() => {
-        input.current?.focus();
-        input.current?.setSelectionRange(at, at);
-      });
-    },
-    [query, draft, caret, setDraft, input],
-  );
+  /** Put `token` in place of draft[start, end), with the caret after it. */
+  const replace = (start: number, end: number, token: string) => {
+    const at = start + token.length;
+    setDraft(draft.slice(0, start) + token + draft.slice(end));
+    setCaret(at);
+    setActive(0);
+    requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.setSelectionRange(at, at);
+    });
+  };
+
+  const pick = (choice: MentionChoice) => {
+    if (!query) return;
+    replace(query.start, caret, `${mentionToken(choice.mention)} `);
+    setPicked((current) => (current.some((m) => sameMention(m, choice.mention)) ? current : [...current, choice.mention]));
+    // The "@" is done: its text still reads as a query, but the list should not reopen for it.
+    setDismissedAt(query.start);
+  };
 
   /** Keys the list takes while it is open; true when it took this one. */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
@@ -101,25 +105,20 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
   };
 
   /** Follow the caret: the list is about the "@" just before it. */
-  const track = () => setCaret(input.current?.selectionStart ?? draft.length);
+  const track = () => {
+    setCaret(input.current?.selectionStart ?? draft.length);
+    setActive(0);
+  };
 
   /** Put an "@" at the caret, with a space before it when it would touch a word, and open the list. */
   const insertAt = () => {
-    const el = input.current;
-    const at = el?.selectionStart ?? draft.length;
-    const token = at > 0 && !/\s/.test(draft[at - 1]) ? " @" : "@";
-    setDraft(draft.slice(0, at) + token + draft.slice(at));
-    setCaret(at + token.length);
+    const at = input.current?.selectionStart ?? draft.length;
+    replace(at, at, at > 0 && !/\s/.test(draft[at - 1]) ? " @" : "@");
     setDismissedAt(null);
-    requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(at + token.length, at + token.length);
-    });
   };
 
   /** The picks still named in `text`, to send with it; the list starts empty for the next message. */
-  const take = (text: string): MentionInput[] =>
-    keptMentions(text, picked).map((m) => (m.kind === "file" ? { kind: "file", path: m.path } : { kind: "artifact", id: m.id }));
+  const take = (text: string): MentionInput[] => keptMentions(text, picked);
   const clear = () => setPicked([]);
 
   return { open, loaded: options !== null, choices, active, setActive, pick, onKeyDown, track, insertAt, take, clear };
@@ -173,7 +172,7 @@ export function MentionText({ text, mentions }: { text: string; mentions?: Menti
           </a>
         ) : (
           <span key={i} className="mention-chip" title={part.path}>
-            @{part.path.slice(part.path.lastIndexOf("/") + 1)}
+            @{baseName(part.path)}
           </span>
         ),
       )}
