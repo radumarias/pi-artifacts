@@ -3,6 +3,7 @@
 // for one read naturally against the other.
 
 import type { Attachment, AttachmentInput } from "./attachments.ts";
+import type { Mention, MentionInput } from "./mentions.ts";
 
 export type McpErrorCode =
   | "server_not_connected"
@@ -185,6 +186,8 @@ export interface ChatMessageData extends Person {
   text: string;
   /** Files attached to the message, as the model got them (see shared/attachments.ts). */
   attachments?: Attachment[];
+  /** Files and artifacts the message names with "@" (see shared/mentions.ts). */
+  mentions?: Mention[];
 }
 
 /**
@@ -211,7 +214,8 @@ export interface Presence {
 /** Browser → ChatAgent over the chat WebSocket. */
 export type ChatClientMessage =
   // `attachments` were uploaded first, with POST /api/chats/:id/attachments; `text` may then be empty.
-  | { type: "prompt"; text: string; attachments?: AttachmentInput[] }
+  // `mentions` are the files and artifacts picked with "@" whose text is still in `text`.
+  | { type: "prompt"; text: string; attachments?: AttachmentInput[]; mentions?: MentionInput[] }
   | { type: "abort" }
   // Run the chat on another model or effort (shared/models.ts). The change reaches every socket as pi's agent_changed.
   | { type: "model"; model: string; thinkingLevel?: string };

@@ -8,6 +8,7 @@ import { DurableObject, exports } from "cloudflare:workers";
 import {
   CHAT_MESSAGE_KIND,
   CHAT_PEOPLE_KIND,
+  ID_PATTERN,
   isOwnedBy,
   isReadOnly,
   manifestOf,
@@ -29,10 +30,12 @@ import {
   type QueuedMessage,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
+import { parseMentions, type MentionInput } from "../shared/mentions.ts";
 import type { ModelChoice } from "../shared/models.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
+import { resolveMentions } from "./agent/mentions.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
@@ -127,7 +130,7 @@ export class ChatAgent extends DurableObject<Env> {
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
     queued: (ids) => this.queued(ids),
-    prompt: (text, author, attachments) => this.prompt(text, author, attachments),
+    prompt: (text, author, attachments, mentions) => this.prompt(text, author, attachments, mentions),
     abort: (by) => this.abort(by),
     setModel: (input, by) => this.setModel(input, by),
   });
@@ -431,25 +434,39 @@ export class ChatAgent extends DurableObject<Env> {
    * Once the chat has members, the model reads it as "name: text"; until then
    * it gets the text alone, so no name reaches the model for a chat nobody shares.
    * Attached files (already uploaded to the owner's files) come before the text,
-   * as images, text or names (see attachmentContent).
+   * as images, text or names (see attachmentContent). Files and artifacts picked
+   * with "@" come after it, by exact path and id (see resolveMentions).
    * While a run is going, it waits in pi's inbox, where everyone sees it queued (see queued), and is answered next.
    */
-  async prompt(text: string, author: Person, attachments: readonly AttachmentInput[] = []): Promise<void> {
+  async prompt(text: string, author: Person, attachments: readonly AttachmentInput[] = [], mentionInputs: readonly MentionInput[] = []): Promise<void> {
     this.#requireInChat(author);
-    const [attached] = await Promise.all([
+    const [attached, { mentions, note }] = await Promise.all([
       attachments.length ? this.scope.files().then((files) => attachmentContent(attachments, files, this.#toMarkdown)) : undefined,
+      resolveMentions(mentionInputs, {
+        ownerUid: this.uid,
+        chatId: this.chatId,
+        byOwner: author.uid === this.uid,
+        readMeta: (id) => this.storage.artifacts.readMeta(id),
+      }),
       this.refreshMcpTools().catch(() => {}),
       this.refreshSkills(),
       this.refreshFiles(),
     ]);
     // Again after the refreshes, which can take seconds: the author may have been removed meanwhile.
     this.#requireInChat(author);
-    const said = this.members.hasAny() ? `${author.name}: ${text}` : text;
-    const content = attached ? [...attached.content, ...(text ? [{ type: "text" as const, text: said }] : [])] : said;
+    const written = note ? `${text}\n\n${note}` : text;
+    const said = this.members.hasAny() ? `${author.name}: ${written}` : written;
+    const content = attached ? [...attached.content, ...(written ? [{ type: "text" as const, text: said }] : [])] : said;
     await this.harness.submit(content, {
       entry: {
         kind: CHAT_MESSAGE_KIND,
-        data: { uid: author.uid, name: author.name, text, ...(attached && { attachments: attached.attachments }) } satisfies ChatMessageData,
+        data: {
+          uid: author.uid,
+          name: author.name,
+          text,
+          ...(attached && { attachments: attached.attachments }),
+          ...(mentions.length && { mentions }),
+        } satisfies ChatMessageData,
       },
     });
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
@@ -641,7 +658,7 @@ interface ChatSession {
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
   queued(ids: readonly number[]): Promise<QueuedMessage[]>;
-  prompt(text: string, author: Person, attachments: readonly AttachmentInput[]): Promise<void>;
+  prompt(text: string, author: Person, attachments: readonly AttachmentInput[], mentions: readonly MentionInput[]): Promise<void>;
   abort(by: Person): Promise<void>;
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
 }
@@ -751,8 +768,9 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     try {
       if (message.type === "prompt") {
         const attachments = parseAttachments(message.attachments);
+        const mentions = parseMentions(message.mentions, ID_PATTERN);
         const text = String(message.text ?? "").trim().slice(0, 20_000);
-        if (text || attachments.length) await this.#chat.prompt(text, person, attachments);
+        if (text || attachments.length) await this.#chat.prompt(text, person, attachments, mentions);
       }
       else if (message.type === "abort") await this.#chat.abort(person);
       else if (message.type === "model") await this.#chat.setModel(message, person);

@@ -1,4 +1,5 @@
 import { exports } from "cloudflare:workers";
+import type { MentionOptions } from "../shared/mentions.ts";
 import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type CreatedInvite, type Person } from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
 import { storeUpload } from "./files-routes.ts";
@@ -15,6 +16,7 @@ import type { UserDirectory } from "./users.ts";
  *   DELETE /api/chats/:id/invites/:inviteId   (owner) revoke an invite
  *   DELETE /api/chats/:id/members/:uid        (owner) remove a member, or (member) leave
  *   POST   /api/chats/:id/attachments         files for a message, as POST /api/files takes them, into the owner's files
+ *   GET    /api/chats/:id/mentions            what "@" offers in the composer: the owner's files and artifacts
  *   POST   /api/invites/accept                {token}: join the chat an invite link is for
  * Returns null for any other path.
  */
@@ -37,7 +39,7 @@ export async function chatRoute(
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/(ws|invites|members|attachments)(?:\/([a-z0-9-]+))?$/);
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/(ws|invites|members|attachments|mentions)(?:\/([a-z0-9-]+))?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
@@ -63,6 +65,18 @@ export async function chatRoute(
   if (what === "attachments" && method === "POST" && !item) {
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
     return storeUpload(request, () => filesOf(ownerUid));
+  }
+  // What the agent can open: the owner's files, and the owner's artifacts. Someone else in the chat is offered only this
+  // chat's artifacts: the owner's other chats are theirs, and a message from anyone else cannot name them (resolveMentions).
+  if (what === "mentions" && method === "GET" && !item) {
+    if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
+    const [files, artifacts] = await Promise.all([filesOf(ownerUid).then((f) => f.list()), exports.UserDirectory.getByName(ownerUid).listArtifacts()]);
+    return json({
+      files: files.sort((a, b) => +b.uploaded - +a.uploaded).map(({ path, size }) => ({ path, size })),
+      artifacts: artifacts
+        .filter((a) => person.uid === ownerUid || a.chatId === chatId)
+        .map(({ id, title, latest, chatId: where }) => ({ id, title, latest, chatId: where })),
+    } satisfies MentionOptions);
   }
   if (what === "invites" && method === "DELETE" && item) return answer(await chat.revokeInvite(person, item));
   if (what === "members" && method === "DELETE" && item) return answer(await chat.removeMember(person, item));

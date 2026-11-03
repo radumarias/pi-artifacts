@@ -51,6 +51,7 @@
     "worker/agent/skills.ts",
     "worker/models.ts",
     "worker/agent/file-refs.ts",
+    "worker/agent/mentions.ts",
     "worker/files-routes.ts",
     "worker/http.ts",
     "worker/skills/index.ts",

@@ -2,7 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { exports } from "cloudflare:workers";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
-import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails } from "../../shared/protocol.ts";
+import { manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
@@ -252,10 +252,13 @@ export async function publishArtifact(scope: ChatScope, input: PublishInput): Pr
   return meta;
 }
 
-/** An artifact this chat published. Anything else reads as missing. */
+/**
+ * An artifact of the chat's owner, from this chat or, when the user names it with "@", from another one: the agent may
+ * read it, but publishes a new version only of this chat's (ArtifactStore.publishVersion). Anything else reads as missing.
+ */
 async function ownArtifact(scope: ChatScope, id: string): Promise<ArtifactMeta> {
   const meta = await scope.artifacts.readMeta(id);
-  if (!meta || !isOwnedBy(meta, scope.uid, scope.chatId)) throw new Error(`No artifact ${id} in this chat.`);
+  if (!meta || meta.ownerUid !== scope.uid) throw new Error(`No artifact ${id} in this chat or the user's others.`);
   return meta;
 }
 
@@ -291,7 +294,7 @@ export function artifactExtension(scope: ChatScope): Extension {
       }),
       defineTool({
         name: "artifact_read",
-        description: "Read the HTML of an artifact published in this chat, to revise it.",
+        description: "Read the HTML of an artifact published in this chat, to revise it, or of one the user named with @ from another of their chats, to build on it.",
         parameters: Type.Object({ artifact_id: Type.String(), version: Type.Optional(Type.Number()) }),
         replay: "safe",
         execute: async (args) => {
@@ -305,7 +308,7 @@ export function artifactExtension(scope: ChatScope): Extension {
       }),
       defineTool({
         name: "artifact_history",
-        description: "List the versions of an artifact published in this chat: when each was published and what it changed.",
+        description: "List the versions of an artifact published in this chat (or named with @ from another): when each was published and what it changed.",
         parameters: Type.Object({ artifact_id: Type.String() }),
         replay: "safe",
         execute: async (args) => {
