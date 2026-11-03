@@ -2,7 +2,8 @@ import puppeteer, { type Browser } from "@cloudflare/puppeteer";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CheckTimedOut, deadline } from "../worker/artifacts/browser.ts";
+import { deadline } from "../shared/util.ts";
+import { CheckTimedOut } from "../worker/artifacts/browser.ts";
 import { checkPage, describeReport, renderForCheck, type Bridge, type BridgeRequest, type CheckInput } from "../worker/artifacts/check.ts";
 
 /** A local Chrome to check pages in: CHROME_PATH, else the one Playwright installs. Without one the browser tests skip. */

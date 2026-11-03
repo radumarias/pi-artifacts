@@ -1,6 +1,6 @@
 import type { Frame, Page } from "@cloudflare/puppeteer";
 import { ARTIFACT_SANDBOX, type ArtifactManifest, type CallToolResult, type McpError, type McpErrorCode, type ToolInfo } from "../../shared/protocol.ts";
-import { clip, errorMessage } from "../../shared/util.ts";
+import { clip, deadline, errorMessage } from "../../shared/util.ts";
 import { PAGE_POLICY, renderArtifact } from "./serve.ts";
 
 /**
@@ -226,13 +226,6 @@ export function renderForCheck(html: string): { document: string; mapLine: (line
   return { document, mapLine: (line) => (line <= startLine ? line : line >= startLine + added ? line - added : undefined) };
 }
 
-/** Rejects after `ms`, so a page that never settles a promise cannot hold the check. */
-function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} took over ${Math.round(ms / 100) / 10} s`)), ms)));
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
 /** Waits for the frame to lay out and paint what changed (two animation frames), rather than a fixed time. */
 const PAINTED = "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
 
@@ -308,7 +301,8 @@ async function runTests(frame: Frame, tests: readonly CheckTest[]): Promise<Test
     }
     try {
       // Evaluated through the devtools protocol: the page policy, which forbids eval, does not apply to it.
-      const value = await within(frame.evaluate(`(async () => {\n${test.run}\n})()`), left, "The test");
+      // A page that never settles a promise cannot hold the check.
+      const value = await deadline(frame.evaluate(`(async () => {\n${test.run}\n})()`), left, () => new Error(`The test took over ${Math.round(left / 100) / 10} s`));
       if (value === false) results.push({ name: test.name, ok: false, detail: "returned false" });
       else results.push({ name: test.name, ok: true, detail: typeof value === "string" ? clip(value, MAX_ENTRY) : undefined });
     } catch (error) {

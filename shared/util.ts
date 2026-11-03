@@ -64,3 +64,19 @@ export function listSome(items: readonly string[], max: number): string {
 export function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
+
+/** `promise`, or a rejection once `ms` passed or `signal` aborted, whichever comes first. */
+export function deadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error, signal?: AbortSignal): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const stop = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(onTimeout()), ms);
+    onAbort = () => reject(signal!.reason ?? new Error("Stopped."));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([promise, stop]).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort!);
+  });
+}

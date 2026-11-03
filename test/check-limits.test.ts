@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CheckTimedOut, deadline } from "../worker/artifacts/browser.ts";
+import { deadline } from "../shared/util.ts";
+import { CheckTimedOut } from "../worker/artifacts/browser.ts";
 
 describe("deadline", () => {
   it("passes a promise that settles in time through", async () => {

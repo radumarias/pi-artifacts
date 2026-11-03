@@ -29,7 +29,7 @@ describe("waiting on the model", () => {
 
   it("hides while a tool call is written or waits to start: its panel shows a spinner", () => {
     expect(waitingOnModel(partial([{ type: "text", text: "Building it." }, { type: "toolCall", id: "c", name: "artifact_publish", arguments: {} }]))).toBe(false);
-    const call = { id: "a", kind: "pi.assistant", model: [{ role: "assistant", content: [{ type: "toolCall", id: "c", name: "run_python", arguments: {} }] }] };
+    const call = { id: "a", kind: "pi.assistant", model: [{ role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "c", name: "run_python", arguments: {} }] }] };
     const result = { id: "r", kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "c", toolName: "run_python", content: [], isError: false }] };
     expect(waitingOnModel({ ...busy, entries: [call] } as unknown as ChatState)).toBe(false);
     // Ended without a result: the model is up again.
@@ -42,6 +42,9 @@ describe("waiting on the model", () => {
   it("waits on no call of a message that was cut off: those calls never run", () => {
     const cut = { id: "a", kind: "pi.assistant", model: [{ role: "assistant", stopReason: "aborted", content: [{ type: "toolCall", id: "c", name: "artifact_check", arguments: {} }] }] };
     expect(unansweredCalls([cut] as unknown as ChatState["entries"])).toEqual(new Set());
+    // Out of tokens while writing the page: the call never runs either.
+    const long = { ...cut, model: [{ ...cut.model[0], stopReason: "length" }] };
+    expect(unansweredCalls([long] as unknown as ChatState["entries"])).toEqual(new Set());
     expect(waitingOnModel({ ...busy, entries: [cut] } as unknown as ChatState)).toBe(true);
   });
 });

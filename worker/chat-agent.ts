@@ -44,15 +44,7 @@ import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
-import {
-  artifactExtension,
-  filesExtension,
-  filesIndexExtension,
-  sandboxExtension,
-  sandboxName,
-  skillsExtension,
-  type ChatScope,
-} from "./agent/tools.ts";
+import { artifactExtension, filesExtension, filesIndexExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
 import { FailedChecks, publishChecked, type PublishInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";

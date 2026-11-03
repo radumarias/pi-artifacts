@@ -1,5 +1,5 @@
 import puppeteer, { type Browser, type BrowserWorker, type Page } from "@cloudflare/puppeteer";
-import { errorMessage } from "../../shared/util.ts";
+import { deadline, errorMessage } from "../../shared/util.ts";
 import { SCRIPT_HOSTS } from "./serve.ts";
 
 /** The only hosts the check's browser may reach: the page's script hosts and Google Fonts. Everything else it renders itself. */
@@ -15,28 +15,14 @@ const IDLE_MS = 15_000;
 const LAUNCH_MS = 30_000;
 /** How long opening a page in a running browser may take. */
 const PAGE_MS = 10_000;
+/** How long closing a page may take before the check stops waiting on it. */
+const CLOSE_MS = 5_000;
 
 /** Why there is no browser to check with: the check is skipped, and the page stays a draft (published unchecked only in local development). */
 export class BrowserUnavailable extends Error {}
 
 /** The check ran out of time: the page held the browser (a loop that never ends, a wait on something forever). */
 export class CheckTimedOut extends Error {}
-
-/** `promise`, or a rejection once `ms` passed or `signal` aborted, whichever comes first. */
-export function deadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error, signal?: AbortSignal): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  const stop = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(onTimeout()), ms);
-    onAbort = () => reject(signal!.reason ?? new Error("The check was stopped."));
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
-  });
-  return Promise.race([promise, stop]).finally(() => {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort!);
-  });
-}
 
 /**
  * One headless browser (Cloudflare Browser Rendering) for a chat's page checks, opened on the first check and closed
@@ -56,25 +42,29 @@ export class CheckBrowser {
   /**
    * Run `use` with a fresh page, for at most `timeoutMs` (CheckTimedOut after), and until `signal` aborts. A page that
    * ran out of time may hold the browser (a script that never yields blocks every devtools call), so the browser goes
-   * with it, and the next check starts another.
+   * with it, and the next check starts another. Stopping keeps the browser for the next check.
    */
   async withPage<T>(use: (page: Page) => Promise<T>, { timeoutMs, signal }: { timeoutMs: number; signal?: AbortSignal }): Promise<T> {
     this.#using++;
     clearTimeout(this.#idle);
     try {
-      signal?.throwIfAborted();
-      const page = await this.#page();
-      let stuck = false;
+      const opening = this.#page();
+      // Stopped while the browser starts: the page it gets later closes unused, and the launch stays for the next check.
+      const page = await deadline(opening, LAUNCH_MS + PAGE_MS, () => new BrowserUnavailable("the browser did not start in time"), signal).catch(
+        (error: unknown) => {
+          void opening.then((late) => late.close()).catch(() => {});
+          throw error;
+        },
+      );
       try {
         return await deadline(use(page), timeoutMs, () => new CheckTimedOut(`the check did not finish in ${timeoutMs / 1000} s`), signal);
       } catch (error) {
-        stuck = error instanceof CheckTimedOut || signal?.aborted === true;
+        // A page that ran out of time may hold the browser and never answer a close: the browser goes too.
+        if (error instanceof CheckTimedOut) this.#drop();
         throw error;
       } finally {
-        // A stuck page may never answer a close: drop the browser instead, unless another check is using it.
-        if (stuck && this.#using === 1) this.close();
-        else if (stuck) void page.close().catch(() => {});
-        else await deadline(page.close(), 5_000, () => new Error("closing the page took too long")).catch(() => {});
+        // Not waited on: nothing after it needs the page gone.
+        void deadline(page.close(), CLOSE_MS, () => new Error("closing the page took too long")).catch(() => {});
       }
     } finally {
       if (--this.#using === 0) this.#idle = setTimeout(() => this.close(), IDLE_MS);
@@ -87,6 +77,12 @@ export class CheckBrowser {
     void browser?.then((b) => b.close()).catch(() => {});
   }
 
+  /** Forget the browser, so the next check starts another, and close it unless another check still uses it. */
+  #drop(): void {
+    if (this.#using === 1) this.close();
+    else this.#browser = undefined;
+  }
+
   async #page(): Promise<Page> {
     const binding = this.#binding;
     if (!binding) throw new BrowserUnavailable("this deployment has no browser binding");
@@ -94,10 +90,8 @@ export class CheckBrowser {
       const browser = await this.#open(binding);
       return await deadline(browser.newPage(), PAGE_MS, () => new Error(`no new page within ${PAGE_MS / 1000} s`));
     } catch (error) {
-      // The next check starts a new browser. Close this one, if it started, unless another check still uses it.
-      const failed = this.#browser;
-      this.#browser = undefined;
-      if (this.#using === 1) void failed?.then((b) => b.close()).catch(() => {});
+      // The next check starts a new browser.
+      this.#drop();
       // Only the first line: a launch failure can carry a whole log.
       const why = errorMessage(error).split("\n")[0].slice(0, 300);
       throw new BrowserUnavailable(`the browser did not start (${why})`);
