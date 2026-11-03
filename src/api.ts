@@ -68,6 +68,8 @@ export const api = {
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
   models: () => request<ModelInfo[]>("/api/models"),
   artifact: (id: string) => request<ArtifactView>(`/api/artifacts/${id}`),
+  /** The owner opened `version` of their artifact: it is no longer new in their sidebar. */
+  markArtifactSeen: (id: string, version: number) => request<object>(`/api/artifacts/${id}/seen`, post({ version })),
   artifactTools: (id: string, version: number) => request<DeclaredTool[]>(`/api/artifacts/${id}/tools?version=${version}`),
   cloneAccess: (id: string) => request<CloneAccess>(`/api/artifacts/${id}/clone`, post({})),
   /** Resolves with the Worker's ProxyResponse, errors included; rejects only when the request itself fails. */

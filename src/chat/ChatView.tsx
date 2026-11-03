@@ -62,8 +62,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, [state.entries.length, state.partial, state.tools, state.queued.length]);
 
-  // A finished run may have published artifacts, saved files or proposed skills: refresh the sidebar. (The chat list
-  // follows on its own: see useChatList.)
+  // A finished run may have saved files (run_python): read them again. The rest of the sidebar follows on its own
+  // (useSidebarSocket).
   const wasBusy = useRef(false);
   useEffect(() => {
     if (wasBusy.current && !state.busy) onActivity();

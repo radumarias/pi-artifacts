@@ -1,6 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelChoice } from "../shared/models.ts";
-import { SIDEBAR_CHATS_CHANGED, type ArtifactSummary, type ChatStatus, type ChatSummary } from "../shared/protocol.ts";
+import type { ArtifactSummary, ChatStatus, ChatSummary, SidebarList } from "../shared/protocol.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
 import { titleFromMessage, UNNAMED_CHAT } from "./agent/title.ts";
@@ -46,6 +46,12 @@ export class UserDirectory extends DurableObject<Env> {
       if (!columns.has("activity_at")) ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN activity_at INTEGER NOT NULL DEFAULT 0`);
       if (!columns.has("seen_at")) ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN seen_at INTEGER NOT NULL DEFAULT 0`);
     }
+    // The newest version of each artifact its owner opened. Artifacts from before count as seen.
+    const artifactColumns = ctx.storage.sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('artifacts')").toArray();
+    if (!artifactColumns.some((column) => column.name === "seen")) {
+      ctx.storage.sql.exec("ALTER TABLE artifacts ADD COLUMN seen INTEGER NOT NULL DEFAULT 0");
+      ctx.storage.sql.exec("UPDATE artifacts SET seen = latest");
+    }
     // A sidebar's socket stays open for hours: answer its keep-alive pings without waking this object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     // Forget sign-ins to servers this deployment no longer has, tokens included.
@@ -68,8 +74,9 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /**
-   * The sidebar's socket: it only hears that the chat list changed (a chat was added, named, bumped, or its agent
-   * started or stopped working), and the app reads the list again. The Worker opens it for the signed-in user only.
+   * The sidebar's socket: it only hears which list changed (SidebarList): a chat was added, named, bumped, or its agent
+   * started or stopped working; an artifact was published or opened; a skill was added, changed or proposed. The app
+   * reads that list again. The Worker opens it for the signed-in user only.
    */
   fetch(request: Request): Response {
     if (request.headers.get("upgrade") !== "websocket") return new Response("Expected a WebSocket upgrade", { status: 426 });
@@ -90,11 +97,11 @@ export class UserDirectory extends DurableObject<Env> {
     }
   }
 
-  /** Tell the open sidebars that the chat list changed. */
-  #chatsChanged(): void {
+  /** Tell the open sidebars that a list changed. */
+  #changed(list: SidebarList): void {
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        ws.send(SIDEBAR_CHATS_CHANGED);
+        ws.send(list);
       } catch {
         // Closing; the app reads the list again when it reconnects.
       }
@@ -130,7 +137,7 @@ export class UserDirectory extends DurableObject<Env> {
     const own = ownerUid === this.ctx.id.name;
     const sql = own ? `UPDATE chats SET ${set} WHERE id = ?` : `UPDATE shared_chats SET ${set} WHERE id = ? AND owner_uid = ?`;
     const changed = this.ctx.storage.sql.exec(sql, ...values, id, ...(own ? [] : [ownerUid])).rowsWritten > 0;
-    if (changed) this.#chatsChanged();
+    if (changed) this.#changed("chats");
     return changed;
   }
 
@@ -149,7 +156,7 @@ export class UserDirectory extends DurableObject<Env> {
     const now = Date.now();
     const own = this.ctx.storage.sql.exec("UPDATE chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
     const shared = this.ctx.storage.sql.exec("UPDATE shared_chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
-    if (own + shared > 0) this.#chatsChanged();
+    if (own + shared > 0) this.#changed("chats");
   }
 
   /** Whose chat `id` is: this user's own uid, the owner's for a chat shared with them, or null. The chat itself still checks membership. */
@@ -174,7 +181,7 @@ export class UserDirectory extends DurableObject<Env> {
       now,
       chat.status,
     );
-    this.#chatsChanged();
+    this.#changed("chats");
   }
 
   /** Bump a shared chat to the top with its current title, as touchChat does for the owner. `byOther`: someone else wrote. */
@@ -188,13 +195,13 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   removeSharedChat(id: string, ownerUid: string): void {
-    if (this.ctx.storage.sql.exec("DELETE FROM shared_chats WHERE id = ? AND owner_uid = ?", id, ownerUid).rowsWritten) this.#chatsChanged();
+    if (this.ctx.storage.sql.exec("DELETE FROM shared_chats WHERE id = ? AND owner_uid = ?", id, ownerUid).rowsWritten) this.#changed("chats");
   }
 
   createChat(id: string): ChatSummary {
     const now = Date.now();
     this.ctx.storage.sql.exec("INSERT INTO chats (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)", id, UNNAMED_CHAT, now, now);
-    this.#chatsChanged();
+    this.#changed("chats");
     return { id, title: UNNAMED_CHAT, createdAt: now, updatedAt: now };
   }
 
@@ -220,9 +227,21 @@ export class UserDirectory extends DurableObject<Env> {
 
   listArtifacts(): ArtifactSummary[] {
     return this.ctx.storage.sql
-      .exec<{ id: string; title: string; chat_id: string; latest: number; updated_at: number }>("SELECT * FROM artifacts ORDER BY updated_at DESC")
+      .exec<{ id: string; title: string; chat_id: string; latest: number; updated_at: number; seen: number }>("SELECT * FROM artifacts ORDER BY updated_at DESC")
       .toArray()
-      .map((row) => ({ id: row.id, title: row.title, chatId: row.chat_id, latest: row.latest, updatedAt: row.updated_at }));
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        chatId: row.chat_id,
+        latest: row.latest,
+        updatedAt: row.updated_at,
+        ...(row.latest > row.seen && { unread: true as const }),
+      }));
+  }
+
+  /** The owner opened `version` of an artifact: it and the ones before are no longer unread. */
+  markArtifactSeen(id: string, version: number): void {
+    if (this.ctx.storage.sql.exec("UPDATE artifacts SET seen = ? WHERE id = ? AND seen < ?", version, id, version).rowsWritten) this.#changed("artifacts");
   }
 
   recordArtifact(artifact: ArtifactSummary): void {
@@ -235,6 +254,7 @@ export class UserDirectory extends DurableObject<Env> {
       artifact.latest,
       artifact.updatedAt,
     );
+    this.#changed("artifacts");
   }
 
   /**
@@ -312,6 +332,7 @@ export class UserDirectory extends DurableObject<Env> {
       on ? 1 : 0,
       now,
     );
+    this.#changed("skills");
     return { ...skill, origin, enabled: on, updatedAt: now };
   }
 
@@ -319,6 +340,7 @@ export class UserDirectory extends DurableObject<Env> {
     if (!builtinSkill(name)) return { error: `No built-in skill named "${name}".` };
     if (enabled) this.ctx.storage.sql.exec("DELETE FROM builtin_skills_off WHERE name = ?", name);
     else this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name);
+    this.#changed("skills");
     return this.getBuiltinSkill(name)!;
   }
 
@@ -338,12 +360,14 @@ export class UserDirectory extends DurableObject<Env> {
     } else {
       this.ctx.storage.sql.exec("UPDATE skills SET enabled = 0, updated_at = ? WHERE name = ?", Date.now(), name);
     }
+    this.#changed("skills");
     return this.getSkill(name) ?? { error: `No skill named "${name}".` };
   }
 
   /** Delete one of the user's skills. Built-in ones can only be turned off. */
   deleteSkill(name: string): SkillResult | null {
     const deleted = this.ctx.storage.sql.exec("DELETE FROM skills WHERE name = ?", name).rowsWritten;
+    if (deleted) this.#changed("skills");
     return deleted ? null : { error: `No skill named "${name}".` };
   }
 

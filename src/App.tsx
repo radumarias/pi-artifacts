@@ -4,12 +4,13 @@ import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
-import { ChatList, useChatList } from "./chat/ChatList.tsx";
+import { ChatList, UnreadDot, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
 import { ResizeHandle, useStoredState } from "./layout.tsx";
+import { useLatest, useSidebarSocket } from "./sidebar.ts";
 import { SkillsView } from "./skills/SkillsView.tsx";
 
 function usePath(): [string, (path: string) => void] {
@@ -169,8 +170,8 @@ const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
 function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: WorkspaceProps) {
-  const chats = useChatList(chatId);
-  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  const { chats, load: loadChats } = useChatList(chatId);
+  const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -190,15 +191,15 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
       (e: Error) => setSkillsError(e.message),
     );
   }, []);
-  const loadArtifacts = useCallback(() => void api.artifacts().then(setArtifacts, () => {}), []);
   const loadFiles = useCallback(() => void api.files().then(setFiles, () => {}), []);
-  // After a run: it may have published, saved files (run_python) or proposed a skill. The chat list follows on its own.
-  const refresh = useCallback(() => {
+  useEffect(() => {
     loadArtifacts();
     loadFiles();
     loadSkills();
   }, [loadArtifacts, loadFiles, loadSkills]);
-  useEffect(refresh, [refresh]);
+  // Chats, artifacts and skills live in the user's directory, which says when they change. Files are not in it: a run
+  // may have saved some (run_python), so they are read again after each one.
+  useSidebarSocket({ chats: loadChats, artifacts: loadArtifacts, skills: loadSkills });
   useEffect(() => setPreview(null), [chatId]);
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
@@ -212,9 +213,8 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const onArtifact = useCallback(
     (artifact: PublishedDetails) => {
       setPreview(artifact);
-      loadArtifacts();
     },
-    [loadArtifacts],
+    [],
   );
 
   const { status: uploadStatus, upload } = useUploads(loadFiles);
@@ -291,8 +291,11 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           <h3>Artifacts</h3>
           <nav>
             {artifacts.map((a) => (
-              <a key={a.id} href={`/a/${a.id}`} target="_blank" rel="noreferrer">
-                {a.title} <small>v{a.latest}</small>
+              <a key={a.id} href={`/a/${a.id}`} target="_blank" rel="noreferrer" className={a.unread ? "nav-item unread" : "nav-item"}>
+                <span className="nav-title">
+                  {a.title} <small>v{a.latest}</small>
+                </span>
+                {a.unread && <UnreadDot label="New version you have not opened" />}
               </a>
             ))}
           </nav>
@@ -300,14 +303,17 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           <nav>
             <a
               href="/skills"
-              className={showSkills ? "active" : ""}
+              className={["nav-item", showSkills && "active", proposed > 0 && "unread"].filter(Boolean).join(" ")}
               onClick={(e) => {
                 e.preventDefault();
                 navigate("/skills");
               }}
             >
-              {(skills ?? []).filter(isActive).length} on, {skills?.length ?? 0} in all
-              {proposed > 0 && <small> · {proposed} to review</small>}
+              <span className="nav-title">
+                {(skills ?? []).filter(isActive).length} on, {skills?.length ?? 0} in all
+                {proposed > 0 && <small> · {proposed} to review</small>}
+              </span>
+              {proposed > 0 && <UnreadDot label="Proposed skills to review" />}
             </a>
           </nav>
           </div>
@@ -340,7 +346,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               chatId={chatId}
               uid={uid}
               onArtifact={onArtifact}
-              onActivity={refresh}
+              onActivity={loadFiles}
               onLeft={() => navigate("/")}
             />
           </ErrorBoundary>

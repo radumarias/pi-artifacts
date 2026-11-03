@@ -84,9 +84,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   // Published artifacts are public: anyone with a link may view a page and load its live data, signed in or not.
   // Only what a page needs is here; the chat it came from, its owner and everything else need a sign-in below.
-  const [, matchedId, artifactSub] = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone)?$/) ?? [];
+  const [, matchedId, artifactSub] = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone|\/seen)?$/) ?? [];
   const artifactId = matchedId && ID_PATTERN.test(matchedId) ? matchedId : undefined;
-  if (artifactId && artifactSub !== "/clone") {
+  if (artifactId && artifactSub !== "/clone" && artifactSub !== "/seen") {
     const response = await publicArtifactRoute(request, url, env, storage, artifactId, artifactSub, identity?.uid ?? null);
     if (response) return response;
   }
@@ -117,6 +117,13 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/chats" && method === "GET") return json(await directory.listChats());
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());
+  // The owner opened a version of one of their artifacts: only their own sidebar entry changes.
+  if (artifactId && artifactSub === "/seen" && method === "POST") {
+    const version = (await readJson<{ version?: unknown }>(request))?.version;
+    if (!Number.isInteger(version)) return json({ error: "Expected {version}." }, 400);
+    await directory.markArtifactSeen(artifactId, version as number);
+    return json({});
+  }
   // The model picker's choices. They change only with a deploy.
   if (path === "/api/models" && method === "GET") return json(modelCatalog(), 200, { "cache-control": "private, max-age=3600" });
 

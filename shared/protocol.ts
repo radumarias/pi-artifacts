@@ -110,6 +110,8 @@ export interface ArtifactSummary {
   chatId: string;
   latest: number;
   updatedAt: number;
+  /** Set when a version was published that its owner has not opened yet. */
+  unread?: true;
 }
 
 /**
@@ -157,8 +159,8 @@ export interface ChatSummary {
   unread?: true;
 }
 
-/** What the sidebar's socket (GET /api/me/ws) sends: the chat list changed, so read it again. */
-export const SIDEBAR_CHATS_CHANGED = "chats";
+/** What the sidebar's socket (GET /api/me/ws) sends: the name of a list that changed, so the app reads it again. */
+export type SidebarList = "chats" | "artifacts" | "skills";
 
 /** Someone in a chat: a verified uid, and the name the others see (their email, or the demo name). */
 export interface Person {

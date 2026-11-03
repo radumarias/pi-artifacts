@@ -41,6 +41,8 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
         setMeta(m);
         setVersion(m.latest);
         setError(null);
+        // Its owner has now seen the newest version: it is no longer new in their sidebar.
+        if (m.isOwner) api.markArtifactSeen(artifactId, m.latest).catch(() => {});
       })
       .catch((e: Error) => !cancelled && setError(e.message));
     return () => {
