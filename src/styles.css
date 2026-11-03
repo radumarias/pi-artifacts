@@ -207,7 +207,18 @@ body.resizing iframe { pointer-events: none; }
   pointer-events: none;
 }
 .workspace.dragging iframe { pointer-events: none; }
-.sidebar footer { margin-top: auto; display: flex; align-items: center; justify-content: space-between; padding-top: 12px; color: var(--muted); }
+/* Who is signed in, at the bottom; a click opens the account menu above it. */
+.account { position: relative; margin: auto -8px 0; padding-top: 8px; }
+.account-button, .account-menu button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; text-align: left; }
+.account-button { padding: 6px 8px; }
+.account-menu button { padding: 8px 10px; }
+:is(.account-button, .account-menu button):hover, .account-button[aria-expanded="true"], .account-menu button:focus-visible { background: var(--surface-2); }
+.account-button > svg { flex: none; color: var(--muted); transition: transform 0.15s; }
+.account-button[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.avatar { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+/* A long email ends in an ellipsis rather than squeezing anything else. */
+.account-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 4px); z-index: 5; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); }
 
 .main { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .chat { display: flex; flex-direction: column; height: 100%; }

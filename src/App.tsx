@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { ID_PATTERN } from "../shared/protocol.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
+import { AccountMenu } from "./AccountMenu.tsx";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatList, UnreadDot, useChatList } from "./chat/ChatList.tsx";
@@ -341,12 +342,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
             </nav>
           </section>
           <FilesNav files={files} status={uploadStatus} upload={upload} />
-          <footer>
-            <span title={label}>{label}</span>
-            <button type="button" onClick={onSignOut}>
-              Sign out
-            </button>
-          </footer>
+          <AccountMenu label={label} onSignOut={onSignOut} />
         </aside>
       )}
       <ResizeHandle

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Icon } from "./Icon.tsx";
 
 /**
@@ -28,6 +28,35 @@ export function useStoredState<T>(key: string, fallback: T, valid?: (value: unkn
     [key],
   );
   return [value, store];
+}
+
+/**
+ * Closes a popup on a click outside the element the returned ref is put on (an iframe's included), or on Escape;
+ * listens only while `open`.
+ */
+export function useDismiss<T extends HTMLElement>(open: boolean, setOpen: (open: boolean) => void) {
+  const box = useRef<T>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (event: MouseEvent) => box.current?.contains(event.target as Node) || setOpen(false);
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Focus inside the popup would fall to the page as it closes: hand it back to the button that opened it.
+      if (box.current?.contains(document.activeElement)) box.current.querySelector<HTMLElement>("[aria-expanded]")?.focus();
+      setOpen(false);
+    };
+    // A click into an iframe (the artifact preview) reaches no document listener here, but blurs the window.
+    const onBlur = () => setOpen(false);
+    document.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [open, setOpen]);
+  return box;
 }
 
 /** The check for a stored open/closed (or on/off) setting. */

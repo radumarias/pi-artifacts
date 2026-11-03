@@ -1,6 +1,7 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { effortLabel, type ModelInfo } from "../../shared/models.ts";
+import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
 import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
 import { formatElapsed } from "./Thinking.tsx";
@@ -40,19 +41,8 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
   // Only the open panel splits models by effort: the button shows totals, and the entries change with every message.
   const split = open ? entries : undefined;
   const spend = useMemo(() => chatSpend(usage, split), [usage, split]);
-  const box = useRef<HTMLDivElement>(null);
   // A click anywhere else, or Escape, closes the panel.
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (event: MouseEvent) => box.current?.contains(event.target as Node) || setOpen(false);
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && setOpen(false);
-    document.addEventListener("click", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const box = useDismiss<HTMLDivElement>(open, setOpen);
   if (spend.models.length === 0) return null;
   // By id, not the catalog: a deployment's default can be a Workers AI model the picker does not list.
   const workersAi = spend.models.some((share) => share.model.startsWith("@cf/"));
