@@ -1,4 +1,4 @@
-import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel, type Provider } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type Models, type ModelThinkingLevel, type Provider } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { createAI } from "agents/models/pi-ai";
 import { EFFORT_LABELS, VENDORS, type ModelChoice, type ModelInfo, type Vendor } from "../shared/models.ts";
@@ -56,6 +56,28 @@ export function withCurrentPrices(provider: Provider): Provider {
     getModels: () => provider.getModels().map(withCurrentPrice),
     getAllModels: () => (provider.getAllModels?.() ?? provider.getModels()).map(withCurrentPrice),
   };
+}
+
+/**
+ * `models`, with each reply marked with the effort it was asked at: pi-ai's `thinkingLevel` on the message, which only
+ * pi's own agent loop sets, and pi-durable does not. The chat's cost panel shows it next to the model. A request that
+ * asks for no reasoning is "off".
+ */
+export function withEffortRecorded(models: Models): Models {
+  const streamSimple = models.streamSimple.bind(models);
+  // completeSimple (the calls that summarize a long conversation) goes through streamSimple too.
+  models.streamSimple = (model, context, options) => {
+    const stream = streamSimple(model, context, options);
+    const result = stream.result.bind(stream);
+    const effort = options?.reasoning ?? "off";
+    stream.result = async () => {
+      const message = await result();
+      message.thinkingLevel ??= effort;
+      return message;
+    };
+    return stream;
+  };
+  return models;
 }
 
 /** A listed model, and the pi-ai metadata its efforts come from. */

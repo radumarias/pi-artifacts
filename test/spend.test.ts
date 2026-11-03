@@ -88,6 +88,33 @@ describe("chat spend", () => {
     expect(chatSpend(undefined).models).toEqual([]);
   });
 
+  it("splits a model's share by the effort its replies were asked at, the rest of its ledger going to the effort used last", () => {
+    const answer = (model: string, cost: number, thinkingLevel?: string) =>
+      entry("pi.assistant", { role: "assistant", model, content: [], usage: usage({ input: 10 }, cost), ...(thinkingLevel && { thinkingLevel }) });
+    const ledger = {
+      // Opus: 0.1 + 0.3 + 0.2 in replies, and 0.05 summarizing the conversation.
+      models: { "cloudflare/anthropic/claude-opus-5.5": usage({ input: 35 }, 0.65), "cloudflare/openai/gpt-5.5": usage({ input: 20 }, 0.4) },
+      tools: {},
+    } as unknown as UsageState;
+    const entries = [
+      prompt(),
+      answer("anthropic/claude-opus-5.5", 0.1, "high"),
+      answer("anthropic/claude-opus-5.5", 0.3, "medium"),
+      answer("anthropic/claude-opus-5.5", 0.2, "high"),
+      answer("openai/gpt-5.5", 0.4),
+    ];
+    const { total, models: rows } = chatSpend(ledger, entries);
+    expect(rows.map(({ model, effort, input }) => ({ model, effort, input }))).toEqual([
+      { model: "openai/gpt-5.5", effort: undefined, input: 20 },
+      { model: "anthropic/claude-opus-5.5", effort: "high", input: 25 },
+      { model: "anthropic/claude-opus-5.5", effort: "medium", input: 10 },
+    ]);
+    expect(rows.map((row) => row.cost)).toEqual([0.4, expect.closeTo(0.35), expect.closeTo(0.3)]);
+    expect(total.cost).toBeCloseTo(1.05);
+    // Replies from before efforts were recorded, and a model with no replies in view, keep one row without an effort.
+    expect(chatSpend(ledger, [entries[4]]).models.map((row) => row.effort)).toEqual([undefined, undefined]);
+  });
+
   it("formats small costs to two significant digits and larger ones to the cent", () => {
     expect([0, 0.00004, 0.0042, 0.37, 0.5, 0.999, 12.4].map(formatCost)).toEqual(["$0.00", "<$0.0001", "$0.0042", "$0.37", "$0.50", "$1.00", "$12.40"]);
   });

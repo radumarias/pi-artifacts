@@ -1,4 +1,4 @@
-import type { Usage } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { CHAT_MESSAGE_KIND } from "../../shared/protocol.ts";
 
@@ -25,6 +25,12 @@ function spendOf(usage: Usage): Spend {
 
 function plus(a: Spend, b: Spend): Spend {
   return { cost: a.cost + b.cost, input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite };
+}
+
+/** `a` less `b`, never below zero: sums of the same costs in another order can differ in the last digits. */
+function minus(a: Spend, b: Spend): Spend {
+  const at = (key: keyof Spend) => Math.max(0, a[key] - b[key]);
+  return { cost: at("cost"), input: at("input"), output: at("output"), cacheRead: at("cacheRead"), cacheWrite: at("cacheWrite") };
 }
 
 /** How long work took: wall-clock time, and how long model replies and tools ran within it (tools can overlap). */
@@ -101,17 +107,53 @@ export function totalTime(prompts: Iterable<PromptSpend>): Timing {
   return [...prompts].reduce((sum, prompt) => plusTime(sum, prompt.time), NO_TIME);
 }
 
+/** One row of a chat's spend: a model at one effort (none for replies from before efforts were recorded), or a tool. */
+export type Share = Spend & { model: string; effort?: ModelThinkingLevel };
+
+/** What each model's replies in `entries` cost at each effort, the effort used last last. */
+function replySpend(entries: readonly EntryRecord[]): Map<string, Map<ModelThinkingLevel | undefined, Spend>> {
+  const models = new Map<string, Map<ModelThinkingLevel | undefined, Spend>>();
+  for (const entry of entries) {
+    const message = entry.model?.[0];
+    if (entry.kind !== "pi.assistant" || message?.role !== "assistant") continue;
+    let efforts = models.get(message.model);
+    if (!efforts) models.set(message.model, (efforts = new Map()));
+    const sum = plus(efforts.get(message.thinkingLevel) ?? NONE, spendOf(message.usage));
+    // Moved to the end: the effort used last comes last.
+    efforts.delete(message.thinkingLevel);
+    efforts.set(message.thinkingLevel, sum);
+  }
+  return models;
+}
+
 /**
- * A chat's spend from pi's ledger, by model, costliest first: model replies, and the calls that summarize a long
- * conversation. A tool that reports a spend of its own counts too, under the tool's name.
+ * A model's share of the ledger, by the effort its replies were asked at. The ledger also counts calls that are no
+ * reply (those that summarize a long conversation, at the chat's effort then): what the replies leave over goes to the
+ * effort used last.
  */
-export function chatSpend(usage: UsageState | undefined): { total: Spend; models: (Spend & { model: string })[] } {
+function byEffort(model: string, total: Spend, efforts: Map<ModelThinkingLevel | undefined, Spend> | undefined): Share[] {
+  if (!efforts?.size) return [{ ...total, model }];
+  const shares: Share[] = [...efforts].map(([effort, spend]) => ({ ...spend, model, ...(effort && { effort }) }));
+  const last = shares.length - 1;
+  shares[last] = { ...shares[last], ...plus(shares[last], minus(total, shares.reduce<Spend>(plus, NONE))) };
+  return shares;
+}
+
+/**
+ * A chat's spend from pi's ledger, by model and the effort each reply in `entries` was asked at, costliest first: model
+ * replies, and the calls that summarize a long conversation. A tool that reports a spend of its own counts too, under
+ * the tool's name.
+ */
+export function chatSpend(usage: UsageState | undefined, entries: readonly EntryRecord[] = []): { total: Spend; models: Share[] } {
+  const replies = replySpend(entries);
   const models = [
     // Keyed `provider/modelId`; every model comes through the one provider, so its name says nothing.
-    ...Object.entries(usage?.models ?? {}).map(([key, value]) => [key.slice(key.indexOf("/") + 1), value] as const),
-    ...Object.entries(usage?.tools ?? {}),
+    ...Object.entries(usage?.models ?? {}).flatMap(([key, value]) => {
+      const model = key.slice(key.indexOf("/") + 1);
+      return byEffort(model, spendOf(value as Usage), replies.get(model));
+    }),
+    ...Object.entries(usage?.tools ?? {}).map(([model, value]): Share => ({ ...spendOf(value as Usage), model })),
   ]
-    .map(([model, value]) => ({ ...spendOf(value as Usage), model }))
     .filter((spend) => spend.cost > 0 || spend.input + spend.output > 0)
     .sort((a, b) => b.cost - a.cost);
   return { total: models.reduce<Spend>(plus, NONE), models };

@@ -1,7 +1,8 @@
-import type { UsageState } from "@earendil-works/pi-durable";
+import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { EFFORT_LABELS, type ModelInfo } from "../../shared/models.ts";
 import { useCatalog } from "./ModelPicker.tsx";
-import { chatSpend, describeTokens, formatCost, type PromptSpend, shortTokens, type Timing } from "./spend.ts";
+import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
 import { formatElapsed } from "./Thinking.tsx";
 
 /** Where the time went, for a tooltip: "model replies 48s (3), tools 31s (2)". */
@@ -9,6 +10,14 @@ function describeTime(time: Timing): string {
   const parts = [`model replies ${formatElapsed(time.modelMs)} (${time.replies})`];
   if (time.tools) parts.push(`tools ${formatElapsed(time.toolMs)} (${time.tools})`);
   return parts.join(", ");
+}
+
+/** A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name. */
+function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
+  const model = models.get(share.model);
+  const name = model?.name ?? share.model;
+  // A model that does not reason is asked for no effort: nothing to say.
+  return share.effort && (share.effort !== "off" || model?.efforts.length) ? `${name} · ${EFFORT_LABELS[share.effort]} effort` : name;
 }
 
 /** What one prompt's model calls cost and how long it took, under the agent's last reply to it. Memoized: the chat re-renders on every streamed token. */
@@ -24,13 +33,13 @@ export const PromptCost = memo(function PromptCost({ spend }: { spend: PromptSpe
 /**
  * What the chat's model calls cost so far and how long its prompts took, in the header; a click opens what each
  * model's share was and where the time went. `time` is the finished prompts'. Memoized: the chat re-renders on every
- * streamed token, the ledger only when a reply lands.
+ * streamed token, the ledger and `entries` (whose replies say their effort) only when a reply lands.
  */
-export const ChatCost = memo(function ChatCost({ usage, time }: { usage?: UsageState; time: Timing }) {
+export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage?: UsageState; entries: readonly EntryRecord[]; time: Timing }) {
   const [open, setOpen] = useState(false);
   const catalog = useCatalog();
   const models = useMemo(() => new Map(catalog.map((model) => [model.id, model])), [catalog]);
-  const spend = useMemo(() => chatSpend(usage), [usage]);
+  const spend = useMemo(() => chatSpend(usage, entries), [usage, entries]);
   const box = useRef<HTMLDivElement>(null);
   // A click anywhere else, or Escape, closes the panel.
   useEffect(() => {
@@ -58,8 +67,8 @@ export const ChatCost = memo(function ChatCost({ usage, time }: { usage?: UsageS
           <strong>AI cost and time of this chat</strong>
           <ul>
             {spend.models.map((share) => (
-              <li key={share.model} title={describeTokens(share)}>
-                <span>{models.get(share.model)?.name ?? share.model}</span>
+              <li key={`${share.model} ${share.effort}`} title={describeTokens(share)}>
+                <span>{shareName(share, models)}</span>
                 <small>{shortTokens(share)}</small>
                 <span className="cost-amount">{formatCost(share.cost)}</span>
               </li>

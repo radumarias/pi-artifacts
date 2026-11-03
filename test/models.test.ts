@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { checkModelChoice, defaultModelChoice, modelCatalog } from "../worker/models.ts";
+import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
+import { checkModelChoice, defaultModelChoice, modelCatalog, withEffortRecorded } from "../worker/models.ts";
 
 // The real catalog, as the Worker builds it from pi-ai.
 const models = modelCatalog();
@@ -64,5 +66,35 @@ describe("default model", () => {
     expect(defaultModelChoice("anthropic/claude-opus-5.5", "high")).toEqual({ model: "anthropic/claude-opus-5.5", thinkingLevel: "high" });
     expect(defaultModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "high")).toEqual({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", thinkingLevel: "high" });
     expect(defaultModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "hgih").thinkingLevel).toBe("medium");
+  });
+});
+
+describe("effort per reply", () => {
+  /** Models whose every reply is `reply`, done at once. */
+  const answering = (reply: () => AssistantMessage) =>
+    withEffortRecorded({
+      streamSimple() {
+        const stream = new AssistantMessageEventStream();
+        stream.push({ type: "done", reason: "stop", message: reply() });
+        return stream;
+      },
+      async completeSimple(this: Models, ...args: Parameters<Models["streamSimple"]>) {
+        return this.streamSimple(...args).result();
+      },
+    } as unknown as Models);
+  const message = (extra: Partial<AssistantMessage> = {}) => ({ role: "assistant", content: [], usage: {}, stopReason: "stop", timestamp: 0, ...extra }) as unknown as AssistantMessage;
+  const model = {} as Model<never>;
+
+  it("marks each reply with the effort it was asked at, and one asked for no reasoning as off", async () => {
+    const models = answering(() => message());
+    expect((await models.streamSimple(model, { messages: [] }, { reasoning: "high" }).result()).thinkingLevel).toBe("high");
+    // Summaries of a long conversation come through completeSimple.
+    expect((await models.completeSimple(model, { messages: [] }, { reasoning: "low" })).thinkingLevel).toBe("low");
+    expect((await models.completeSimple(model, { messages: [] })).thinkingLevel).toBe("off");
+  });
+
+  it("keeps an effort the reply already says", async () => {
+    const models = answering(() => message({ thinkingLevel: "medium" }));
+    expect((await models.streamSimple(model, { messages: [] }, { reasoning: "high" }).result()).thinkingLevel).toBe("medium");
   });
 });

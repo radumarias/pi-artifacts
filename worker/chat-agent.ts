@@ -55,7 +55,7 @@ import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
-import { checkModelChoice, defaultModelChoice, withCurrentPrices } from "./models.ts";
+import { checkModelChoice, defaultModelChoice, withCurrentPrices, withEffortRecorded } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
 
@@ -99,11 +99,11 @@ const SETTLE_MS = 1_500;
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
 const STATUS_KEY = "status";
 
-/** pi-ai's models, through the chat's AI Gateway, at the vendors' current prices. */
+/** pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort. */
 function piModels(provider: Provider) {
   const models = createModels();
   models.setProvider(withCurrentPrices(provider));
-  return models;
+  return withEffortRecorded(models);
 }
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */

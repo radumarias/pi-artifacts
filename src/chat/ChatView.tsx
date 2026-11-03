@@ -167,7 +167,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
           ))}
           {mine > 1 && `${others.length ? " · " : ""}Open in ${mine} of your windows`}
         </span>
-        <ChatCost usage={state.usage} time={time} />
+        <ChatCost usage={state.usage} entries={state.entries} time={time} />
         {people && (
           <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
             {isOwner ? "Share" : "People"}
