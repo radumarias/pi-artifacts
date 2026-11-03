@@ -132,17 +132,20 @@ export function previewType(path: string): string | undefined {
 
 /** Where a user file is served from (`<prefix><path>`): an image opens in the browser, anything else downloads. */
 export const FILE_ROUTE = "/api/files/raw/";
-/** Where a user folder downloads from (`<prefix><path>`), as a zip named after it with the folder itself at its root. */
+/**
+ * Where a user folder downloads from (GET `<prefix><path>`), as a zip named after it with the folder itself at its
+ * root; POSTed bare, a form of picked `file` and `folder` fields downloads as one zip (worker/files-routes.ts serveSelection).
+ */
 export const ZIP_ROUTE = "/api/files/zip/";
 
-/** What one folder's zip may hold: past either, the Worker refuses and the user downloads its subfolders. */
+/** What one zip may hold, of a folder or a pick: past either, the Worker refuses and the user downloads less at a time. */
 export const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
 export const MAX_ZIP_FILES = MAX_LISTED;
 
-/** Why a folder of `count` files and `bytes` cannot be zipped, or undefined when it can. */
+/** Why `count` files of `bytes` cannot be zipped together, or undefined when they can. */
 export function zipRefusal(count: number, bytes: number): string | undefined {
-  if (count > MAX_ZIP_FILES) return `Too many files to zip (over ${MAX_ZIP_FILES.toLocaleString("en")}); download its folders one at a time.`;
-  if (bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download its folders one at a time.`;
+  if (count > MAX_ZIP_FILES) return `Too many files to zip (over ${MAX_ZIP_FILES.toLocaleString("en")}); download fewer at a time.`;
+  if (bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download fewer at a time.`;
   return undefined;
 }
 

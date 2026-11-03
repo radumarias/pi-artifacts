@@ -165,9 +165,10 @@ describe("file and folder downloads", () => {
     expect(unzipAgrees(zip) ?? true).toBe(true);
   });
 
-  async function pick(bucket: FakeBucket, fields: [string, string][]): Promise<Response> {
+  async function pick(bucket: FakeBucket, fields: [string, string][] | FormData): Promise<Response> {
     const files = new UserFiles(bucket.r2, "ada", await deriveUserKey(MASTER, "ada"));
-    const request = new Request(`https://app.test${ZIP_ROUTE}`, { method: "POST", body: new URLSearchParams(fields) });
+    const body = fields instanceof FormData ? fields : new URLSearchParams(fields);
+    const request = new Request(`https://app.test${ZIP_ROUTE}`, { method: "POST", body });
     return (await filesRoute(request, async () => files))!;
   }
 
@@ -210,8 +211,7 @@ describe("file and folder downloads", () => {
     // A file sent as a folder field is no path, not the top of every file.
     const form = new FormData();
     form.append("folder", new File(["x"], "x.txt"));
-    const files = new UserFiles(bucket().r2, "ada", await deriveUserKey(MASTER, "ada"));
-    await expect(filesRoute(new Request(`https://app.test${ZIP_ROUTE}`, { method: "POST", body: form }), async () => files)).rejects.toThrow(/empty/);
+    await expect(pick(bucket(), form)).rejects.toThrow(/empty/);
   });
 
   it("names a pick after the deepest folder holding it all", () => {
