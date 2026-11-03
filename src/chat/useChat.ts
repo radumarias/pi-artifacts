@@ -1,5 +1,5 @@
 import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { AgentEvent, AgentState, EntryRecord, JsonObject } from "@earendil-works/pi-durable";
+import type { AgentEvent, AgentState, EntryRecord, JsonObject, UsageState } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AttachmentInput } from "../../shared/attachments.ts";
 import { SOCKET_NOT_A_MEMBER, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type Presence, type QueuedMessage } from "../../shared/protocol.ts";
@@ -27,6 +27,8 @@ export interface ChatState {
   /** The model and effort the chat runs on, from pi's agent state. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
+  /** pi's ledger of what the chat's model calls used and cost, by model. */
+  usage?: UsageState;
 }
 
 const initial: ChatState = { entries: [], tools: [], busy: false, queued: [] };
@@ -72,6 +74,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
             busy,
             runStartedAt: busy ? (started ?? action.at) : undefined,
             queued: next.queued,
+            usage: event.usage,
           },
           event.agent,
         );
@@ -79,6 +82,9 @@ export function reduce(state: ChatState, action: Action): ChatState {
       }
       case "agent_changed":
         next = withAgent(next, event.agent);
+        break;
+      case "usage_changed":
+        next = { ...next, usage: event.usage };
         break;
       case "run_start":
         next = { ...next, busy: true, runStartedAt: action.at, error: undefined };

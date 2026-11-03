@@ -5,7 +5,7 @@ import { memoAsync } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
 // The choices change only with a deploy, so every chat shares one fetch.
-const loadCatalog = memoAsync(() => api.models());
+export const loadCatalog = memoAsync(() => api.models());
 
 interface Props {
   model?: string;

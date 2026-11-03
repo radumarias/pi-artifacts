@@ -25,6 +25,7 @@
     "test",
     "src/artifact/broker.ts",
     "src/chat/useChat.ts",
+    "src/chat/spend.ts",
     "src/api.ts",
     "src/chat/Markdown.tsx",
     "src/chat/Thinking.tsx",

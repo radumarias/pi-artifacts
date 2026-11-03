@@ -43,7 +43,7 @@ import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
-import { checkModelChoice, defaultModelChoice } from "./models.ts";
+import { checkModelChoice, defaultModelChoice, withCurrentPrices } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
 
@@ -101,7 +101,7 @@ export class ChatAgent extends DurableObject<Env> {
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
       const models = createModels();
-      models.setProvider(this.ai.provider);
+      models.setProvider(withCurrentPrices(this.ai.provider));
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again.
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings: { afterFailedRun: "continue" } }, context);

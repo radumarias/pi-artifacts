@@ -1,4 +1,4 @@
-import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel, type Provider } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { createAI } from "agents/models/pi-ai";
 import { EFFORT_LABELS, VENDORS, type ModelChoice, type ModelInfo, type Vendor } from "../shared/models.ts";
@@ -21,6 +21,33 @@ const WORKERS_AI_MODELS = [
 ];
 
 const VENDOR_ORDER = Object.keys(VENDORS) as Vendor[];
+
+/**
+ * Prices, in dollars per million tokens, that changed after the pi-ai release this app ships with, from the vendors'
+ * own price pages (checked 2026-11-03). pi-ai prices every model reply from its model's `cost` when the reply comes
+ * in, and stores that price with the reply, so a change here prices replies from then on and leaves earlier ones as
+ * they were charged. Drop an entry once pi-ai has the price.
+ */
+export const PRICE_UPDATES: Readonly<Record<string, Partial<Model<Api>["cost"]>>> = {
+  // Anthropic halved Claude Sonnet 5.5's cache reads, to 0.05 times its input price, on 2026-10-07.
+  "anthropic/claude-sonnet-5.5": { cacheRead: 0.1 },
+};
+
+/** `model` at its current price: what PRICE_UPDATES says, else what pi-ai says. */
+export function withCurrentPrice<T extends Model<Api>>(model: T): T {
+  const update = Object.hasOwn(PRICE_UPDATES, model.id) ? PRICE_UPDATES[model.id] : undefined;
+  return update ? { ...model, cost: { ...model.cost, ...update } } : model;
+}
+
+/** `provider` with its models at their current prices: the agent finds the models it runs on through its provider. */
+export function withCurrentPrices<T extends Provider>(provider: T): T {
+  const priced = <M,>(models: readonly M[]) => models.map((model) => withCurrentPrice(model as Model<Api>) as M);
+  return {
+    ...provider,
+    getModels: () => priced(provider.getModels()),
+    ...(provider.getAllModels && { getAllModels: () => priced(provider.getAllModels!()) }),
+  };
+}
 
 /** A listed model, and the pi-ai metadata its efforts come from. */
 interface ModelEntry {

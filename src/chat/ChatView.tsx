@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -9,7 +9,9 @@ import { Icon } from "../Icon.tsx";
 import { carriesFiles } from "../files/pick.ts";
 import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, PUBLISH_TOOL, type ChatMessageData, type ChatPeopleData, type PublishedDetails, type QueuedMessage } from "../../shared/protocol.ts";
+import { ChatCost, PromptCost } from "./Cost.tsx";
 import { SharePanel } from "./SharePanel.tsx";
+import { promptSpend } from "./spend.ts";
 import { useChat, waitingOnModel } from "./useChat.ts";
 import { Dictation } from "./Dictation.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -134,6 +136,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
     el.style.height = `${el.scrollHeight}px`;
   }, [draft]);
 
+  const prompts = useMemo(() => promptSpend(state.entries), [state.entries]);
+
   const isOwner = people?.owner.uid === uid;
   const sendLabel = attachments.sending ? "Sending…" : "Send";
   const ownerName = people && !isOwner ? people.owner.name : undefined;
@@ -156,6 +160,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
           ))}
           {mine > 1 && `${others.length ? " · " : ""}Open in ${mine} of your windows`}
         </span>
+        <ChatCost usage={state.usage} />
         {people && (
           <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
             {isOwner ? "Share" : "People"}
@@ -171,9 +176,16 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
               <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
             </div>
           )}
-          {state.entries.map((entry) => (
-            <Entry key={entry.id} entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
-          ))}
+          {state.entries.map((entry) => {
+            const spend = prompts.spend.get(entry.id);
+            return (
+              <Fragment key={entry.id}>
+                <Entry entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
+                {/* The prompt a run is answering can cost more yet: its cost shows once the run ends. */}
+                {spend && !(state.busy && entry.id === prompts.open) && <PromptCost spend={spend} />}
+              </Fragment>
+            );
+          })}
           {state.partial && <Assistant message={state.partial} streaming />}
           {state.runStartedAt !== undefined && waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
           {state.error && <div className="chat-error">{state.error}</div>}

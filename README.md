@@ -299,6 +299,18 @@ of whoever made it (kept in their `UserDirectory`): a chat takes it when it is f
 then on, even before its first message, until someone changes it. Before a user has picked anything, chats start on
 `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at high effort).
 
+### What a chat costs
+
+The chat shows what its model calls cost: each prompt's under the agent's last reply to it (with the tokens in and
+out), and the chat's total in the header, which opens each model's share. pi-ai prices every model reply when it
+comes in, from the tokens the provider reports and its model's prices per million tokens (input, output, cache reads
+and writes, and the higher rates of a long prompt where a model has them), and stores the price with the reply; pi
+keeps a ledger of the conversation's spend by model, which the total comes from, so it also counts the calls that
+summarize a long conversation. The prices are pi-ai's, except where a vendor changed a price after the pi-ai release
+the app ships with: `PRICE_UPDATES` in `worker/models.ts` has those, from the vendors' own price pages, and a test
+fails once pi-ai has caught up. They are list prices: Workers AI's free daily allowance, and any discount the
+account has, are not taken off. Everyone in a shared chat sees them.
+
 ## Layout
 
 | Path | What |
@@ -306,7 +318,7 @@ then on, even before its first message, until someone changes it. Before a user 
 | `worker/index.ts`, `worker/files-routes.ts` | Routes: identity, chats, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files and uploads |
 | `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall`, members |
 | `worker/chat-routes.ts`, `worker/members.ts` | Shared chats: the chat socket, people, invite links and their routes |
-| `worker/models.ts` | The models a chat can pick, and the check on a pick |
+| `worker/models.ts` | The models a chat can pick, the check on a pick, and price updates pi-ai lacks |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
 | `worker/skills/`, `worker/skills-routes.ts` | Built-in skills, the SKILL.md format, and the `/api/skills` routes |

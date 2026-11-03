@@ -401,3 +401,14 @@ body.resizing iframe { pointer-events: none; }
 .queued.mine .queued-label { align-self: flex-end; }
 /* Someone with the chat open right now: a dot before their name. */
 .person.online::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--live); }
+/* What the model calls cost: per prompt under the agent's last reply to it, and for the whole chat in the header. */
+.prompt-cost { align-self: flex-start; padding-left: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* The panel hangs from the header's right edge, so it stays on screen however wide the header is. */
+.chat-header { position: relative; }
+.chat-cost > button { font-variant-numeric: tabular-nums; }
+.cost-panel { position: absolute; right: 20px; top: calc(100% + 6px); z-index: 5; width: min(340px, calc(100% - 40px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.cost-panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cost-panel li { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; }
+.cost-panel li small { grid-row: 2; color: var(--muted); }
+.cost-panel .cost-amount { grid-row: 1 / 3; grid-column: 2; align-self: center; font-variant-numeric: tabular-nums; }
+.cost-panel > small { color: var(--muted); font-size: 12px; }
