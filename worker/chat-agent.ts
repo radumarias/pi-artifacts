@@ -37,7 +37,7 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { parseMentions, type MentionInput } from "../shared/mentions.ts";
 import type { ModelChoice } from "../shared/models.ts";
-import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
+import { errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
@@ -1031,8 +1031,11 @@ interface ChatSession {
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
 }
 
-/** A chat socket's hibernation attachment: whose socket it is. */
-type SocketAttachment = { owner: typeof OWNER; person: Person };
+/**
+ * A chat socket's hibernation attachment: whose socket it is, and a digest of the last snapshot it was sent (see
+ * ChatSockets.#attach).
+ */
+type SocketAttachment = { owner: typeof OWNER; person: Person; sent?: string };
 
 /**
  * The chat's browser connections, one or more per person in the chat. Each
@@ -1163,13 +1166,22 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     return this.onWebSocketClose(ws);
   }
 
+  /**
+   * Follow the conversation for `ws`: a snapshot first, then each commit. Every wake (a page's call, an alarm) attaches
+   * every open socket again, and each would get the whole conversation again; a socket already sent this same snapshot
+   * has everything in it, as the commits since reached it while the object was awake, so it is sent only a changed one.
+   */
   #attach(ws: WebSocket): Promise<AgentEventStream> {
     let stream = this.#streams.get(ws);
     if (stream) return stream;
     stream = (async () => {
       const events = await this.#chat.events();
-      send(ws, { type: "people", people: this.#chat.peopleFor(this.#person(ws)!.uid) });
-      send(ws, await this.#events([events.snapshot]));
+      const attachment = ws.deserializeAttachment() as SocketAttachment;
+      send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
+      const snapshot = await this.#events([events.snapshot]);
+      // Not by runElapsedMs, which changes with the time it is sent at.
+      const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
+      if (sent !== attachment.sent && send(ws, snapshot)) ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
       events.start(async (batch) => {
         if (!send(ws, await this.#events(batch))) await this.#detach(ws);
       });
@@ -1187,7 +1199,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
    * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run has gone;
    * a batch that changes pi's inbox, with the people's messages waiting in it.
    */
-  async #events(batch: readonly AgentEvent[]): Promise<ChatServerMessage> {
+  async #events(batch: readonly AgentEvent[]): Promise<Extract<ChatServerMessage, { type: "events" }>> {
     const snapshot = batch.findLast((event) => event.type === "snapshot");
     const ids = inboxIds(batch);
     const [started, queued] = await Promise.all([

@@ -48,7 +48,7 @@ function callFailure(server: string, tool: string, error: unknown): unknown {
  * server sends unasked (tool lists are listed again by age), and an answer still comes back on its own request. A GET
  * that resumes a request's interrupted answer carries Last-Event-ID and goes through.
  */
-export function withoutStandaloneStream(url: URL): FetchLike {
+function withoutStandaloneStream(url: URL): FetchLike {
   return (input, init) => {
     const standalone = init?.method === "GET" && new URL(input).href === url.href && !new Headers(init.headers).has("last-event-id");
     return standalone ? Promise.resolve(new Response(null, { status: 405 })) : fetch(input, init);

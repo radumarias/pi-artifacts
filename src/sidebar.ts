@@ -63,10 +63,11 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>): void
     let retry: ReturnType<typeof setTimeout> | undefined;
     const open = () => {
       ws = new WebSocket(api.sidebarSocketUrl());
+      // Pings only while the socket is open, and stops when it closes.
+      keepAlive(ws);
       ws.onopen = () => {
         attempt = 0;
         LISTS.forEach(load);
-        if (ws) keepAlive(ws);
       };
       ws.onmessage = (event) => {
         if (LISTS.includes(event.data)) load(event.data);

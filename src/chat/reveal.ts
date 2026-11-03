@@ -10,9 +10,11 @@ export interface Reveal {
   target: string;
   /** How much of it is shown, in UTF-16 units. */
   shown: number;
+  /** How much was shown when the text last arrived: `rate` counts from here. */
+  from: number;
   /** Units a millisecond: what reveals the backlog in about STREAM_STEP_MS. */
   rate: number;
-  /** When `shown` last grew. */
+  /** When the text last arrived. */
   at: number;
 }
 
@@ -22,17 +24,21 @@ export interface Reveal {
  * shows at once.
  */
 export function revealTo(reveal: Reveal | undefined, text: string, now: number): Reveal {
-  if (!reveal || !text.startsWith(reveal.target)) return { target: text, shown: text.length, rate: 0, at: now };
-  return { target: text, shown: reveal.shown, rate: (text.length - reveal.shown) / STREAM_STEP_MS, at: now };
+  if (!reveal || !text.startsWith(reveal.target)) return { target: text, shown: text.length, from: text.length, rate: 0, at: now };
+  return { target: text, shown: reveal.shown, from: reveal.shown, rate: (text.length - reveal.shown) / STREAM_STEP_MS, at: now };
 }
 
-/** The reveal `now`, grown by the time since it last grew; never cutting a character in two. */
+/**
+ * The reveal `now`: by the time since the text arrived, so no tick's rounding is lost, and by at least one unit a tick;
+ * never cutting a character in two.
+ */
 export function revealAt(reveal: Reveal, now: number): Reveal {
   if (reveal.shown >= reveal.target.length) return reveal;
-  let shown = Math.min(reveal.target.length, reveal.shown + Math.max(1, Math.round(reveal.rate * (now - reveal.at))));
+  const due = reveal.from + Math.round(reveal.rate * (now - reveal.at));
+  let shown = Math.min(reveal.target.length, Math.max(reveal.shown + 1, due));
   const code = reveal.target.charCodeAt(shown - 1);
   if (code >= 0xd800 && code <= 0xdbff) shown++;
-  return { ...reveal, shown, at: now };
+  return { ...reveal, shown };
 }
 
 /**
@@ -42,15 +48,15 @@ export function revealAt(reveal: Reveal, now: number): Reveal {
  * mid-answer) shows at once. `onGrow` runs after each growth reaches the page, so the list can follow it.
  */
 export function useRevealedText(text: string, onGrow?: () => void): string {
-  const reveal = useRef<Reveal>(null!);
-  if (reveal.current?.target !== text) reveal.current = revealTo(reveal.current ?? undefined, text, performance.now());
+  const reveal = useRef<Reveal | undefined>(undefined);
+  if (reveal.current?.target !== text) reveal.current = revealTo(reveal.current, text, performance.now());
   const [, rerender] = useState(0);
   const { shown } = reveal.current;
   const done = shown >= text.length;
   useEffect(() => {
     if (done) return;
     const timer = setInterval(() => {
-      reveal.current = revealAt(reveal.current, performance.now());
+      if (reveal.current) reveal.current = revealAt(reveal.current, performance.now());
       rerender((n) => n + 1);
     }, TICK_MS);
     return () => clearInterval(timer);

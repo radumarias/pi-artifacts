@@ -20,6 +20,12 @@ describe("revealing a streaming answer", () => {
     expect(revealAt(next, 1_500 + STEP_MS).shown).toBe(31);
   });
 
+  it("keeps to its pace tick by tick, losing nothing to rounding", () => {
+    let reveal = revealTo(revealTo(undefined, "a", 0), "a" + "b".repeat(14), 0);
+    for (let now = 100; now <= STEP_MS; now += 100) reveal = revealAt(reveal, now);
+    expect(reveal.shown).toBe(15);
+  });
+
   it("shows a text that changed rather than grew at once", () => {
     const reveal = revealTo(revealTo(undefined, "Hello", 0), "Goodbye", 100);
     expect(reveal.shown).toBe(7);
