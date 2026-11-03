@@ -1,0 +1,226 @@
+// The models' prices, from the vendors' own price pages, kept in worker/prices.json for the Worker to price replies
+// with. A build refreshes the file once it is a week old, and fails rather than ship prices it could not read.
+// `node --experimental-strip-types scripts/prices.ts` (pnpm prices) refreshes it now.
+
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import type { Plugin } from "vite";
+
+/** Dollars per million tokens, as pi-ai's model `cost` has them. A tier applies to prompts over `inputTokensAbove`. */
+export interface Price {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tiers?: (Omit<Price, "tiers"> & { inputTokensAbove: number })[];
+}
+
+export interface PriceList {
+  /** When the pages were read, ISO 8601. */
+  checkedAt: string;
+  /** By pi-ai model id: anthropic/claude-opus-5.5, openai/gpt-5.5, @cf/zai-org/glm-5.3. */
+  models: Record<string, Price>;
+}
+
+export const PRICES_FILE = new URL("../worker/prices.json", import.meta.url);
+export const MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+/** The pages, in Markdown: each vendor serves one next to its HTML page. */
+export const SOURCES = {
+  anthropic: "https://platform.claude.com/docs/en/about-claude/pricing.md",
+  openai: "https://developers.openai.com/api/docs/pricing.md",
+  "workers-ai": "https://developers.cloudflare.com/workers-ai/platform/pricing/index.md",
+} as const;
+
+class PriceError extends Error {}
+
+/** `$4`, `$0.125 / MTok`, `$2 / MTok<sup>3</sup>` → 4, 0.125, 2. `-` (not offered) → `none`. Anything else is an error. */
+function dollars(cell: string, where: string, none?: number): number {
+  const text = cell.replace(/<sup>.*?<\/sup>/g, "").trim();
+  if (text === "-" && none !== undefined) return none;
+  const match = text.match(/^\$(\d+(?:\.\d+)?)(?:\s*\/\s*MTok)?$/);
+  if (!match) throw new PriceError(`${where}: "${cell.trim()}" is not a price`);
+  return Number(match[1]);
+}
+
+/** The rows of the Markdown tables in `md`, as trimmed cells, without header and separator rows. */
+function rows(md: string): string[][] {
+  return md
+    .split("\n")
+    .filter((line) => line.startsWith("|") && !/^\|\s*:?-{3}/.test(line))
+    .map((line) => line.slice(1, line.lastIndexOf("|")).split("|").map((cell) => cell.trim()))
+    .filter((cells) => cells[0] !== "Model");
+}
+
+/** The text from `heading` to the next heading of the same level or above, for each time it appears. */
+function sections(md: string, heading: RegExp): string[] {
+  const lines = md.split("\n");
+  const found: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!heading.test(lines[i])) continue;
+    const level = lines[i].match(/^#+/)![0].length;
+    let end = i + 1;
+    while (end < lines.length && !(lines[end].match(/^#+ /) && lines[end].match(/^#+/)![0].length <= level)) end++;
+    found.push(lines.slice(i + 1, end).join("\n"));
+  }
+  return found;
+}
+
+function nonEmpty(models: Record<string, Price>, vendor: string): Record<string, Price> {
+  if (Object.keys(models).length === 0) throw new PriceError(`${vendor}: no prices found; has the page changed?`);
+  return models;
+}
+
+/**
+ * Anthropic's "Model pricing" table: base input, 5-minute cache writes, 1-hour cache writes, cache hits, output. pi-ai
+ * prices 1-hour writes as twice the input, which the table agrees with. A model priced higher for long prompts has a
+ * second row, "(for prompts over 100,000 tokens)".
+ */
+export function parseAnthropic(md: string): Record<string, Price> {
+  const [table] = sections(md, /^## Model pricing\s*$/);
+  if (!table) throw new PriceError("anthropic: no Model pricing section");
+  const models: Record<string, Price> = {};
+  for (const cells of rows(table)) {
+    if (cells.length !== 6) throw new PriceError(`anthropic: a row with ${cells.length} cells: ${cells[0]}`);
+    const over = cells[0].match(/\(for prompts over ([\d,]+) tokens\)/);
+    const name = cells[0].replace(/\s*\(.*$/, "").trim();
+    const id = `anthropic/${name.toLowerCase().replace(/\s+/g, "-")}`;
+    const where = `anthropic: ${name}`;
+    const price = { input: dollars(cells[1], where), output: dollars(cells[5], where), cacheRead: dollars(cells[4], where), cacheWrite: dollars(cells[2], where) };
+    if (!over) {
+      models[id] = { ...models[id], ...price };
+      continue;
+    }
+    if (!models[id]) throw new PriceError(`${where}: a long-prompt row before its base row`);
+    (models[id].tiers ??= []).push({ inputTokensAbove: Number(over[1].replaceAll(",", "")), ...price });
+  }
+  return nonEmpty(models, "anthropic");
+}
+
+/**
+ * OpenAI's "Standard pricing data" tables (not Batch, Flex or the faster tiers). Either short and long context
+ * columns (input, output, cached input, 30-minute write, 12-hour write, each twice), or input, output and cached
+ * input; `-` where a model offers no such price. A model's long context starts at the length its name gives, `gpt-5.5 (<272K context length)`, else 272K.
+ */
+export function parseOpenAI(md: string): Record<string, Price> {
+  const models: Record<string, Price> = {};
+  for (const table of sections(md, /^### Standard pricing data\s*$/)) {
+    for (const cells of rows(table)) {
+      const name = cells[0].replace(/\s*\(.*$/, "").trim();
+      const id = `openai/${name}`;
+      const where = `openai: ${name}`;
+      if (models[id]) continue;
+      // No cached price: the model caches nothing, so any cached token is priced as input. No write price: writes are free.
+      const price = (at: number, writes: boolean) => {
+        const input = dollars(cells[at], where);
+        return { input, output: dollars(cells[at + 1], where), cacheRead: dollars(cells[at + 2], where, input), cacheWrite: writes ? dollars(cells[at + 3], where, 0) : 0 };
+      };
+      if (cells.length === 4) {
+        models[id] = price(1, false);
+      } else if (cells.length === 11) {
+        models[id] = price(1, true);
+        const limit = cells[0].match(/<(\d+)K context/);
+        if (cells[6] !== "-") models[id].tiers = [{ inputTokensAbove: limit ? Number(limit[1]) * 1000 : 272_000, ...price(6, true) }];
+      } else {
+        throw new PriceError(`${where}: a row with ${cells.length} cells`);
+      }
+    }
+  }
+  return nonEmpty(models, "openai");
+}
+
+/** Cloudflare's Workers AI per-model table: "$0.440 per M input tokens <br> $0.014 per M cached input tokens <br> …". */
+export function parseWorkersAI(md: string): Record<string, Price> {
+  const models: Record<string, Price> = {};
+  for (const cells of rows(md)) {
+    if (!cells[0].startsWith("@cf/") || !/per M (input|output) tokens/.test(cells[1] ?? "")) continue;
+    const rate = (kind: string) => {
+      const match = cells[1].match(new RegExp(`\\$(\\d+(?:\\.\\d+)?) per M ${kind} tokens`));
+      return match ? Number(match[1]) : undefined;
+    };
+    const input = rate("input");
+    const output = rate("output");
+    if (input === undefined) throw new PriceError(`workers-ai: ${cells[0]}: no input price in "${cells[1]}"`);
+    // Embedding and other models priced by input alone: not chat models.
+    if (output === undefined) continue;
+    // No cached price: the model caches nothing, so any cached token is priced as input.
+    models[cells[0]] = { input, output, cacheRead: rate("cached input") ?? input, cacheWrite: 0 };
+  }
+  return nonEmpty(models, "workers-ai");
+}
+
+const PARSERS = { anthropic: parseAnthropic, openai: parseOpenAI, "workers-ai": parseWorkersAI } as const;
+
+/** Read every page and parse it; any page that cannot be fetched or read fails the whole refresh. */
+export async function fetchPrices(fetchPage: (url: string) => Promise<string> = fetchText): Promise<Record<string, Price>> {
+  const parts = await Promise.all(Object.entries(SOURCES).map(async ([vendor, url]) => PARSERS[vendor as keyof typeof SOURCES](await fetchPage(url))));
+  return Object.fromEntries(parts.flatMap((part) => Object.entries(part)).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new PriceError(`${url}: HTTP ${response.status}`);
+  return response.text();
+}
+
+/** The price list as worker/prices.json has it, checked: a file that does not read as one fails. */
+export function readPrices(text: string): PriceList {
+  const list = JSON.parse(text) as PriceList;
+  const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  const valid = (price: Price) => number(price.input) && number(price.output) && number(price.cacheRead) && number(price.cacheWrite);
+  if (Number.isNaN(Date.parse(list.checkedAt)) || !list.models || Object.keys(list.models).length === 0) throw new PriceError("worker/prices.json: no checkedAt or no models");
+  for (const [id, price] of Object.entries(list.models)) {
+    if (!valid(price) || !(price.tiers ?? []).every((tier) => valid(tier) && number(tier.inputTokensAbove))) throw new PriceError(`worker/prices.json: ${id} has a bad price`);
+  }
+  return list;
+}
+
+/** What changed between two lists, one line per model, for the build log. */
+export function describeChanges(before: Record<string, Price>, after: Record<string, Price>): string[] {
+  const ids = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  return ids.flatMap((id) => {
+    const [was, now] = [JSON.stringify(before[id]), JSON.stringify(after[id])];
+    if (was === now) return [];
+    return [!before[id] ? `+ ${id} ${now}` : !after[id] ? `- ${id}` : `~ ${id} ${was} → ${now}`];
+  });
+}
+
+/**
+ * Refresh worker/prices.json when it is older than a week (or `force`), and return what changed. Throws when the file
+ * cannot be read, or when it is due and a page cannot be fetched or parsed: the build then fails instead of using
+ * prices that may be wrong.
+ */
+export async function refreshPrices({
+  file = PRICES_FILE,
+  force = false,
+  now = Date.now(),
+  fetchPage,
+}: { file?: URL | string; force?: boolean; now?: number; fetchPage?: (url: string) => Promise<string> } = {}) {
+  // A first run (forced) starts the file; a build without it fails.
+  const current = force && !existsSync(file) ? { checkedAt: new Date(0).toISOString(), models: {} } : readPrices(readFileSync(file, "utf8"));
+  if (!force && now - Date.parse(current.checkedAt) < MAX_AGE_MS) return { refreshed: false, changes: [] as string[] };
+  const models = await fetchPrices(fetchPage);
+  const next: PriceList = { checkedAt: new Date(now).toISOString(), models };
+  writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`);
+  return { refreshed: true, changes: describeChanges(current.models, models) };
+}
+
+/** The build step: once per build (Vite builds the app and the Worker), before anything is bundled. */
+export function pricesPlugin(): Plugin {
+  let run: ReturnType<typeof refreshPrices> | undefined;
+  return {
+    name: "pi-artifacts:prices",
+    apply: "build",
+    async buildStart() {
+      const { refreshed, changes } = await (run ??= refreshPrices());
+      if (!refreshed) return;
+      this.info(`Read the vendors' prices into worker/prices.json: ${changes.length ? `\n${changes.join("\n")}` : "no changes"}`);
+      // Even with no changes: the new date keeps the next builds from reading the pages again.
+      this.warn("worker/prices.json was refreshed: commit it, so the repository has the prices this build uses.");
+    },
+  };
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const { changes } = await refreshPrices({ force: true });
+  console.log(changes.length ? changes.join("\n") : "No price changes.");
+}

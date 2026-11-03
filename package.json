@@ -11,7 +11,8 @@
     "deploy": "cf deploy",
     "types": "cf workers types",
     "typecheck": "cf workers types && tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prices": "node --experimental-strip-types scripts/prices.ts"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",

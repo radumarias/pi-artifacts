@@ -17,6 +17,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
     "types": [
       "node"
     ]
@@ -26,6 +27,7 @@
     "src/artifact/broker.ts",
     "src/chat/useChat.ts",
     "src/chat/spend.ts",
+    "scripts/prices.ts",
     "src/api.ts",
     "src/chat/Markdown.tsx",
     "src/chat/Thinking.tsx",
@@ -50,6 +52,7 @@
     "worker/queue.ts",
     "worker/agent/skills.ts",
     "worker/models.ts",
+    "worker/prices.json",
     "worker/agent/file-refs.ts",
     "worker/files-routes.ts",
     "worker/http.ts",
