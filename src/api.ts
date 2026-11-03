@@ -1,7 +1,7 @@
 import type { ModelInfo } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import { FILE_ROUTE, ZIP_ROUTE } from "../shared/uploads.ts";
-import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
+import type { ArtifactSummary, ArtifactView, ChatDeletion, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
 
 export type { ArtifactSummary };
 
@@ -60,6 +60,10 @@ export const api = {
   createChat: () => request<ChatSummary>("/api/chats", { method: "POST" }),
   /** The user has seen the chat: it is no longer unread in their sidebar. */
   markSeen: (chatId: string) => request<object>(`/api/chats/${chatId}/seen`, { method: "POST" }),
+  /** What deleting a chat would delete with it. Only for its owner. */
+  chatDeletion: (chatId: string) => request<ChatDeletion>(`/api/chats/${chatId}/deletion`),
+  /** Delete a chat for everyone in it, with its artifacts and those of its files in `files` (from chatDeletion). Only for its owner. */
+  deleteChat: (chatId: string, files: readonly string[]) => request<object>(`/api/chats/${chatId}`, send("DELETE", { files })),
   createInvite: (chatId: string) => request<CreatedInvite>(`/api/chats/${chatId}/invites`, post({})),
   revokeInvite: (chatId: string, inviteId: string) => request<object>(`/api/chats/${chatId}/invites/${inviteId}`, { method: "DELETE" }),
   /** The owner removes a member; a member passes their own uid to leave. */

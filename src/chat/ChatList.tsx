@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { ChatSummary } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
+import { Icon } from "../Icon.tsx";
 import { useLatest, useVisible } from "../sidebar.ts";
 
 /**
@@ -41,26 +42,43 @@ export function UnreadDot({ label }: { label: string }) {
   return <span className="nav-status nav-unread" role="img" aria-label={label} title={label} />;
 }
 
-export function ChatList({ chats, openId, navigate }: { chats: ChatSummary[]; openId: string | undefined; navigate: (path: string) => void }) {
+interface ChatListProps {
+  chats: ChatSummary[];
+  openId: string | undefined;
+  navigate: (path: string) => void;
+  /** Ask to delete one of the user's own chats. */
+  onDelete: (chatId: string) => void;
+}
+
+export function ChatList({ chats, openId, navigate, onDelete }: ChatListProps) {
   return (
     <nav>
       {chats.map((chat) => (
-        <a
-          key={chat.id}
-          href={`/c/${chat.id}`}
-          className={["nav-item", chat.id === openId && "active", chat.unread && chat.id !== openId && "unread"].filter(Boolean).join(" ")}
-          title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
-          onClick={(e) => {
-            e.preventDefault();
-            navigate(`/c/${chat.id}`);
-          }}
-        >
-          <span className="nav-title">
-            {chat.title}
-            {chat.sharedBy && <small> · {chat.sharedBy}</small>}
-          </span>
-          <ChatStatusIcon chat={chat} open={chat.id === openId} />
-        </a>
+        <div key={chat.id} className={chat.id === openId ? "chat-link active" : "chat-link"}>
+          <a
+            href={`/c/${chat.id}`}
+            className={chat.unread && chat.id !== openId ? "nav-item unread" : "nav-item"}
+            title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
+            onClick={(e) => {
+              e.preventDefault();
+              navigate(`/c/${chat.id}`);
+            }}
+          >
+            <span className="nav-title">
+              {chat.title}
+              {chat.sharedBy && <small> · {chat.sharedBy}</small>}
+            </span>
+            <ChatStatusIcon chat={chat} open={chat.id === openId} />
+          </a>
+          {/* Only the owner can delete a chat; someone it is shared with leaves it from the chat's People panel. */}
+          {!chat.sharedBy && (
+            <button type="button" className="chat-delete" title="Delete chat" aria-label={`Delete chat ${chat.title}`} onClick={() => onDelete(chat.id)}>
+              <Icon size={15} box={24}>
+                <path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+              </Icon>
+            </button>
+          )}
+        </div>
       ))}
     </nav>
   );

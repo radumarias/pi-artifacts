@@ -247,4 +247,30 @@ describe("ArtifactStore on Git repos", () => {
     await expect(gitRemote("-C", into, "push", "-q", "origin", "HEAD:main")).rejects.toThrow();
     expect(await store.cloneAccess("0000000000000000")).toBeNull();
   });
+
+  it("deletes an artifact for good, repo and cache, only for the chat that owns it", async () => {
+    const meta = await publish();
+    await publish({ id: meta.id, html: "<p>two</p>" });
+    const other = await publish({ title: "Other" });
+
+    expect(await store.delete(meta.id, "ada", "chat2")).toBe(false);
+    expect(await store.delete(meta.id, "bob", "chat1")).toBe(false);
+    expect(existsSync(repoDir(meta))).toBe(true);
+
+    expect(await store.delete(meta.id, "ada", "chat1")).toBe(true);
+    expect(existsSync(repoDir(meta))).toBe(false);
+    expect([...bucket.objects.keys()].filter((key) => key.includes(meta.id))).toEqual([]);
+    expect(await store.readMeta(meta.id)).toBeNull();
+    expect(await store.readHtml(meta.id, 1)).toBeNull();
+    // Again, after a try that stopped part way: nothing left is fine.
+    expect(await store.delete(meta.id, "ada", "chat1")).toBe(true);
+    expect(await store.readHtml(other.id, 1)).toBe("<p>one</p>");
+  });
+
+  it("finishes a delete that removed the repo but not the cached copies", async () => {
+    const meta = await publish();
+    await artifacts.delete(`artifact-${meta.id}`);
+    expect(await store.delete(meta.id, "ada", "chat1")).toBe(true);
+    expect(await store.readHtml(meta.id, 1)).toBeNull();
+  });
 });

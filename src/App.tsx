@@ -6,6 +6,7 @@ import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatList, UnreadDot, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
+import { DeleteChat } from "./chat/DeleteChat.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
@@ -176,6 +177,8 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [skills, loadSkills] = useLatest<SkillInfo[] | null>(api.skills, null, (e) => setSkillsError(e?.message ?? null));
   const [preview, setPreview] = useState<PublishedDetails | null>(null);
+  // The chat whose deletion is being confirmed.
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.
@@ -271,7 +274,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           {/* Chats, artifacts and skills scroll here, above the files panel. */}
           <div className="sidebar-scroll">
           <h3>Chats</h3>
-          <ChatList chats={chats} openId={chatId} navigate={navigate} />
+          <ChatList chats={chats} openId={chatId} navigate={navigate} onDelete={setDeleting} />
           <h3>Artifacts</h3>
           <nav>
             {artifacts.map((a) => (
@@ -350,6 +353,19 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           max={() => (chatRef.current?.parentElement?.offsetWidth ?? innerWidth) - (collapsed ? RAIL_WIDTH : sidebarWidth) - PREVIEW_MIN}
           onResize={setChatWidth}
           onReset={() => setChatWidth(null)}
+        />
+      )}
+      {deleting && (
+        <DeleteChat
+          chatId={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            setDeleting(null);
+            // Leaving the chat closes its preview; another chat's deletion leaves this one's open.
+            if (deleting === chatId) navigate("/");
+            // Its files may be gone too; the chat and artifact lists follow on their own.
+            loadFiles();
+          }}
         />
       )}
       {dragging && (

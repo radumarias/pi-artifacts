@@ -203,6 +203,9 @@ export function waitingOnModel(state: ChatState): boolean {
   return last?.type !== "text" || !last.text;
 }
 
+/** Why the chat's socket stopped for good. */
+const STOPPED = { removed: "You are not in this chat.", deleted: "This chat was deleted." };
+
 /**
  * The chat's WebSocket: reconnects with backoff, and every (re)connect starts from a fresh snapshot.
  * It stops for good when the user is no longer in the chat (removed, or the chat is gone).
@@ -223,9 +226,9 @@ export function useChat(chatId: string) {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     // Not in the chat: stop for good.
-    const stop = () => {
+    const stop = (why = STOPPED.removed) => {
       closed = true;
-      dispatch({ type: "error", message: "You are not in this chat." });
+      dispatch({ type: "error", message: why });
     };
 
     const open = () => {
@@ -240,8 +243,8 @@ export function useChat(chatId: string) {
         if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
         else if (message.type === "people") setPeople(message.people);
         else if (message.type === "presence") setOnline(message.online);
-        else if (message.type === "removed") {
-          stop();
+        else if (message.type === "removed" || message.type === "deleted") {
+          stop(STOPPED[message.type]);
           ws.close();
         } else dispatch({ type: "error", message: message.message });
       };

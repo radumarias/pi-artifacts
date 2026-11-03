@@ -14,8 +14,9 @@ const repoName = (id: string) => `artifact-${id}`;
 const tagFor = (version: number) => `v${version}`;
 // The R2 read cache keeps the layout artifacts had before repos, so artifacts
 // published then still serve from it.
-const metaKey = (id: string) => `artifacts/${id}/meta.json`;
-const htmlKey = (id: string, version: number) => `artifacts/${id}/v${version}/index.html`;
+const cachePrefix = (id: string) => `artifacts/${id}/`;
+const metaKey = (id: string) => `${cachePrefix(id)}meta.json`;
+const htmlKey = (id: string, version: number) => `${cachePrefix(id)}v${version}/index.html`;
 
 /** A new artifact or chat id: 16 lowercase hex characters. */
 export function newId(): string {
@@ -68,6 +69,28 @@ export class ArtifactStore {
       const [info, token] = await Promise.all([repo.info(), repo.createToken("read", CLONE_TOKEN_TTL_S)]);
       return { remote: info.remote, token: tokenSecret(token.plaintext), expiresAt: token.expiresAt };
     });
+  }
+
+  /**
+   * Delete an artifact, every version, for good: its repo, then its cached copies, so that a failure part way leaves
+   * it still readable and the next try finishes the job. Only the chat that owns it may: false for anyone else's. An
+   * artifact already gone is deleted.
+   */
+  async delete(id: string, ownerUid: string, chatId: string): Promise<boolean> {
+    // Not readMeta: it would cache a copy of what is about to go.
+    const cached = await this.#cache.get(metaKey(id));
+    const meta = cached ? ((await cached.json()) as ArtifactMeta) : await this.#readRepoMeta(id);
+    if (meta && !isOwnedBy(meta, ownerUid, chatId)) return false;
+    await this.#repos.delete(repoName(id));
+    let cursor: string | undefined;
+    do {
+      const page = await this.#cache.list({ prefix: cachePrefix(id), cursor });
+      const keys: string[] = [];
+      for (const object of page.objects) keys.push(object.key);
+      if (keys.length) await this.#cache.delete(keys);
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+    return true;
   }
 
   /**

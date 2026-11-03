@@ -1,5 +1,5 @@
 import { exports } from "cloudflare:workers";
-import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type CreatedInvite, type Person } from "../shared/protocol.ts";
+import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type ChatDeletion, type CreatedInvite, type Person } from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
 import { storeUpload } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
@@ -10,6 +10,8 @@ import type { UserDirectory } from "./users.ts";
 /**
  * A chat's socket and invites, for a verified `person`. The chat object decides who may do what;
  * these routes only find it and turn its answers into HTTP.
+ *   DELETE /api/chats/:id                     (owner) {files?: string[]}: delete the chat, its artifacts and those of its files listed
+ *   GET    /api/chats/:id/deletion            (owner) what that would delete
  *   GET    /api/chats/:id/ws                  the chat's WebSocket, for its owner and members; it also carries who is in the chat
  *   POST   /api/chats/:id/invites             (owner) a new single-use invite link
  *   DELETE /api/chats/:id/invites/:inviteId   (owner) revoke an invite
@@ -38,7 +40,7 @@ export async function chatRoute(
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/(ws|invites|members|attachments|seen)(?:\/([a-z0-9-]+))?$/);
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|deletion|seen)(?:\/([a-z0-9-]+))?)?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
@@ -69,6 +71,19 @@ export async function chatRoute(
   if (what === "attachments" && method === "POST" && !item) {
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
     return storeUpload(request, () => filesOf(ownerUid));
+  }
+  if (!what && method === "DELETE") {
+    const asked = (await readJson<{ files?: unknown }>(request))?.files;
+    const files = Array.isArray(asked) ? asked.filter((path): path is string => typeof path === "string") : [];
+    const refused = await chat.deleteChat(person, { files });
+    if (refused) return answer(refused);
+    // Last, once the chat holds nothing: until then it stays in the owner's list, to delete again should a step fail.
+    await directory.forgetChat(chatId);
+    return json({});
+  }
+  if (what === "deletion" && method === "GET" && !item) {
+    const preview = await chat.deletionPreview(person);
+    return "status" in preview ? answer(preview) : json(preview satisfies ChatDeletion);
   }
   if (what === "invites" && method === "DELETE" && item) return answer(await chat.revokeInvite(person, item));
   if (what === "members" && method === "DELETE" && item) return answer(await chat.removeMember(person, item));

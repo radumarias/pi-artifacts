@@ -40,9 +40,12 @@ export class FakeBucket {
     this.objects.set(key, typeof body === "string" ? body : "");
   }
 
-  async delete(key: string) {
-    this.calls.push({ op: "delete", key });
-    this.objects.delete(key);
+  /** One key or several, as R2 takes them. */
+  async delete(keys: string | string[]) {
+    for (const key of [keys].flat()) {
+      this.calls.push({ op: "delete", key });
+      this.objects.delete(key);
+    }
   }
 
   get r2(): R2Bucket {
