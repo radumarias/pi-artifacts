@@ -74,7 +74,8 @@ export function chatSpend(usage: UsageState | undefined): { total: Spend; models
   return { total: models.reduce<Spend>(plus, NONE), models };
 }
 
-const SMALL = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 2 });
+// Both bounds: with only a maximum, 0.5 comes out as "$0.5".
+const SMALL = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumSignificantDigits: 2, maximumSignificantDigits: 2 });
 const LARGE = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Dollars: two significant digits below a dollar ($0.0042, $0.37), cents from a dollar on ($12.40). */

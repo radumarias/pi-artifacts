@@ -35,7 +35,8 @@ export const ChatCost = memo(function ChatCost({ usage }: { usage?: UsageState }
     };
   }, [open]);
   if (spend.models.length === 0) return null;
-  const workersAi = spend.models.some((share) => models.get(share.model)?.vendor === "workers-ai");
+  // By id, not the catalog: a deployment's default can be a Workers AI model the picker does not list.
+  const workersAi = spend.models.some((share) => share.model.startsWith("@cf/"));
   return (
     <div className="chat-cost" ref={box}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} title={`AI cost of this chat: ${describeTokens(spend.total)}`}>

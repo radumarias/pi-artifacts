@@ -90,6 +90,6 @@ describe("chat spend", () => {
   });
 
   it("formats small costs to two significant digits and larger ones to the cent", () => {
-    expect([0, 0.00004, 0.0042, 0.37, 0.999, 12.4].map(formatCost)).toEqual(["$0.00", "<$0.0001", "$0.0042", "$0.37", "$1.00", "$12.40"]);
+    expect([0, 0.00004, 0.0042, 0.37, 0.5, 0.999, 12.4].map(formatCost)).toEqual(["$0.00", "<$0.0001", "$0.0042", "$0.37", "$0.50", "$1.00", "$12.40"]);
   });
 });
