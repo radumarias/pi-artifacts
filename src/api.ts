@@ -72,7 +72,8 @@ export const api = {
   acceptInvite: (token: string) => request<{ chatId: string }>("/api/invites/accept", post({ token })),
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
   models: () => request<ModelInfo[]>("/api/models"),
-  artifact: (id: string) => request<ArtifactView>(`/api/artifacts/${id}`),
+  /** `withChat`: also the chat that builds it, if the user is in that chat, to go back to it. */
+  artifact: (id: string, withChat = false) => request<ArtifactView>(`/api/artifacts/${id}${withChat ? "?chat" : ""}`),
   /** The owner opened `version` of their artifact: it is no longer new in their sidebar. */
   markArtifactSeen: (id: string, version: number) => request<object>(`/api/artifacts/${id}/seen`, post({ version })),
   artifactTools: (id: string, version: number) => request<DeclaredTool[]>(`/api/artifacts/${id}/tools?version=${version}`),

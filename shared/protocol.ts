@@ -119,8 +119,8 @@ export interface ArtifactSummary {
 }
 
 /**
- * An artifact as GET /api/artifacts/:id returns it: everything but who owns it, and the chat it lives in only for
- * people in that chat, who can open it there to keep building it.
+ * An artifact as GET /api/artifacts/:id returns it: everything but who owns it, and the chat it lives in only when asked
+ * (?chat) by people in that chat, who can open it there to keep building it.
  */
 export type ArtifactView = Omit<ArtifactMeta, "chatId" | "ownerUid"> & { isOwner: boolean; chatId?: string };
 

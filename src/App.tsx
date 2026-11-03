@@ -51,7 +51,7 @@ export function App() {
     // A shared artifact: anyone the app lets in can view it by its link.
     return (
       <ErrorBoundary what="this artifact">
-        <ArtifactPanel artifactId={shared[1]} uid={me.uid} fullPage navigate={navigate} />
+        <ArtifactPanel artifactId={shared[1]} uid={me.uid} fullPage />
       </ErrorBoundary>
     );
   }
@@ -209,6 +209,13 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   useSidebarSocket({ chats: loadChats, artifacts: loadArtifacts, skills: loadSkills });
   // Another chat shows its own artifacts: the one asked for at once, else the newest it published once it loads.
   useEffect(() => setPreview(opening ? { artifactId: opening } : null), [chatId, opening]);
+  // A new publish always shows; the chat's newest artifact on load only when none was asked for.
+  const onArtifact = useCallback(
+    (artifact: Preview, loading?: boolean) => {
+      if (!loading || !opening) setPreview(artifact);
+    },
+    [opening],
+  );
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
   const proposed = (skills ?? []).filter((s) => s.origin === "agent" && !s.enabled).length;
@@ -354,8 +361,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
             <ChatView
               chatId={chatId}
               uid={uid}
-              opening={opening}
-              onArtifact={setPreview}
+              onArtifact={onArtifact}
               onActivity={loadFiles}
               onLeft={() => navigate("/")}
             />
