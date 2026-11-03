@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useDeferredValue, useMemo, useRef, useState } from "react";
 import { baseName } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, ZIP_ROUTE, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
@@ -129,8 +129,8 @@ function Pick({ path, kind }: { path: string; kind: Kind }) {
 }
 
 /**
- * A folder's subfolders and files. Re-renders only when its folder changes (tree() keeps a folder's object while the
- * files stay the same) or the selection does. While searching, `expand` opens every folder, so the matches show.
+ * A folder's subfolders and files. Re-renders only when its folder changes (tree() runs again only when the files or
+ * the search do); a selection change re-renders just the checkboxes. While searching, `expand` opens every folder, so the matches show.
  */
 const FolderView = memo(function FolderView({ folder, depth, expand }: { folder: Folder; depth: number; expand: boolean }) {
   return (
@@ -190,8 +190,8 @@ const FolderView = memo(function FolderView({ folder, depth, expand }: { folder:
 const DOWNLOAD_FRAME = "files-download";
 
 /**
- * Select mode's bar: how much is picked and its download. One file or folder downloads as it does from the tree; more
- * go as one zip, posted into a hidden frame (a form, since a long pick would not fit a URL).
+ * Select mode's bar: how much is picked and its download, as one zip posted into a hidden frame (a form, since a long
+ * pick would not fit a URL); one file alone downloads as itself.
  */
 function SelectionBar({ files, picked, onDone }: { files: readonly FileInfo[]; picked: ReadonlyMap<string, Kind>; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
@@ -203,16 +203,13 @@ function SelectionBar({ files, picked, onDone }: { files: readonly FileInfo[]; p
       held.reduce((sum, file) => sum + file.size, 0),
     );
   }, [files, picked]);
-  const [only] = picked.size === 1 ? picked : [];
+  // One file downloads as it does from the tree; anything else, one folder too, goes through the form and its checks.
+  const [only] = picked.size === 1 ? [...picked].filter(([, kind]) => kind === "file") : [];
   return (
     <div className="files-selection">
       <span>{picked.size ? `${picked.size} picked` : "Pick files and folders"}</span>
       {only ? (
-        <a
-          className="button"
-          href={only[1] === "file" ? api.fileUrl(only[0]) : api.folderZipUrl(only[0])}
-          download={only[1] === "file" ? baseName(only[0]) : `${baseName(only[0])}.zip`}
-        >
+        <a className="button" href={api.fileUrl(only[0])} download={baseName(only[0])}>
           Download
         </a>
       ) : (
@@ -263,18 +260,11 @@ const Chevron = () => (
  * The sidebar's files, in a panel at its bottom that opens and closes (remembered in this browser): a folder tree,
  * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
  */
-export const FilesNav = memo(function FilesNav({
-  files,
-  status,
-  upload,
-}: {
-  files: readonly FileInfo[];
-  status: UploadStatus | null;
-  upload: (picked: Picked[]) => Promise<void>;
-}) {
+export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
   const [open, setOpen] = useStoredState("layout.filesOpen", true, (value) => typeof value === "boolean");
   const [query, setQuery] = useState("");
-  const search = query.trim().toLowerCase();
+  // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
+  const search = useDeferredValue(query).trim().toLowerCase();
   const shown = useMemo(() => (search ? files.filter((file) => file.path.toLowerCase().includes(search)) : files), [files, search]);
   const root = useMemo(() => tree(shown), [shown]);
   const [picked, setPicked] = useState<ReadonlyMap<string, Kind> | null>(null);
@@ -301,13 +291,7 @@ export const FilesNav = memo(function FilesNav({
   };
   return (
     <section className={open ? "files-panel open" : "files-panel"}>
-      <button
-        type="button"
-        className="files-panel-head"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        title={open ? "Hide your files" : "Show your files"}
-      >
+      <button type="button" className="files-panel-head" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? "Hide your files" : "Show your files"}>
         Files <small>{files.length.toLocaleString("en")}</small>
         {/* Closed, the panel still shows that an upload is going. */}
         {!open && status?.busy && <span className="spinner" />}
@@ -337,13 +321,7 @@ export const FilesNav = memo(function FilesNav({
             </label>
             <label className="upload" title="Pick a folder; its layout is kept under uploads/">
               Upload a folder
-              <input
-                type="file"
-                hidden
-                disabled={status?.busy}
-                ref={(input) => input?.setAttribute("webkitdirectory", "")}
-                onChange={(e) => pick(e.target)}
-              />
+              <input type="file" hidden disabled={status?.busy} ref={(input) => input?.setAttribute("webkitdirectory", "")} onChange={(e) => pick(e.target)} />
             </label>
           </div>
           <small className={status?.error ? "upload-status error" : "upload-status"}>

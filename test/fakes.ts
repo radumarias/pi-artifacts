@@ -32,13 +32,7 @@ export class FakeBucket {
     const value = this.objects.get(key);
     if (value === undefined) return null;
     const bytes = new TextEncoder().encode(value);
-    return {
-      text: async () => value,
-      json: async () => JSON.parse(value),
-      size: bytes.byteLength,
-      uploaded: new Date(0),
-      body: new Blob([bytes]).stream(),
-    };
+    return { text: async () => value, json: async () => JSON.parse(value), size: bytes.byteLength, uploaded: new Date(0), body: new Blob([bytes]).stream() };
   }
 
   async put(key: string, body: unknown, options?: { ssecKey?: unknown }) {

@@ -146,9 +146,12 @@ export function zipRefusal(count: number, bytes: number): string | undefined {
   return undefined;
 }
 
-/** The deepest folder holding all of `paths` (files or folders), or "" when only the top level does. */
-export function commonFolder(paths: readonly string[]): string {
-  const parents = paths.map((path) => path.split("/").slice(0, -1));
+/**
+ * What a zip of picked `files` and `folders` is rooted at: the deepest folder holding them all, a picked folder
+ * counting as its own (so one folder roots at itself, as its own download does), or "" when only the top level does.
+ */
+export function commonFolder(files: readonly string[], folders: readonly string[]): string {
+  const parents = [...files.map((path) => path.split("/").slice(0, -1)), ...folders.map((path) => path.split("/"))];
   const first = parents[0] ?? [];
   let depth = 0;
   while (depth < first.length && parents.every((parent) => parent[depth] === first[depth])) depth++;

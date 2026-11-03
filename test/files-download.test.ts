@@ -202,10 +202,11 @@ describe("file and folder downloads", () => {
   });
 
   it("names a pick after the deepest folder holding it all", () => {
-    expect(commonFolder(["uploads/q3/a.csv", "uploads/q3/2024"])).toBe("uploads/q3");
-    expect(commonFolder(["uploads/q3/a.csv", "uploads/q4/b.csv"])).toBe("uploads");
-    expect(commonFolder(["uploads/a.csv", "out/b.json"])).toBe("");
-    expect(commonFolder(["uploads"])).toBe("");
+    expect(commonFolder(["uploads/q3/a.csv"], ["uploads/q3/2024"])).toBe("uploads/q3");
+    expect(commonFolder(["uploads/q3/a.csv", "uploads/q4/b.csv"], [])).toBe("uploads");
+    expect(commonFolder(["uploads/a.csv", "out/b.json"], [])).toBe("");
+    expect(commonFolder([], ["uploads/q3/2024"])).toBe("uploads/q3/2024");
+    expect(commonFolder([], ["uploads/q3", "uploads/q4"])).toBe("uploads");
   });
 
   it("zips a folder of exactly the most files a zip holds, and refuses one more", async () => {

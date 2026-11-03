@@ -25,10 +25,10 @@ const EXTRA_LENGTH = 9;
  * they are (most uploads are compressed already, and storing keeps the CPU
  * time to a CRC); the next file is opened while one streams, so a folder of
  * small files does not wait a round trip per file. Fails the stream when the
- * files would weigh more than `maxBytes` or the archive outgrow plain zip, or
+ * files would weigh more than `maxBytes` (no cap unless given) or the archive outgrow plain zip, or
  * a file is not the size it said.
  */
-export function zipStream(entries: readonly ZipEntry[], { maxBytes = MAX_BYTES } = {}): ReadableStream<Uint8Array> {
+export function zipStream(entries: readonly ZipEntry[], { maxBytes = Infinity } = {}): ReadableStream<Uint8Array> {
   const chunks = zipChunks(entries, maxBytes);
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -86,16 +86,7 @@ async function* zipChunks(entries: readonly ZipEntry[], maxBytes: number): Async
       central.push(centralHeader(header));
     }
     const start = offset;
-    yield counted(
-      concat([
-        ...central,
-        endOfCentralDirectory(
-          central.length,
-          central.reduce((sum, h) => sum + h.byteLength, 0),
-          start,
-        ),
-      ]),
-    );
+    yield counted(concat([...central, endOfCentralDirectory(central.length, central.reduce((sum, h) => sum + h.byteLength, 0), start)]));
   } finally {
     // A file opened and not read to its end (the zip failed or the reader went away) gives its connection back,
     // as does one opened ahead. Cancelling a stream a for-await already cancelled does nothing.
