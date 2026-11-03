@@ -177,6 +177,12 @@ in `uploads/`, a folder keeping its layout (`reports/q3/sales.csv` is `uploads/r
 whose names start with a dot (`.git`, `.DS_Store`) are left out of a folder. A file may be up to 10 MB; the app splits a
 big pick into requests of at most 50 files and 40 MB (`shared/uploads.ts`, `worker/files-routes.ts`).
 
+In the sidebar, an image's name opens it in a new tab, and every file and folder has a download button. A folder
+downloads as a zip named after it with the folder itself at its root (`q3.zip` holds `q3/sales.csv`, `q3/2024/…`),
+streamed by the Worker and stored uncompressed (`worker/zip.ts`), up to 1 GB and 2,000 files. Files are served with
+`nosniff`, a sandboxing CSP and `Cross-Origin-Resource-Policy: same-origin`; only raster images and SVG open in the
+browser (an SVG's scripts stay off under the sandbox), anything else only downloads.
+
 Before each message, the agent's prompt gets a list of your files, newest first (at most 150, then a count per folder),
 so "the sales file from q3" maps to its path without a tool call. `files_read`, `run_python` and `run_bash` also take a
 file's name or the end of its path when only one file matches, and answer with the candidates when several do

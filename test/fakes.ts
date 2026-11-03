@@ -16,13 +16,15 @@ export class FakeBucket {
   async list({ prefix }: { prefix: string }) {
     this.calls.push({ op: "list", prefix });
     const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix));
-    return { objects: keys.map((key) => ({ key, size: 1, uploaded: new Date(0) })), truncated: false };
+    return { objects: keys.map((key) => ({ key, size: new TextEncoder().encode(this.objects.get(key)!).byteLength, uploaded: new Date(0) })), truncated: false };
   }
 
   async get(key: string, options?: { ssecKey?: unknown }) {
     this.calls.push({ op: "get", key, ssecKey: options?.ssecKey });
     const value = this.objects.get(key);
-    return value === undefined ? null : { text: async () => value, json: async () => JSON.parse(value) };
+    if (value === undefined) return null;
+    const bytes = new TextEncoder().encode(value);
+    return { text: async () => value, json: async () => JSON.parse(value), size: bytes.byteLength, body: new Blob([bytes]).stream() };
   }
 
   async put(key: string, body: unknown, options?: { ssecKey?: unknown }) {

@@ -105,3 +105,43 @@ export function uploadBatches<T>(files: readonly T[], size: (file: T) => number)
   if (current.length) batches.push(current);
   return batches;
 }
+
+/**
+ * The image types a user file opens as in the browser, by extension; every
+ * other file only downloads. Raster formats and SVG, which the Worker serves
+ * with a sandboxing CSP so its scripts cannot run.
+ */
+const PREVIEW_TYPES: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  svg: "image/svg+xml",
+};
+
+/** The content type `path` opens as in the browser, or undefined when it only downloads. */
+export function previewType(path: string): string | undefined {
+  const dot = path.lastIndexOf(".");
+  return dot > path.lastIndexOf("/") ? PREVIEW_TYPES[path.slice(dot + 1).toLowerCase()] : undefined;
+}
+
+/** A folder zips to at most this much: past it the Worker refuses, and the user downloads its subfolders. */
+export const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
+
+/** Where a user file is served from: opened in the browser if it is an image (see previewType), otherwise or with `download` saved. */
+export function fileUrl(path: string, { download = false } = {}): string {
+  return `/api/files/raw/${encodePath(path)}${download ? "?download" : ""}`;
+}
+
+/** Where a user folder downloads from, as a zip named after it with the folder itself at its root. */
+export function folderZipUrl(path: string): string {
+  return `/api/files/zip/${encodePath(path)}`;
+}
+
+function encodePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}

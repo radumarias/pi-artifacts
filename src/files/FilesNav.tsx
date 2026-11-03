@@ -1,7 +1,8 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { MAX_FILE_BYTES, MAX_LISTED, underUploads, uploadBatches, uploadTargets } from "../../shared/uploads.ts";
+import { fileUrl, folderZipUrl, MAX_FILE_BYTES, MAX_LISTED, MAX_ZIP_BYTES, previewType, underUploads, uploadBatches, uploadTargets } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
+import { Icon } from "../Icon.tsx";
 import { fromInput, type Picked } from "./pick.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
@@ -59,42 +60,84 @@ interface Folder {
   folders: Map<string, Folder>;
   files: FileInfo[];
   count: number;
+  bytes: number;
 }
 
 function tree(files: readonly FileInfo[]): Folder {
-  const root: Folder = { name: "", path: "", folders: new Map(), files: [], count: 0 };
+  const root: Folder = { name: "", path: "", folders: new Map(), files: [], count: 0, bytes: 0 };
   for (const file of files) {
     const segments = file.path.split("/");
     let folder = root;
     folder.count++;
+    folder.bytes += file.size;
     for (const name of segments.slice(0, -1)) {
       let next = folder.folders.get(name);
-      if (!next) folder.folders.set(name, (next = { name, path: folder.path ? `${folder.path}/${name}` : name, folders: new Map(), files: [], count: 0 }));
+      if (!next) folder.folders.set(name, (next = { name, path: folder.path ? `${folder.path}/${name}` : name, folders: new Map(), files: [], count: 0, bytes: 0 }));
       folder = next;
       folder.count++;
+      folder.bytes += file.size;
     }
     folder.files.push(file);
   }
   return root;
 }
 
+const DownloadIcon = () => (
+  <Icon size={15} box={16} stroke={1.6}>
+    <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" />
+  </Icon>
+);
+
+/** Why a folder cannot be zipped (the Worker's limits, worker/files-routes.ts), or undefined when it can. */
+function zipRefusal(folder: Folder): string | undefined {
+  if (folder.count >= MAX_LISTED) return `Too many files to zip (over ${MAX_LISTED.toLocaleString("en")}); download its folders instead`;
+  if (folder.bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(folder.bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download its folders instead`;
+  return undefined;
+}
+
 function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
   return (
     <>
-      {[...folder.folders.values()].map((sub) => (
-        // Top-level folders (uploads/, out/) start open; folders inside them start closed.
-        <details key={sub.path} className="file-folder" open={depth === 0}>
-          <summary title={sub.path}>
-            {sub.name}/ <small>{sub.count}</small>
-          </summary>
-          <FolderView folder={sub} depth={depth + 1} />
-        </details>
-      ))}
-      {folder.files.map((file) => (
-        <span key={file.path} title={`${file.path} · ${formatBytes(file.size)}`}>
-          {file.path.split("/").pop()}
-        </span>
-      ))}
+      {[...folder.folders.values()].map((sub) => {
+        const refusal = zipRefusal(sub);
+        return (
+          // Top-level folders (uploads/, out/) start open; folders inside them start closed.
+          <details key={sub.path} className="file-folder" open={depth === 0}>
+            <summary title={sub.path}>
+              {sub.name}/ <small>{sub.count}</small>
+              {refusal ? (
+                <span className="file-action disabled" title={refusal} aria-disabled="true">
+                  <DownloadIcon />
+                </span>
+              ) : (
+                <a className="file-action" href={folderZipUrl(sub.path)} download={`${sub.name}.zip`} title={`Download ${sub.name} as a zip`} aria-label={`Download ${sub.name} as a zip`}>
+                  <DownloadIcon />
+                </a>
+              )}
+            </summary>
+            <FolderView folder={sub} depth={depth + 1} />
+          </details>
+        );
+      })}
+      {folder.files.map((file) => {
+        const name = file.path.split("/").pop();
+        const title = `${file.path} · ${formatBytes(file.size)}`;
+        return (
+          <div key={file.path} className="file-row">
+            {previewType(file.path) ? (
+              // An image opens in a new tab to look at; the Worker serves it so nothing in it can run.
+              <a href={fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
+                {name}
+              </a>
+            ) : (
+              <span title={title}>{name}</span>
+            )}
+            <a className="file-action" href={fileUrl(file.path, { download: true })} download={name} title={`Download ${name}`} aria-label={`Download ${name}`}>
+              <DownloadIcon />
+            </a>
+          </div>
+        );
+      })}
     </>
   );
 }
