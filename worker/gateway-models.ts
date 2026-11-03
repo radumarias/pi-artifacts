@@ -61,8 +61,8 @@ export interface GatewayProvider {
   parse(body: unknown): ListedModel[];
   /** pi-ai's own catalog of the vendor, by the vendor's ids: names, limits, efforts and prices for the models it knows. */
   known: Record<string, Model<Api>>;
-  /** How to reach a model pi-ai does not know, and with `always`, every model: pi-ai's own wire for it is one AI Gateway does not route. */
-  wire: Wire & { always?: boolean };
+  /** How to reach a model whose own pi-ai wire AI Gateway does not route for pi (or that pi-ai does not know). */
+  wire: Wire;
 }
 
 // A lenient view of the JSON the lists send: every field may be missing.
@@ -72,14 +72,22 @@ const text = (value: unknown): string | undefined => (typeof value === "string" 
 const count = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined);
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
 
-/** An OpenAI-style list, `{ data: [{ id }] }`, keeping the ids `keep` accepts. */
-const idList =
-  (keep: (id: string, item: Json) => boolean = () => true) =>
+/**
+ * A list of models under `field` of the body, each named by `idOf` (its `id` by default), read by `read`: what it says
+ * of the model, or undefined to leave the model out.
+ */
+const listOf =
+  (field: string, read: (item: Json, id: string) => Omit<ListedModel, "id"> | undefined, idOf = (item: Json) => text(item.id)) =>
   (body: unknown): ListedModel[] =>
-    array((body as Json)?.data).flatMap((item) => {
-      const id = text(item.id);
-      return id && keep(id, item) ? [{ id, contextWindow: count(item.context_window) ?? count(item.context_length) }] : [];
+    array((body as Json)?.[field]).flatMap((item) => {
+      const id = idOf(item);
+      const listed = id && read(item, id);
+      return listed ? [{ id: id!, ...listed }] : [];
     });
+
+/** An OpenAI-style list, `{ data: [{ id, context_window? }] }`, keeping the models `keep` accepts. */
+const idList = (keep: (id: string, item: Json) => boolean = () => true) =>
+  listOf("data", (item, id) => (keep(id, item) ? { contextWindow: count(item.context_window) ?? count(item.context_length) } : undefined));
 
 /** A dated snapshot of a model also listed by its plain name: claude-haiku-4-5-20251001, gpt-4o-2024-08-06. */
 const SNAPSHOT = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
@@ -100,6 +108,10 @@ const perMillion = (value: unknown): number | undefined => {
   return price === undefined ? undefined : Math.round(price * 1e12) / 1e6;
 };
 
+/** A cost from an input and an output price, when the list gives both. */
+const costOf = (input: number | undefined, output: number | undefined, cacheRead = 0, cacheWrite = 0): ModelCost | undefined =>
+  input === undefined || output === undefined ? undefined : { input, output, cacheRead, cacheWrite };
+
 /**
  * The providers, by their AI Gateway names. Their lists come through the gateway, which adds the key it holds, so the
  * app holds none. Each reads only what its vendor documents for its own list.
@@ -108,11 +120,7 @@ export const GATEWAY_PROVIDERS: Record<GatewayProviderId, GatewayProvider> = {
   anthropic: {
     list: "v1/models?limit=1000",
     headers: { "anthropic-version": "2023-06-01" },
-    parse: (body) =>
-      array((body as Json)?.data).flatMap((item) => {
-        const id = text(item.id);
-        return id && !SNAPSHOT.test(id) ? [{ id, name: text(item.display_name), images: true }] : [];
-      }),
+    parse: listOf("data", (item, id) => (SNAPSHOT.test(id) ? undefined : { name: text(item.display_name), images: true })),
     known: ANTHROPIC_MODELS as Record<string, Model<Api>>,
     wire: { api: "anthropic-messages", baseUrl: "https://api.anthropic.com" },
   },
@@ -125,24 +133,23 @@ export const GATEWAY_PROVIDERS: Record<GatewayProviderId, GatewayProvider> = {
   },
   "google-ai-studio": {
     list: "v1beta/models?pageSize=1000",
-    parse: (body) =>
-      array((body as Json)?.models).flatMap((item) => {
-        const id = text(item.name)?.replace(/^models\//, "");
-        if (!id?.startsWith("gemini") || NOT_CHAT.test(id) || !strings(item.supportedGenerationMethods).includes("generateContent")) return [];
-        return [
-          {
-            id,
-            name: text(item.displayName),
-            contextWindow: count(item.inputTokenLimit),
-            maxTokens: count(item.outputTokenLimit),
-            reasoning: item.thinking === true,
-            images: true,
-          },
-        ];
-      }),
+    parse: listOf(
+      "models",
+      (item, id) =>
+        id.startsWith("gemini") && !NOT_CHAT.test(id) && strings(item.supportedGenerationMethods).includes("generateContent")
+          ? {
+              name: text(item.displayName),
+              contextWindow: count(item.inputTokenLimit),
+              maxTokens: count(item.outputTokenLimit),
+              reasoning: item.thinking === true,
+              images: true,
+            }
+          : undefined,
+      (item) => text(item.name)?.replace(/^models\//, ""),
+    ),
     known: GOOGLE_MODELS as Record<string, Model<Api>>,
-    // pi-ai speaks Gemini's own API, which AI Gateway does not route for pi: use Gemini's OpenAI-compatible one.
-    wire: { api: "openai-completions", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", always: true },
+    // pi-ai speaks Gemini's own API, which AI Gateway does not route for pi: Gemini's OpenAI-compatible one instead.
+    wire: { api: "openai-completions", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
   },
   grok: {
     list: "v1/models",
@@ -152,16 +159,14 @@ export const GATEWAY_PROVIDERS: Record<GatewayProviderId, GatewayProvider> = {
   },
   mistral: {
     list: "v1/models",
-    parse: (body) =>
-      array((body as Json)?.data).flatMap((item) => {
-        const id = text(item.id);
-        const can = (item.capabilities ?? {}) as Json;
-        if (!id || item.deprecation || can.completion_chat !== true || can.function_calling !== true) return [];
-        return [{ id, name: text(item.name), contextWindow: count(item.max_context_length), images: can.vision === true }];
-      }),
+    parse: listOf("data", (item) => {
+      const can = (item.capabilities ?? {}) as Json;
+      if (item.deprecation || can.completion_chat !== true || can.function_calling !== true) return undefined;
+      return { name: text(item.name), contextWindow: count(item.max_context_length), images: can.vision === true };
+    }),
     known: MISTRAL_MODELS as Record<string, Model<Api>>,
-    // pi-ai speaks Mistral's Conversations API, which AI Gateway does not route for pi: use its chat completions.
-    wire: { api: "openai-completions", baseUrl: "https://api.mistral.ai/v1", always: true },
+    // pi-ai speaks Mistral's Conversations API, which AI Gateway does not route for pi: its chat completions instead.
+    wire: { api: "openai-completions", baseUrl: "https://api.mistral.ai/v1" },
   },
   deepseek: {
     list: "models",
@@ -183,82 +188,71 @@ export const GATEWAY_PROVIDERS: Record<GatewayProviderId, GatewayProvider> = {
   },
   cohere: {
     list: "v1/models?endpoint=chat&page_size=1000",
-    parse: (body) =>
-      array((body as Json)?.models).flatMap((item) => {
-        const id = text(item.name);
+    parse: listOf(
+      "models",
+      (item) => {
         const features = strings(item.features);
-        if (!id || !strings(item.endpoints).includes("chat") || !features.includes("tools")) return [];
-        return [{ id, contextWindow: count(item.context_length), images: item.supports_vision === true || features.includes("vision") }];
-      }),
+        if (!strings(item.endpoints).includes("chat") || !features.includes("tools")) return undefined;
+        return { contextWindow: count(item.context_length), images: item.supports_vision === true || features.includes("vision") };
+      },
+      (item) => text(item.name),
+    ),
     known: {},
     // Cohere's OpenAI-compatible API.
     wire: { api: "openai-completions", baseUrl: "https://api.cohere.ai/compatibility/v1" },
   },
   openrouter: {
     list: "v1/models",
-    parse: (body) =>
-      array((body as Json)?.data).flatMap((item) => {
-        const id = text(item.id);
-        if (!id || !strings(item.supported_parameters).includes("tools")) return [];
-        const pricing = (item.pricing ?? {}) as Json;
-        const [input, output] = [perMillion(pricing.prompt), perMillion(pricing.completion)];
-        const architecture = (item.architecture ?? {}) as Json;
-        return [
-          {
-            id,
-            name: text(item.name),
-            contextWindow: count(item.context_length),
-            maxTokens: count(((item.top_provider ?? {}) as Json).max_completion_tokens),
-            images: strings(architecture.input_modalities).includes("image"),
-            reasoning: strings(item.supported_parameters).includes("reasoning"),
-            cost:
-              input === undefined || output === undefined
-                ? undefined
-                : { input, output, cacheRead: perMillion(pricing.input_cache_read) ?? 0, cacheWrite: perMillion(pricing.input_cache_write) ?? 0 },
-          },
-        ];
-      }),
+    parse: listOf("data", (item) => {
+      const parameters = strings(item.supported_parameters);
+      if (!parameters.includes("tools")) return undefined;
+      const pricing = (item.pricing ?? {}) as Json;
+      return {
+        name: text(item.name),
+        contextWindow: count(item.context_length),
+        maxTokens: count(((item.top_provider ?? {}) as Json).max_completion_tokens),
+        images: strings(((item.architecture ?? {}) as Json).input_modalities).includes("image"),
+        reasoning: parameters.includes("reasoning"),
+        cost: costOf(perMillion(pricing.prompt), perMillion(pricing.completion), perMillion(pricing.input_cache_read), perMillion(pricing.input_cache_write)),
+      };
+    }),
     known: OPENROUTER_MODELS as Record<string, Model<Api>>,
-    wire: { api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", always: true },
+    wire: { api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" },
   },
   huggingface: {
     list: "v1/models",
-    parse: (body) =>
-      array((body as Json)?.data).flatMap((item) => {
-        const id = text(item.id);
-        // The router picks one of the model's providers per request: list it when one that is up calls tools.
-        const providers = array(item.providers).filter((provider) => provider.status !== "error" && provider.supports_tools === true);
-        if (!id || !providers.length) return [];
-        const pricing = (providers[0].pricing ?? {}) as Json;
-        // Already in dollars per million tokens.
-        const [input, output] = [dollars(pricing.input), dollars(pricing.output)];
-        return [
-          {
-            id,
-            contextWindow: count(providers[0].context_length),
-            cost: input === undefined || output === undefined ? undefined : { input, output, cacheRead: 0, cacheWrite: 0 },
-          },
-        ];
-      }),
+    parse: listOf("data", (item) => {
+      // The router picks one of the model's providers per request: list it when one that is up calls tools.
+      const provider = array(item.providers).find((provider) => provider.status !== "error" && provider.supports_tools === true);
+      if (!provider) return undefined;
+      // Already in dollars per million tokens.
+      const pricing = (provider.pricing ?? {}) as Json;
+      return { contextWindow: count(provider.context_length), cost: costOf(dollars(pricing.input), dollars(pricing.output)) };
+    }),
     known: HUGGINGFACE_MODELS as Record<string, Model<Api>>,
     wire: { api: "openai-completions", baseUrl: "https://router.huggingface.co/v1" },
   },
 };
 
+/** The wires agents/models/pi-ai routes through AI Gateway: a pi-ai model on any other runs on its provider's `wire`. */
+export const ROUTED_APIS: ReadonlySet<string> = new Set<Wire["api"]>(["anthropic-messages", "openai-completions", "openai-responses"]);
+
 /** The AI binding's way to AI Gateway's provider paths (agents/models/pi-ai sends its own requests the same way). */
-interface GatewayFetcher {
+export interface GatewayFetcher {
   fetch(url: string, init?: RequestInit): Promise<Response>;
 }
 
 export interface DiscoverOptions {
-  ai: unknown;
+  ai: GatewayFetcher;
   gateway: string;
   /** The alias of the provider keys to use, when not "default". */
   byokAlias?: string;
   /** The last discovery: a provider whose list cannot be read now keeps the models it had. */
   previous?: Discovery | null;
-  timeoutMs?: number;
 }
+
+/** How long one provider's list may take. */
+const LIST_TIMEOUT_MS = 10_000;
 
 /** A request the provider refused for want of a key: no key in AI Gateway for it, or none that works. */
 function refused(status: number, body: string): boolean {
@@ -272,10 +266,11 @@ async function listProvider(id: GatewayProviderId, options: DiscoverOptions): Pr
   const headers: Record<string, string> = { ...provider.headers, "cf-aig-collect-log": "false" };
   if (options.byokAlias) headers["cf-aig-byok-alias"] = options.byokAlias;
   try {
-    const response = await (options.ai as GatewayFetcher).fetch(
-      `https://workers-binding.ai/ai-gateway/gateways/${encodeURIComponent(options.gateway)}/${id}/${provider.list}`,
-      { method: "GET", headers, signal: AbortSignal.timeout(options.timeoutMs ?? 10_000) },
-    );
+    const response = await options.ai.fetch(`https://workers-binding.ai/ai-gateway/gateways/${encodeURIComponent(options.gateway)}/${id}/${provider.list}`, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       if (refused(response.status, body)) return { status: "no-key", models: [] };

@@ -9,7 +9,6 @@ export { newId } from "./artifacts.ts";
 export type { ArtifactStore } from "./artifacts.ts";
 export { draftId, MAX_DRAFTS, passed, type ChatDrafts, type Draft, type DraftSummary } from "./drafts.ts";
 export type { FileEntry, UserFiles } from "./user-files.ts";
-export type { ModelCache } from "./model-cache.ts";
 export { literalPath, normalisePath, PathError } from "./paths.ts";
 
 /**

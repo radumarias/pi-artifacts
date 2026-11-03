@@ -7,7 +7,7 @@ import { filesRoute } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
 import { chatRoute } from "./chat-routes.ts";
 import { mcpRoute } from "./mcp-routes.ts";
-import { loadCatalog } from "./models.ts";
+import { catalogSource, loadCatalog } from "./models.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
@@ -148,8 +148,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   // The model picker's choices: the models AI Gateway's providers list (for those it holds a key for), and Workers AI's.
   // POST asks the providers again now, for a key added since.
   if (path === "/api/models" && (method === "GET" || method === "POST")) {
-    const source = { cache: storage.models, ai: env.AI, gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined, waitUntil };
-    return json(await loadCatalog(source, { refresh: method === "POST" }), 200, { "cache-control": "private, no-cache" });
+    return json(await loadCatalog(catalogSource(env, storage.models, waitUntil), { refresh: method === "POST" }), 200, { "cache-control": "private, no-cache" });
   }
 
   const skills = await skillsRoute(request, directory);

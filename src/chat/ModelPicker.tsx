@@ -1,10 +1,23 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { memo, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type RefObject } from "react";
-import { effortLabel, PROVIDERS, type ModelCatalog, type ModelInfo, type ProviderId } from "../../shared/models.ts";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
+import { effortLabel, providerLabel, type ModelCatalog, type ModelInfo, type ProviderId } from "../../shared/models.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
 import { useStoredState } from "../layout.tsx";
+import { COMPACT } from "./spend.ts";
 
 const EMPTY: ModelCatalog = { models: [] };
 
@@ -45,8 +58,6 @@ const isIdList = (value: unknown): value is string[] => Array.isArray(value) && 
 const isIdListOrNull = (value: unknown): value is string[] | null => value === null || isIdList(value);
 const MAX_RECENT = 5;
 
-const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
-
 /** "$3", "$0.15", "$2.5": a price per million tokens, short. */
 function dollars(value: number): string {
   return `$${Number(value.toPrecision(3))}`;
@@ -72,7 +83,7 @@ function ago(at: number): string {
 
 /** Whether `model` matches every word of `query`, in its name, id or provider. */
 function matches(model: ModelInfo, words: readonly string[]): boolean {
-  const text = `${model.name} ${model.id} ${PROVIDERS[model.provider] ?? model.provider}`.toLowerCase();
+  const text = `${model.name} ${model.id} ${providerLabel(model.provider)}`.toLowerCase();
   return words.every((word) => text.includes(word));
 }
 
@@ -81,8 +92,9 @@ interface Section {
   key: string;
   label: string;
   models: ModelInfo[];
-  /** Whether it opens and closes, and whether it is open. */
-  toggle?: { open: boolean };
+  /** Whether it opens and closes. */
+  foldable: boolean;
+  open: boolean;
 }
 
 interface Props {
@@ -101,11 +113,15 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
 
+  const close = useCallback(() => {
+    setOpen(false);
+    trigger.current?.focus();
+  }, []);
+
   if (!model) return null;
   const current = catalog.models.find((entry) => entry.id === model);
   const pick = (id: string) => {
-    setOpen(false);
-    trigger.current?.focus();
+    close();
     // Coming from a model that does not reason (or an unlisted one at "off"), ask for no effort: the chat picks the new model's usual one.
     if (id !== model) onChange(id, (current ? !current.efforts.length : thinkingLevel === "off") ? undefined : thinkingLevel);
   };
@@ -118,7 +134,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={current ? `${current.name} (${PROVIDERS[current.provider]})` : model}
+        title={current ? `${current.name} (${providerLabel(current.provider)})` : model}
         onClick={() => setOpen(!open)}
       >
         {/* A deployment's default can be a model the picker does not list. */}
@@ -127,18 +143,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
           <path d="m6 9 6 6 6-6" />
         </Icon>
       </button>
-      {open && (
-        <ModelMenu
-          catalog={catalog}
-          current={model}
-          onPick={pick}
-          onClose={() => {
-            setOpen(false);
-            trigger.current?.focus();
-          }}
-          trigger={trigger}
-        />
-      )}
+      {open && <ModelMenu catalog={catalog} current={model} onPick={pick} onClose={close} trigger={trigger} />}
       {current && current.efforts.length > 0 && thinkingLevel && (
         <select
           className="effort"
@@ -179,11 +184,12 @@ function usePlacement(trigger: RefObject<HTMLElement | null>): CSSProperties {
     return { width, right, bottom: window.innerHeight - rect.top + 6, maxHeight: Math.min(520, rect.top - 2 * MARGIN) };
   };
   const [place, setPlace] = useState(measure);
+  // measure reads only the ref and the window: listen once.
   useEffect(() => {
     const onResize = () => setPlace(measure());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  });
+  }, []);
   return place;
 }
 
@@ -215,42 +221,48 @@ function ModelMenu({
   const openGroups = useMemo(() => storedGroups ?? (currentProvider ? [currentProvider] : []), [storedGroups, currentProvider]);
   // The row the arrow keys are on, by its key, so it stays put while sections above it change.
   const [activeKey, setActiveKey] = useState<string>();
-  const [refreshing, setRefreshing] = useState<"idle" | "busy" | string>("idle");
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string>();
   const box = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const place = usePlacement(trigger);
 
+  // The models by id, and by provider in the catalog's order: made once per catalog, not per keystroke.
+  const { byId, byProvider } = useMemo(() => {
+    const byProvider = new Map<ProviderId, ModelInfo[]>();
+    for (const model of catalog.models) byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model]);
+    return { byId: new Map(catalog.models.map((model) => [model.id, model])), byProvider };
+  }, [catalog.models]);
+
   const sections = useMemo((): Section[] => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const byId = new Map(catalog.models.map((model) => [model.id, model]));
-    const providers = [...new Set(catalog.models.map((model) => model.provider))];
-    const groups = providers.map((provider): Section => {
-      const models = catalog.models.filter((model) => model.provider === provider && matches(model, words));
-      // While searching every group with a match is open; with one provider there is nothing to fold.
-      const open = words.length > 0 || providers.length === 1 || openGroups.includes(provider);
-      return {
+    // While searching every group with a match is open; with one provider there is nothing to fold.
+    const foldable = !words.length && byProvider.size > 1;
+    const groups = [...byProvider].map(
+      ([provider, models]): Section => ({
         key: provider,
-        label: PROVIDERS[provider as ProviderId] ?? provider,
-        models,
-        toggle: words.length || providers.length === 1 ? undefined : { open },
-      };
-    });
+        label: providerLabel(provider),
+        models: words.length ? models.filter((model) => matches(model, words)) : models,
+        foldable,
+        open: !foldable || openGroups.includes(provider),
+      }),
+    );
     if (words.length) return groups.filter((group) => group.models.length);
     const pinned = favorites.flatMap((key) => byId.get(key) ?? []);
     const lately = recent.filter((key) => !favorites.includes(key)).flatMap((key) => byId.get(key) ?? []);
     return [
-      ...(pinned.length ? [{ key: "favorites", label: "Favorites", models: pinned }] : []),
-      ...(lately.length ? [{ key: "recent", label: "Recent", models: lately }] : []),
+      ...(pinned.length ? [{ key: "favorites", label: "Favorites", models: pinned, foldable: false, open: true }] : []),
+      ...(lately.length ? [{ key: "recent", label: "Recent", models: lately, foldable: false, open: true }] : []),
       ...groups,
     ];
-  }, [catalog.models, query, favorites, recent, openGroups]);
+  }, [byId, byProvider, query, favorites, recent, openGroups]);
 
-  // What the arrow keys move through: the models of every open section, in order.
-  const options = useMemo(
-    () => sections.flatMap((section) => (section.toggle?.open === false ? [] : section.models.map((model) => ({ key: `${section.key}:${model.id}`, model })))),
-    [sections],
-  );
-  const found = options.findIndex((option) => option.key === activeKey);
+  // What the arrow keys move through: the models of every open section, in order; and each row's place among them.
+  const { options, indexOf } = useMemo(() => {
+    const options = sections.flatMap((section) => (section.open ? section.models.map((model) => ({ key: `${section.key}:${model.id}`, model })) : []));
+    return { options, indexOf: new Map(options.map((option, index) => [option.key, index])) };
+  }, [sections]);
+  const found = activeKey === undefined ? -1 : (indexOf.get(activeKey) ?? -1);
   // Until the user moves, the current model where the list first shows it, else the first row.
   const activeIndex =
     found >= 0
@@ -286,17 +298,19 @@ function ModelMenu({
     setFavorites(favorites.includes(model.id) ? favorites.filter((key) => key !== model.id) : [...favorites, model.id]);
   const toggleGroup = (section: Section) => {
     const shown = new Set(openGroups);
-    if (section.toggle?.open) shown.delete(section.key);
+    if (section.open) shown.delete(section.key);
     else shown.add(section.key);
     setOpenGroups([...shown]);
   };
   const refresh = async () => {
-    setRefreshing("busy");
+    setRefreshing(true);
+    setRefreshError(undefined);
     try {
       await catalogStore.refresh();
-      setRefreshing("idle");
     } catch (error) {
-      setRefreshing(errorMessage(error));
+      setRefreshError(errorMessage(error));
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -316,7 +330,7 @@ function ModelMenu({
   };
 
   const total = catalog.models.length;
-  const providerCount = new Set(catalog.models.map((model) => model.provider)).size;
+  const providerCount = byProvider.size;
   return (
     <div className="model-menu" role="dialog" aria-label="Choose a model" ref={box} style={place}>
       <label className="model-search">
@@ -345,10 +359,10 @@ function ModelMenu({
       <div className="model-list" id={`${id}-list`} role="listbox" aria-label="Models" ref={list}>
         {sections.map((section) => (
           <div key={section.key} role="group" aria-label={section.label} className="model-section">
-            {section.toggle ? (
-              <button type="button" className="model-group" aria-expanded={section.toggle.open} tabIndex={-1} onClick={() => toggleGroup(section)}>
+            {section.foldable ? (
+              <button type="button" className="model-group" aria-expanded={section.open} tabIndex={-1} onClick={() => toggleGroup(section)}>
                 <Icon size={14} stroke={2}>
-                  <path d={section.toggle.open ? "m6 9 6 6 6-6" : "m9 6 6 6-6 6"} />
+                  <path d={section.open ? "m6 9 6 6 6-6" : "m9 6 6 6-6 6"} />
                 </Icon>
                 <span>{section.label}</span>
                 <small>{section.models.length}</small>
@@ -359,10 +373,10 @@ function ModelMenu({
                 {query && <small>{section.models.length}</small>}
               </div>
             )}
-            {section.toggle?.open !== false &&
+            {section.open &&
               section.models.map((model) => {
                 const key = `${section.key}:${model.id}`;
-                const index = options.findIndex((option) => option.key === key);
+                const index = indexOf.get(key) ?? -1;
                 const favorite = favorites.includes(model.id);
                 return (
                   <div
@@ -384,7 +398,9 @@ function ModelMenu({
                         }
                       >
                         {/* Favorites and recent picks mix providers: say whose each is. */}
-                        {(section.key === "favorites" || section.key === "recent" ? [PROVIDERS[model.provider], ...facts(model)] : facts(model)).join(" · ")}
+                        {(section.key === "favorites" || section.key === "recent" ? [providerLabel(model.provider), ...facts(model)] : facts(model)).join(
+                          " · ",
+                        )}
                       </small>
                     </span>
                     {model.id === current && (
@@ -416,15 +432,15 @@ function ModelMenu({
       </div>
       <div className="model-menu-foot">
         <small>
-          {refreshing !== "idle" && refreshing !== "busy"
-            ? `Could not check: ${refreshing}`
+          {refreshError
+            ? `Could not check: ${refreshError}`
             : `${total} models from ${providerCount} ${providerCount === 1 ? "provider" : "providers"}${catalog.checkedAt ? ` · checked ${ago(catalog.checkedAt)}` : ""}`}
         </small>
         <button
           type="button"
           className="icon-button"
           onClick={refresh}
-          disabled={refreshing === "busy"}
+          disabled={refreshing}
           title="Ask AI Gateway's providers for their models again, for a key added since"
           aria-label="Check for new models"
         >

@@ -55,7 +55,7 @@ import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
-import { currentCatalog, defaultModelChoice, listedProviders, loadCatalog, withCurrentPrices, withEffortRecorded, type Catalog } from "./models.ts";
+import { catalogSource, currentCatalog, defaultModelChoice, listedProviders, loadCatalog, withCurrentPrices, withEffortRecorded, type Catalog } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
 
@@ -263,13 +263,7 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** The models a chat can pick, as AI Gateway's providers last listed them. */
   #catalog(): Promise<Catalog> {
-    return loadCatalog({
-      cache: this.storage.models,
-      ai: this.env.AI,
-      gateway: this.env.AI_GATEWAY_ID,
-      byokAlias: this.env.AI_BYOK_ALIAS || undefined,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
-    });
+    return loadCatalog(catalogSource(this.env, this.storage.models, (promise) => this.ctx.waitUntil(promise)));
   }
 
   /** The user's last pick, checked again: the list of models can change. On a failure, the deployment's default. */

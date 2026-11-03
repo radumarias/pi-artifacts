@@ -176,7 +176,7 @@ export function formatCost(dollars: number): string {
 }
 
 const COUNT = new Intl.NumberFormat("en-US");
-const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+export const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
 /** Tokens in and out, short: input counts what came from the cache and went into it too. */
 export function shortTokens(spend: Spend): string {

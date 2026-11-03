@@ -1,9 +1,9 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type Models, type ModelThinkingLevel, type Provider, type ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { createAI } from "agents/models/pi-ai";
-import { EFFORT_LABELS, modelKey, PROVIDERS, type ModelCatalog, type ModelChoice, type ModelInfo, type ProviderId } from "../shared/models.ts";
+import { EFFORT_LABELS, modelKey, PROVIDERS, providerLabel, type ModelCatalog, type ModelChoice, type ModelInfo, type ProviderId } from "../shared/models.ts";
 import { errorMessage } from "../shared/util.ts";
-import { discoverModels, GATEWAY_PROVIDERS, type Discovery, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
+import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, type Discovery, type GatewayFetcher, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
 import prices from "./prices.json";
 import type { ModelCache } from "./storage/model-cache.ts";
 
@@ -194,17 +194,19 @@ function catalogId(provider: GatewayProviderId, id: string): string {
 function listedModel(provider: GatewayProviderId, listed: ListedModel): { model: Model<Api>; isPriced: boolean } {
   const spec = GATEWAY_PROVIDERS[provider];
   const known = Object.hasOwn(spec.known, listed.id) ? spec.known[listed.id] : undefined;
-  const own = known && !spec.wire.always;
+  // pi-ai's own wire for the model, when AI Gateway routes it for pi; else the provider's.
+  const own = known && ROUTED_APIS.has(known.api);
+  const { api, baseUrl } = own ? known : spec.wire;
   const reasoning = known?.reasoning ?? listed.reasoning ?? false;
   // A live list's price (OpenRouter's, Hugging Face's) is the newest; the build's (worker/prices.json) is at most a week old.
   const cost = listed.cost ?? PRICES.get(catalogId(provider, listed.id)) ?? known?.cost;
-  const thinkingLevelMap = own && known.thinkingLevelMap ? known.thinkingLevelMap : reasoning && provider !== "anthropic" ? BASIC_EFFORTS : undefined;
+  const thinkingLevelMap = (own && known.thinkingLevelMap) || (reasoning && api === "openai-completions" ? BASIC_EFFORTS : undefined);
   const model: Model<Api> = {
     id: listed.id,
     name: known?.name ?? listed.name ?? listed.id,
-    api: own ? known.api : spec.wire.api,
+    api,
     provider,
-    baseUrl: own ? known.baseUrl : spec.wire.baseUrl,
+    baseUrl,
     reasoning,
     input: known?.input ?? (listed.images ? ["text", "image"] : ["text"]),
     cost: cost ?? NO_COST,
@@ -214,6 +216,12 @@ function listedModel(provider: GatewayProviderId, listed: ListedModel): { model:
     ...(own && known.compat && { compat: known.compat }),
   };
   return { model, isPriced: cost !== undefined };
+}
+
+/** A provider's own model's entry: run on its provider's path through AI Gateway, under `<provider>/<id>`. */
+function ownEntry(provider: GatewayProviderId, listed: ListedModel): ModelEntry {
+  const { model, isPriced } = listedModel(provider, listed);
+  return { info: infoOf(model, model, provider, modelKey(provider, model.id), isPriced), model, metadata: model };
 }
 
 /** The models a chat can pick, the deployment's providers' (as last discovered) and Workers AI's. */
@@ -226,33 +234,25 @@ export class Catalog {
   constructor(base: readonly ModelEntry[], discovery: Discovery | null) {
     this.checkedAt = discovery?.checkedAt;
     const byCatalogId = new Map(base.map((entry) => [entry.info.id, entry]));
-    const entries: ModelEntry[] = base.filter((entry) => entry.info.provider === "workers-ai");
-    for (const provider of Object.keys(GATEWAY_PROVIDERS) as GatewayProviderId[]) {
-      const listing = discovery?.providers[provider];
-      // Anthropic and OpenAI stay as AI Gateway's catalog has them until their lists say otherwise: the gateway can
-      // reach them without a key of the deployment's own (unified billing), and lists they cannot read say nothing.
-      if ((provider === "anthropic" || provider === "openai") && listing?.status !== "ok") {
-        entries.push(...base.filter((entry) => entry.info.provider === provider));
+    const entries = new Map<string, ModelEntry>();
+    for (const provider of PROVIDER_ORDER) {
+      const listed = provider === "workers-ai" ? undefined : discovery?.providers[provider]?.models;
+      // A provider with no models listed (Workers AI, and before or without a list) shows what AI Gateway's catalog
+      // has of it: Anthropic and OpenAI can be reached without a key of the deployment's own (unified billing).
+      if (!listed?.length) {
+        for (const entry of base) if (entry.info.provider === provider) entries.set(entry.info.id, entry);
         continue;
       }
-      const seen = new Set<string>();
-      for (const listed of listing?.models ?? []) {
-        const inCatalog = byCatalogId.get(catalogId(provider, listed.id));
-        const entry = inCatalog ?? this.#own(provider, listed);
-        if (seen.has(entry.info.id)) continue;
-        seen.add(entry.info.id);
-        entries.push(entry);
+      for (const model of listed) {
+        const entry = byCatalogId.get(catalogId(provider as GatewayProviderId, model.id)) ?? ownEntry(provider as GatewayProviderId, model);
+        if (!entries.has(entry.info.id)) entries.set(entry.info.id, entry);
       }
     }
-    for (const entry of entries.sort(byPickerOrder)) this.#entries.set(entry.info.id, entry);
-  }
-
-  #own(provider: GatewayProviderId, listed: ListedModel): ModelEntry {
-    const { model, isPriced } = listedModel(provider, listed);
-    let models = this.#listed.get(provider);
-    if (!models) this.#listed.set(provider, (models = []));
-    models.push(model);
-    return { info: infoOf(model, model, provider, modelKey(provider, model.id), isPriced), model, metadata: model };
+    for (const entry of [...entries.values()].sort(byPickerOrder)) {
+      this.#entries.set(entry.info.id, entry);
+      const { provider } = entry.model;
+      if (Object.hasOwn(GATEWAY_PROVIDERS, provider)) this.#listed.set(provider as GatewayProviderId, [...this.listed(provider as GatewayProviderId), entry.model]);
+    }
   }
 
   /** The picker's list. */
@@ -328,27 +328,36 @@ export function listedProviders(cloudflare: Provider, catalog: () => Catalog): P
   return (Object.keys(GATEWAY_PROVIDERS) as GatewayProviderId[]).map((id) => ({
     ...cloudflare,
     id,
-    name: PROVIDERS[id],
+    name: providerLabel(id),
     getModels: () => catalog().listed(id),
     getAllModels: () => catalog().listed(id),
   }));
 }
 
 /** How long a discovery stands before the providers are asked again (in the background: the old one serves meanwhile). */
-export const FRESH_MS = 60 * 60_000;
+const FRESH_MS = 60 * 60_000;
 /** How soon someone may ask the providers again by hand. */
-export const MIN_REFRESH_MS = 60_000;
+const MIN_REFRESH_MS = 60_000;
 /** How long an isolate keeps the catalog before reading the shared copy again, which another isolate may have renewed. */
 const REREAD_MS = 5 * 60_000;
 
 export interface CatalogSource {
   cache: ModelCache;
   /** The AI binding, and the gateway and key alias the chats use. */
-  ai: unknown;
+  ai: GatewayFetcher;
   gateway: string;
   byokAlias?: string;
   /** Keeps a background refresh alive after the response (the Worker's waitUntil). */
   waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+/** Where a Worker or chat object finds the catalog, from its environment. */
+export function catalogSource(
+  env: { AI: unknown; AI_GATEWAY_ID: string; AI_BYOK_ALIAS?: string },
+  cache: ModelCache,
+  waitUntil?: (promise: Promise<unknown>) => void,
+): CatalogSource {
+  return { cache, ai: env.AI as GatewayFetcher, gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined, waitUntil };
 }
 
 /** The isolate's catalog, and when it was read. */
@@ -359,14 +368,34 @@ export function currentCatalog(): Catalog {
   return held?.catalog ?? baseCatalog();
 }
 
+/** Hold a discovery, building its catalog only when it is not the one already held. */
 function hold(discovery: Discovery | null): Catalog {
+  const readAt = Date.now();
+  if (held && held.discovery?.checkedAt === discovery?.checkedAt) {
+    held.readAt = readAt;
+    return held.catalog;
+  }
   const catalog = catalogFrom(discovery);
-  held = { catalog, discovery, readAt: Date.now() };
+  held = { catalog, discovery, readAt };
   return catalog;
 }
 
-/** The ask in flight: concurrent asks share it. */
+/** The read and the ask in flight, which concurrent callers share. */
+let reading: Promise<Discovery | null> | undefined;
 let discovering: Promise<Catalog> | undefined;
+
+/** The shared copy, read once however many ask at the same time. */
+function readCached(cache: ModelCache): Promise<Discovery | null> {
+  return (reading ??= cache
+    .read()
+    .catch((error: unknown) => {
+      console.error("models: could not read the last discovery:", errorMessage(error));
+      return null;
+    })
+    .finally(() => {
+      reading = undefined;
+    }));
+}
 
 /** Ask the providers, keep the answer for every isolate, and hold it here. */
 function rediscover(source: CatalogSource): Promise<Catalog> {
@@ -385,15 +414,9 @@ function rediscover(source: CatalogSource): Promise<Catalog> {
  * in the background while the old one serves. `refresh` asks again now, unless the last ask was under a minute ago.
  */
 export async function loadCatalog(source: CatalogSource, { refresh = false } = {}): Promise<Catalog> {
-  const now = Date.now();
-  if (held && !refresh && now - held.readAt < REREAD_MS) return held.catalog;
-  let discovery: Discovery | null = null;
-  try {
-    discovery = await source.cache.read();
-  } catch (error) {
-    console.error("models: could not read the last discovery:", errorMessage(error));
-  }
-  const age = discovery ? now - discovery.checkedAt : Infinity;
+  if (held && !refresh && Date.now() - held.readAt < REREAD_MS) return held.catalog;
+  const discovery = await readCached(source.cache);
+  const age = discovery ? Date.now() - discovery.checkedAt : Infinity;
   if (!discovery || (refresh && age >= MIN_REFRESH_MS)) {
     try {
       return await rediscover(source);

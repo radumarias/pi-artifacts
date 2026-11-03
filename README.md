@@ -391,7 +391,7 @@ those providers' models; signed out, it keeps the providers the file already pri
 the file is a week old or when those providers change (`scripts/prices.ts`, a Vite plugin), and fails if a source
 cannot be fetched or read, or the file is not a valid price list, rather than ship prices that may be wrong; commit
 the file it writes. `pnpm prices` reads them now. A live list's own price (OpenRouter's, Hugging Face's) goes first;
-a model no source prices keeps pi-ai's, and one pi-ai does not know either counts as free, which the picker and the
+a model no source prices keeps pi-ai's, and one pi-ai does not know either counts as free (so a provider keyed after the last build has its models priced from the next build), which the picker and the
 cost panel say ("price unknown"). They are list prices: Workers AI's free daily allowance, and any discount the
 account has, are not taken off. Everyone in a shared chat sees them.
 

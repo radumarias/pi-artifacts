@@ -1,26 +1,39 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
+/** What the app knows of a provider beyond how to reach it (worker/gateway-models.ts). */
+interface ProviderFacts {
+  /** The picker's group label. */
+  label: string;
+  /** The provider's name in models.dev's catalog, where the build reads its prices (scripts/prices.ts); absent for those priced from their own pages. */
+  modelsDev?: string;
+}
+
 /**
- * The providers the picker can list, in its order, with their group labels: Workers AI (no key needed), and every AI
- * Gateway provider the app knows how to list models from and talk to (worker/gateway-models.ts). A provider shows up
- * only once AI Gateway holds a key for it.
+ * The providers the picker can list, in its order: Workers AI (no key needed), and every AI Gateway provider the app
+ * knows how to list models from and talk to (worker/gateway-models.ts). A provider shows up only once AI Gateway holds a
+ * key for it.
  */
 export const PROVIDERS = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  "google-ai-studio": "Google",
-  grok: "xAI",
-  mistral: "Mistral",
-  deepseek: "DeepSeek",
-  groq: "Groq",
-  cerebras: "Cerebras",
-  cohere: "Cohere",
-  openrouter: "OpenRouter",
-  huggingface: "Hugging Face",
-  "workers-ai": "Workers AI (free daily allowance)",
-} as const;
+  anthropic: { label: "Anthropic" },
+  openai: { label: "OpenAI" },
+  "google-ai-studio": { label: "Google", modelsDev: "google" },
+  grok: { label: "xAI", modelsDev: "xai" },
+  mistral: { label: "Mistral", modelsDev: "mistral" },
+  deepseek: { label: "DeepSeek", modelsDev: "deepseek" },
+  groq: { label: "Groq", modelsDev: "groq" },
+  cerebras: { label: "Cerebras", modelsDev: "cerebras" },
+  cohere: { label: "Cohere", modelsDev: "cohere" },
+  openrouter: { label: "OpenRouter", modelsDev: "openrouter" },
+  huggingface: { label: "Hugging Face", modelsDev: "huggingface" },
+  "workers-ai": { label: "Workers AI (free daily allowance)" },
+} satisfies Record<string, ProviderFacts>;
 
 export type ProviderId = keyof typeof PROVIDERS;
+
+/** A provider's group label. */
+export function providerLabel(id: ProviderId): string {
+  return PROVIDERS[id].label;
+}
 
 /** A model a chat can run on, as the model picker lists it. */
 export interface ModelInfo {

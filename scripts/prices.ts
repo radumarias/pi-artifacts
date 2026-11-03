@@ -43,23 +43,10 @@ export const SOURCES = {
 /** Every provider's models and prices, as JSON: the source of the providers without a price page read above. */
 export const MODELS_DEV = "https://models.dev/api.json";
 
-/** The AI Gateway providers priced from models.dev, by gateway name, with models.dev's name for each. */
-export const MODELS_DEV_PROVIDERS: Record<string, string> = {
-  "google-ai-studio": "google",
-  grok: "xai",
-  mistral: "mistral",
-  deepseek: "deepseek",
-  groq: "groq",
-  cerebras: "cerebras",
-  cohere: "cohere",
-  openrouter: "openrouter",
-  huggingface: "huggingface",
-};
-
-// Every provider the app can list models from (shared/models.ts) has a price source here.
-for (const provider of Object.keys(PROVIDERS)) {
-  if (!["anthropic", "openai", "workers-ai"].includes(provider) && !MODELS_DEV_PROVIDERS[provider]) throw new Error(`No price source for ${provider}`);
-}
+/** The AI Gateway providers priced from models.dev, by gateway name, with models.dev's name for each (shared/models.ts). */
+export const MODELS_DEV_PROVIDERS: Record<string, string> = Object.fromEntries(
+  Object.entries(PROVIDERS).flatMap(([provider, facts]) => ("modelsDev" in facts ? [[provider, facts.modelsDev]] : [])),
+);
 
 /** The AI Gateway the deployment uses (AI_GATEWAY_ID in cloudflare.config.ts). */
 export const AI_GATEWAY = process.env.AI_GATEWAY_ID ?? "pi-artifacts";
@@ -186,6 +173,13 @@ function modelsDevPrice(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/** A models.dev cost entry as a price, when it has input and output prices. */
+function modelsDevCost(cost: Record<string, unknown> = {}): Price | undefined {
+  const [input, output] = [modelsDevPrice(cost.input), modelsDevPrice(cost.output)];
+  // No cached price: the model caches nothing, so any cached token is priced as input. No write price: writes are free.
+  return input === undefined || output === undefined ? undefined : { input, output, cacheRead: modelsDevPrice(cost.cache_read) ?? input, cacheWrite: modelsDevPrice(cost.cache_write) ?? 0 };
+}
+
 /**
  * The prices of `providers`' chat models (those that call tools) in models.dev's catalog, keyed as the picker names
  * them: `<gateway provider>/<model id>`. A tier by context length is a long-prompt price, as pi-ai has it. A provider
@@ -198,16 +192,11 @@ export function parseModelsDev(json: string, providers: readonly string[]): Reco
     const listed = catalog[MODELS_DEV_PROVIDERS[provider]]?.models;
     if (!listed) throw new PriceError(`models.dev: no ${MODELS_DEV_PROVIDERS[provider]} models`);
     for (const [id, model] of Object.entries(listed)) {
-      const price = (cost: Record<string, unknown> = {}) => {
-        const [input, output] = [modelsDevPrice(cost.input), modelsDevPrice(cost.output)];
-        // No cached price: the model caches nothing, so any cached token is priced as input. No write price: writes are free.
-        return input === undefined || output === undefined ? undefined : { input, output, cacheRead: modelsDevPrice(cost.cache_read) ?? input, cacheWrite: modelsDevPrice(cost.cache_write) ?? 0 };
-      };
-      const base = model.tool_call === false ? undefined : price(model.cost);
+      const base = model.tool_call === false ? undefined : modelsDevCost(model.cost);
       if (!base) continue;
       const tiers = (Array.isArray(model.cost?.tiers) ? (model.cost.tiers as Record<string, unknown>[]) : []).flatMap((tier) => {
         const at = tier.tier as { type?: string; size?: unknown } | undefined;
-        const tierPrice = price(tier);
+        const tierPrice = modelsDevCost(tier);
         return at?.type === "context" && typeof at.size === "number" && tierPrice ? [{ inputTokensAbove: at.size, ...tierPrice }] : [];
       });
       models[`${provider}/${id}`] = tiers.length ? { ...base, tiers } : base;
@@ -317,6 +306,13 @@ export async function refreshPrices({
   return { refreshed: true, changes: describeChanges(current.models, models) };
 }
 
+/** What the build learned of the gateway's keys, for its log. */
+function describeKeyed(keyed: string[] | undefined): string {
+  return keyed
+    ? `AI Gateway ${AI_GATEWAY} holds keys for: ${keyed.length ? keyed.join(", ") : "no provider beyond Anthropic and OpenAI"}.`
+    : `Could not ask Cloudflare which providers AI Gateway ${AI_GATEWAY} holds keys for (sign in with cf auth login): pricing the providers worker/prices.json prices.`;
+}
+
 /** The build step: once per build (Vite builds the app and the Worker), before anything is bundled. */
 export function pricesPlugin(): Plugin {
   let run: ReturnType<typeof refreshPrices> | undefined;
@@ -325,11 +321,7 @@ export function pricesPlugin(): Plugin {
     apply: "build",
     async buildStart() {
       const keyed = process.env.PI_OFFLINE === "1" ? undefined : keyedProviders();
-      this.info(
-        keyed
-          ? `AI Gateway ${AI_GATEWAY} holds keys for: ${keyed.length ? keyed.join(", ") : "no provider beyond Anthropic and OpenAI"}.`
-          : `Could not ask Cloudflare which providers AI Gateway ${AI_GATEWAY} holds keys for (sign in with cf auth login): pricing the providers worker/prices.json prices.`,
-      );
+      this.info(describeKeyed(keyed));
       const { refreshed, changes } = await (run ??= refreshPrices({ providers: keyed }));
       if (!refreshed) return;
       this.info(`Read the prices into worker/prices.json: ${changes.length ? `\n${changes.join("\n")}` : "no changes"}`);
@@ -341,7 +333,7 @@ export function pricesPlugin(): Plugin {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const keyed = keyedProviders();
-  console.log(keyed ? `AI Gateway ${AI_GATEWAY} holds keys for: ${keyed.join(", ") || "no provider beyond Anthropic and OpenAI"}.` : "Could not ask Cloudflare which providers have keys: pricing the ones the file prices, else all.");
+  console.log(describeKeyed(keyed));
   const { changes } = await refreshPrices({ force: true, providers: keyed });
   console.log(changes.length ? changes.join("\n") : "No price changes.");
 }
