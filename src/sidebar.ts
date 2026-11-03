@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SOCKET_PING, type SidebarList } from "../shared/protocol.ts";
-import { api } from "./api.ts";
+import type { SidebarList } from "../shared/protocol.ts";
+import { api, keepAlive } from "./api.ts";
 
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
 const LOAD_DELAY_MS = 150;
@@ -61,20 +61,17 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>): void
     let attempt = 0;
     let ws: WebSocket | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    let ping: ReturnType<typeof setInterval> | undefined;
     const open = () => {
       ws = new WebSocket(api.sidebarSocketUrl());
       ws.onopen = () => {
         attempt = 0;
         LISTS.forEach(load);
-        // Proxies close a socket that stays quiet for long.
-        ping = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send(SOCKET_PING.request), SOCKET_PING.everyMs);
+        if (ws) keepAlive(ws);
       };
       ws.onmessage = (event) => {
         if (LISTS.includes(event.data)) load(event.data);
       };
       ws.onclose = () => {
-        clearInterval(ping);
         if (!closed) retry = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 30_000));
       };
     };
@@ -83,7 +80,6 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>): void
     return () => {
       closed = true;
       clearTimeout(retry);
-      clearInterval(ping);
       pending.forEach((timer) => clearTimeout(timer));
       ws?.close();
     };

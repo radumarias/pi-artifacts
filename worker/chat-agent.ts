@@ -14,6 +14,7 @@ import {
   manifestOf,
   SOCKET_NOT_A_MEMBER,
   SOCKET_PING,
+  STREAM_STEP_MS,
   type ArtifactManifest,
   type ChatClientMessage,
   type ChatDeletion,
@@ -97,12 +98,8 @@ const MEMBERS_TOUCH_MS = 60_000;
  * after, and the spinner should not blink between them.
  */
 const SETTLE_MS = 1_500;
-/**
- * How often pi commits a streaming answer and running tool output, which is how they reach the browsers. Each commit
- * writes about seven SQLite rows; at pi's default of 100 ms a question wrote some 8,600. Once a second writes about a
- * tenth of that, and the app reveals each step's new text over the second until the next (useRevealedText).
- */
-const PROGRESS = { partialIntervalMs: 1_000, outputIntervalMs: 1_000 };
+/** How often pi commits a streaming answer and running tool output (see STREAM_STEP_MS). */
+const PROGRESS = { partialIntervalMs: STREAM_STEP_MS, outputIntervalMs: STREAM_STEP_MS };
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
 const STATUS_KEY = "status";
 

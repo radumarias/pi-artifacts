@@ -63,20 +63,11 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     const el = list.current;
     if (el) following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
-  useEffect(() => {
+  const follow = useCallback(() => {
     const el = list.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
-  }, [state.entries.length, state.partial, state.tools, state.queued.length]);
-  // A streaming answer also grows between the steps it arrives in (useRevealedText): follow that too.
-  useEffect(() => {
-    const el = list.current;
-    if (!el) return;
-    const observer = new MutationObserver(() => {
-      if (following.current) el.scrollTop = el.scrollHeight;
-    });
-    observer.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
   }, []);
+  useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length]);
 
   // A finished run may have saved files (run_python): read them again. The rest of the sidebar follows on its own
   // (useSidebarSocket).
@@ -203,7 +194,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
               </Fragment>
             );
           })}
-          {state.partial && <Assistant message={state.partial} streaming />}
+          {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
           {state.runStartedAt !== undefined && waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
           {state.error && <div className="chat-error">{state.error}</div>}
           <Queue queued={state.queued} uid={uid} />
@@ -496,13 +487,16 @@ function release(item: Pending): void {
   if (item.preview) URL.revokeObjectURL(item.preview);
 }
 
-/** A reply: its text, and a collapsed panel for each thought and tool call in it. `streaming` while the model writes it. */
 /** A streaming answer's text, revealed a little at a time between the steps it arrives in. */
-function RevealedMarkdown({ text }: { text: string }) {
-  return <Markdown text={useRevealedText(text)} />;
+function RevealedMarkdown({ text, onGrow }: { text: string; onGrow?: () => void }) {
+  return <Markdown text={useRevealedText(text, onGrow)} />;
 }
 
-function Assistant({ message, streaming = false }: { message: AssistantMessage; streaming?: boolean }) {
+/**
+ * A reply: its text, and a collapsed panel for each thought and tool call in it. `streaming` while the model writes it,
+ * with `onGrow` called as its text is revealed.
+ */
+function Assistant({ message, streaming = false, onGrow }: { message: AssistantMessage; streaming?: boolean; onGrow?: () => void }) {
   return (
     <div className="assistant">
       {/* By the block's own index, which stays the same once the message lands, so an opened thought stays open. */}
@@ -511,7 +505,7 @@ function Assistant({ message, streaming = false }: { message: AssistantMessage; 
         if (block.type === "text")
           return block.text ? (
             <div key={i} className="bubble bot markdown">
-              {streaming ? <RevealedMarkdown text={block.text} /> : <Markdown text={block.text} />}
+              {streaming ? <RevealedMarkdown text={block.text} onGrow={onGrow} /> : <Markdown text={block.text} />}
             </div>
           ) : null;
         if (block.type === "toolCall") return <ToolStep key={i} call={block} streaming={streaming} />;

@@ -296,6 +296,13 @@ export const SOCKET_NOT_A_MEMBER = 4403;
  */
 export const SOCKET_PING = { request: "ping", response: "pong", everyMs: 30_000 } as const;
 
+/**
+ * How often a chat stores a streaming answer and running tool output, which is how they reach the browsers. Each
+ * store writes about seven SQLite rows: at pi's default of 100 ms a question wrote some 8,600. The app reveals each
+ * step's new text over this time, until the next step comes (useRevealedText).
+ */
+export const STREAM_STEP_MS = 1_000;
+
 /** The minimum polling interval a page can ask for, as at Claude. */
 export const MIN_REFETCH_MS = 30_000;
 

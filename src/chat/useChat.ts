@@ -5,7 +5,7 @@ import type { AttachmentInput } from "../../shared/attachments.ts";
 import type { MentionInput } from "../../shared/mentions.ts";
 import { modelKey } from "../../shared/models.ts";
 import { SOCKET_NOT_A_MEMBER, SOCKET_PING, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type Presence, type QueuedMessage } from "../../shared/protocol.ts";
-import { api } from "../api.ts";
+import { api, keepAlive } from "../api.ts";
 
 /** A call of the current round: waiting its turn, running, or ended without a result (it faulted, or was orphaned). */
 export interface RunningTool {
@@ -231,7 +231,6 @@ export function useChat(chatId: string) {
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let ping: ReturnType<typeof setInterval> | undefined;
 
     // Not in the chat: stop for good.
     const stop = (why = STOPPED.removed) => {
@@ -245,10 +244,8 @@ export function useChat(chatId: string) {
       ws.onopen = () => {
         attempt = 0;
         setConnected(true);
-        // Between questions the socket is quiet for hours, and proxies close a quiet socket. The chat's runtime answers
-        // the ping without waking the chat, where a reconnect would wake it and send the whole conversation again.
-        clearInterval(ping);
-        ping = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(SOCKET_PING.request), SOCKET_PING.everyMs);
+        // A reconnect would also send the whole conversation again.
+        keepAlive(ws);
       };
       ws.onmessage = (event) => {
         if (event.data === SOCKET_PING.response) return;
@@ -262,7 +259,6 @@ export function useChat(chatId: string) {
         } else dispatch({ type: "error", message: message.message });
       };
       ws.onclose = (event) => {
-        clearInterval(ping);
         setConnected(false);
         // Who is here is unknown until the next socket hears it again.
         setOnline([]);
@@ -277,7 +273,6 @@ export function useChat(chatId: string) {
     return () => {
       closed = true;
       clearTimeout(timer);
-      clearInterval(ping);
       socket.current?.close();
     };
   }, [chatId]);

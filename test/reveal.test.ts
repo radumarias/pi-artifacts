@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { revealAt, revealTo, STEP_MS } from "../src/chat/reveal.ts";
+import { STREAM_STEP_MS as STEP_MS } from "../shared/protocol.ts";
+import { revealAt, revealTo } from "../src/chat/reveal.ts";
 
 describe("revealing a streaming answer", () => {
   it("shows the first text at once", () => {

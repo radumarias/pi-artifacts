@@ -2,7 +2,18 @@ import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import { FILE_ROUTE, ZIP_ROUTE } from "../shared/uploads.ts";
-import type { ArtifactSummary, ArtifactView, ChatDeletion, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
+import {
+  SOCKET_PING,
+  type ArtifactSummary,
+  type ArtifactView,
+  type ChatDeletion,
+  type ChatSummary,
+  type CloneAccess,
+  type CreatedInvite,
+  type ProxyRequest,
+  type ProxyResponse,
+  type DeclaredTool,
+} from "../shared/protocol.ts";
 
 export type { ArtifactSummary };
 
@@ -38,6 +49,15 @@ function uploadForm(files: readonly { file: File; path: string }[]): FormData {
     form.append("path", path);
   }
   return form;
+}
+
+/**
+ * Ping `ws` while it is open: between messages a socket can stay quiet for hours, and proxies close a quiet socket.
+ * The Durable Object's runtime answers the ping (SOCKET_PING) without waking the object; a reconnect would wake it.
+ */
+export function keepAlive(ws: WebSocket): void {
+  const timer = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(SOCKET_PING.request), SOCKET_PING.everyMs);
+  ws.addEventListener("close", () => clearInterval(timer));
 }
 
 const socketUrl = (path: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;
