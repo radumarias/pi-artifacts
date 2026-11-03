@@ -194,9 +194,18 @@ publish without an `artifact_id` whose title matches one of the chat's artifacts
 artifact stuck at version 1.
 `artifact_publish` runs the same check on a page sent as HTML that has not passed one, and refuses it while it has
 errors.
+
+Until a page passes, it is a **draft**, not a version: every page the agent checks, or tries to publish, is saved as one
+of its chat's drafts (`worker/storage/drafts.ts`), so no attempt is lost and the Git repo only ever gets pages that
+passed. Drafts live in the chat owner's R2 folder (`users/<uid>/drafts/<chatId>/`), encrypted with the owner's key like
+their files but apart from them, keyed by a hash of the page and what it declares, so the same page is one draft. A
+chat keeps its newest 20; publishing a page drops its draft, and deleting the chat deletes them all. The agent lists
+them and gets one back with `artifact_drafts` (an earlier attempt, or the page it was working on after the chat
+restarted), and a `check_id` is a draft's id, so a passed check can still be published after a restart.
 During a check only read-only tools run, from results up to two minutes old; a write tool answers `not_granted`. The
-browser may reach only the page's script hosts and Google Fonts. A deployment without a browser (or one that fails to
-start) publishes pages unchecked, and the agent says so. `pnpm dev` runs a local Chrome, which miniflare downloads.
+browser may reach only the page's script hosts and Google Fonts. When no browser can check a page (none bound, or one
+that fails to start), the page is not published: it stays a draft, and the agent says so. Only local development
+(`AUTH_MODE=demo`) publishes it unchecked. `pnpm dev` runs a local Chrome, which miniflare downloads.
 
 ## Your files
 
@@ -486,6 +495,8 @@ userKey = HKDF-SHA-256(ikm = FILES_MASTER_KEY,                                  
                        salt = "pi-artifacts/user-files/v1", info = uid) → 256 bits
 UserFiles(uid, userKey): keys under users/<uid>/files/, every put/get passes {ssecKey: userKey}
                                                                                   worker/storage/user-files.ts
+ChatDrafts(uid, chatId, userKey): keys under users/<uid>/drafts/<chatId>/, the same {ssecKey: userKey}
+                                                                                  worker/storage/drafts.ts
 ```
 
 - **No key is stored.** The derivation is deterministic, so a user's key is recomputed whenever their files are

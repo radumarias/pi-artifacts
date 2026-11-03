@@ -4,6 +4,7 @@ import { defineExtension, defineTool, section, type Extension, type ToolExecutio
 import { createTwoFilesPatch } from "diff";
 import {
   CHECK_TOOL,
+  DRAFTS_TOOL,
   isOwnedBy,
   manifestOf,
   PUBLISH_TOOL,
@@ -16,35 +17,37 @@ import {
 } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { canonicalJson } from "../../shared/canonical.ts";
-import { formatBytes, listSome, plural, sha256Hex } from "../../shared/util.ts";
+import { errorMessage, formatBytes, listSome, plural, sha256Hex } from "../../shared/util.ts";
 import { BrowserUnavailable } from "../artifacts/browser.ts";
 import { describeReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import { literalPath, normalisePath, PathError, type ArtifactStore, type FileEntry, type UserFiles } from "../storage/index.ts";
-import { artifactByTitle } from "./publish-target.ts";
+import {
+  literalPath,
+  MAX_DRAFTS,
+  normalisePath,
+  passed,
+  PathError,
+  type ArtifactStore,
+  type ChatDrafts,
+  type Draft,
+  type FileEntry,
+  type UserFiles,
+} from "../storage/index.ts";
+import { draftId, publishChecked, saveDraft, validPage, type PublishInput, type PublishScope } from "./publish.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
 /** What the tools need from the chat they run in. */
-export interface ChatScope {
-  uid: string;
-  chatId: string;
-  hub: McpHub;
-  artifacts: ArtifactStore;
+export interface ChatScope extends PublishScope {
   /** This chat's user's files: scoped to the uid and encrypted with that user's key. */
   files: () => Promise<UserFiles>;
-  onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
   /** Whether the owner named this artifact from another of their chats with "@" here, so the agent may read it. */
   broughtIn(id: string): boolean;
   /** Save a skill for the user, turned off until they turn it on. */
   proposeSkill(skill: SkillInput): Promise<SkillResult>;
-  /** Render a page in a headless browser and report on it (worker/artifacts/check.ts). Throws BrowserUnavailable without one. */
-  checkPage(input: CheckInput): Promise<CheckReport>;
-  /** The artifacts published in this chat, newest first. */
-  chatArtifacts(): Promise<ArtifactSummary[]>;
 }
 
 /**
@@ -241,40 +244,6 @@ export function sandboxExtension(scope: ChatScope): Extension {
   });
 }
 
-export interface PublishInput {
-  title: string;
-  html: string;
-  artifactId?: string;
-  /** A separate artifact even when this chat has one by this title (see artifactFor). */
-  newArtifact?: boolean;
-  mcp?: NonNullable<ArtifactManifest["mcp"]>["servers"];
-  message?: string;
-}
-
-/** The manifest a page declares, checked against the chat's servers, and the page's size. Throws with what to fix. */
-async function validPage(scope: ChatScope, html: string, mcp: PublishInput["mcp"], what: string): Promise<ArtifactManifest> {
-  if (new TextEncoder().encode(html).byteLength > MAX_HTML_BYTES) throw new Error("The page is over 2 MB; summarise the data instead of inlining it.");
-  const manifest: ArtifactManifest = mcp?.length ? { mcp: { servers: mcp } } : {};
-  const problems = await checkManifest(scope.hub, manifest);
-  if (problems.length) throw new Error(`${what} Fix the mcp declaration:\n${problems.join("\n")}`);
-  return manifest;
-}
-
-/** Store a new version with its checked manifest and index it for the user. */
-async function publishArtifact(scope: ChatScope, input: PublishInput, manifest: ArtifactManifest): Promise<ArtifactMeta> {
-  const meta = await scope.artifacts.publishVersion({
-    id: input.artifactId,
-    ownerUid: scope.uid,
-    chatId: scope.chatId,
-    title: input.title,
-    html: input.html,
-    manifest,
-    message: input.message,
-  });
-  await scope.onPublished({ id: meta.id, title: meta.title, latest: meta.latest, updatedAt: meta.updatedAt });
-  return meta;
-}
-
 /**
  * An artifact of this chat, or one of the owner's from another chat that the owner named here with "@": the agent may
  * read it, but publishes a new version only of this chat's (ArtifactStore.publishVersion). Anything else reads as missing.
@@ -299,82 +268,6 @@ const mcpParameter = Type.Optional(
   }),
 );
 
-/**
- * The pages that passed a check in this chat lately, by an id the check gives the agent: it publishes one by that id,
- * rather than writing the whole page again, and a page sent again as it is needs no second check. Kept in memory, so a
- * restarted chat object has forgotten them, and the agent sends the page again.
- */
-export class CheckedPages {
-  static readonly MAX = 8;
-  readonly #pages = new Map<string, { html: string; manifest: ArtifactManifest; artifactId?: string }>();
-
-  /** The id of a page and its manifest: the start of a SHA-256 of both. */
-  static async id(html: string, manifest: ArtifactManifest): Promise<string> {
-    return (await sha256Hex(`${canonicalJson(manifest)}\u0000${html}`)).slice(0, 16);
-  }
-
-  get(id: string) {
-    return this.#pages.get(id);
-  }
-
-  /** `artifactId`: the artifact the page was checked as a new version of, which publishing it by its id keeps. */
-  add(id: string, html: string, manifest: ArtifactManifest, artifactId?: string): void {
-    const kept = this.#pages.get(id)?.artifactId;
-    this.#pages.delete(id);
-    this.#pages.set(id, { html, manifest, artifactId: artifactId ?? kept });
-    if (this.#pages.size > CheckedPages.MAX) this.#pages.delete(this.#pages.keys().next().value!);
-  }
-}
-
-/** What came of a publish: the version, else the check's report on why there is none. */
-export interface PublishOutcome {
-  meta?: ArtifactMeta;
-  /** The check run here, if the page had not passed one already. */
-  report?: CheckReport;
-  /** Why no browser checked the page, when none did. */
-  unchecked?: string;
-  /** Set when the page was published as a new version of this chat's artifact by its title, without an artifact_id. */
-  byTitle?: boolean;
-}
-
-/**
- * The artifact a publish goes to: the one it names; a new one with newArtifact; else the one the page was checked as a
- * version of (`checkedFor`); else this chat's by its title (artifactByTitle); else a new one.
- */
-async function artifactFor(scope: ChatScope, input: PublishInput, checkedFor?: string): Promise<{ id?: string; byTitle?: boolean }> {
-  if (input.artifactId !== undefined) return { id: input.artifactId };
-  if (input.newArtifact) return {};
-  if (checkedFor !== undefined) return { id: checkedFor };
-  const same = artifactByTitle(await scope.chatArtifacts(), input.title);
-  return same ? { id: same.id, byTitle: true } : {};
-}
-
-/**
- * Publish a page, but only one without errors: one that passed a check as it is now, or passes one here. Without a
- * browser to check in, the page is published unchecked, and the outcome says why.
- */
-export async function publishChecked(scope: ChatScope, input: PublishInput, checked = new CheckedPages()): Promise<PublishOutcome> {
-  const manifest = await validPage(scope, input.html, input.mcp, "Not published.");
-  const id = await CheckedPages.id(input.html, manifest);
-  const checkedFor = checked.get(id)?.artifactId;
-  const publish = async (outcome: Omit<PublishOutcome, "meta" | "byTitle">): Promise<PublishOutcome> => {
-    const target = await artifactFor(scope, input, checkedFor);
-    const meta = await publishArtifact(scope, { ...input, artifactId: target.id }, manifest);
-    return { ...outcome, meta, byTitle: target.byTitle };
-  };
-  if (checked.get(id)) return publish({});
-  let report: CheckReport;
-  try {
-    report = await scope.checkPage({ html: input.html, manifest });
-  } catch (error) {
-    if (!(error instanceof BrowserUnavailable)) throw error;
-    return publish({ unchecked: error.message });
-  }
-  if (report.errors.length) return { report };
-  checked.add(id, input.html, manifest);
-  return publish({ report });
-}
-
 /** What a check's result gives the model: a line on what came of it, the report, then the screenshot. */
 function checkOutput(headline: string, report: CheckReport) {
   const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = text(clip(`${headline}\n\n${describeReport(report)}`));
@@ -390,8 +283,15 @@ function passedLine(report: CheckReport): string {
   return `The check passed${report.warnings.length ? ` with ${plural(report.warnings.length, "warning")}` : ""}.`;
 }
 
+/** One draft in a listing: its id, when, what it is for and how its check went. */
+function draftLine(draft: Omit<Draft, "html" | "manifest"> & { bytes?: number }): string {
+  const check = draft.errors === null ? "not checked" : passed(draft) ? "passed its check" : plural(draft.errors, "error");
+  const warnings = draft.warnings ? `, ${plural(draft.warnings, "warning")}` : "";
+  const size = draft.bytes === undefined ? "" : `, ${formatBytes(draft.bytes)}`;
+  return `${draft.id}  ${new Date(draft.savedAt).toISOString()}  ${draft.artifactId ? `for artifact ${draft.artifactId}` : "no artifact named"}  ${check}${warnings}${size}`;
+}
+
 export function artifactExtension(scope: ChatScope): Extension {
-  const checked = new CheckedPages();
   return defineExtension({
     name: "artifacts",
     tools: [
@@ -425,20 +325,25 @@ export function artifactExtension(scope: ChatScope): Extension {
         execute: async (args) => {
           if (args.artifact_id !== undefined) await chatArtifact(scope, args.artifact_id);
           const manifest = await validPage(scope, args.html, args.mcp, "Not checked.");
+          const [id, drafts] = await Promise.all([draftId(args.html, manifest), scope.drafts()]);
+          const before = await drafts.get(id);
+          const page = { html: args.html, manifest, artifactId: args.artifact_id };
           let report: CheckReport;
           try {
             report = await scope.checkPage({ html: args.html, manifest, tests: args.tests, viewport: args.viewport });
           } catch (error) {
             if (!(error instanceof BrowserUnavailable)) throw error;
-            return { output: text(`The page could not be checked: ${error.message}. Publish it with its html; it is published unchecked.`) };
+            await saveDraft(drafts, id, page, null, before);
+            const next = scope.publishUnchecked
+              ? "Publish it with its html; it is published unchecked."
+              : "A page is published only once a check passes: check it again in a while.";
+            return { output: text(`The page could not be checked: ${error.message}. It is saved as draft "${id}"; nothing was published. ${next}`) };
           }
+          await saveDraft(drafts, id, page, report, before);
           const failed = report.errors.length > 0;
-          let headline = `The check found ${plural(report.errors.length, "error")}. Fix them and check again; nothing was published.`;
-          if (!failed) {
-            const id = await CheckedPages.id(args.html, manifest);
-            checked.add(id, args.html, manifest, args.artifact_id);
-            headline = `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with check_id "${id}" instead of html and mcp.`;
-          }
+          const headline = failed
+            ? `The check found ${plural(report.errors.length, "error")}. The page is saved as draft "${id}"; fix them and check again. Nothing was published.`
+            : `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with check_id "${id}" instead of html and mcp.`;
           return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed };
         },
       }),
@@ -465,17 +370,25 @@ export function artifactExtension(scope: ChatScope): Extension {
           let page: { html: string; mcp: PublishInput["mcp"] };
           if (args.check_id !== undefined) {
             if (args.html !== undefined || args.mcp !== undefined) throw new Error("Pass check_id alone, or the page as html with its mcp: not both.");
-            const passed = checked.get(args.check_id);
-            if (!passed) throw new Error(`No passed check "${args.check_id}" is kept any more. Send the page as html, with its mcp.`);
-            page = { html: passed.html, mcp: passed.manifest.mcp?.servers };
+            const draft = await (await scope.drafts()).get(args.check_id);
+            if (!draft) {
+              throw new Error(`No draft "${args.check_id}" in this chat: it was published, or dropped as one of the oldest. Send the page as html, with its mcp.`);
+            }
+            if (!passed(draft)) throw new Error(`Draft "${args.check_id}" has not passed a check (${draftLine(draft)}). Fix it, and check it again.`);
+            page = { html: draft.html, mcp: draft.manifest.mcp?.servers };
           } else if (args.html !== undefined) page = { html: args.html, mcp: args.mcp };
           else throw new Error("Pass check_id, or the page as html.");
           const input = { title: args.title, artifactId: args.artifact_id, newArtifact: args.new_artifact, message: args.message, ...page };
-          const outcome = await publishChecked(scope, input, checked);
-          const { meta, report } = outcome;
+          const outcome = await publishChecked(scope, input);
+          const { meta, report, draft } = outcome;
           if (!meta) {
-            const headline = `Not published: the check found ${plural(report!.errors.length, "error")}. No version was made; fix them and publish again.`;
-            return { output: checkOutput(headline, report!), details: { check: checkedDetails(report!) }, isError: true };
+            const saved = `The page is saved as draft "${draft!.id}"; no version was made.`;
+            if (!report) {
+              const why = `Not published: no browser could check the page (${outcome.unchecked}), and a page is published only once a check passes. ${saved} Check it again in a while.`;
+              return { output: text(why), isError: true };
+            }
+            const headline = `Not published: the check found ${plural(report.errors.length, "error")}. ${saved} Fix them and publish again.`;
+            return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: true };
           }
           const done =
             `Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.` +
@@ -485,6 +398,27 @@ export function artifactExtension(scope: ChatScope): Extension {
             (outcome.unchecked ? ` It was not checked in a browser: ${outcome.unchecked}.` : "");
           const details: PublishedDetails = { artifactId: meta.id, version: meta.latest, title: meta.title, ...(report && { check: checkedDetails(report) }) };
           return { output: report ? checkOutput(`${done} ${passedLine(report)}`, report) : text(done), details };
+        },
+      }),
+      defineTool({
+        name: DRAFTS_TOOL,
+        description:
+          `List this chat's drafts, newest first: pages you checked or tried to publish that are not published yet (the newest ${MAX_DRAFTS} are kept; ` +
+          "a published page's draft goes). Pass draft_id to get one back, its html and mcp, to carry on from it: after a fix went wrong, " +
+          "when the user asks for an earlier attempt, or when you no longer have the page you were working on.",
+        parameters: Type.Object({ draft_id: Type.Optional(Type.String()) }),
+        replay: "safe",
+        execute: async (args) => {
+          const drafts = await scope.drafts();
+          if (args.draft_id === undefined) {
+            const list = await drafts.list();
+            const lines = list.length ? `${plural(list.length, "draft")}, newest first:\n${list.map(draftLine).join("\n")}` : "This chat has no drafts.";
+            return { output: text(lines) };
+          }
+          const draft = await drafts.get(args.draft_id);
+          if (!draft) throw new Error(`No draft "${args.draft_id}" in this chat. List them without draft_id.`);
+          const declared = JSON.stringify(draft.manifest.mcp?.servers ?? []);
+          return { output: text(`Draft ${draftLine(draft)}, mcp ${declared}:\n\n${draft.html}`) };
         },
       }),
       defineTool({

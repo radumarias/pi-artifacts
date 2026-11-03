@@ -73,7 +73,7 @@ export default defineConfig({
       BROWSER: bindings.browser({ dev: { remote: false } }),
       // Workers AI binding. Pi's createAI() routes Claude through AI Gateway with it.
       AI: bindings.ai({}),
-      // Each user's files (users/<uid>/files/…), and a read cache of artifact versions (artifacts/<id>/…).
+      // Each user's files (users/<uid>/files/…) and drafts (users/<uid>/drafts/<chatId>/…), and a read cache of artifact versions (artifacts/<id>/…).
       FILES: bindings.r2({ name: "pi-artifacts" }),
       // Cloudflare Artifacts: one Git repo per published artifact, the source of truth for its versions.
       // Local development uses a local Git backend, so it never touches the deployed repos.

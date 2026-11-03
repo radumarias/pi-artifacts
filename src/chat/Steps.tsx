@@ -1,7 +1,7 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { CHECK_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
+import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
 import { clip, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
@@ -89,6 +89,7 @@ const LABELS: Record<string, string> = {
   run_bash: "Bash",
   [PUBLISH_TOOL]: "Publish artifact",
   [CHECK_TOOL]: "Check page",
+  [DRAFTS_TOOL]: "Drafts",
   artifact_read: "Read artifact",
   artifact_history: "Artifact history",
   artifact_diff: "Compare versions",

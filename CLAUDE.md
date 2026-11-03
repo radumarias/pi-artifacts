@@ -34,7 +34,8 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   owned by the owner). The chat object checks membership on every socket and prompt; keep it that way.
 - Before a page becomes a version it is checked in a headless browser (`BROWSER` binding, `worker/artifacts/check.ts`):
   `artifact_check` and `artifact_publish` report console errors, failed calls, a screenshot and the agent's tests, and
-  publish refuses a page with errors; keep it that way. `test/check.test.ts` runs the check in a local Chrome
+  publish refuses a page with errors, or one no browser checked (except with `AUTH_MODE=demo`); keep it that way. Until
+  then a page is a draft, in the owner's R2 folder (`worker/storage/drafts.ts`, `ChatDrafts`), never a commit. `test/check.test.ts` runs the check in a local Chrome
   (`CHROME_PATH`, else Playwright's) and skips without one.
 - Each artifact is the repo `artifact-<id>`: one commit and tag `v<n>` per publish, pushed with isomorphic-git
   (`worker/storage/git.ts`), since the binding cannot write files. `pnpm dev` uses a local Git backend for it (needs

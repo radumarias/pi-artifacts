@@ -156,6 +156,9 @@ export type CheckedDetails = {
   warnings: number;
 };
 
+/** The tool that lists the pages the agent checked or tried in a chat and has not published, and gets one back. */
+export const DRAFTS_TOOL = "artifact_drafts";
+
 /**
  * What a chat's agent is up to, as the sidebar shows it: "running" while it works (or messages wait for it), "waiting"
  * when its last reply ended on a question to the people in the chat. Null where it is neither.

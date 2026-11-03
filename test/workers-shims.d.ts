@@ -3,3 +3,4 @@ type R2Bucket = any;
 type R2ObjectBody = any;
 type Artifacts = any;
 type ArtifactsRepo = any;
+type R2Object = any;

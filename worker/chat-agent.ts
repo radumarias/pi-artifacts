@@ -44,17 +44,8 @@ import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
-import {
-  artifactExtension,
-  filesExtension,
-  filesIndexExtension,
-  publishChecked,
-  sandboxExtension,
-  sandboxName,
-  skillsExtension,
-  type ChatScope,
-  type PublishInput,
-} from "./agent/tools.ts";
+import { artifactExtension, filesExtension, filesIndexExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
+import { publishChecked, type PublishInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { checkPage, type Bridge } from "./artifacts/check.ts";
 import { chatTraces } from "./chat-traces.ts";
@@ -226,6 +217,8 @@ export class ChatAgent extends DurableObject<Env> {
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
       checkPage: (input) => this.#checkBrowser.withPage((page) => checkPage(page, input, this.#checkBridge(input.manifest))),
       chatArtifacts: () => this.#directory.listChatArtifacts(this.chatId),
+      drafts: memoAsync(() => this.storage.chatDrafts(this.uid, this.chatId)),
+      publishUnchecked: env.AUTH_MODE === "demo",
     });
     this.registry.install(promptExtension);
     this.registry.install(peopleExtension(() => this.people()));
@@ -783,7 +776,7 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * Delete the chat for good, for its owner: everyone's sockets close and it leaves the members' sidebars; its
-   * artifacts and its sandbox go, and of the files its messages attached or its agent saved, those the owner confirmed
+   * artifacts, its drafts and its sandbox go, and of the files its messages attached or its agent saved, those the owner confirmed
    * (`files`, as deletionPreview listed them); then everything this object stores (the conversation, its cost, members
    * and invites), leaving only a mark that it was deleted. The Worker then takes it off the owner's list. Each step can
    * run again, so after a failure the owner deletes it again.
@@ -812,6 +805,7 @@ export class ChatAgent extends DurableObject<Env> {
         // The store checks each is this chat's: the transcript's ids come from tool results.
         ...traces.artifacts.map((id) => this.storage.artifacts.delete(id, this.uid, this.chatId)),
         toDelete.length && this.scope.files().then((store) => store.delete(toDelete)),
+        this.scope.drafts().then((drafts) => drafts.deleteAll()),
         this.env.SANDBOX_ENABLED === "true" && exports.Sandbox.getByName(sandboxName(this.uid, this.chatId)).destroy(),
       ]);
       await this.lifecycle.disableAlarms();
@@ -867,7 +861,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async devPublish(input: PublishInput) {
     const { meta, report, unchecked } = await publishChecked(this.scope, input);
-    if (!meta) throw new Error(`The check found errors:\n${report!.errors.join("\n")}`);
+    if (!meta) throw new Error(report ? `The check found errors:\n${report.errors.join("\n")}` : `Not checked, so not published: ${unchecked}`);
     return { artifactId: meta.id, version: meta.latest, checked: report ? { errors: 0, warnings: report.warnings } : { unchecked } };
   }
 
