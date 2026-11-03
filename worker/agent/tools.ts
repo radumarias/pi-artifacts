@@ -15,9 +15,10 @@ import {
   type SavedFilesDetails,
 } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
-import { formatBytes, listSome } from "../../shared/util.ts";
+import { canonicalJson } from "../../shared/canonical.ts";
+import { formatBytes, listSome, plural, sha256Hex } from "../../shared/util.ts";
 import { BrowserUnavailable } from "../artifacts/browser.ts";
-import { describeReport, type CheckInput, type CheckReport, type CheckViewport } from "../artifacts/check.ts";
+import { describeReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
 import type { McpHub } from "../mcp/hub.ts";
@@ -286,56 +287,63 @@ const mcpParameter = Type.Optional(
   }),
 );
 
-/** A page and its manifest, as a key: the same page checked twice, or checked and then published, is checked once. */
-async function pageKey(html: string, manifest: ArtifactManifest): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${JSON.stringify(manifest)}\u0000${html}`));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+/**
+ * The pages that passed a check in this chat lately, by an id the check gives the agent: it publishes one by that id,
+ * rather than writing the whole page again, and a page sent again as it is needs no second check. Kept in memory, so a
+ * restarted chat object has forgotten them, and the agent sends the page again.
+ */
+export class CheckedPages {
+  static readonly MAX = 8;
+  readonly #pages = new Map<string, { html: string; manifest: ArtifactManifest }>();
+
+  /** The id of a page and its manifest: the start of a SHA-256 of both. */
+  static async id(html: string, manifest: ArtifactManifest): Promise<string> {
+    return (await sha256Hex(`${canonicalJson(manifest)}\u0000${html}`)).slice(0, 16);
+  }
+
+  get(id: string) {
+    return this.#pages.get(id);
+  }
+
+  add(id: string, html: string, manifest: ArtifactManifest): void {
+    this.#pages.delete(id);
+    this.#pages.set(id, { html, manifest });
+    if (this.#pages.size > CheckedPages.MAX) this.#pages.delete(this.#pages.keys().next().value!);
+  }
 }
 
-/** The pages that passed a check in this chat lately, by pageKey: publishing one of them as it is needs no second check. */
-export class PassedPages {
-  static readonly MAX = 20;
-  readonly #keys = new Set<string>();
-
-  has(key: string): boolean {
-    return this.#keys.has(key);
-  }
-
-  add(key: string): void {
-    this.#keys.delete(key);
-    this.#keys.add(key);
-    if (this.#keys.size > PassedPages.MAX) this.#keys.delete(this.#keys.values().next().value!);
-  }
+/** What came of a publish: the version, else the check's report on why there is none. */
+export interface PublishOutcome {
+  meta?: ArtifactMeta;
+  /** The check run here, if the page had not passed one already. */
+  report?: CheckReport;
+  /** Why no browser checked the page, when none did. */
+  unchecked?: string;
 }
 
 /**
  * Publish a page, but only one without errors: one that passed a check as it is now, or passes one here. Without a
- * browser to check in, the page is published unchecked, and the result says so.
+ * browser to check in, the page is published unchecked, and the outcome says why.
  */
-export async function publishChecked(scope: ChatScope, input: PublishInput, passed: PassedPages): Promise<ToolExecutionResult<Partial<PublishedDetails>>> {
+export async function publishChecked(scope: ChatScope, input: PublishInput, checked = new CheckedPages()): Promise<PublishOutcome> {
   const manifest = await validPage(scope, input.html, input.mcp, "Not published.");
-  const key = await pageKey(input.html, manifest);
-  let report: CheckReport | undefined;
-  let unchecked = "";
-  if (!passed.has(key)) {
-    try {
-      report = await scope.checkPage({ html: input.html, manifest, tests: [], viewport: "desktop" });
-    } catch (error) {
-      if (!(error instanceof BrowserUnavailable)) throw error;
-      unchecked = ` It was not checked in a browser: ${error.message}.`;
-    }
-    if (report?.errors.length) return { output: checkOutput(report, ""), details: { check: checkedDetails(report) }, isError: true };
-    if (report) passed.add(key);
+  const id = await CheckedPages.id(input.html, manifest);
+  if (checked.get(id)) return { meta: await publishArtifact(scope, input, manifest) };
+  let report: CheckReport;
+  try {
+    report = await scope.checkPage({ html: input.html, manifest });
+  } catch (error) {
+    if (!(error instanceof BrowserUnavailable)) throw error;
+    return { meta: await publishArtifact(scope, input, manifest), unchecked: error.message };
   }
-  const meta = await publishArtifact(scope, input, manifest);
-  const done = `Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.${unchecked}`;
-  const details: PublishedDetails = { artifactId: meta.id, version: meta.latest, title: meta.title, ...(report && { check: checkedDetails(report) }) };
-  return { output: report ? checkOutput(report, done) : text(done), details };
+  if (report.errors.length) return { report };
+  checked.add(id, input.html, manifest);
+  return { meta: await publishArtifact(scope, input, manifest), report };
 }
 
-/** What a check's result gives the model: the report, then the screenshot. */
-function checkOutput(report: CheckReport, published?: string) {
-  const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = text(clip(describeReport(report, published)));
+/** What a check's result gives the model: a line on what came of it, the report, then the screenshot. */
+function checkOutput(headline: string, report: CheckReport) {
+  const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = text(clip(`${headline}\n\n${describeReport(report)}`));
   content.push({ type: "image", data: report.screenshot, mimeType: "image/jpeg" });
   return content;
 }
@@ -344,8 +352,12 @@ function checkedDetails(report: CheckReport): CheckedDetails {
   return { thumb: report.thumb, errors: report.errors.length, warnings: report.warnings.length };
 }
 
+function passedLine(report: CheckReport): string {
+  return `The check passed${report.warnings.length ? ` with ${plural(report.warnings.length, "warning")}` : ""}.`;
+}
+
 export function artifactExtension(scope: ChatScope): Extension {
-  const passed = new PassedPages();
+  const checked = new CheckedPages();
   return defineExtension({
     name: "artifacts",
     tools: [
@@ -355,7 +367,8 @@ export function artifactExtension(scope: ChatScope): Extension {
           "Render a page in a headless browser before publishing it, with its live MCP calls answered as the viewer's would be (read-only tools only; " +
           "a write tool gets a not_granted error instead of running). Returns errors (uncaught exceptions, console errors, blocked or failed loads, " +
           "calls the page got wrong, failed tests), warnings, how the live calls went, the visible text and a screenshot. Nothing is published, " +
-          "so fixing and checking again uses up no versions. Pass `tests`: a few short checks of what the page must show once its data arrived.",
+          "so fixing and checking again uses up no versions. A page that passes gets a check_id to publish it by. " +
+          "Pass `tests`: a few short checks of what the page must show once its data arrived.",
         parameters: Type.Object({
           html: Type.String({ description: "The page, exactly as you would publish it." }),
           mcp: mcpParameter,
@@ -378,13 +391,19 @@ export function artifactExtension(scope: ChatScope): Extension {
           const manifest = await validPage(scope, args.html, args.mcp, "Not checked.");
           let report: CheckReport;
           try {
-            report = await scope.checkPage({ html: args.html, manifest, tests: args.tests ?? [], viewport: (args.viewport ?? "desktop") as CheckViewport });
+            report = await scope.checkPage({ html: args.html, manifest, tests: args.tests, viewport: args.viewport });
           } catch (error) {
             if (!(error instanceof BrowserUnavailable)) throw error;
-            return { output: text(`The page could not be checked: ${error.message}. Publishing works without the check.`) };
+            return { output: text(`The page could not be checked: ${error.message}. Publish it with its html; it is published unchecked.`) };
           }
-          if (report.errors.length === 0) passed.add(await pageKey(args.html, manifest));
-          return { output: checkOutput(report), details: { check: checkedDetails(report) }, isError: report.errors.length > 0 };
+          const failed = report.errors.length > 0;
+          let headline = `The check found ${plural(report.errors.length, "error")}. Fix them and check again; nothing was published.`;
+          if (!failed) {
+            const id = await CheckedPages.id(args.html, manifest);
+            checked.add(id, args.html, manifest);
+            headline = `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with check_id "${id}" instead of html and mcp.`;
+          }
+          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed };
         },
       }),
       defineTool({
@@ -392,18 +411,37 @@ export function artifactExtension(scope: ChatScope): Extension {
         description:
           "Publish an HTML page as an artifact the user sees in the preview panel. Pass artifact_id to publish a new version of an artifact " +
           "you published in this chat; omit it to create a new one (also to build on an artifact from another chat, which stays as it is). Declare in `mcp` every server and tool the page calls; the page can call nothing else. " +
-          `A page that has not passed ${CHECK_TOOL} as it is gets checked first, and is not published while the check finds errors.`,
+          `Pass check_id from a passed ${CHECK_TOOL} instead of html and mcp; a page sent as html that has not passed a check gets checked first, and is not published while the check finds errors.`,
         parameters: Type.Object({
           title: Type.String({ description: "Two to five words." }),
-          html: Type.String({ description: "The page: a full HTML document, or a body fragment." }),
+          check_id: Type.Optional(Type.String({ description: `The page that passed ${CHECK_TOOL}, with what it declared.` })),
+          html: Type.Optional(Type.String({ description: "The page: a full HTML document, or a body fragment. Leave out with check_id." })),
           artifact_id: Type.Optional(Type.String()),
           message: Type.Optional(
             Type.String({ description: "One line on what this version changes, e.g. \"Add a 7-day sparkline\". It becomes the version's commit message." }),
           ),
           mcp: mcpParameter,
         }),
-        execute: (args) =>
-          publishChecked(scope, { title: args.title, html: args.html, artifactId: args.artifact_id, mcp: args.mcp, message: args.message }, passed),
+        execute: async (args): Promise<ToolExecutionResult<Partial<PublishedDetails>>> => {
+          let page: { html: string; mcp: PublishInput["mcp"] };
+          if (args.check_id !== undefined) {
+            const passed = checked.get(args.check_id);
+            if (!passed) throw new Error(`No passed check "${args.check_id}" is kept any more. Send the page as html, with its mcp.`);
+            page = { html: passed.html, mcp: passed.manifest.mcp?.servers };
+          } else if (args.html !== undefined) page = { html: args.html, mcp: args.mcp };
+          else throw new Error("Pass check_id, or the page as html.");
+          const outcome = await publishChecked(scope, { title: args.title, artifactId: args.artifact_id, message: args.message, ...page }, checked);
+          const { meta, report } = outcome;
+          if (!meta) {
+            const headline = `Not published: the check found ${plural(report!.errors.length, "error")}. No version was made; fix them and publish again.`;
+            return { output: checkOutput(headline, report!), details: { check: checkedDetails(report!) }, isError: true };
+          }
+          const done =
+            `Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.` +
+            (outcome.unchecked ? ` It was not checked in a browser: ${outcome.unchecked}.` : "");
+          const details: PublishedDetails = { artifactId: meta.id, version: meta.latest, title: meta.title, ...(report && { check: checkedDetails(report) }) };
+          return { output: report ? checkOutput(`${done} ${passedLine(report)}`, report) : text(done), details };
+        },
       }),
       defineTool({
         name: "artifact_read",

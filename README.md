@@ -188,7 +188,9 @@ page's CSP, with its live calls answered by the chat's MCP connections. It retur
 - the results of **tests** the agent passes: short scripts run in the page once its data arrived, such as "the price
   table has rows".
 
-`artifact_publish` runs the same check on a page that has not passed one as it is, and refuses it while it has errors.
+A page that passes gets a `check_id`, and the agent publishes it by that id rather than writing the page out again.
+`artifact_publish` runs the same check on a page sent as HTML that has not passed one, and refuses it while it has
+errors.
 During a check only read-only tools run, from results up to two minutes old; a write tool answers `not_granted`. The
 browser may reach only the page's script hosts and Google Fonts. A deployment without a browser (or one that fails to
 start) publishes pages unchecked, and the agent says so. `pnpm dev` runs a local Chrome, which miniflare downloads.

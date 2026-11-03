@@ -134,7 +134,7 @@ pi.use("mcp").then((mcp) => {
     expect(report.text).toContain("ABC");
     expect(report.screenshot.length).toBeGreaterThan(1_000);
     expect(report.thumb).toMatch(/^data:image\/jpeg;base64,/);
-    expect(describeReport(report)).toMatch(/^The check passed\. Publish this exact page\./);
+    expect(describeReport(report)).toMatch(/^Live calls:\n- Demo\/quotes: 1 ok\n\nTests:\n- passed: rows \(2 rows\)\n- passed: title\n\nVisible text:\nQuotes/);
   }, 30_000);
 
   it("reports an uncaught exception with the page's own line", async () => {
@@ -144,8 +144,7 @@ pi.use("mcp").then((mcp) => {
     expect(report.errors).toHaveLength(1);
     expect(report.errors[0]).toMatch(/^Uncaught TypeError: L\.map is not a function/);
     expect(report.errors[0]).toContain("page line 5:");
-    expect(describeReport(report)).toMatch(/^The check found 1 error\./);
-    expect(describeReport(report, "")).toMatch(/^Not published: the check found 1 error\. No version was made/);
+    expect(describeReport(report)).toMatch(/^Errors:\n- Uncaught TypeError: L\.map is not a function/);
   }, 30_000);
 
   it("reports an error the page caught and logged, rejections, and what the policy blocked", async () => {

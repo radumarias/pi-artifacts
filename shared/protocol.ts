@@ -70,6 +70,9 @@ export function isReadOnly(tool: ToolInfo): boolean {
 /** A tool an artifact version declared, with the server it belongs to: what GET /api/artifacts/:id/tools lists. */
 export type DeclaredTool = ToolInfo & { server: string };
 
+/** What an artifact's frame may do: run scripts and open popups, with an opaque origin (no allow-same-origin). */
+export const ARTIFACT_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
+
 /** What a page may call. Fixed per version at publish time; the page cannot widen it. */
 export interface ArtifactManifest {
   mcp?: { servers: { server: string; tools: string[] }[] };

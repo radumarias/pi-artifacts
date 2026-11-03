@@ -59,3 +59,8 @@ export function listSome(items: readonly string[], max: number): string {
   const shown = items.slice(0, max).join(", ");
   return items.length > max ? `${shown} and ${items.length - max} more` : shown;
 }
+
+/** A count and its noun, plural when it is not one: "1 error", "3 errors". */
+export function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}

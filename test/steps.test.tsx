@@ -40,14 +40,14 @@ describe("step header", () => {
   });
 
   it("hints with the first telling line of the first text argument, else the arguments", () => {
-    expect(stepHint({ code: "\n# Load the sales\nimport pandas" })).toBe("# Load the sales");
-    expect(stepHint({ script: "#!/bin/bash\nset -euo pipefail\nwc -l files/sales.csv" })).toBe("wc -l files/sales.csv");
-    expect(stepHint({ script: "set -e" })).toBe("set -e");
-    expect(stepHint({ ids: ["bitcoin"], days: 7 })).toBe('{"ids":["bitcoin"],"days":7}');
-    expect(stepHint(undefined)).toBe("");
+    expect(stepHint("run_python", { code: "\n# Load the sales\nimport pandas" })).toBe("# Load the sales");
+    expect(stepHint("run_python", { script: "#!/bin/bash\nset -euo pipefail\nwc -l files/sales.csv" })).toBe("wc -l files/sales.csv");
+    expect(stepHint("run_python", { script: "set -e" })).toBe("set -e");
+    expect(stepHint("run_python", { ids: ["bitcoin"], days: 7 })).toBe('{"ids":["bitcoin"],"days":7}');
+    expect(stepHint("run_python", undefined)).toBe("");
     // A page check's first argument is the page: its hint is how it checks.
-    expect(stepHint({ html: "<!doctype html>", tests: [{}, {}], viewport: "mobile" }, "artifact_check")).toBe("Mobile · 2 tests");
-    expect(stepHint({ html: "<!doctype html>" }, "artifact_check")).toBe("Desktop");
+    expect(stepHint("artifact_check", { html: "<!doctype html>", tests: [{}, {}], viewport: "mobile" })).toBe("Mobile · 2 tests");
+    expect(stepHint("artifact_check", { html: "<!doctype html>" })).toBe("Desktop");
   });
 });
 

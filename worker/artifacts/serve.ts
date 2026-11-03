@@ -1,4 +1,5 @@
 import RUNTIME from "../../runtime/pi-runtime.js?raw";
+import { ARTIFACT_SANDBOX } from "../../shared/protocol.ts";
 
 /** The only hosts a page may load scripts from, as on claude.ai. */
 export const SCRIPT_HOSTS = [
@@ -19,8 +20,6 @@ export const SCRIPT_HOSTS = [
  * frame's sandbox. Without it, a page loaded top-level would run on the app's
  * origin and could script the app as the viewer.
  */
-export const ARTIFACT_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
-
 /** The policy without its sandbox directive, which a <meta> policy cannot carry: the check (check.ts) sandboxes its frame instead. */
 export const PAGE_POLICY = [
   "default-src 'none'",

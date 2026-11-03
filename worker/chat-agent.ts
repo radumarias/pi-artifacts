@@ -25,6 +25,7 @@ import {
   type ChatStatus,
   type DeclaredTool,
   type McpError,
+  type ToolInfo,
   type Person,
   type Presence,
   type ProxyRequest,
@@ -47,7 +48,6 @@ import {
   artifactExtension,
   filesExtension,
   filesIndexExtension,
-  PassedPages,
   publishChecked,
   sandboxExtension,
   sandboxName,
@@ -94,6 +94,11 @@ const MAX_STALE_MS = 24 * 60 * 60_000;
 const CHECK_STALE_MS = 2 * 60_000;
 /** The live calls one page check may make. */
 const MAX_CHECK_CALLS = 40;
+
+/** What a page gets when its call threw: the server's own error, else upstream_error. */
+function callFailure(error: unknown, server: string): McpError {
+  return error instanceof McpFailure ? error.error : { code: "upstream_error", server, message: errorMessage(error) };
+}
 const MEMBERS_TOUCH_MS = 60_000;
 /**
  * How long a chat must stay idle before the sidebars hear its run ended: the next queued message starts its run right
@@ -857,13 +862,12 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * Publish without the model, through the same checks as the agent's tool, the browser check included: a page with
-   * errors throws the check's report. Only routed when DEV_TOOLS is on.
+   * errors throws the check's errors. Only routed when DEV_TOOLS is on.
    */
   async devPublish(input: PublishInput) {
-    const result = await publishChecked(this.scope, input, new PassedPages());
-    const report = (result.output ?? []).flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
-    if (result.isError || !result.details?.artifactId) throw new Error(report);
-    return { artifactId: result.details.artifactId, version: result.details.version, report };
+    const { meta, report, unchecked } = await publishChecked(this.scope, input);
+    if (!meta) throw new Error(`The check found errors:\n${report!.errors.join("\n")}`);
+    return { artifactId: meta.id, version: meta.latest, checked: report ? { errors: 0, warnings: report.warnings } : { unchecked } };
   }
 
   async abort(by: Person): Promise<void> {
@@ -893,36 +897,45 @@ export class ChatAgent extends DurableObject<Env> {
 
     const manifest = await this.#manifest(artifactId, request.version);
     if (!manifest) return fail({ code: "not_in_manifest", server, message: "No such artifact version in this chat." });
-    const declared = manifest.mcp?.servers.find((entry) => entry.server === server);
-    if (!declared?.tools.includes(tool)) {
-      return fail({ code: "not_in_manifest", server, message: `This page did not declare ${server}/${tool} when it was published.` });
-    }
 
     if (!this.#mayLoad(server, viewer)) {
       return fail({ code: "not_granted", server, message: `${server} signs in each user, and this page calls as its author, so only people in its chat can load it.` });
     }
 
     try {
-      const info = await this.hub.tool(server, tool);
-      if (!info) return fail({ code: "not_in_manifest", server, message: `${server} no longer has a tool named ${tool}.` });
-      const readOnly = isReadOnly(info);
+      const info = await this.#declaredTool(manifest, server, tool, mode);
+      if ("code" in info) return fail(info);
 
       if (mode === "read") {
-        if (!readOnly) return fail({ code: "bad_request", server, message: `${tool} is not read-only, so it cannot be watched or cached; use callTool.` });
         const staleMs = Math.min(Math.max(Number(request.staleMs) || 0, 0), MAX_STALE_MS);
         const read = await this.hub.read(server, tool, input, { staleMs, viewer });
         return { ok: true, result: read.result, storedAt: read.storedAt, nextRefreshAt: staleMs > 0 ? read.nextRefreshAt : undefined };
       }
 
-      if (!readOnly && viewer !== this.uid) {
+      if (!isReadOnly(info) && viewer !== this.uid) {
         return fail({ code: "not_granted", server, message: `${tool} can change data, so only the page's author can call it.` });
       }
       const result = await this.hub.call(server, tool, input);
       return { ok: true, result, storedAt: Date.now() };
     } catch (error) {
-      if (error instanceof McpFailure) return fail(error.error);
-      return fail({ code: "upstream_error", server, message: errorMessage(error) });
+      return fail(callFailure(error, server));
     }
+  }
+
+  /**
+   * The tool a page calls, if its manifest declares it and the server still has it, and if `mode` is "read" (a watch
+   * or a cached read), only a read-only one. Else the error the page gets.
+   */
+  async #declaredTool(manifest: ArtifactManifest, server: string, tool: string, mode: "read" | "call"): Promise<ToolInfo | McpError> {
+    if (!manifest.mcp?.servers.find((entry) => entry.server === server)?.tools.includes(tool)) {
+      return { code: "not_in_manifest", server, message: `This page does not declare ${server}/${tool}.` };
+    }
+    const info = await this.hub.tool(server, tool);
+    if (!info) return { code: "not_in_manifest", server, message: `${server} no longer has a tool named ${tool}.` };
+    if (mode === "read" && !isReadOnly(info)) {
+      return { code: "bad_request", server, message: `${tool} is not read-only, so it cannot be watched or cached; use callTool.` };
+    }
+    return info;
   }
 
   /**
@@ -934,26 +947,20 @@ export class ChatAgent extends DurableObject<Env> {
     let calls = 0;
     return async (request) => {
       const { server, tool } = request;
-      const fail = (error: Omit<McpError, "server">) => ({ ok: false as const, error: { ...error, server } });
-      if (!manifest.mcp?.servers.find((entry) => entry.server === server)?.tools.includes(tool)) {
-        return fail({ code: "not_in_manifest", message: `This page does not declare ${server}/${tool}.` });
-      }
       try {
-        const info = await this.hub.tool(server, tool);
-        if (!info) return fail({ code: "not_in_manifest", message: `${server} has no tool named ${tool}.` });
+        const info = await this.#declaredTool(manifest, server, tool, request.method === "call" ? request.mode : "call");
+        if ("code" in info) return { ok: false, error: info };
         if (request.method === "describe") {
-          return { ok: true as const, tool: { name: info.name, description: info.description, inputSchema: info.inputSchema, annotations: info.annotations } };
+          return { ok: true, tool: { name: info.name, description: info.description, inputSchema: info.inputSchema, annotations: info.annotations } };
         }
         if (!isReadOnly(info)) {
-          if (request.mode === "read") return fail({ code: "bad_request", message: `${tool} is not read-only, so it cannot be watched or cached; use callTool.` });
-          return fail({ code: "not_granted", message: `${tool} can change data, so the check does not run it; the page gets this error instead.` });
+          return { ok: false, error: { code: "not_granted", server, message: `${tool} can change data, so the check does not run it; the page gets this error instead.` } };
         }
-        if (++calls > MAX_CHECK_CALLS) return fail({ code: "rate_limited", message: `A check makes at most ${MAX_CHECK_CALLS} live calls.` });
+        if (++calls > MAX_CHECK_CALLS) return { ok: false, error: { code: "rate_limited", server, message: `A check makes at most ${MAX_CHECK_CALLS} live calls.` } };
         const read = await this.hub.read(server, tool, request.input, { staleMs: CHECK_STALE_MS, viewer: this.uid });
-        return { ok: true as const, result: read.result };
+        return { ok: true, result: read.result };
       } catch (error) {
-        if (error instanceof McpFailure) return { ok: false as const, error: error.error };
-        return fail({ code: "upstream_error", message: errorMessage(error) });
+        return { ok: false, error: callFailure(error, server) };
       }
     };
   }

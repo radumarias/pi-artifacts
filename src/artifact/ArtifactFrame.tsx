@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ArtifactManifest } from "../../shared/protocol.ts";
+import { ARTIFACT_SANDBOX, type ArtifactManifest } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 import { ArtifactBroker } from "./broker.ts";
 
@@ -69,5 +69,5 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artifactId, version, uid]);
 
-  return <iframe ref={ref} className="artifact-frame" title={title} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" />;
+  return <iframe ref={ref} className="artifact-frame" title={title} sandbox={ARTIFACT_SANDBOX} />;
 }

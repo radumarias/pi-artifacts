@@ -2,7 +2,7 @@ import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
 import { CHECK_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
-import { clip } from "../../shared/util.ts";
+import { clip, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
@@ -119,15 +119,18 @@ export function stepLabel(name: string): string {
 /** Lines that say nothing about what a script does: blank, a shebang, shell options. */
 const BOILERPLATE = /^\s*($|#!|set -)/;
 
-/** One line on what a check does: its first argument is the page, whose first line says nothing. */
-function checkHint(args: Record<string, unknown> | undefined): string {
-  const tests = Array.isArray(args?.tests) ? args.tests.length : 0;
-  return [args?.viewport === "mobile" ? "Mobile" : "Desktop", tests && `${tests} test${tests === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
-}
+/** Tools whose first text argument says little about the call, by a hint of their own. */
+const HINTS: Record<string, (args: Record<string, unknown> | undefined) => string> = {
+  // The page, whose first line is its doctype.
+  [CHECK_TOOL]: (args) => {
+    const tests = Array.isArray(args?.tests) ? args.tests.length : 0;
+    return [args?.viewport === "mobile" ? "Mobile" : "Desktop", tests && plural(tests, "test")].filter(Boolean).join(" · ");
+  },
+};
 
 /** One line on what the call does: the first telling line of its first text argument, or its arguments in short. */
-export function stepHint(args: Record<string, unknown> | undefined, name?: string): string {
-  if (name === CHECK_TOOL) return checkHint(args);
+export function stepHint(name: string, args: Record<string, unknown> | undefined): string {
+  if (HINTS[name]) return HINTS[name](args);
   const values = Object.values(args ?? {});
   const first = values.find((value): value is string => typeof value === "string" && value.trim() !== "");
   if (first !== undefined) {
@@ -231,7 +234,7 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const { text, icon, tone } = STATUS[status];
   const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
   return (
-    <Panel openKey={call.id} tone={tone} icon={icon ?? <Spark />} label={stepLabel(call.name)} hint={stepHint(call.arguments, call.name)} status={text + time}>
+    <Panel openKey={call.id} tone={tone} icon={icon ?? <Spark />} label={stepLabel(call.name)} hint={stepHint(call.name, call.arguments)} status={text + time}>
       {() => {
         const output = result ? resultText(result) : live!.tools.get(call.id)?.output;
         const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
@@ -256,11 +259,10 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
 
 /** What a page check saw: its screenshot, and how many errors and warnings it found. */
 function CheckShot({ check }: { check: CheckedDetails }) {
-  const count = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
   return (
     <figure className={check.errors ? "step-shot error" : "step-shot"}>
       {check.thumb.startsWith("data:image/jpeg;base64,") && <img src={check.thumb} alt="The page as the check rendered it" />}
-      <figcaption>{check.errors || check.warnings ? `${count(check.errors, "error")}, ${count(check.warnings, "warning")}` : "No errors or warnings"}</figcaption>
+      <figcaption>{check.errors || check.warnings ? `${plural(check.errors, "error")}, ${plural(check.warnings, "warning")}` : "No errors or warnings"}</figcaption>
     </figure>
   );
 }
@@ -273,7 +275,7 @@ export function OrphanResult({ message }: { message: ToolResultMessage }) {
 /** What the model thought before answering, when the provider sends it. `openKey` stays the same once the message lands. */
 export function ThoughtStep({ openKey, text }: { openKey: string; text: string }) {
   return (
-    <Panel openKey={openKey} icon="✻" label="Thought process" hint={stepHint({ text })}>
+    <Panel openKey={openKey} icon="✻" label="Thought process" hint={stepHint("", { text })}>
       {() => <div className="step-thought">{text.trim()}</div>}
     </Panel>
   );
