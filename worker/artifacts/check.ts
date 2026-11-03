@@ -76,6 +76,13 @@ const MIN_MS = 1_500;
 const SETTLE_MS = 800;
 const MAX_MS = 15_000;
 const TEST_MS = 5_000;
+/** All the tests together: a test past it fails without running, so a check stays well inside CHECK_MS. */
+const TESTS_MS = 20_000;
+/**
+ * The whole check, from a fresh page to the report (CheckBrowser.withPage enforces it): loading and settling take at
+ * most MAX_MS, the tests TESTS_MS, and the rest is screenshots and the page's own load.
+ */
+export const CHECK_MS = 60_000;
 /** The tallest page a screenshot shows: a longer page is cut at this height. */
 const MAX_SHOT_HEIGHT = 2_400;
 /** The longest side the model sees an image at: a larger screenshot would only be scaled down on the way. */
@@ -222,7 +229,7 @@ export function renderForCheck(html: string): { document: string; mapLine: (line
 /** Rejects after `ms`, so a page that never settles a promise cannot hold the check. */
 function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} took over ${ms / 1000} s`)), ms)));
+  const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} took over ${Math.round(ms / 100) / 10} s`)), ms)));
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
@@ -291,11 +298,17 @@ export async function checkPage(page: Page, input: CheckInput, bridge: Bridge): 
 
 async function runTests(frame: Frame, tests: readonly CheckTest[]): Promise<TestResult[]> {
   const results: TestResult[] = [];
+  const until = Date.now() + TESTS_MS;
   // One at a time, each its own evaluation: a test that does not parse fails alone.
   for (const test of tests) {
+    const left = Math.min(TEST_MS, until - Date.now());
+    if (left <= 0) {
+      results.push({ name: test.name, ok: false, detail: `not run: the tests together took over ${TESTS_MS / 1000} s` });
+      continue;
+    }
     try {
       // Evaluated through the devtools protocol: the page policy, which forbids eval, does not apply to it.
-      const value = await within(frame.evaluate(`(async () => {\n${test.run}\n})()`), TEST_MS, "The test");
+      const value = await within(frame.evaluate(`(async () => {\n${test.run}\n})()`), left, "The test");
       if (value === false) results.push({ name: test.name, ok: false, detail: "returned false" });
       else results.push({ name: test.name, ok: true, detail: typeof value === "string" ? clip(value, MAX_ENTRY) : undefined });
     } catch (error) {
@@ -403,7 +416,27 @@ export function describeReport(report: CheckReport): string {
       tests.map((t) => `${t.ok ? "passed" : "FAILED"}: ${t.name}${t.detail ? ` (${t.detail})` : ""}`),
     ),
     `Visible text:\n${report.text || "(none)"}`,
-    `Screenshot at ${report.width}×${report.height}: look at it for anything that renders wrong (overlaps, empty sections, broken charts, unreadable contrast).`,
+    report.screenshot
+      ? `Screenshot at ${report.width}×${report.height}: look at it for anything that renders wrong (overlaps, empty sections, broken charts, unreadable contrast).`
+      : "No screenshot: the check did not get that far.",
   ];
   return parts.filter(Boolean).join("\n\n");
+}
+
+/** The report of a check that ran out of time (CheckTimedOut): one error, and nothing seen. */
+export function timedOutReport(why: string, viewport: CheckViewport = "desktop"): CheckReport {
+  const { width, height } = VIEWPORTS[viewport];
+  return {
+    errors: [
+      `The page held the browser: ${why}. Look for a loop that never ends, or a wait on something that never comes (a promise never settled, polling with no end), and keep every test short.`,
+    ],
+    warnings: [],
+    calls: [],
+    tests: [],
+    text: "",
+    screenshot: "",
+    thumb: "",
+    width,
+    height,
+  };
 }

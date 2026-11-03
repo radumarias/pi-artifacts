@@ -199,9 +199,16 @@ Until a page passes, it is a **draft**, not a version: every page the agent chec
 of its chat's drafts (`worker/storage/drafts.ts`), so no attempt is lost and the Git repo only ever gets pages that
 passed. Drafts live in the chat owner's R2 folder (`users/<uid>/drafts/<chatId>/`), encrypted with the owner's key like
 their files but apart from them, keyed by a hash of the page and what it declares, so the same page is one draft. A
-chat keeps its newest 20; publishing a page drops its draft, and deleting the chat deletes them all. The agent lists
-them and gets one back with `artifact_drafts` (an earlier attempt, or the page it was working on after the chat
-restarted), and a `check_id` is a draft's id, so a passed check can still be published after a restart.
+chat keeps its newest 20; publishing a page drops its draft, and deleting the chat deletes them all. To fix a page the agent checks its draft again with
+`draft_id` and `edits` (text replaced exactly once each), so a fix costs the model only what changes, not the whole page
+again. The agent lists drafts and gets one back with `artifact_drafts` (an earlier attempt, or the page it was working on
+after the chat restarted), and a `check_id` is a draft's id, so a passed check can still be published after a restart.
+
+A check has hard limits, so it never holds a run: the browser gets 30 s to start, the whole check 60 s (loading and
+settling at most 15 s, the agent's tests 20 s together), and a page that holds the browser past that, such as one stuck
+in a loop, gets an error for it while its browser is dropped. Stopping the chat ends a running check. After 5 checks in
+a row with errors the agent stops fixing and tells the user what still fails; their next message lets it go on.
+
 During a check only read-only tools run, from results up to two minutes old; a write tool answers `not_granted`. The
 browser may reach only the page's script hosts and Google Fonts. When no browser can check a page (none bound, or one
 that fails to start), the page is not published: it stays a draft, and the agent says so. Only local development

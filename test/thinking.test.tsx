@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { THINKING_WORDS, Thinking, formatElapsed, nextWord } from "../src/chat/Thinking.tsx";
-import { reduce, waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
+import { reduce, unansweredCalls, waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
 
 const idle: ChatState = { entries: [], tools: [], busy: false, queued: [] };
 const busy: ChatState = { ...idle, busy: true };
@@ -37,6 +37,12 @@ describe("waiting on the model", () => {
     expect(waitingOnModel({ ...busy, entries: [call], tools: stopped } as unknown as ChatState)).toBe(true);
     // Answered: the model is up again.
     expect(waitingOnModel({ ...busy, entries: [call, result] } as unknown as ChatState)).toBe(true);
+  });
+
+  it("waits on no call of a message that was cut off: those calls never run", () => {
+    const cut = { id: "a", kind: "pi.assistant", model: [{ role: "assistant", stopReason: "aborted", content: [{ type: "toolCall", id: "c", name: "artifact_check", arguments: {} }] }] };
+    expect(unansweredCalls([cut] as unknown as ChatState["entries"])).toEqual(new Set());
+    expect(waitingOnModel({ ...busy, entries: [cut] } as unknown as ChatState)).toBe(true);
   });
 });
 

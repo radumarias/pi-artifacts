@@ -2,6 +2,7 @@ import puppeteer, { type Browser } from "@cloudflare/puppeteer";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CheckTimedOut, deadline } from "../worker/artifacts/browser.ts";
 import { checkPage, describeReport, renderForCheck, type Bridge, type BridgeRequest, type CheckInput } from "../worker/artifacts/check.ts";
 
 /** A local Chrome to check pages in: CHROME_PATH, else the one Playwright installs. Without one the browser tests skip. */
@@ -261,5 +262,17 @@ fetch("https://example.com/data.json");
     expect(report.height).toBeLessThanOrEqual(2_400);
     const mobile = await check("<p>Small</p>", { manifest: {}, viewport: "mobile" });
     expect([mobile.width, mobile.height]).toEqual([390, 844]);
+  }, 30_000);
+
+  it("cannot finish on a page that never yields, so the deadline around it has to end it", async () => {
+    const page = await browser.newPage();
+    const spin = `<p>Spins</p><script>setTimeout(() => { for (;;) {} }, 50);</script>`;
+    const started = Date.now();
+    const checking = checkPage(page, { html: spin, manifest: {} }, quotes);
+    checking.catch(() => {});
+    await expect(deadline(checking, 4_000, () => new CheckTimedOut("the check did not finish in 4 s"))).rejects.toBeInstanceOf(CheckTimedOut);
+    expect(Date.now() - started).toBeLessThan(6_000);
+    // The renderer is stuck: what the check browser does then is drop the page without waiting on it.
+    void page.close().catch(() => {});
   }, 30_000);
 });

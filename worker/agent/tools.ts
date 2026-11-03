@@ -19,7 +19,7 @@ import { describeReport, type CheckReport } from "../artifacts/check.ts";
 import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
 import { draftId, literalPath, MAX_DRAFTS, normalisePath, PathError, type FileEntry, type UserFiles } from "../storage/index.ts";
-import { checkInBrowser, draftCheck, draftLine, publishChecked, validPage, type PublishInput, type PublishScope } from "./publish.ts";
+import { applyEdits, checkInBrowser, draftCheck, draftLine, FailedChecks, publishChecked, validPage, type PublishInput, type PublishScope } from "./publish.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
@@ -31,6 +31,8 @@ export interface ChatScope extends PublishScope {
   broughtIn(id: string): boolean;
   /** Save a skill for the user, turned off until they turn it on. */
   proposeSkill(skill: SkillInput): Promise<SkillResult>;
+  /** The checks that found errors in a row; the chat resets it when someone writes. */
+  failedChecks: FailedChecks;
 }
 
 /**
@@ -254,7 +256,7 @@ const mcpParameter = Type.Optional(
 /** What a check's result gives the model: a line on what came of it, the report, then the screenshot. */
 function checkOutput(headline: string, report: CheckReport) {
   const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = text(clip(`${headline}\n\n${describeReport(report)}`));
-  content.push({ type: "image", data: report.screenshot, mimeType: "image/jpeg" });
+  if (report.screenshot) content.push({ type: "image", data: report.screenshot, mimeType: "image/jpeg" });
   return content;
 }
 
@@ -277,10 +279,30 @@ export function artifactExtension(scope: ChatScope): Extension {
           "a write tool gets a not_granted error instead of running). Returns errors (uncaught exceptions, console errors, blocked or failed loads, " +
           "calls the page got wrong, failed tests), warnings, how the live calls went, the visible text and a screenshot. Nothing is published, " +
           "so fixing and checking again uses up no versions. A page that passes gets a check_id to publish it by. " +
+          "Every page checked is saved as a draft: to fix one, check it again with its draft_id and `edits` for just what changes, rather than sending the whole page. " +
           "Pass `tests`: a few short checks of what the page must show once its data arrived.",
         parameters: Type.Object({
-          html: Type.String({ description: "The page, exactly as you would publish it." }),
-          mcp: mcpParameter,
+          html: Type.Optional(Type.String({ description: "The page, exactly as you would publish it. Leave out with draft_id." })),
+          draft_id: Type.Optional(
+            Type.String({
+              description:
+                "Check a saved draft (the id a check gave, or from artifact_drafts) instead of sending html, with `edits` applied: to fix a page, send only what changes.",
+            }),
+          ),
+          edits: Type.Optional(
+            Type.Array(
+              Type.Object({
+                old: Type.String({ description: "Text that occurs exactly once in the draft, with enough around it to be unique." }),
+                new: Type.String({ description: "What replaces it; empty deletes it." }),
+              }),
+              { description: "Changes to the draft, applied in order. Only with draft_id.", maxItems: 20 },
+            ),
+          ),
+          mcp: Type.Optional(
+            Type.Array(Type.Object({ server: Type.String(), tools: Type.Array(Type.String()) }), {
+              description: 'e.g. [{"server": "CoinGecko", "tools": ["execute"]}]. With draft_id, leave out to keep what the draft declares.',
+            }),
+          ),
           tests: Type.Optional(
             Type.Array(
               Type.Object({
@@ -297,16 +319,31 @@ export function artifactExtension(scope: ChatScope): Extension {
           viewport: Type.Optional(Type.Union([Type.Literal("desktop"), Type.Literal("mobile")], { description: "desktop (1280 wide, the default) or mobile (390 wide)." })),
           artifact_id: Type.Optional(Type.String({ description: "The artifact of this chat this page is a new version of: publishing the page goes there, unless the publish names another or new_artifact." })),
         }),
-        execute: async (args) => {
+        execute: async (args, _api, context) => {
+          scope.failedChecks.allow(args.draft_id);
           if (args.artifact_id !== undefined) await chatArtifact(scope, args.artifact_id);
-          const manifest = await validPage(scope, args.html, args.mcp, "Not checked.");
-          const [id, drafts, checked] = await Promise.all([
-            draftId(args.html, manifest),
-            scope.drafts(),
-            checkInBrowser(scope, { html: args.html, manifest, tests: args.tests, viewport: args.viewport }),
+          const drafts = await scope.drafts();
+          let html: string;
+          let mcp = args.mcp;
+          let artifactId = args.artifact_id;
+          if (args.draft_id !== undefined) {
+            if (args.html !== undefined) throw new Error("Pass draft_id with edits, or the page as html: not both.");
+            const draft = await drafts.get(args.draft_id);
+            if (!draft) throw new Error(`No draft "${args.draft_id}" in this chat. List them with ${DRAFTS_TOOL}, or send the page as html.`);
+            html = applyEdits(draft.html, args.edits ?? []);
+            mcp ??= draft.manifest.mcp?.servers;
+            artifactId ??= draft.artifactId;
+          } else if (args.html !== undefined) {
+            if (args.edits?.length) throw new Error("edits change a draft: pass its draft_id with them.");
+            html = args.html;
+          } else throw new Error("Pass the page as html, or a draft_id with edits.");
+          const manifest = await validPage(scope, html, mcp, "Not checked.");
+          const [id, checked] = await Promise.all([
+            draftId(html, manifest),
+            checkInBrowser(scope, { html, manifest, tests: args.tests, viewport: args.viewport }, context.abortSignal),
           ]);
           const { report, unchecked } = checked;
-          await drafts.save({ id, html: args.html, manifest, artifactId: args.artifact_id }, draftCheck(report));
+          await drafts.save({ id, html, manifest, artifactId }, draftCheck(report));
           if (!report) {
             const next = scope.publishUnchecked
               ? "Publish it with its html; it is published unchecked."
@@ -314,8 +351,10 @@ export function artifactExtension(scope: ChatScope): Extension {
             return { output: text(`The page could not be checked: ${unchecked}. It is saved as draft "${id}"; nothing was published. ${next}`) };
           }
           const failed = report.errors.length > 0;
+          const stop = scope.failedChecks.record(failed);
           const headline = failed
-            ? `The check found ${plural(report.errors.length, "error")}. The page is saved as draft "${id}"; fix them and check again. Nothing was published.`
+            ? `The check found ${plural(report.errors.length, "error")}. The page is saved as draft "${id}"; fix them and check it again, ` +
+              `with draft_id "${id}" and edits for just what changes. Nothing was published.${stop}`
             : `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with check_id "${id}" instead of html and mcp.`;
           return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed };
         },
@@ -339,7 +378,7 @@ export function artifactExtension(scope: ChatScope): Extension {
           ),
           mcp: mcpParameter,
         }),
-        execute: async (args): Promise<ToolExecutionResult<Partial<PublishedDetails>>> => {
+        execute: async (args, _api, context): Promise<ToolExecutionResult<Partial<PublishedDetails>>> => {
           const target = { title: args.title, artifactId: args.artifact_id, newArtifact: args.new_artifact, message: args.message };
           let input: PublishInput;
           if (args.check_id !== undefined) {
@@ -347,15 +386,19 @@ export function artifactExtension(scope: ChatScope): Extension {
             input = { ...target, checkId: args.check_id };
           } else if (args.html !== undefined) input = { ...target, html: args.html, mcp: args.mcp };
           else throw new Error("Pass check_id, or the page as html.");
-          const outcome = await publishChecked(scope, input);
+          if ("html" in input) scope.failedChecks.allow();
+          const outcome = await publishChecked(scope, input, context.abortSignal);
           const { meta, report, draft } = outcome;
+          const stop = report ? scope.failedChecks.record(!meta) : "";
           if (!meta) {
             const saved = `The page is saved as draft "${draft!.id}"; no version was made.`;
             if (!report) {
               const why = `Not published: no browser could check the page (${outcome.unchecked}), and a page is published only once a check passes. ${saved} Check it again in a while.`;
               return { output: text(why), isError: true };
             }
-            const headline = `Not published: the check found ${plural(report.errors.length, "error")}. ${saved} Fix them and publish again.`;
+            const headline =
+              `Not published: the check found ${plural(report.errors.length, "error")}. ${saved} Fix them with ${CHECK_TOOL}, ` +
+              `passing draft_id "${draft!.id}" and edits for just what changes, then publish by its check_id.${stop}`;
             return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: true };
           }
           const done =

@@ -1,7 +1,7 @@
-import type { ArtifactManifest, ArtifactMeta, ArtifactSummary } from "../../shared/protocol.ts";
+import { DRAFTS_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary } from "../../shared/protocol.ts";
 import { errorMessage, formatBytes, plural } from "../../shared/util.ts";
-import { BrowserUnavailable } from "../artifacts/browser.ts";
-import type { CheckInput, CheckReport } from "../artifacts/check.ts";
+import { BrowserUnavailable, CheckTimedOut } from "../artifacts/browser.ts";
+import { timedOutReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { ArtifactStore } from "../storage/artifacts.ts";
@@ -14,8 +14,11 @@ export interface PublishScope {
   hub: McpHub;
   artifacts: ArtifactStore;
   onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
-  /** Render a page in a headless browser and report on it (worker/artifacts/check.ts). Throws BrowserUnavailable without one. */
-  checkPage(input: CheckInput): Promise<CheckReport>;
+  /**
+   * Render a page in a headless browser and report on it (worker/artifacts/check.ts), for at most CHECK_MS and until
+   * `signal` aborts. Throws BrowserUnavailable without a browser, CheckTimedOut when the page held it too long.
+   */
+  checkPage(input: CheckInput, signal?: AbortSignal): Promise<CheckReport>;
   /** The artifacts published in this chat, newest first. */
   chatArtifacts(): Promise<ArtifactSummary[]>;
   /** The pages checked or tried in this chat and not published yet: in the owner's folder, encrypted with their key. */
@@ -47,13 +50,64 @@ export async function validPage(scope: PublishScope, html: string, mcp: McpDecla
   return manifest;
 }
 
-/** Check a page in the headless browser: its report, or why no browser could check it. */
-export async function checkInBrowser(scope: PublishScope, input: CheckInput): Promise<{ report?: CheckReport; unchecked?: string }> {
+/** Check a page in the headless browser: its report (one error, if it ran out of time), or why no browser could check it. */
+export async function checkInBrowser(scope: PublishScope, input: CheckInput, signal?: AbortSignal): Promise<{ report?: CheckReport; unchecked?: string }> {
   try {
-    return { report: await scope.checkPage(input) };
+    return { report: await scope.checkPage(input, signal) };
   } catch (error) {
+    if (error instanceof CheckTimedOut) return { report: timedOutReport(error.message, input.viewport) };
     if (!(error instanceof BrowserUnavailable)) throw error;
     return { unchecked: error.message };
+  }
+}
+
+/**
+ * `html` with `edits` applied in order: each `old` must occur exactly once in the page as the edits before left it, so
+ * an edit never lands somewhere the model did not mean. Throws naming every edit that does not apply.
+ */
+export function applyEdits(html: string, edits: readonly { old: string; new: string }[]): string {
+  const problems: string[] = [];
+  for (const [i, edit] of edits.entries()) {
+    const at = edit.old ? html.indexOf(edit.old) : -1;
+    if (at < 0) problems.push(`edit ${i + 1}: its old text is not in the draft${edit.old ? "" : " (it is empty)"}`);
+    else if (html.indexOf(edit.old, at + 1) >= 0) problems.push(`edit ${i + 1}: its old text occurs more than once; add the text around it`);
+    else html = html.slice(0, at) + edit.new + html.slice(at + edit.old.length);
+  }
+  if (problems.length)
+    throw new Error(`Not checked: ${problems.join("; ")}. Copy old text exactly from the draft (${DRAFTS_TOOL} with its draft_id shows it).`);
+  return html;
+}
+
+/** How many checks in a row may find errors before the agent stops fixing and asks the user. */
+export const MAX_FAILED_CHECKS = 5;
+
+/**
+ * The checks and publishes that found errors since the last that passed or the user's last message: a model that
+ * cannot fix a page would otherwise go on rewriting it for as long as the run lasts.
+ */
+export class FailedChecks {
+  #count = 0;
+
+  /** Throws once MAX_FAILED_CHECKS failed in a row, before another check runs. */
+  allow(draft?: string): void {
+    if (this.#count < MAX_FAILED_CHECKS) return;
+    throw new Error(
+      `Not checked: ${MAX_FAILED_CHECKS} checks in a row found errors. Stop fixing and tell the user what still fails and what you tried` +
+        `${draft ? ` (the last page is draft "${draft}")` : ""}, and ask how to go on. Their next message lets you check again.`,
+    );
+  }
+
+  /** Counts a check's outcome; returns what to add to a failed check's result when that was the last one allowed. */
+  record(failed: boolean): string {
+    this.#count = failed ? this.#count + 1 : 0;
+    return this.#count >= MAX_FAILED_CHECKS
+      ? ` That is ${MAX_FAILED_CHECKS} failed checks in a row: do not check again. Tell the user what still fails and what you tried, and ask how to go on.`
+      : "";
+  }
+
+  /** The user wrote: they may have said how to go on. */
+  reset(): void {
+    this.#count = 0;
   }
 }
 
@@ -129,7 +183,7 @@ async function pageToPublish(scope: PublishScope, drafts: ChatDrafts, input: Pub
  * published either, except in local development (PublishScope.publishUnchecked), and `unchecked` says why. A published
  * page's draft goes: its version holds it now.
  */
-export async function publishChecked(scope: PublishScope, input: PublishInput): Promise<PublishOutcome> {
+export async function publishChecked(scope: PublishScope, input: PublishInput, signal?: AbortSignal): Promise<PublishOutcome> {
   const drafts = await scope.drafts();
   const { page, prior } = await pageToPublish(scope, drafts, input);
   const publish = async (outcome: Omit<PublishOutcome, "meta" | "byTitle" | "draft">): Promise<PublishOutcome> => {
@@ -149,7 +203,7 @@ export async function publishChecked(scope: PublishScope, input: PublishInput): 
     return { ...outcome, meta, byTitle: target.byTitle };
   };
   if (prior && passed(prior)) return publish({});
-  const checked = await checkInBrowser(scope, { html: page.html, manifest: page.manifest });
+  const checked = await checkInBrowser(scope, { html: page.html, manifest: page.manifest }, signal);
   if (checked.report ? !checked.report.errors.length : scope.publishUnchecked) {
     try {
       return await publish(checked);

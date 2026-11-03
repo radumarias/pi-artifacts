@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ArtifactMeta } from "../shared/protocol.ts";
-import { artifactByTitle, publishChecked, type PublishScope } from "../worker/agent/publish.ts";
-import { BrowserUnavailable } from "../worker/artifacts/browser.ts";
+import { applyEdits, artifactByTitle, checkInBrowser, FailedChecks, MAX_FAILED_CHECKS, publishChecked, type PublishScope } from "../worker/agent/publish.ts";
+import { BrowserUnavailable, CheckTimedOut } from "../worker/artifacts/browser.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
 import type { ArtifactStore } from "../worker/storage/artifacts.ts";
@@ -128,5 +128,54 @@ describe("publishChecked", () => {
     const local = chat(down, true);
     expect((await publishChecked(local.scope, { title: "Map", html: fixed })).meta).toBeDefined();
     expect(local.versions).toHaveLength(1);
+  });
+});
+
+describe("applyEdits", () => {
+  const page = "<h1>Prices</h1><p>a</p><p>a</p>";
+
+  it("applies each edit in order, to the page as the edits before left it", () => {
+    expect(
+      applyEdits(page, [
+        { old: "Prices", new: "Rates" },
+        { old: "<h1>Rates", new: "<h2>Rates" },
+      ]),
+    ).toBe("<h2>Rates</h1><p>a</p><p>a</p>");
+    expect(applyEdits(page, [])).toBe(page);
+  });
+
+  it("refuses text that is missing, empty or not unique, naming each edit", () => {
+    expect(() => applyEdits(page, [{ old: "<p>a</p>", new: "" }])).toThrow("edit 1: its old text occurs more than once");
+    expect(() =>
+      applyEdits(page, [
+        { old: "Prices", new: "x" },
+        { old: "nope", new: "" },
+        { old: "", new: "y" },
+      ]),
+    ).toThrow(/edit 2: its old text is not in the draft; edit 3: its old text is not in the draft \(it is empty\)/);
+  });
+});
+
+describe("checkInBrowser", () => {
+  it("turns a check that ran out of time into a report with one error and no screenshot", async () => {
+    const { scope } = chat(() => new CheckTimedOut("the check did not finish in 60 s"));
+    const { report } = await checkInBrowser(scope, { html: "<p>x</p>", manifest: {}, viewport: "mobile" });
+    expect(report?.errors).toEqual([expect.stringContaining("the check did not finish in 60 s")]);
+    expect(report).toMatchObject({ screenshot: "", thumb: "", width: 390 });
+  });
+});
+
+describe("FailedChecks", () => {
+  it(`stops checks after ${MAX_FAILED_CHECKS} failed in a row, until one passes or the user writes`, () => {
+    const checks = new FailedChecks();
+    for (let n = 1; n < MAX_FAILED_CHECKS; n++) expect(checks.record(true)).toBe("");
+    expect(checks.record(true)).toContain("do not check again");
+    expect(() => checks.allow("0000000000000001")).toThrow(/draft "0000000000000001"/);
+    checks.reset();
+    expect(() => checks.allow()).not.toThrow();
+    checks.record(true);
+    checks.record(false);
+    for (let n = 1; n < MAX_FAILED_CHECKS; n++) checks.record(true);
+    expect(() => checks.allow()).not.toThrow();
   });
 });

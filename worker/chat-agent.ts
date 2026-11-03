@@ -44,10 +44,18 @@ import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
-import { artifactExtension, filesExtension, filesIndexExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
-import { publishChecked, type PublishInput } from "./agent/publish.ts";
+import {
+  artifactExtension,
+  filesExtension,
+  filesIndexExtension,
+  sandboxExtension,
+  sandboxName,
+  skillsExtension,
+  type ChatScope,
+} from "./agent/tools.ts";
+import { FailedChecks, publishChecked, type PublishInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
-import { checkPage, type Bridge } from "./artifacts/check.ts";
+import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
 import { chatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
@@ -215,10 +223,12 @@ export class ChatAgent extends DurableObject<Env> {
       onPublished: (artifact) => this.#directory.recordArtifact({ ...artifact, chatId: this.chatId }),
       broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
-      checkPage: (input) => this.#checkBrowser.withPage((page) => checkPage(page, input, this.#checkBridge(input.manifest))),
+      checkPage: (input, signal) =>
+        this.#checkBrowser.withPage((page) => checkPage(page, input, this.#checkBridge(input.manifest)), { timeoutMs: CHECK_MS, signal }),
       chatArtifacts: () => this.#directory.listChatArtifacts(this.chatId),
       drafts: memoAsync(() => this.storage.chatDrafts(this.uid, this.chatId)),
       publishUnchecked: env.AUTH_MODE === "demo",
+      failedChecks: new FailedChecks(),
     });
     this.registry.install(promptExtension);
     this.registry.install(peopleExtension(() => this.people()));
@@ -531,6 +541,7 @@ export class ChatAgent extends DurableObject<Env> {
     // lets go after SETTLE_MS, which they can outlast. Only a view: the prompt goes on without it.
     await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
     this.#bringIn(broughtIn);
+    this.scope.failedChecks.reset();
     const written = note ? `${text}\n\n${note}` : text;
     const said = this.members.hasAny() ? `${author.name}: ${written}` : written;
     const content = attached ? [...attached.content, ...(written ? [{ type: "text" as const, text: said }] : [])] : said;

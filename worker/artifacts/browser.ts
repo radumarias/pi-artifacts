@@ -11,8 +11,32 @@ const ALLOWED_DOMAINS = [...SCRIPT_HOSTS.map((url) => new URL(url).hostname), "f
  */
 const IDLE_MS = 15_000;
 
+/** How long a browser may take to start (Browser Rendering can queue a launch) before the check gives up on it. */
+const LAUNCH_MS = 30_000;
+/** How long opening a page in a running browser may take. */
+const PAGE_MS = 10_000;
+
 /** Why there is no browser to check with: the check is skipped, and the page stays a draft (published unchecked only in local development). */
 export class BrowserUnavailable extends Error {}
+
+/** The check ran out of time: the page held the browser (a loop that never ends, a wait on something forever). */
+export class CheckTimedOut extends Error {}
+
+/** `promise`, or a rejection once `ms` passed or `signal` aborted, whichever comes first. */
+export function deadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error, signal?: AbortSignal): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const stop = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(onTimeout()), ms);
+    onAbort = () => reject(signal!.reason ?? new Error("The check was stopped."));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([promise, stop]).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort!);
+  });
+}
 
 /**
  * One headless browser (Cloudflare Browser Rendering) for a chat's page checks, opened on the first check and closed
@@ -29,15 +53,28 @@ export class CheckBrowser {
     this.#binding = binding;
   }
 
-  async withPage<T>(use: (page: Page) => Promise<T>): Promise<T> {
+  /**
+   * Run `use` with a fresh page, for at most `timeoutMs` (CheckTimedOut after), and until `signal` aborts. A page that
+   * ran out of time may hold the browser (a script that never yields blocks every devtools call), so the browser goes
+   * with it, and the next check starts another.
+   */
+  async withPage<T>(use: (page: Page) => Promise<T>, { timeoutMs, signal }: { timeoutMs: number; signal?: AbortSignal }): Promise<T> {
     this.#using++;
     clearTimeout(this.#idle);
     try {
+      signal?.throwIfAborted();
       const page = await this.#page();
+      let stuck = false;
       try {
-        return await use(page);
+        return await deadline(use(page), timeoutMs, () => new CheckTimedOut(`the check did not finish in ${timeoutMs / 1000} s`), signal);
+      } catch (error) {
+        stuck = error instanceof CheckTimedOut || signal?.aborted === true;
+        throw error;
       } finally {
-        await page.close().catch(() => {});
+        // A stuck page may never answer a close: drop the browser instead, unless another check is using it.
+        if (stuck && this.#using === 1) this.close();
+        else if (stuck) void page.close().catch(() => {});
+        else await deadline(page.close(), 5_000, () => new Error("closing the page took too long")).catch(() => {});
       }
     } finally {
       if (--this.#using === 0) this.#idle = setTimeout(() => this.close(), IDLE_MS);
@@ -54,7 +91,8 @@ export class CheckBrowser {
     const binding = this.#binding;
     if (!binding) throw new BrowserUnavailable("this deployment has no browser binding");
     try {
-      return await (await this.#open(binding)).newPage();
+      const browser = await this.#open(binding);
+      return await deadline(browser.newPage(), PAGE_MS, () => new Error(`no new page within ${PAGE_MS / 1000} s`));
     } catch (error) {
       // The next check starts a new browser. Close this one, if it started, unless another check still uses it.
       const failed = this.#browser;
@@ -72,7 +110,12 @@ export class CheckBrowser {
     this.#browser = (async () => {
       const open = await previous?.catch(() => undefined);
       if (open?.connected) return open;
-      return puppeteer.launch(binding, { keep_alive: IDLE_MS + 15_000, guardrails: { allowedDomains: ALLOWED_DOMAINS } });
+      const launch = puppeteer.launch(binding, { keep_alive: IDLE_MS + 15_000, guardrails: { allowedDomains: ALLOWED_DOMAINS } });
+      // A launch that comes back after its deadline closes again, unused.
+      return deadline(launch, LAUNCH_MS, () => {
+        void launch.then((late) => late.close()).catch(() => {});
+        return new Error(`no browser within ${LAUNCH_MS / 1000} s`);
+      });
     })();
     return this.#browser;
   }

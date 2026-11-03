@@ -182,6 +182,8 @@ export function unansweredCalls(entries: readonly EntryRecord[]): Set<string> {
     const message = entries[i].model?.[0];
     if (message?.role === "toolResult") answered.add(message.toolCallId);
     else if (message?.role === "assistant") {
+      // A message cut off (its run was stopped, or the model's stream broke) never has its calls run: none is waited on.
+      if (message.stopReason === "aborted" || message.stopReason === "error") return new Set();
       return new Set(message.content.flatMap((block) => (block?.type === "toolCall" && !answered.has(block.id) ? [block.id] : [])));
     } else if (message) break;
   }
