@@ -34,6 +34,7 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Pro
       version,
       transport: (call) => api.proxy(artifactId, call),
       describe: () => api.artifactTools(artifactId, version),
+      manifest,
       cacheNamespace: uid,
       storage: browserStorage(),
     });

@@ -121,8 +121,8 @@ Where things live and who can use them:
   are still the ones that chat used.
 - **Pages that call such a server load only for people in their author's chat** (the author, and anyone they invited
   into it; see [Shared chats](#shared-chats)). A page calls through its author's chat, so it would otherwise show the
-  author's data to anyone with the link. Other viewers get `not_granted`. Claude's artifacts instead use each viewer's
-  own connectors.
+  author's data to anyone with the link. Other viewers get `not_granted`, and the page's tool list leaves that server's
+  tools out for them. Claude's artifacts instead use each viewer's own connectors.
 - **Removing a server** from the list also removes everyone's stored sign-in for it, tokens included. This happens the
   next time each user's directory loads.
 - **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then. To end the portal's own session, sign out on the portal's home

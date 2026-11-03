@@ -84,15 +84,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   // The artifact page itself, framed by the viewer.
   const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)$/);
-  if (page && method === "GET") {
-    const [id, version] = [page[1], Number(page[2])];
-    if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
-    const etag = artifactETag(id, version);
-    const cached = notModified(request, etag);
-    if (cached) return cached;
-    const html = await storage.artifacts.readHtml(id, version);
-    return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html, etag);
-  }
+  if (page && method === "GET") return artifactPage(request, storage, page[1], Number(page[2]));
 
   // Artifact metadata and the MCP proxy.
   const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone)?$/);
@@ -104,7 +96,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!name) return json({ error: "No such artifact" }, 404);
       const chat = exports.ChatAgent.getByName(name);
       if (artifact[2] === "/tools") {
-        const tools = await chat.artifactTools(id, Number(url.searchParams.get("version")));
+        const tools = await chat.artifactTools(id, Number(url.searchParams.get("version")), uid);
         return tools ? json(tools) : json({ error: "No such artifact version." }, 404);
       }
       const body = await readJson<ProxyRequest>(request);
@@ -119,7 +111,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     const meta = await storage.artifacts.readMeta(id);
     if (!meta) return json({ error: "No such artifact" }, 404);
     if (!artifact[2] && method === "GET") {
-      const { chatId: _chatId, ...visible } = meta;
+      // Not the chat it lives in, nor who owns it: only whether the viewer does.
+      const { chatId: _chatId, ownerUid: _ownerUid, ...visible } = meta;
       return json({ ...visible, isOwner: uid === meta.ownerUid } satisfies ArtifactView);
     }
     // A read-only Git token for the artifact's repo, for `git clone`. Only the owner gets one:
@@ -163,6 +156,16 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (files) return files;
 
   return json({ error: "Not found" }, 404);
+}
+
+/** One version of a published page. Versions never change, so a repeat view is a 304 without reading R2. */
+async function artifactPage(request: Request, storage: Storage, id: string, version: number): Promise<Response> {
+  if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
+  const etag = artifactETag(id, version);
+  const cached = notModified(request, etag);
+  if (cached) return cached;
+  const html = await storage.artifacts.readHtml(id, version);
+  return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html, etag);
 }
 
 function demoCookie(url: URL, value: string, maxAge: number): string {
