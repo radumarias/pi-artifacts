@@ -274,6 +274,7 @@ body.resizing iframe { pointer-events: none; }
 .step-hint { flex: 0 1 auto; min-width: 0; color: var(--muted); font: 12px/20px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .step-hint.prose { font: inherit; }
 .step.static .step-hint { flex: 1; white-space: normal; overflow-wrap: anywhere; }
+.step.error.static .step-hint { color: var(--error); }
 /* Opened, the body shows it all. */
 .step[open] .step-hint { display: none; }
 .step-status { flex: none; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }

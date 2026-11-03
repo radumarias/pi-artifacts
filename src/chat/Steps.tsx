@@ -195,7 +195,12 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
     <>
       <span className="step-icon">{icon}</span>
       <span className="step-label">{label}</span>
-      {hint && <span className={prose ? "step-hint prose" : "step-hint"}>{hint}</span>}
+      {hint && (
+        <span className={prose ? "step-hint prose" : "step-hint"}>
+          {/* Whole on a line with nothing to open, where its links are the only way to follow them. */}
+          {children ? hint : <Linkified text={hint} />}
+        </span>
+      )}
       {children && (
         <svg className="step-chevron" viewBox="0 0 16 16" aria-hidden="true">
           <path d="M6 4l4 4-4 4" />
@@ -285,8 +290,9 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
   // Only when it is needed: a result can be long, and finished steps re-render as the chat grows.
   const output = () => (result ? resultText(result) : live!.tools.get(call.id)?.output) ?? "";
-  // A call without arguments whose output is a short line (or which has none) is said on its line alone.
-  if (!check && !call.argumentsError && Object.keys(call.arguments ?? {}).length === 0) {
+  // A call without arguments whose output is a short line (or which has none) is said on its line alone. Not while the
+  // model writes it: its arguments are empty until the first one lands, and the line would turn into a panel then.
+  if (status !== "writing" && !check && !call.argumentsError && Object.keys(call.arguments ?? {}).length === 0) {
     const line = shortOutput(output());
     if (line !== undefined) return <Panel {...props} hint={line} />;
   }
