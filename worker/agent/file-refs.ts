@@ -1,5 +1,6 @@
 import { underUploads } from "../../shared/uploads.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
+import { normalisePath, PathError } from "../storage/paths.ts";
 import type { FileEntry } from "../storage/user-files.ts";
 
 /**
@@ -162,4 +163,26 @@ export function sandboxLayout(paths: readonly string[]): Map<string, string> {
     }
   }
   return layout;
+}
+
+/**
+ * Where a run's outputs are saved: each under `folder` (chatOutFolder), and those whose names the user's files do not
+ * allow, or that would land on one path, skipped with why.
+ */
+export function outputPaths<T>(folder: string, outputs: readonly { name: string; bytes: T }[]): { toSave: Map<string, T>; skipped: string[] } {
+  const toSave = new Map<string, T>();
+  const skipped: string[] = [];
+  for (const output of outputs) {
+    // A name the user's files do not allow must not throw away the run's output and the files already saved.
+    try {
+      // Names that differ only in what normalising trims ("a.csv" and "a.csv ") would overwrite each other.
+      const path = normalisePath(`${folder}${output.name}`);
+      if (toSave.has(path)) skipped.push(`${output.name} (same file as ${path})`);
+      else toSave.set(path, output.bytes);
+    } catch (error) {
+      if (!(error instanceof PathError)) throw error;
+      skipped.push(`${output.name} (${error.message})`);
+    }
+  }
+  return { toSave, skipped };
 }

@@ -268,7 +268,9 @@ internet. Each run is limited to 60 seconds. Files move like this:
   but without the leading `uploads/` (`uploads/q3/sales.csv` is `./files/q3/sales.csv`). Two files that would land on
   one path (`uploads/a.csv` and `a.csv`) refuse the run. One run takes at most 200 files and 25 MB (they reach the container in one RPC call, capped at 32 MiB).
 - **Out:** after the run, whatever the script wrote to `./out/` (top level only) is read back from the container and
-  saved through the same `UserFiles` as `out/<name>`, encrypted with the user's key.
+  saved through the same `UserFiles` as `out/<chatId>/<name>`, encrypted with the user's key. Each chat saves to its
+  own folder, so two chats of one user running at once never overwrite each other's outputs; the agent is told to keep
+  the files it writes with `files_write` there too.
 - **Between runs:** `./files` and `./out` start empty each run. Anything else in the working directory stays until
   the container stops, 10 minutes after the last run.
 

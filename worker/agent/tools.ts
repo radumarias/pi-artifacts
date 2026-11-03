@@ -16,11 +16,11 @@ import {
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome, plural } from "../../shared/util.ts";
 import { describeReport, type CheckReport } from "../artifacts/check.ts";
-import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
+import { chatOutFolder, FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, savedReport, wroteReport } from "../chat-traces.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import { draftId, literalPath, MAX_DRAFTS, normalisePath, PathError, type FileEntry, type UserFiles } from "../storage/index.ts";
+import { draftId, literalPath, MAX_DRAFTS, type FileEntry, type UserFiles } from "../storage/index.ts";
 import { applyEdits, checkInBrowser, draftCheck, draftLine, FailedChecks, publishChecked, validPage, type PublishInput, type PublishScope } from "./publish.ts";
-import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
+import { FileRefError, MAX_SANDBOX_BYTES, outputPaths, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
 /** What the tools need from the chat they run in. */
@@ -101,7 +101,9 @@ export function filesExtension(scope: ChatScope): Extension {
       }),
       defineTool({
         name: FILES_WRITE_TOOL,
-        description: "Write a UTF-8 text file into the user's files, replacing any file at that path.",
+        description:
+          "Write a UTF-8 text file into the user's files, replacing any file at that path. " +
+          `Keep files you make for this chat, such as a page you are drafting, in ${chatOutFolder(scope.chatId)}: the user's other chats write to their own folders under out/.`,
         parameters: Type.Object({ path: Type.String(), content: Type.String() }),
         execute: async (args) => {
           const path = await (await scope.files()).put(args.path, args.content, "text/plain; charset=utf-8");
@@ -117,10 +119,10 @@ export function filesIndexExtension(index: string): Extension {
   return defineExtension({ name: "files-index", sections: [section("user_files", () => index)] });
 }
 
-const SANDBOX_FILES =
+const sandboxFiles = (outFolder: string) =>
   "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
   "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/report.csv is ./files/out/report.csv). " +
-  "Anything written to ./out/ (top level, not subfolders) is saved back to the user's files under out/. " +
+  `Anything written to ./out/ (top level, not subfolders) is saved back to the user's files in this chat's folder, ${outFolder}. ` +
   "Each run starts with fresh ./files and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
   "Returns exit code, stdout and stderr.";
 
@@ -169,27 +171,14 @@ export function sandboxName(uid: string, chatId: string): string {
 
 /**
  * Copy the named user files in, run in this chat's sandbox, save ./out back to
- * the user's files. The files go through the user's UserFiles, so they are
+ * this chat's folder in the user's files (chatOutFolder). The files go through the user's UserFiles, so they are
  * decrypted on the way in and encrypted with the user's key on the way out.
  */
 async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
   const inputs = await sandboxInputs(files, refs ?? []);
   const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs);
-  const toSave = new Map<string, ArrayBuffer>();
-  const skipped = [];
-  for (const output of result.outputs) {
-    // A name the user's files do not allow must not throw away the run's output and the files already saved.
-    try {
-      // Names that differ only in what normalising trims ("a.csv" and "a.csv ") would overwrite each other.
-      const path = normalisePath(`${SANDBOX_OUT}${output.name}`);
-      if (toSave.has(path)) skipped.push(`${output.name} (same file as ${path})`);
-      else toSave.set(path, output.bytes);
-    } catch (error) {
-      if (!(error instanceof PathError)) throw error;
-      skipped.push(`${output.name} (${error.message})`);
-    }
-  }
+  const { toSave, skipped } = outputPaths(chatOutFolder(scope.chatId), result.outputs);
   const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
   const report = [
     inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,
@@ -208,12 +197,13 @@ const inputFiles = Type.Optional(
 );
 
 export function sandboxExtension(scope: ChatScope): Extension {
+  const aboutFiles = sandboxFiles(chatOutFolder(scope.chatId));
   return defineExtension({
     name: "sandbox",
     tools: [
       defineTool({
         name: RUN_PYTHON_TOOL,
-        description: `Run a Python 3.13 script (pandas and numpy installed) in this chat's isolated Linux sandbox: no internet, 60 s limit. ${SANDBOX_FILES}`,
+        description: `Run a Python 3.13 script (pandas and numpy installed) in this chat's isolated Linux sandbox: no internet, 60 s limit. ${aboutFiles}`,
         parameters: Type.Object({ code: Type.String(), files: inputFiles }),
         execute: async (args) => runInSandbox(scope, args.files, (sandbox, inputs) => sandbox.runPython(args.code, inputs)),
       }),
@@ -221,7 +211,7 @@ export function sandboxExtension(scope: ChatScope): Extension {
         name: RUN_BASH_TOOL,
         description:
           "Run a bash script in the same sandbox as run_python (Debian with coreutils, grep, sed, awk, tar, gzip, python3): no internet, so no package installs or downloads; 60 s limit. " +
-          `Runs as written; start with set -e to stop at the first failing command. ${SANDBOX_FILES}`,
+          `Runs as written; start with set -e to stop at the first failing command. ${aboutFiles}`,
         parameters: Type.Object({ script: Type.String(), files: inputFiles }),
         execute: async (args) => runInSandbox(scope, args.files, (sandbox, inputs) => sandbox.runBash(args.script, inputs)),
       }),

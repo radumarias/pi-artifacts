@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, underUploads, uploadBatches, uploadPath, uploadTargets } from "../shared/uploads.ts";
-import { FileRefError, filesIndex, MAX_SANDBOX_FILES, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
+import { FileRefError, filesIndex, MAX_SANDBOX_FILES, outputPaths, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath } from "../worker/storage/paths.ts";
@@ -237,5 +237,23 @@ describe("filesRoute", () => {
   it("leaves other routes alone", async () => {
     const { storage } = await setup();
     expect(await filesRoute(new Request("https://app.test/api/chats"), storage)).toBeUndefined();
+  });
+});
+
+describe("outputPaths", () => {
+  const output = (name: string) => ({ name, bytes: name });
+
+  it("saves a run's outputs under the chat's folder", () => {
+    const { toSave, skipped } = outputPaths("out/0123456789abcdef/", [output("budget.html"), output("chart.png")]);
+    expect([...toSave.keys()]).toEqual(["out/0123456789abcdef/budget.html", "out/0123456789abcdef/chart.png"]);
+    expect(skipped).toEqual([]);
+  });
+
+  it("skips names the user's files do not allow, and names that land on one path, keeping the rest", () => {
+    const { toSave, skipped } = outputPaths("out/c1/", [output("a.csv"), output("a.csv "), output("bad*name"), output("b.csv")]);
+    expect([...toSave.keys()]).toEqual(["out/c1/a.csv", "out/c1/b.csv"]);
+    expect(skipped).toHaveLength(2);
+    expect(skipped[0]).toBe("a.csv  (same file as out/c1/a.csv)");
+    expect(skipped[1]).toMatch(/^bad\*name \(/);
   });
 });
