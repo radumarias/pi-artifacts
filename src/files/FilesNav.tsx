@@ -4,6 +4,7 @@ import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, u
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
+import { useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
@@ -142,8 +143,18 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
   );
 });
 
-/** The sidebar's files: a folder tree, the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app. */
+const Chevron = () => (
+  <Icon size={14} box={16} stroke={1.8}>
+    <path d="M4 10l4-4 4 4" />
+  </Icon>
+);
+
+/**
+ * The sidebar's files, in a panel at its bottom that opens and closes (remembered in this browser): a folder tree,
+ * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
+ */
 export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
+  const [open, setOpen] = useStoredState("layout.filesOpen", true, (value) => typeof value === "boolean");
   const root = useMemo(() => tree(files), [files]);
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
@@ -152,27 +163,39 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
     if (picked.length) void upload(picked);
   };
   return (
-    <nav className="files">
-      <FolderView folder={root} depth={0} />
-      <div className="upload-actions">
-        <label className="upload" title="Pick one or more files">
-          Upload files
-          <input type="file" multiple hidden disabled={status?.busy} onChange={(e) => pick(e.target)} />
-        </label>
-        <label className="upload" title="Pick a folder; its layout is kept under uploads/">
-          Upload a folder
-          <input type="file" hidden disabled={status?.busy} ref={(input) => input?.setAttribute("webkitdirectory", "")} onChange={(e) => pick(e.target)} />
-        </label>
-      </div>
-      <small className={status?.error ? "upload-status error" : "upload-status"}>
-        {status ? (
-          <>
-            {status.busy && <span className="spinner" />} {status.text}
-          </>
-        ) : (
-          "Or drop files and folders anywhere."
-        )}
-      </small>
-    </nav>
+    <section className={open ? "files-panel open" : "files-panel"}>
+      <button type="button" className="files-panel-head" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? "Hide your files" : "Show your files"}>
+        Files <small>{files.length.toLocaleString("en")}</small>
+        {/* Closed, the panel still shows that an upload is going. */}
+        {!open && status?.busy && <span className="spinner" />}
+        <Chevron />
+      </button>
+      {open && (
+        <>
+          <nav className="files">
+            <FolderView folder={root} depth={0} />
+          </nav>
+          <div className="upload-actions">
+            <label className="upload" title="Pick one or more files">
+              Upload files
+              <input type="file" multiple hidden disabled={status?.busy} onChange={(e) => pick(e.target)} />
+            </label>
+            <label className="upload" title="Pick a folder; its layout is kept under uploads/">
+              Upload a folder
+              <input type="file" hidden disabled={status?.busy} ref={(input) => input?.setAttribute("webkitdirectory", "")} onChange={(e) => pick(e.target)} />
+            </label>
+          </div>
+          <small className={status?.error ? "upload-status error" : "upload-status"}>
+            {status ? (
+              <>
+                {status.busy && <span className="spinner" />} {status.text}
+              </>
+            ) : (
+              "Or drop files and folders anywhere."
+            )}
+          </small>
+        </>
+      )}
+    </section>
   );
 });
