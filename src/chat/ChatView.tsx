@@ -11,7 +11,7 @@ import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, PUBLISH_TOOL, type ChatMessageData, type ChatPeopleData, type PublishedDetails, type QueuedMessage } from "../../shared/protocol.ts";
 import { ChatCost, PromptCost } from "./Cost.tsx";
 import { SharePanel } from "./SharePanel.tsx";
-import { promptSpend } from "./spend.ts";
+import { promptSpend, totalTime } from "./spend.ts";
 import { useChat, waitingOnModel } from "./useChat.ts";
 import { Dictation } from "./Dictation.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -132,6 +132,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   }, [draft]);
 
   const prompts = useMemo(() => promptSpend(state.entries, state.busy), [state.entries, state.busy]);
+  const time = useMemo(() => totalTime(prompts.values()), [prompts]);
 
   const isOwner = people?.owner.uid === uid;
   const sendLabel = attachments.sending ? "Sending…" : "Send";
@@ -155,7 +156,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
           ))}
           {mine > 1 && `${others.length ? " · " : ""}Open in ${mine} of your windows`}
         </span>
-        <ChatCost usage={state.usage} />
+        <ChatCost usage={state.usage} time={time} />
         {people && (
           <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
             {isOwner ? "Share" : "People"}
