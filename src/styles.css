@@ -131,8 +131,19 @@ body.resizing iframe { pointer-events: none; }
 /* A file's name (an image's opens it in a new tab) and its download button; a folder's zip download sits at its summary's end. */
 .files .file-row { display: flex; align-items: center; border-radius: 6px; }
 .file-row:hover { background: var(--surface-2); }
-.file-row > :first-child { flex: 1; min-width: 0; }
-.sidebar .file-row > a:first-child:hover { background: none; text-decoration: underline; }
+.file-row > .file-name { flex: 1; min-width: 0; }
+.sidebar .file-row > a.file-name:hover { background: none; text-decoration: underline; }
+/* Search and select mode, above the tree. */
+.files-tools { display: flex; gap: 6px; padding: 2px 0 4px; }
+.files-tools input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 14px; }
+.files-tools button { padding: 4px 10px; font-size: 13px; }
+.files-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0 6px; font-size: 13px; }
+.files-selection > span { flex: 1; color: var(--muted); }
+.files-selection .button, .files-selection button { padding: 3px 10px; font-size: 13px; }
+.files-selection .upload-status { flex-basis: 100%; padding: 0; }
+.file-pick { flex: none; margin: 0 2px 0 6px; accent-color: var(--accent); }
+.file-folder > summary > .file-pick { margin: 0 4px 0 2px; vertical-align: -2px; }
+.files-empty { padding: 4px 8px; }
 .sidebar .file-action { display: inline-flex; flex: none; padding: 4px; margin-right: 2px; border-radius: 5px; color: var(--muted); opacity: 0; }
 .file-folder > summary > .file-action { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); }
 .file-row:hover .file-action, .file-folder > summary:hover > .file-action, .file-action:focus-visible { opacity: 1; }

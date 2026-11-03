@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { crc32 } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { api } from "../src/api.ts";
-import { MAX_ZIP_FILES, previewType } from "../shared/uploads.ts";
+import { commonFolder, MAX_ZIP_FILES, previewType, ZIP_ROUTE } from "../shared/uploads.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { UserFiles } from "../worker/storage/user-files.ts";
@@ -61,9 +61,9 @@ describe("zipStream", () => {
   it("stores each file with its name and CRC, readable by unzip", async () => {
     const zip = await bytes(
       zipStream([
-        { name: "q3/sales.csv", modified: new Date(Date.UTC(2026, 10, 3, 9, 30, 12)), open: async () => ({ size: 9, body: text("a,b\n1,2\n\n") }) },
-        { name: "q3/2024/empty.txt", modified: new Date(0), open: async () => ({ size: 0, body: text("") }) },
-        { name: "q3/gone.txt", modified: new Date(0), open: async () => null },
+        { name: "q3/sales.csv", open: async () => ({ modified: new Date(Date.UTC(2026, 10, 3, 9, 30, 12)), size: 9, body: text("a,b\n1,2\n\n") }) },
+        { name: "q3/2024/empty.txt", open: async () => ({ modified: new Date(0), size: 0, body: text("") }) },
+        { name: "q3/gone.txt", open: async () => null },
       ]),
     );
     expect(readZip(zip)).toEqual(
@@ -76,22 +76,22 @@ describe("zipStream", () => {
   });
 
   it("fails the stream when a file is not the size it said", async () => {
-    const zip = zipStream([{ name: "a.txt", modified: new Date(), open: async () => ({ size: 3, body: text("abcd") }) }]);
+    const zip = zipStream([{ name: "a.txt", open: async () => ({ modified: new Date(), size: 3, body: text("abcd") }) }]);
     await expect(bytes(zip)).rejects.toThrow(/changed/);
   });
 
   it("fails the stream when a file cannot be opened, and gives back a file opened ahead when the reader goes away", async () => {
     const failing = zipStream([
-      { name: "a.txt", modified: new Date(), open: async () => ({ size: 1, body: text("a") }) },
-      { name: "b.txt", modified: new Date(), open: async () => Promise.reject(new Error("R2 is down")) },
+      { name: "a.txt", open: async () => ({ modified: new Date(), size: 1, body: text("a") }) },
+      { name: "b.txt", open: async () => Promise.reject(new Error("R2 is down")) },
     ]);
     await expect(bytes(failing)).rejects.toThrow("R2 is down");
 
     let cancelled = false;
     const ahead = new ReadableStream<Uint8Array>({ cancel: () => void (cancelled = true) });
     const zip = zipStream([
-      { name: "a.txt", modified: new Date(), open: async () => ({ size: 1, body: text("a") }) },
-      { name: "b.txt", modified: new Date(), open: async () => ({ size: 1, body: ahead }) },
+      { name: "a.txt", open: async () => ({ modified: new Date(), size: 1, body: text("a") }) },
+      { name: "b.txt", open: async () => ({ modified: new Date(), size: 1, body: ahead }) },
     ]);
     const reader = zip.getReader();
     await reader.read();
@@ -103,7 +103,7 @@ describe("zipStream", () => {
   it("gives back the file being written when the reader goes away after its header", async () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({ cancel: () => void (cancelled = true) });
-    const reader = zipStream([{ name: "a.txt", modified: new Date(), open: async () => ({ size: 1, body }) }]).getReader();
+    const reader = zipStream([{ name: "a.txt", open: async () => ({ modified: new Date(), size: 1, body }) }]).getReader();
     await reader.read();
     await reader.cancel();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -163,6 +163,49 @@ describe("file and folder downloads", () => {
       ]),
     );
     expect(unzipAgrees(zip) ?? true).toBe(true);
+  });
+
+  async function pick(bucket: FakeBucket, fields: [string, string][]): Promise<Response> {
+    const files = new UserFiles(bucket.r2, "ada", await deriveUserKey(MASTER, "ada"));
+    const request = new Request(`https://app.test${ZIP_ROUTE}`, { method: "POST", body: new URLSearchParams(fields) });
+    return (await filesRoute(request, async () => files))!;
+  }
+
+  it("zips picked files and folders under the folder holding them, each file once", async () => {
+    const b = bucket();
+    b.objects.set("users/ada/files/out/report.json", "{}");
+    const response = await pick(b, [
+      ["file", "uploads/q3/sales.csv"],
+      ["folder", "uploads/q3/2024"],
+      ["file", "uploads/q3/2024/old sales.csv"],
+    ]);
+    expect(response.headers.get("content-disposition")).toBe('attachment; filename="q3.zip"');
+    expect(readZip(new Uint8Array(await response.arrayBuffer()))).toEqual(
+      new Map([
+        ["q3/2024/old sales.csv", "c,d\n"],
+        ["q3/sales.csv", "a,b\n"],
+      ]),
+    );
+    const across = await pick(b, [
+      ["file", "out/report.json"],
+      ["file", "uploads/q3/chart.png"],
+      ["file", "uploads/gone.csv"],
+    ]);
+    expect(across.headers.get("content-disposition")).toBe('attachment; filename="files.zip"');
+    expect([...readZip(new Uint8Array(await across.arrayBuffer())).keys()]).toEqual(["out/report.json", "uploads/q3/chart.png"]);
+  });
+
+  it("refuses an empty pick, one that climbs, or one of only missing files", async () => {
+    expect((await pick(bucket(), [])).status).toBe(400);
+    await expect(pick(bucket(), [["file", "../bob/files/secret.csv"]])).rejects.toThrow(/not allowed|Invalid/);
+    expect((await pick(bucket(), [["folder", "uploads/nope"]])).status).toBe(404);
+  });
+
+  it("names a pick after the deepest folder holding it all", () => {
+    expect(commonFolder(["uploads/q3/a.csv", "uploads/q3/2024"])).toBe("uploads/q3");
+    expect(commonFolder(["uploads/q3/a.csv", "uploads/q4/b.csv"])).toBe("uploads");
+    expect(commonFolder(["uploads/a.csv", "out/b.json"])).toBe("");
+    expect(commonFolder(["uploads"])).toBe("");
   });
 
   it("zips a folder of exactly the most files a zip holds, and refuses one more", async () => {

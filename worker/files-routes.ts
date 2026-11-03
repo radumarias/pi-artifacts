@@ -1,5 +1,17 @@
 import { baseName } from "../shared/attachments.ts";
-import { FILE_ROUTE, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, MAX_ZIP_FILES, previewType, uploadTargets, ZIP_ROUTE, zipRefusal } from "../shared/uploads.ts";
+import {
+  commonFolder,
+  FILE_ROUTE,
+  MAX_FILE_BYTES,
+  MAX_FILES_PER_UPLOAD,
+  MAX_UPLOAD_BYTES,
+  MAX_ZIP_BYTES,
+  MAX_ZIP_FILES,
+  previewType,
+  uploadTargets,
+  ZIP_ROUTE,
+  zipRefusal,
+} from "../shared/uploads.ts";
 import { formatBytes } from "../shared/util.ts";
 import { json } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
@@ -19,6 +31,7 @@ export async function filesRoute(request: Request, userFiles: () => Promise<User
   const { pathname } = new URL(request.url);
   if (request.method === "GET" && pathname.startsWith(FILE_ROUTE)) return serveFile(await userFiles(), urlPath(pathname.slice(FILE_ROUTE.length)));
   if (request.method === "GET" && pathname.startsWith(ZIP_ROUTE)) return serveZip(await userFiles(), urlPath(pathname.slice(ZIP_ROUTE.length)));
+  if (request.method === "POST" && pathname === ZIP_ROUTE) return serveSelection(request, await userFiles());
   if (pathname !== "/api/files") return undefined;
   if (request.method === "GET") return json(await (await userFiles()).list());
   if (request.method !== "POST") return undefined;
@@ -36,7 +49,8 @@ export async function storeUpload(request: Request, userFiles: () => Promise<Use
   const form = await request.formData();
   const files = form.getAll("file");
   const paths = form.getAll("path");
-  if (files.length === 0 || !files.every((file): file is File => file instanceof File)) return json({ error: "Expected one or more file fields" }, 400);
+  if (files.length === 0 || !files.every((file): file is File => file instanceof File))
+    return json({ error: "Expected one or more file fields" }, 400);
   if (files.length > MAX_FILES_PER_UPLOAD) return json({ error: `Upload at most ${MAX_FILES_PER_UPLOAD} files at a time.` }, 413);
   const large = files.find((file) => file.size > MAX_FILE_BYTES);
   if (large) return json({ error: `${large.name} is over ${formatBytes(MAX_FILE_BYTES)}; files are limited to that.` }, 413);
@@ -109,17 +123,62 @@ async function serveZip(files: UserFiles, folder: string): Promise<Response> {
     entries.reduce((sum, entry) => sum + entry.size, 0),
   );
   if (refusal) return json({ error: `${folder}: ${refusal}` }, 413);
-  const name = baseName(folder);
-  const inside = folder.length + 1;
+  return zipResponse(
+    files,
+    folder,
+    entries.map((entry) => entry.path),
+  );
+}
+
+/** What a selection's form may weigh: its paths, at most MAX_ZIP_FILES of them. */
+const MAX_SELECTION_FORM = 1024 * 1024;
+
+/**
+ * Picked files and folders as one zip: a form (posted by the sidebar into a
+ * hidden frame, so the browser saves the answer) with a `file` field per file
+ * and a `folder` field per folder. The zip is named after the folder holding
+ * them all, which is its root, as for one folder ("q3.zip" with "q3/sales.csv"
+ * and "q3/2024/…"); with nothing in common it is "files.zip" with the top
+ * folders at its root. It reads only, and only the signed-in user's files, so
+ * another site posting the form gets nothing it can read.
+ */
+async function serveSelection(request: Request, files: UserFiles): Promise<Response> {
+  if (Number(request.headers.get("content-length")) > MAX_SELECTION_FORM) return json({ error: "Too many files picked." }, 413);
+  const form = await request.formData().catch(() => null);
+  if (!form) return json({ error: "Expected a form of file and folder fields." }, 400);
+  const fields = (name: string) => form.getAll(name).map((value) => (typeof value === "string" ? normalisePath(value) : ""));
+  const picked = { files: fields("file"), folders: fields("folder") };
+  if (picked.files.length + picked.folders.length === 0) return json({ error: "Pick at least one file or folder." }, 400);
+  if (picked.files.length + picked.folders.length > MAX_ZIP_FILES) return json({ error: zipRefusal(MAX_ZIP_FILES + 1, 0) }, 413);
+  const listed = await Promise.all(picked.folders.map((folder) => files.list(folder, MAX_ZIP_FILES + 1)));
+  // A file or folder inside a picked folder is in it once; files' sizes count when they are read (zipStream's maxBytes).
+  const paths = [...new Set([...listed.flat().map((entry) => entry.path), ...picked.files])].sort();
+  if (paths.length === 0) return json({ error: "No such files" }, 404);
+  const refusal = zipRefusal(
+    paths.length,
+    listed.flat().reduce((sum, entry) => sum + entry.size, 0),
+  );
+  if (refusal) return json({ error: refusal }, 413);
+  const root = commonFolder([...picked.files, ...picked.folders]);
+  return zipResponse(files, root, paths);
+}
+
+/**
+ * `paths` as a zip named after `root` (the folder holding them all), with
+ * that folder at its root; "files.zip" with the paths as they are when `root`
+ * is empty. Each file is read when its turn comes; a missing one is left out.
+ */
+function zipResponse(files: UserFiles, root: string, paths: readonly string[]): Response {
+  const name = root ? baseName(root) : "files";
   const zip = zipStream(
-    entries.map((entry) => ({
-      name: `${name}/${entry.path.slice(inside)}`,
-      modified: entry.uploaded,
+    paths.map((path) => ({
+      name: root ? `${name}/${path.slice(root.length + 1)}` : path,
       open: async () => {
-        const object = await files.get(entry.path);
-        return object && { size: object.size, body: object.body };
+        const object = await files.get(path);
+        return object && { size: object.size, modified: object.uploaded, body: object.body };
       },
     })),
+    { maxBytes: MAX_ZIP_BYTES },
   );
   return new Response(zip, {
     headers: { ...SERVED_HEADERS, "content-type": "application/zip", "content-disposition": `attachment; filename="${name}.zip"` },

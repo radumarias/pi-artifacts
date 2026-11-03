@@ -145,3 +145,12 @@ export function zipRefusal(count: number, bytes: number): string | undefined {
   if (bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download its folders one at a time.`;
   return undefined;
 }
+
+/** The deepest folder holding all of `paths` (files or folders), or "" when only the top level does. */
+export function commonFolder(paths: readonly string[]): string {
+  const parents = paths.map((path) => path.split("/").slice(0, -1));
+  const first = parents[0] ?? [];
+  let depth = 0;
+  while (depth < first.length && parents.every((parent) => parent[depth] === first[depth])) depth++;
+  return first.slice(0, depth).join("/");
+}

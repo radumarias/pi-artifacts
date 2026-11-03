@@ -1,6 +1,6 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { baseName } from "../../shared/attachments.ts";
-import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, zipRefusal } from "../../shared/uploads.ts";
+import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, ZIP_ROUTE, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -92,8 +92,47 @@ const DownloadIcon = () => (
   </Icon>
 );
 
-/** Re-renders only when its folder changes: tree() keeps a folder's object while the files stay the same. */
-const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
+type Kind = "file" | "folder";
+
+/** What is picked for download, while the panel is in select mode. */
+interface Selection {
+  picked: ReadonlyMap<string, Kind>;
+  toggle(path: string, kind: Kind): void;
+}
+
+/** Null outside select mode: the tree then shows no checkboxes. */
+const SelectionContext = createContext<Selection | null>(null);
+
+/** Whether a folder above `path` is picked, which picks `path` too. */
+function inPickedFolder(picked: ReadonlyMap<string, Kind>, path: string): boolean {
+  for (let slash = path.indexOf("/"); slash !== -1; slash = path.indexOf("/", slash + 1)) {
+    if (picked.get(path.slice(0, slash)) === "folder") return true;
+  }
+  return false;
+}
+
+/** A file's or folder's checkbox in select mode; checked and fixed when a folder above it is picked. */
+function Pick({ path, kind }: { path: string; kind: Kind }) {
+  const selection = useContext(SelectionContext);
+  if (!selection) return null;
+  const inside = inPickedFolder(selection.picked, path);
+  return (
+    <input
+      type="checkbox"
+      className="file-pick"
+      checked={inside || selection.picked.has(path)}
+      disabled={inside}
+      onChange={() => selection.toggle(path, kind)}
+      aria-label={`Pick ${baseName(path)}`}
+    />
+  );
+}
+
+/**
+ * A folder's subfolders and files. Re-renders only when its folder changes (tree() keeps a folder's object while the
+ * files stay the same) or the selection does. While searching, `expand` opens every folder, so the matches show.
+ */
+const FolderView = memo(function FolderView({ folder, depth, expand }: { folder: Folder; depth: number; expand: boolean }) {
   return (
     <>
       {[...folder.folders.values()].map((sub) => {
@@ -101,8 +140,9 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
         const refusal = zipRefusal(sub.count, sub.bytes);
         return (
           // Top-level folders (uploads/, out/) start open; folders inside them start closed.
-          <details key={sub.path} className="file-folder" open={depth === 0}>
+          <details key={sub.path} className="file-folder" open={depth === 0 || expand}>
             <summary title={sub.path}>
+              <Pick path={sub.path} kind="folder" />
               {sub.name}/ <small>{sub.count}</small>
               {/* Without an href when the folder is too big to zip, so it says why and does nothing; without preventDefault its click would open or close the folder. */}
               <a
@@ -116,7 +156,7 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
                 <DownloadIcon />
               </a>
             </summary>
-            <FolderView folder={sub} depth={depth + 1} />
+            <FolderView folder={sub} depth={depth + 1} expand={expand} />
           </details>
         );
       })}
@@ -125,13 +165,16 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
         const title = `${file.path} · ${formatBytes(file.size)}`;
         return (
           <div key={file.path} className="file-row">
+            <Pick path={file.path} kind="file" />
             {previewType(file.path) ? (
               // An image opens in a new tab to look at; the Worker serves it so nothing in it can run.
-              <a href={api.fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
+              <a className="file-name" href={api.fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
                 {name}
               </a>
             ) : (
-              <span title={title}>{name}</span>
+              <span className="file-name" title={title}>
+                {name}
+              </span>
             )}
             <a className="file-action" href={api.fileUrl(file.path)} download={name} title={`Download ${name}`}>
               <DownloadIcon />
@@ -143,6 +186,73 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
   );
 });
 
+/** The frame a picked set's zip downloads into: the page stays, and an error the Worker answers lands there to be read. */
+const DOWNLOAD_FRAME = "files-download";
+
+/**
+ * Select mode's bar: how much is picked and its download. One file or folder downloads as it does from the tree; more
+ * go as one zip, posted into a hidden frame (a form, since a long pick would not fit a URL).
+ */
+function SelectionBar({ files, picked, onDone }: { files: readonly FileInfo[]; picked: ReadonlyMap<string, Kind>; onDone: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  // What the zip would hold, from the sidebar's listing (the Worker checks again).
+  const refusal = useMemo(() => {
+    const held = files.filter((file) => picked.has(file.path) || inPickedFolder(picked, file.path));
+    return zipRefusal(
+      held.length,
+      held.reduce((sum, file) => sum + file.size, 0),
+    );
+  }, [files, picked]);
+  const [only] = picked.size === 1 ? picked : [];
+  return (
+    <div className="files-selection">
+      <span>{picked.size ? `${picked.size} picked` : "Pick files and folders"}</span>
+      {only ? (
+        <a
+          className="button"
+          href={only[1] === "file" ? api.fileUrl(only[0]) : api.folderZipUrl(only[0])}
+          download={only[1] === "file" ? baseName(only[0]) : `${baseName(only[0])}.zip`}
+        >
+          Download
+        </a>
+      ) : (
+        <button
+          type="submit"
+          form="files-zip"
+          disabled={!picked.size || !!refusal}
+          title={refusal ?? "Download them as one zip"}
+          onClick={() => setError(null)}
+        >
+          Download
+        </button>
+      )}
+      <button type="button" onClick={onDone}>
+        Done
+      </button>
+      {error && <small className="upload-status error">{error}</small>}
+      <form id="files-zip" method="post" action={ZIP_ROUTE} target={DOWNLOAD_FRAME} hidden>
+        {[...picked].map(([path, kind]) => (
+          <input key={path} type="hidden" name={kind} value={path} />
+        ))}
+      </form>
+      {/* A saved zip loads nothing here; an error page does, and says why. */}
+      <iframe
+        name={DOWNLOAD_FRAME}
+        title="Downloads"
+        hidden
+        onLoad={(event) => {
+          try {
+            const text = event.currentTarget.contentDocument?.body?.textContent;
+            if (text) setError((JSON.parse(text) as { error?: string }).error ?? text);
+          } catch {
+            // Not readable or not JSON: nothing to say.
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 const Chevron = () => (
   <Icon size={14} box={16} stroke={1.8}>
     <path d="M4 10l4-4 4 4" />
@@ -153,9 +263,36 @@ const Chevron = () => (
  * The sidebar's files, in a panel at its bottom that opens and closes (remembered in this browser): a folder tree,
  * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
  */
-export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
+export const FilesNav = memo(function FilesNav({
+  files,
+  status,
+  upload,
+}: {
+  files: readonly FileInfo[];
+  status: UploadStatus | null;
+  upload: (picked: Picked[]) => Promise<void>;
+}) {
   const [open, setOpen] = useStoredState("layout.filesOpen", true, (value) => typeof value === "boolean");
-  const root = useMemo(() => tree(files), [files]);
+  const [query, setQuery] = useState("");
+  const search = query.trim().toLowerCase();
+  const shown = useMemo(() => (search ? files.filter((file) => file.path.toLowerCase().includes(search)) : files), [files, search]);
+  const root = useMemo(() => tree(shown), [shown]);
+  const [picked, setPicked] = useState<ReadonlyMap<string, Kind> | null>(null);
+  const selection = useMemo<Selection | null>(
+    () =>
+      picked && {
+        picked,
+        toggle: (path, kind) =>
+          setPicked((before) => {
+            const next = new Map(before);
+            if (next.delete(path)) return next;
+            // A picked folder holds what is under it; picks inside it go.
+            if (kind === "folder") for (const key of next.keys()) if (key.startsWith(`${path}/`)) next.delete(key);
+            return next.set(path, kind);
+          }),
+      },
+    [picked],
+  );
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
     // Cleared, so picking the same files again (after changing them) uploads them again.
@@ -164,7 +301,13 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
   };
   return (
     <section className={open ? "files-panel open" : "files-panel"}>
-      <button type="button" className="files-panel-head" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? "Hide your files" : "Show your files"}>
+      <button
+        type="button"
+        className="files-panel-head"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        title={open ? "Hide your files" : "Show your files"}
+      >
         Files <small>{files.length.toLocaleString("en")}</small>
         {/* Closed, the panel still shows that an upload is going. */}
         {!open && status?.busy && <span className="spinner" />}
@@ -172,8 +315,20 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
       </button>
       {open && (
         <>
+          <div className="files-tools">
+            <input type="search" placeholder="Search files" aria-label="Search files" value={query} onChange={(e) => setQuery(e.target.value)} />
+            {!picked && (
+              <button type="button" onClick={() => setPicked(new Map())} title="Pick files and folders to download together">
+                Select
+              </button>
+            )}
+          </div>
+          {picked && <SelectionBar files={files} picked={picked} onDone={() => setPicked(null)} />}
           <nav className="files">
-            <FolderView folder={root} depth={0} />
+            <SelectionContext.Provider value={selection}>
+              <FolderView folder={root} depth={0} expand={!!search} />
+            </SelectionContext.Provider>
+            {search && shown.length === 0 && <small className="files-empty">No files match.</small>}
           </nav>
           <div className="upload-actions">
             <label className="upload" title="Pick one or more files">
@@ -182,7 +337,13 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
             </label>
             <label className="upload" title="Pick a folder; its layout is kept under uploads/">
               Upload a folder
-              <input type="file" hidden disabled={status?.busy} ref={(input) => input?.setAttribute("webkitdirectory", "")} onChange={(e) => pick(e.target)} />
+              <input
+                type="file"
+                hidden
+                disabled={status?.busy}
+                ref={(input) => input?.setAttribute("webkitdirectory", "")}
+                onChange={(e) => pick(e.target)}
+              />
             </label>
           </div>
           <small className={status?.error ? "upload-status error" : "upload-status"}>
