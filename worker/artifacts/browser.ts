@@ -11,7 +11,7 @@ const ALLOWED_DOMAINS = [...SCRIPT_HOSTS.map((url) => new URL(url).hostname), "f
  */
 const IDLE_MS = 15_000;
 
-/** Why there is no browser to check with: the check is skipped, and the page is published unchecked. */
+/** Why there is no browser to check with: the check is skipped, and the page stays a draft (published unchecked only in local development). */
 export class BrowserUnavailable extends Error {}
 
 /**

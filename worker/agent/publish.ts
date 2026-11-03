@@ -150,6 +150,14 @@ export async function publishChecked(scope: PublishScope, input: PublishInput): 
   };
   if (prior && passed(prior)) return publish({});
   const checked = await checkInBrowser(scope, { html: page.html, manifest: page.manifest });
-  if (checked.report ? !checked.report.errors.length : scope.publishUnchecked) return publish(checked);
+  if (checked.report ? !checked.report.errors.length : scope.publishUnchecked) {
+    try {
+      return await publish(checked);
+    } catch (error) {
+      // Keep the page and how its check went, so publishing it again (by its id, as the draft) needs no second check.
+      await drafts.save(page, draftCheck(checked.report)).catch((e: unknown) => console.error("draft:", errorMessage(e)));
+      throw error;
+    }
+  }
   return { ...checked, draft: await drafts.save(page, draftCheck(checked.report)) };
 }

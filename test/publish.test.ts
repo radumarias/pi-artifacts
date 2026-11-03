@@ -100,6 +100,16 @@ describe("publishChecked", () => {
     expect(versions).toHaveLength(2);
   });
 
+  it("keeps a page that passed here as a passed draft when its version could not be stored", async () => {
+    const { scope, checked, drafts } = chat(errorsIn);
+    scope.artifacts.publishVersion = async () => {
+      throw new Error("push failed");
+    };
+    await expect(publishChecked(scope, { title: "Map", html: fixed })).rejects.toThrow("push failed");
+    expect(await drafts.summary(await draftId(fixed, {}))).toMatchObject({ errors: 0 });
+    expect(checked).toEqual([fixed]);
+  });
+
   it("publishes by check id only a draft that passed", async () => {
     const { scope, versions, drafts } = chat(errorsIn);
     await expect(publishChecked(scope, { title: "Map", checkId: "0000000000000001" })).rejects.toThrow("No draft");

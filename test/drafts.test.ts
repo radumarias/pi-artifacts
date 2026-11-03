@@ -55,6 +55,13 @@ describe("ChatDrafts", () => {
     expect(bucket.objects.has(`users/ada/drafts/${CHAT}/${draftId(1)}.json`)).toBe(false);
   });
 
+  it("loses no draft to saves and removes made at once, as a round's tool calls are", async () => {
+    const { drafts } = await setup();
+    await drafts.save(page(9), failed);
+    await Promise.all([drafts.save(page(1), failed), drafts.save(page(2), failed), drafts.remove(draftId(9)), drafts.save(page(3), failed)]);
+    expect((await drafts.list()).map((entry) => entry.id).sort()).toEqual([draftId(1), draftId(2), draftId(3)]);
+  });
+
   it("removes a published draft, and deletes everything of the chat's", async () => {
     const { bucket, drafts } = await setup();
     await drafts.save(page(1), failed);

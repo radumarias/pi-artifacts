@@ -41,13 +41,16 @@ export const passed = (draft: Pick<DraftCheck, "errors">) => draft.errors === 0;
 
 /**
  * One chat's drafts, in its owner's folder and encrypted with the owner's key like their files (UserFiles), but kept
- * apart from them: users/<uid>/drafts/<chatId>/<id>.json, with index.json listing them. A chat's object makes one tool
- * call at a time, so the index's read-modify-write does not race.
+ * apart from them: users/<uid>/drafts/<chatId>/<id>.json, with index.json listing them. The agent runs a round's tool
+ * calls at once (pi's default `toolExecution` is "parallel"), so saves and removes take turns (#serial): the index's
+ * read-modify-write would otherwise lose a draft. A chat's object keeps one ChatDrafts for this (ChatScope.drafts).
  */
 export class ChatDrafts {
   readonly #bucket: R2Bucket;
   readonly #prefix: string;
   readonly #key: ArrayBuffer;
+  /** The last write in line: each save or remove starts once it has settled. */
+  #writes: Promise<unknown> = Promise.resolve();
 
   /** Use `Storage.chatDrafts(uid, chatId)`; the uid must come from a verified identity. */
   constructor(bucket: R2Bucket, uid: string, chatId: string, key: ArrayBuffer) {
@@ -79,6 +82,10 @@ export class ChatDrafts {
    */
   async save(page: DraftPage, check: DraftCheck | null): Promise<Draft> {
     if (!DRAFT_ID.test(page.id)) throw new Error("Invalid draft id.");
+    return this.#serial(() => this.#save(page, check));
+  }
+
+  async #save(page: DraftPage, check: DraftCheck | null): Promise<Draft> {
     const index = await this.#index();
     const before = index.find((entry) => entry.id === page.id);
     const draft: Draft = {
@@ -101,9 +108,18 @@ export class ChatDrafts {
   /** Drop a draft: it was published. A draft that is not there is skipped. */
   async remove(id: string): Promise<void> {
     if (!DRAFT_ID.test(id)) return;
-    const index = await this.#index();
-    const kept = index.filter((entry) => entry.id !== id);
-    await Promise.all([kept.length < index.length && this.#putJson(this.#indexKey, kept), this.#bucket.delete(this.#draftKey(id))]);
+    await this.#serial(async () => {
+      const index = await this.#index();
+      const kept = index.filter((entry) => entry.id !== id);
+      await Promise.all([kept.length < index.length && this.#putJson(this.#indexKey, kept), this.#bucket.delete(this.#draftKey(id))]);
+    });
+  }
+
+  /** Run `write` once the writes before it settled, failed or not. */
+  #serial<T>(write: () => Promise<T>): Promise<T> {
+    const run = this.#writes.then(write);
+    this.#writes = run.catch(() => {});
+    return run;
   }
 
   /** Every draft of the chat and its index, for deleting the chat; by listing, so a draft the index lost goes too. */
