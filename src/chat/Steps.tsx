@@ -229,27 +229,34 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
 }
 
 /** Up to this many characters, a thought or a one-line output shows whole on its line, with nothing to open. */
-export const SHORT_DETAIL = 200;
+const SHORT_DETAIL = 200;
 
 /** The first sentence, when it ends within the short length: a few words at least, and not at an ellipsis. */
-const FIRST_SENTENCE = /^.{12,198}?[^.][.!?:](?=\s|$)/;
+const FIRST_SENTENCE = new RegExp(`^.{12,${SHORT_DETAIL - 2}}?[^.][.!?:](?=\\s|$)`);
 
-/**
- * A thought on one line: the whole of it when it is short (`whole`), else its first sentence, which the line cuts to
- * fit, and the rest behind the arrow.
- */
-export function thoughtLine(text: string): { line: string; whole: boolean } {
-  // Only the head: this runs on every streamed token.
-  const flat = text.slice(0, 2_000).trim().replace(/\s+/g, " ");
-  if (text.trim().length <= SHORT_DETAIL) return { line: flat, whole: true };
-  const sentence = FIRST_SENTENCE.exec(flat)?.[0];
-  return { line: sentence ?? flat.slice(0, SHORT_DETAIL), whole: false };
+/** `text` trimmed, when it is short enough to show whole. Measured raw first: this runs on every streamed chunk. */
+function short(text: string): string | undefined {
+  if (text.length > 2 * SHORT_DETAIL) return undefined;
+  const trimmed = text.trim();
+  return trimmed.length <= SHORT_DETAIL ? trimmed : undefined;
 }
 
-/** An output that is one short line, said on the step's line itself. */
-export function shortOutput(output: string | undefined): string | undefined {
-  const line = output?.trim();
-  return line && line.length <= SHORT_DETAIL && !line.includes("\n") ? line : undefined;
+/**
+ * A thought on one line: the whole of it when it is short (`whole`; words, so its line breaks may go), else its first
+ * sentence, which the line cuts to fit, and the rest behind the arrow.
+ */
+export function thoughtLine(text: string): { line: string; whole: boolean } {
+  const whole = short(text);
+  if (whole !== undefined) return { line: whole.replace(/\s+/g, " "), whole: true };
+  // Only the head: the line shows a sentence at most.
+  const flat = text.slice(0, 3 * SHORT_DETAIL).trim().replace(/\s+/g, " ");
+  return { line: FIRST_SENTENCE.exec(flat)?.[0] ?? flat.slice(0, SHORT_DETAIL), whole: false };
+}
+
+/** An output said on the step's line itself: short, and one line (its line breaks may matter). Empty when there is none. */
+export function shortOutput(output: string): string | undefined {
+  const line = short(output);
+  return line !== undefined && !line.includes("\n") ? line : undefined;
 }
 
 function Section({ label, text, error }: { label: string; text: string; error?: boolean }) {
@@ -274,19 +281,19 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
   const { text, icon, tone } = STATUS[status];
   const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
-  const label = stepLabel(call.name);
-  const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label, status: text + time };
+  const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label: stepLabel(call.name), status: text + time };
   const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
+  // Only when it is needed: a result can be long, and finished steps re-render as the chat grows.
+  const output = () => (result ? resultText(result) : live!.tools.get(call.id)?.output) ?? "";
   // A call without arguments whose output is a short line (or which has none) is said on its line alone.
   if (!check && !call.argumentsError && Object.keys(call.arguments ?? {}).length === 0) {
-    const output = result ? resultText(result) : live!.tools.get(call.id)?.output;
-    const short = output ? shortOutput(output) : "";
-    if (short !== undefined) return <Panel {...props} hint={short} />;
+    const line = shortOutput(output());
+    if (line !== undefined) return <Panel {...props} hint={line} />;
   }
   return (
     <Panel {...props} hint={stepHint(call.name, call.arguments)}>
       {() => {
-        const output = result ? resultText(result) : live!.tools.get(call.id)?.output;
+        const shown = output();
         return (
           <>
             {check && <CheckShot check={check} />}
@@ -294,8 +301,8 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
               <Section key={i} {...section} />
             ))}
             {call.argumentsError && <Section label="Invalid arguments" text={call.argumentsError} error />}
-            {output ? (
-              <Section label={status === "error" ? "Error" : "Output"} text={output} error={status === "error"} />
+            {shown ? (
+              <Section label={status === "error" ? "Error" : "Output"} text={shown} error={status === "error"} />
             ) : (
               status === "stopped" && <p className="step-note">Stopped before it finished.</p>
             )}

@@ -272,7 +272,7 @@ body.resizing iframe { pointer-events: none; }
 .step-label { flex: none; font-weight: 500; white-space: nowrap; }
 /* Cut to one line, except on a step that has nothing to open, where it is the whole detail. */
 .step-hint { flex: 0 1 auto; min-width: 0; color: var(--muted); font: 12px/20px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.step-hint.prose { font: 13px/20px system-ui, -apple-system, "Segoe UI", sans-serif; }
+.step-hint.prose { font: inherit; }
 .step.static .step-hint { flex: 1; white-space: normal; overflow-wrap: anywhere; }
 /* Opened, the body shows it all. */
 .step[open] .step-hint { display: none; }

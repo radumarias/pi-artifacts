@@ -130,6 +130,7 @@ describe("thought step", () => {
 
   it("takes an output as short only when it is one line", () => {
     expect(shortOutput(" 2 files \n")).toBe("2 files");
+    expect(shortOutput(" ")).toBe("");
     expect(shortOutput("a\nb")).toBeUndefined();
     expect(shortOutput("x".repeat(201))).toBeUndefined();
   });
