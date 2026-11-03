@@ -4,7 +4,7 @@ import { errorMessage } from "../shared/util.ts";
 import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { filesRoute } from "./files-routes.ts";
-import { json } from "./http.ts";
+import { json, readJson } from "./http.ts";
 import { chatRoute } from "./chat-routes.ts";
 import { mcpRoute } from "./mcp-routes.ts";
 import { modelCatalog } from "./models.ts";
@@ -107,7 +107,7 @@ async function route(request: Request, env: Env): Promise<Response> {
         const tools = await chat.artifactTools(id, Number(url.searchParams.get("version")));
         return tools ? json(tools) : json({ error: "No such artifact version." }, 404);
       }
-      const body = await request.json<ProxyRequest>();
+      const body = await readJson<ProxyRequest>(request);
       if (typeof body?.server !== "string" || typeof body.tool !== "string" || !Number.isInteger(body.version) || !["read", "call"].includes(body.mode)) {
         return json({ ok: false, error: { code: "bad_request", message: "Expected {version, mode, server, tool, input}." } }, 400);
       }
