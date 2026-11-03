@@ -56,7 +56,12 @@ button.danger { background: var(--error); color: var(--surface); border-color: t
   /* One row as tall as the viewport: the columns scroll inside, never the page. */
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  /* Positioned, so absolutely placed descendants (the thinking indicator's screen-reader text) stay inside: placed against
+     the page, one far down a long transcript made the page scroll the whole app away. Clip, unlike hidden, can't be
+     scrolled by script or focus either (hidden first, for browsers without clip). */
+  position: relative;
   overflow: hidden;
+  overflow: clip;
 }
 .workspace.with-preview { grid-template-columns: var(--sidebar-w, 240px) 6px minmax(320px, var(--chat-w, 40%)) 6px minmax(360px, 1fr); }
 
