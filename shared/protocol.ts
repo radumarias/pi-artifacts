@@ -149,7 +149,7 @@ export interface ChatDeletion {
   title: string;
   /** Published from this chat: deleted with it, and their links stop working. */
   artifacts: { id: string; title: string }[];
-  /** The owner's files attached to its messages or saved by its agent, that are still there. Deleted only when asked. */
+  /** The owner's files attached to its messages or saved by its agent, that are still there. Only those the owner sends back with the DELETE are deleted. */
   files: string[];
   /** How many people it is shared with: they lose it at once. */
   members: number;

@@ -575,32 +575,40 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * Delete the chat for good, for its owner: everyone's sockets close and it leaves the members' sidebars; its
-   * artifacts, its sandbox and, when `withFiles`, the files its messages attached or its agent saved go; then everything
-   * this object stores (the conversation, its cost, members and invites), leaving only a mark that it was deleted. The
-   * Worker then takes it off the owner's list. Each step can run again, so after a failure the owner deletes it again.
+   * artifacts and its sandbox go, and of the files its messages attached or its agent saved, those the owner confirmed
+   * (`files`, as deletionPreview listed them); then everything this object stores (the conversation, its cost, members
+   * and invites), leaving only a mark that it was deleted. The Worker then takes it off the owner's list. Each step can
+   * run again, so after a failure the owner deletes it again.
    */
-  async deleteChat(by: Person, { withFiles }: { withFiles: boolean }): Promise<ChatRefusal | null> {
+  async deleteChat(by: Person, { files }: { files: readonly string[] }): Promise<ChatRefusal | null> {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
     this.#gone = true;
+    let disposed = false;
     try {
-      // Nothing may publish or save while its traces are read.
+      // Nothing may publish or save while its traces are read: abort resolves once the run's tools have stopped.
       await this.harness.abort().catch((error: unknown) => console.error("delete, abort:", errorMessage(error)));
       const traces = await this.#traces();
+      // Only files the owner was shown, and only this chat's: never one the preview left out, nor any other path sent.
+      const confirmed = new Set(files);
+      const toDelete = traces.files.filter((path) => confirmed.has(path));
       const members = this.members.list();
       this.sockets.disconnect();
       await Promise.all([
         ...members.map((member) => this.#index(member.uid).removeSharedChat(this.chatId, this.uid)),
         // The store checks each is this chat's: the transcript's ids come from tool results.
         ...traces.artifacts.map((id) => this.storage.artifacts.delete(id, this.uid, this.chatId)),
-        withFiles && traces.files.length && this.scope.files().then((files) => files.delete(traces.files)),
+        toDelete.length && this.scope.files().then((store) => store.delete(toDelete)),
         this.env.SANDBOX_ENABLED === "true" && exports.Sandbox.getByName(sandboxName(this.uid, this.chatId)).destroy(),
       ]);
       await this.lifecycle.disableAlarms();
       await this.lifecycle.dispose();
+      disposed = true;
       await this.ctx.storage.deleteAll();
       this.ctx.storage.kv.put(GONE_KEY, true);
     } catch (error) {
       this.#gone = false;
+      // A disposed lifecycle cannot serve the chat again: start afresh from what is still stored.
+      if (disposed) setTimeout(() => this.ctx.abort(errorMessage(error)), 0);
       throw error;
     }
     // Drop everything held in memory; should anything wake the object again, the mark keeps it shut.

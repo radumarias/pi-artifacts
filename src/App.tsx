@@ -402,8 +402,8 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           onClose={() => setDeleting(null)}
           onDeleted={() => {
             setDeleting(null);
+            // Leaving the chat closes its preview; another chat's deletion leaves this one's open.
             if (deleting === chatId) navigate("/");
-            setPreview(null);
             refresh();
           }}
         />

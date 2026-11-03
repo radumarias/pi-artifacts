@@ -26,7 +26,8 @@ export function DeleteChat({ chatId, onClose, onDeleted }: Props) {
     setDeleting(true);
     setError(null);
     try {
-      await api.deleteChat(chatId, withFiles);
+      // Exactly the files shown: never any the list left out.
+      await api.deleteChat(chatId, withFiles && plan ? plan.files : []);
       onDeleted();
     } catch (e) {
       setError(errorMessage(e));

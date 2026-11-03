@@ -77,7 +77,9 @@ export class ArtifactStore {
    * artifact already gone is deleted.
    */
   async delete(id: string, ownerUid: string, chatId: string): Promise<boolean> {
-    const meta = await this.readMeta(id);
+    // Not readMeta: it would cache a copy of what is about to go.
+    const cached = await this.#cache.get(metaKey(id));
+    const meta = cached ? ((await cached.json()) as ArtifactMeta) : await this.#readRepoMeta(id);
     if (meta && !isOwnedBy(meta, ownerUid, chatId)) return false;
     await this.#repos.delete(repoName(id));
     let cursor: string | undefined;
