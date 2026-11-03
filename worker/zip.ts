@@ -7,9 +7,9 @@ export interface ZipEntry {
   open(): Promise<{ size: number; body: ReadableStream<Uint8Array> } | null>;
 }
 
-/** Past these a zip needs ZIP64, which this writer leaves out: callers keep under them. */
-export const ZIP_MAX_BYTES = 0xffff_ffff;
-export const ZIP_MAX_ENTRIES = 0xffff;
+// Past these a zip needs ZIP64, which this writer leaves out: callers keep well under them.
+const MAX_BYTES = 0xffff_ffff;
+const MAX_ENTRIES = 0xffff;
 
 // Bit 3: the CRC follows the data, so a file streams through without being read twice. Bit 11: names are UTF-8.
 const FLAGS = 0x0808;
@@ -19,108 +19,148 @@ const NEEDED = 20;
 const FILE_MODE = 0o100644 << 16;
 
 /**
- * A zip of `entries`, streamed: each file is opened only when the one before
- * it has been written, and stored as it is (most uploads are compressed
- * already, and storing keeps the CPU time to a CRC). Fails the stream when the
+ * A zip of `entries`, streamed as the reader takes it. Files are stored as
+ * they are (most uploads are compressed already, and storing keeps the CPU
+ * time to a CRC); the next file is opened while one streams, so a folder of
+ * small files does not wait a round trip per file. Fails the stream when the
  * archive would outgrow plain zip, or a file is not the size it said.
  */
-export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>): ReadableStream<Uint8Array> {
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = writable.getWriter();
+export function zipStream(entries: readonly ZipEntry[]): ReadableStream<Uint8Array> {
+  const chunks = zipChunks(entries);
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { value, done } = await chunks.next();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    async cancel() {
+      await chunks.return(undefined);
+    },
+  });
+}
+
+async function* zipChunks(entries: readonly ZipEntry[]): AsyncGenerator<Uint8Array, void> {
   const encoder = new TextEncoder();
-  void (async () => {
-    const central: Uint8Array[] = [];
-    let offset = 0;
-    const write = async (bytes: Uint8Array) => {
-      offset += bytes.byteLength;
-      if (offset > ZIP_MAX_BYTES) throw new Error("The zip would be over 4 GB.");
-      await writer.write(bytes);
-    };
-    for await (const entry of entries) {
-      const opened = await entry.open();
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  const counted = (bytes: Uint8Array) => {
+    offset += bytes.byteLength;
+    if (offset > MAX_BYTES) throw new Error("The zip would be over 4 GB.");
+    return bytes;
+  };
+  const open = (i: number) => {
+    const opening = entries[i]?.open() ?? Promise.resolve(null);
+    // Awaited later; until then a failure must not count as unhandled.
+    opening.catch(() => {});
+    return opening;
+  };
+  let next = open(0);
+  try {
+    for (let i = 0; i < entries.length; i++) {
+      const opened = await next;
+      next = open(i + 1);
       if (!opened) continue;
-      if (central.length === ZIP_MAX_ENTRIES) throw new Error(`A zip holds at most ${ZIP_MAX_ENTRIES} files.`);
+      if (central.length === MAX_ENTRIES) throw new Error(`A zip holds at most ${MAX_ENTRIES} files.`);
+      const entry = entries[i];
       const name = encoder.encode(entry.name);
-      const { time, date } = dosDateTime(entry.modified);
-      const start = offset;
-      await write(localHeader(name, time, date, opened.size));
-      let crc = 0;
+      const header: Header = { name, ...dosDateTime(entry.modified), crc: 0, size: opened.size, offset };
+      yield counted(localHeader(header));
       let size = 0;
       for await (const chunk of opened.body) {
-        crc = crc32(chunk, crc);
+        header.crc = crc32(chunk, header.crc);
         size += chunk.byteLength;
-        await write(chunk);
+        yield counted(chunk);
       }
       if (size !== opened.size) throw new Error(`${entry.name} changed while it was being zipped.`);
-      await write(dataDescriptor(crc, size));
-      central.push(centralHeader(name, time, date, crc, size, start));
+      yield counted(dataDescriptor(header));
+      central.push(centralHeader(header));
     }
-    const centralStart = offset;
-    for (const header of central) await write(header);
-    await write(endOfCentralDirectory(central.length, offset - centralStart, centralStart));
-    await writer.close();
-  })().catch((error: unknown) => writer.abort(error).catch(() => {}));
-  return readable;
+    const start = offset;
+    yield counted(concat([...central, endOfCentralDirectory(central.length, central.reduce((sum, h) => sum + h.byteLength, 0), start)]));
+  } finally {
+    // A file opened ahead and never read (the zip failed or the reader went away) gives its connection back.
+    void next.then((opened) => opened?.body.cancel()).catch(() => {});
+  }
 }
 
-function localHeader(name: Uint8Array, time: number, date: number, size: number): Uint8Array {
-  const bytes = new Uint8Array(30 + name.byteLength);
+interface Header {
+  name: Uint8Array;
+  time: number;
+  date: number;
+  crc: number;
+  size: number;
+  /** Where the file's local header starts. */
+  offset: number;
+}
+
+/** `length` zeroed bytes with a little-endian signature, filled in by `fill`. */
+function record(signature: number, length: number, fill: (view: DataView) => void): Uint8Array {
+  const bytes = new Uint8Array(length);
   const view = new DataView(bytes.buffer);
-  view.setUint32(0, 0x04034b50, true);
-  view.setUint16(4, NEEDED, true);
-  view.setUint16(6, FLAGS, true);
-  view.setUint16(8, 0, true); // stored
-  view.setUint16(10, time, true);
-  view.setUint16(12, date, true);
-  // The CRC comes in the data descriptor. The sizes are known already, and readers that stream need them for a stored file.
-  view.setUint32(14, 0, true);
-  view.setUint32(18, size, true);
-  view.setUint32(22, size, true);
-  view.setUint16(26, name.byteLength, true);
-  view.setUint16(28, 0, true);
-  bytes.set(name, 30);
+  view.setUint32(0, signature, true);
+  fill(view);
   return bytes;
 }
 
-function dataDescriptor(crc: number, size: number): Uint8Array {
-  const bytes = new Uint8Array(16);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(0, 0x08074b50, true);
-  view.setUint32(4, crc, true);
-  view.setUint32(8, size, true);
-  view.setUint32(12, size, true);
+/**
+ * The fields a local header and a central header share, from version-needed
+ * to the name's length, written at `at`. Method (stored) and the extra field's
+ * length stay 0.
+ */
+function common(view: DataView, at: number, { name, time, date, crc, size }: Header): void {
+  view.setUint16(at, NEEDED, true);
+  view.setUint16(at + 2, FLAGS, true);
+  view.setUint16(at + 6, time, true);
+  view.setUint16(at + 8, date, true);
+  view.setUint32(at + 10, crc, true);
+  view.setUint32(at + 14, size, true);
+  view.setUint32(at + 18, size, true);
+  view.setUint16(at + 22, name.byteLength, true);
+}
+
+/** Its CRC is 0, as it comes in the data descriptor; the sizes are known already, and readers that stream need them for a stored file. */
+function localHeader(header: Header): Uint8Array {
+  const bytes = record(0x04034b50, 30 + header.name.byteLength, (view) => common(view, 4, { ...header, crc: 0 }));
+  bytes.set(header.name, 30);
   return bytes;
 }
 
-function centralHeader(name: Uint8Array, time: number, date: number, crc: number, size: number, offset: number): Uint8Array {
-  const bytes = new Uint8Array(46 + name.byteLength);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(0, 0x02014b50, true);
-  view.setUint16(4, MADE_BY, true);
-  view.setUint16(6, NEEDED, true);
-  view.setUint16(8, FLAGS, true);
-  view.setUint16(10, 0, true);
-  view.setUint16(12, time, true);
-  view.setUint16(14, date, true);
-  view.setUint32(16, crc, true);
-  view.setUint32(20, size, true);
-  view.setUint32(24, size, true);
-  view.setUint16(28, name.byteLength, true);
-  // Extra field, comment, disk number and internal attributes stay 0.
-  view.setUint32(38, FILE_MODE, true);
-  view.setUint32(42, offset, true);
-  bytes.set(name, 46);
+function dataDescriptor({ crc, size }: Header): Uint8Array {
+  return record(0x08074b50, 16, (view) => {
+    view.setUint32(4, crc, true);
+    view.setUint32(8, size, true);
+    view.setUint32(12, size, true);
+  });
+}
+
+function centralHeader(header: Header): Uint8Array {
+  const bytes = record(0x02014b50, 46 + header.name.byteLength, (view) => {
+    view.setUint16(4, MADE_BY, true);
+    common(view, 6, header);
+    // Comment length, disk number and internal attributes stay 0.
+    view.setUint32(38, FILE_MODE, true);
+    view.setUint32(42, header.offset, true);
+  });
+  bytes.set(header.name, 46);
   return bytes;
 }
 
 function endOfCentralDirectory(count: number, size: number, offset: number): Uint8Array {
-  const bytes = new Uint8Array(22);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(0, 0x06054b50, true);
-  view.setUint16(8, count, true);
-  view.setUint16(10, count, true);
-  view.setUint32(12, size, true);
-  view.setUint32(16, offset, true);
+  return record(0x06054b50, 22, (view) => {
+    view.setUint16(8, count, true);
+    view.setUint16(10, count, true);
+    view.setUint32(12, size, true);
+    view.setUint32(16, offset, true);
+  });
+}
+
+function concat(parts: readonly Uint8Array[]): Uint8Array {
+  const bytes = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));
+  let at = 0;
+  for (const part of parts) {
+    bytes.set(part, at);
+    at += part.byteLength;
+  }
   return bytes;
 }
 

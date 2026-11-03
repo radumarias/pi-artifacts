@@ -24,7 +24,8 @@ export class UserFiles {
     this.#key = key;
   }
 
-  async list(folder = ""): Promise<FileEntry[]> {
+  /** The files under `folder` (all of them when empty), at most `limit`. */
+  async list(folder = "", limit = MAX_LISTED): Promise<FileEntry[]> {
     const sub = normalisePath(folder, { allowEmpty: true });
     // Always end the prefix with "/": "users/ada" must never match "users/adam".
     const prefix = this.#prefix + (sub && !sub.endsWith("/") ? `${sub}/` : sub);
@@ -34,8 +35,8 @@ export class UserFiles {
       const page = await this.#bucket.list({ prefix, cursor, limit: 500 });
       for (const o of page.objects) entries.push({ path: o.key.slice(this.#prefix.length), size: o.size, uploaded: o.uploaded });
       cursor = page.truncated ? page.cursor : undefined;
-    } while (cursor && entries.length < MAX_LISTED);
-    return entries;
+    } while (cursor && entries.length < limit);
+    return entries.slice(0, limit);
   }
 
   async get(path: string, range?: { offset: number; length: number }): Promise<R2ObjectBody | null> {

@@ -2,6 +2,7 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
   baseName,
   checkThumb,
+  extension,
   FILE_TEXT_CHARS,
   IMAGE_BASE64,
   IMAGE_TYPES,
@@ -31,12 +32,6 @@ const TEXT_EXTENSIONS = new Set(
 );
 /** What Workers AI's toMarkdown converts without a model (images it would describe with one, at a cost). */
 const DOCUMENT_EXTENSIONS = new Set(["pdf", "docx", "xlsx", "xlsm", "xlsb", "xls", "et", "ods", "odt", "numbers"]);
-
-function extension(path: string): string {
-  const name = baseName(path);
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
-}
 
 /** A message's attachments from the browser, checked for shape. Throws on anything else. */
 export function parseAttachments(raw: unknown): AttachmentInput[] {

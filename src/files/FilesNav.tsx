@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { fileUrl, folderZipUrl, MAX_FILE_BYTES, MAX_LISTED, MAX_ZIP_BYTES, previewType, underUploads, uploadBatches, uploadTargets } from "../../shared/uploads.ts";
+import { baseName } from "../../shared/attachments.ts";
+import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -63,8 +64,10 @@ interface Folder {
   bytes: number;
 }
 
+const newFolder = (name: string, path: string): Folder => ({ name, path, folders: new Map(), files: [], count: 0, bytes: 0 });
+
 function tree(files: readonly FileInfo[]): Folder {
-  const root: Folder = { name: "", path: "", folders: new Map(), files: [], count: 0, bytes: 0 };
+  const root = newFolder("", "");
   for (const file of files) {
     const segments = file.path.split("/");
     let folder = root;
@@ -72,7 +75,7 @@ function tree(files: readonly FileInfo[]): Folder {
     folder.bytes += file.size;
     for (const name of segments.slice(0, -1)) {
       let next = folder.folders.get(name);
-      if (!next) folder.folders.set(name, (next = { name, path: folder.path ? `${folder.path}/${name}` : name, folders: new Map(), files: [], count: 0, bytes: 0 }));
+      if (!next) folder.folders.set(name, (next = newFolder(name, folder.path ? `${folder.path}/${name}` : name)));
       folder = next;
       folder.count++;
       folder.bytes += file.size;
@@ -88,51 +91,41 @@ const DownloadIcon = () => (
   </Icon>
 );
 
-/** Why a folder cannot be zipped (the Worker's limits, worker/files-routes.ts), or undefined when it can. */
-function zipRefusal(folder: Folder): string | undefined {
-  if (folder.count >= MAX_LISTED) return `Too many files to zip (over ${MAX_LISTED.toLocaleString("en")}); download its folders instead`;
-  if (folder.bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(folder.bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download its folders instead`;
-  return undefined;
-}
-
-function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
+/** Re-renders only when its folder changes: tree() keeps a folder's object while the files stay the same. */
+const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
   return (
     <>
       {[...folder.folders.values()].map((sub) => {
-        const refusal = zipRefusal(sub);
+        // From the sidebar's listing, which may be cut short; the Worker checks again.
+        const refusal = zipRefusal(sub.count, sub.bytes);
         return (
           // Top-level folders (uploads/, out/) start open; folders inside them start closed.
           <details key={sub.path} className="file-folder" open={depth === 0}>
             <summary title={sub.path}>
               {sub.name}/ <small>{sub.count}</small>
-              {refusal ? (
-                <span className="file-action disabled" title={refusal} aria-disabled="true">
-                  <DownloadIcon />
-                </span>
-              ) : (
-                <a className="file-action" href={folderZipUrl(sub.path)} download={`${sub.name}.zip`} title={`Download ${sub.name} as a zip`} aria-label={`Download ${sub.name} as a zip`}>
-                  <DownloadIcon />
-                </a>
-              )}
+              {/* Without an href when the folder is too big to zip: the link is then inert, and says why. */}
+              <a className="file-action" href={refusal ? undefined : api.folderZipUrl(sub.path)} download={`${sub.name}.zip`} title={refusal ?? `Download ${sub.name} as a zip`} aria-disabled={!!refusal}>
+                <DownloadIcon />
+              </a>
             </summary>
             <FolderView folder={sub} depth={depth + 1} />
           </details>
         );
       })}
       {folder.files.map((file) => {
-        const name = file.path.split("/").pop();
+        const name = baseName(file.path);
         const title = `${file.path} · ${formatBytes(file.size)}`;
         return (
           <div key={file.path} className="file-row">
             {previewType(file.path) ? (
               // An image opens in a new tab to look at; the Worker serves it so nothing in it can run.
-              <a href={fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
+              <a href={api.fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
                 {name}
               </a>
             ) : (
               <span title={title}>{name}</span>
             )}
-            <a className="file-action" href={fileUrl(file.path, { download: true })} download={name} title={`Download ${name}`} aria-label={`Download ${name}`}>
+            <a className="file-action" href={api.fileUrl(file.path)} download={name} title={`Download ${name}`}>
               <DownloadIcon />
             </a>
           </div>
@@ -140,7 +133,7 @@ function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
       })}
     </>
   );
-}
+});
 
 /** The sidebar's files: a folder tree, the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app. */
 export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {

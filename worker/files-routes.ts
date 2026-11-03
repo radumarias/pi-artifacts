@@ -1,4 +1,5 @@
-import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_LISTED, MAX_UPLOAD_BYTES, MAX_ZIP_BYTES, previewType, uploadTargets } from "../shared/uploads.ts";
+import { baseName } from "../shared/attachments.ts";
+import { FILE_ROUTE, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, MAX_ZIP_FILES, previewType, uploadTargets, ZIP_ROUTE, zipRefusal } from "../shared/uploads.ts";
 import { formatBytes } from "../shared/util.ts";
 import { json } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
@@ -15,10 +16,9 @@ const FORM_OVERHEAD = 1024 * 1024;
  * folder's layout is kept under uploads/. `userFiles` are the signed-in user's.
  */
 export async function filesRoute(request: Request, userFiles: () => Promise<UserFiles>): Promise<Response | undefined> {
-  const url = new URL(request.url);
-  const { pathname } = url;
-  if (request.method === "GET" && pathname.startsWith(RAW)) return serveFile(await userFiles(), urlPath(pathname.slice(RAW.length)), url.searchParams.has("download"));
-  if (request.method === "GET" && pathname.startsWith(ZIP)) return serveZip(await userFiles(), urlPath(pathname.slice(ZIP.length)));
+  const { pathname } = new URL(request.url);
+  if (request.method === "GET" && pathname.startsWith(FILE_ROUTE)) return serveFile(await userFiles(), urlPath(pathname.slice(FILE_ROUTE.length)));
+  if (request.method === "GET" && pathname.startsWith(ZIP_ROUTE)) return serveZip(await userFiles(), urlPath(pathname.slice(ZIP_ROUTE.length)));
   if (pathname !== "/api/files") return undefined;
   if (request.method === "GET") return json(await (await userFiles()).list());
   if (request.method !== "POST") return undefined;
@@ -53,9 +53,6 @@ export async function storeUpload(request: Request, userFiles: () => Promise<Use
   return json({ paths: stored });
 }
 
-const RAW = "/api/files/raw/";
-const ZIP = "/api/files/zip/";
-
 /**
  * What every served file carries. Files are the user's own, but they come from
  * uploads and the sandbox, so none may run on the app's origin: no sniffing a
@@ -68,27 +65,32 @@ const SERVED_HEADERS = {
   "cache-control": "private, no-store",
 };
 
-/** A path from a URL, its segments decoded; UserFiles checks what it may be. */
+/**
+ * A path from a URL, its segments decoded and normalised as UserFiles keys it,
+ * so a listing's paths start with it and its last segment is safe in a header.
+ * Throws PathError (a 400) for anything a user file path may not be.
+ */
 function urlPath(encoded: string): string {
+  let path: string;
   try {
-    return encoded.split("/").map(decodeURIComponent).join("/");
+    path = encoded.split("/").map(decodeURIComponent).join("/");
   } catch {
     throw new PathError("Invalid path in the URL.");
   }
+  return normalisePath(path.replace(/\/+$/, ""));
 }
 
-/** One user file: shown in the browser when it is an image (shared/uploads.ts previewType), saved otherwise or when `download` is asked. */
-async function serveFile(files: UserFiles, path: string, download: boolean): Promise<Response> {
+/** One user file: shown in the browser when it is an image (shared/uploads.ts previewType), saved otherwise. */
+async function serveFile(files: UserFiles, path: string): Promise<Response> {
   const object = await files.get(path);
   if (!object) return json({ error: "No such file" }, 404);
-  const name = baseName(path);
-  const inline = download ? undefined : previewType(path);
+  const inline = previewType(path);
   return new Response(object.body, {
     headers: {
       ...SERVED_HEADERS,
       "content-type": inline ?? "application/octet-stream",
       "content-length": String(object.size),
-      "content-disposition": `${inline ? "inline" : "attachment"}; filename="${name}"`,
+      "content-disposition": `${inline ? "inline" : "attachment"}; filename="${baseName(path)}"`,
     },
   });
 }
@@ -96,16 +98,17 @@ async function serveFile(files: UserFiles, path: string, download: boolean): Pro
 /**
  * A user folder as a zip named after it, with the folder itself at the zip's
  * root ("q3.zip" holds "q3/sales.csv", "q3/2024/…"), everything under it
- * included. Up to MAX_ZIP_BYTES and as many files as UserFiles lists.
+ * included, within shared/uploads.ts zipRefusal's limits.
  */
-async function serveZip(files: UserFiles, path: string): Promise<Response> {
-  // As UserFiles keys it, so the paths it lists start with it.
-  const folder = normalisePath(path.replace(/\/+$/, ""));
-  const entries = await files.list(folder);
+async function serveZip(files: UserFiles, folder: string): Promise<Response> {
+  // One more than a zip may hold, to tell a full folder from one over the limit.
+  const entries = await files.list(folder, MAX_ZIP_FILES + 1);
   if (entries.length === 0) return json({ error: "No such folder" }, 404);
-  if (entries.length >= MAX_LISTED) return json({ error: `${folder} holds over ${MAX_LISTED.toLocaleString("en")} files; download its folders one at a time.` }, 413);
-  const total = entries.reduce((sum, entry) => sum + entry.size, 0);
-  if (total > MAX_ZIP_BYTES) return json({ error: `${folder} holds ${formatBytes(total)}, over the ${formatBytes(MAX_ZIP_BYTES)} a zip may hold; download its folders one at a time.` }, 413);
+  const refusal = zipRefusal(
+    entries.length,
+    entries.reduce((sum, entry) => sum + entry.size, 0),
+  );
+  if (refusal) return json({ error: `${folder}: ${refusal}` }, 413);
   const name = baseName(folder);
   const inside = folder.length + 1;
   const zip = zipStream(
@@ -121,11 +124,6 @@ async function serveZip(files: UserFiles, path: string): Promise<Response> {
   return new Response(zip, {
     headers: { ...SERVED_HEADERS, "content-type": "application/zip", "content-disposition": `attachment; filename="${name}.zip"` },
   });
-}
-
-/** The last segment of a path, as a file name for content-disposition. User file paths have no quotes or controls in them (worker/storage/paths.ts); anything else becomes "_". */
-function baseName(path: string): string {
-  return (path.split("/").pop() || "download").replace(/[^A-Za-z0-9 ._-]/g, "_");
 }
 
 function tooBig(): string {

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32 } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { fileUrl, folderZipUrl, previewType } from "../shared/uploads.ts";
+import { api } from "../src/api.ts";
+import { MAX_ZIP_FILES, previewType } from "../shared/uploads.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { UserFiles } from "../worker/storage/user-files.ts";
@@ -77,6 +78,26 @@ describe("zipStream", () => {
     await expect(bytes(zip)).rejects.toThrow(/changed/);
   });
 
+  it("fails the stream when a file cannot be opened, and gives back a file opened ahead when the reader goes away", async () => {
+    const failing = zipStream([
+      { name: "a.txt", modified: new Date(), open: async () => ({ size: 1, body: text("a") }) },
+      { name: "b.txt", modified: new Date(), open: async () => Promise.reject(new Error("R2 is down")) },
+    ]);
+    await expect(bytes(failing)).rejects.toThrow("R2 is down");
+
+    let cancelled = false;
+    const ahead = new ReadableStream<Uint8Array>({ cancel: () => void (cancelled = true) });
+    const zip = zipStream([
+      { name: "a.txt", modified: new Date(), open: async () => ({ size: 1, body: text("a") }) },
+      { name: "b.txt", modified: new Date(), open: async () => ({ size: 1, body: ahead }) },
+    ]);
+    const reader = zip.getReader();
+    await reader.read();
+    await reader.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cancelled).toBe(true);
+  });
+
   it("dates entries in DOS time, from 1980 on", () => {
     expect(dosDateTime(new Date(Date.UTC(2026, 10, 3, 9, 30, 12)))).toEqual({ time: (9 << 11) | (30 << 5) | 6, date: (46 << 9) | (11 << 5) | 3 });
     expect(dosDateTime(new Date(0))).toEqual({ time: 0, date: (1 << 5) | 1 });
@@ -100,7 +121,7 @@ describe("file and folder downloads", () => {
   };
 
   it("opens an image in the browser, sandboxed", async () => {
-    const response = await route(fileUrl("uploads/q3/chart.png"), bucket());
+    const response = await route(api.fileUrl("uploads/q3/chart.png"), bucket());
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/png");
     expect(response.headers.get("content-disposition")).toBe('inline; filename="chart.png"');
@@ -109,17 +130,15 @@ describe("file and folder downloads", () => {
     expect(await response.text()).toBe("png");
   });
 
-  it("downloads any other file, or an image when asked", async () => {
-    const csv = await route(fileUrl("uploads/q3/2024/old sales.csv"), bucket());
+  it("downloads any other file", async () => {
+    const csv = await route(api.fileUrl("uploads/q3/2024/old sales.csv"), bucket());
     expect(csv.headers.get("content-type")).toBe("application/octet-stream");
     expect(csv.headers.get("content-disposition")).toBe('attachment; filename="old sales.csv"');
     expect(await csv.text()).toBe("c,d\n");
-    const png = await route(fileUrl("uploads/q3/chart.png", { download: true }), bucket());
-    expect(png.headers.get("content-disposition")).toBe('attachment; filename="chart.png"');
   });
 
   it("zips a folder under its own name, with only what is inside it, and only the user's", async () => {
-    const response = await route(folderZipUrl("uploads/q3"), bucket());
+    const response = await route(api.folderZipUrl("uploads/q3"), bucket());
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/zip");
     expect(response.headers.get("content-disposition")).toBe('attachment; filename="q3.zip"');
@@ -134,10 +153,20 @@ describe("file and folder downloads", () => {
     expect(unzipAgrees(zip) ?? true).toBe(true);
   });
 
+  it("zips a folder of exactly the most files a zip holds, and refuses one more", async () => {
+    const full = new FakeBucket();
+    for (let i = 0; i < MAX_ZIP_FILES; i++) full.objects.set(`users/ada/files/uploads/many/${i}.txt`, "x");
+    expect((await route(api.folderZipUrl("uploads/many"), full)).status).toBe(200);
+    full.objects.set("users/ada/files/uploads/many/one-more.txt", "x");
+    const over = await route(api.folderZipUrl("uploads/many"), full);
+    expect(over.status).toBe(413);
+    expect(((await over.json()) as { error: string }).error).toMatch(/Too many files/);
+  });
+
   it("answers 404 for a missing file or folder, and 400 for a path that climbs", async () => {
-    expect((await route(fileUrl("uploads/nope.csv"), bucket())).status).toBe(404);
-    expect((await route(fileUrl("uploads/q3"), bucket())).status).toBe(404);
-    expect((await route(folderZipUrl("uploads/nope"), bucket())).status).toBe(404);
+    expect((await route(api.fileUrl("uploads/nope.csv"), bucket())).status).toBe(404);
+    expect((await route(api.fileUrl("uploads/q3"), bucket())).status).toBe(404);
+    expect((await route(api.folderZipUrl("uploads/nope"), bucket())).status).toBe(404);
     await expect(route("/api/files/raw/uploads/..%2F..%2Fbob/files/x", bucket())).rejects.toThrow(/not allowed|Invalid/);
     await expect(route("/api/files/zip/%E0%A4%A", bucket())).rejects.toThrow(/Invalid path/);
   });
@@ -148,5 +177,7 @@ describe("file and folder downloads", () => {
     expect(previewType("uploads/page.html")).toBeUndefined();
     expect(previewType("uploads/png")).toBeUndefined();
     expect(previewType("uploads/x.png/readme")).toBeUndefined();
+    expect(previewType("uploads/.png")).toBeUndefined();
+    expect(previewType("uploads/a.constructor")).toBeUndefined();
   });
 });
