@@ -2,6 +2,7 @@ import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
+import type { Mention } from "../../shared/mentions.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api } from "../api.ts";
@@ -15,6 +16,7 @@ import { promptSpend, totalTime } from "./spend.ts";
 import { useChat, waitingOnModel } from "./useChat.ts";
 import { Dictation } from "./Dictation.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
@@ -49,6 +51,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
   const attachments = useAttachments(chatId);
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const mentions = useMentions(chatId, draft, setDraft, input);
   const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
 
@@ -88,11 +91,13 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
     event?.preventDefault();
     const text = draft.trim();
     if (attachments.sending || (!text && attachments.pending.length === 0)) return;
+    const named = mentions.take(text);
     if (attachments.pending.length === 0) {
-      if (!prompt(text)) return;
-    } else if (!(await attachments.send((inputs) => prompt(text, inputs)))) return;
+      if (!prompt(text, undefined, named)) return;
+    } else if (!(await attachments.send((inputs) => prompt(text, inputs, named)))) return;
     following.current = true;
     setDraft("");
+    mentions.clear();
     // Clicking Send moves focus to the button; keep typing where you were.
     input.current?.focus();
   };
@@ -118,6 +123,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
 
   // Enter sends, Shift+Enter adds a line. Not while an IME is composing (Enter then confirms the text).
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentions.onKeyDown(event)) return;
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     void submit();
@@ -194,6 +200,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
       </StepsProvider>
       <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
         {attachments.error && <div className="chat-error">{attachments.error}</div>}
+        <MentionList mentions={mentions} />
         {/* A click anywhere in the box but a button puts the cursor in the input. */}
         <div className="composer-box" onClick={(e) => (e.target as Element).closest("button") || input.current?.focus()}>
           {attachments.pending.length > 0 && (
@@ -215,10 +222,14 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
               // Each chat mounts its own view, so a new or opened chat starts with the cursor here.
               autoFocus
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                mentions.track();
+              }}
+              onSelect={mentions.track}
               onKeyDown={onKey}
               onPaste={onPaste}
-              placeholder={connected ? (others ? "Message everyone and the agent…" : "Describe a dashboard, or attach a file to ask about…") : "Connecting…"}
+              placeholder={connected ? (others ? "Message everyone and the agent… (@ names a file or artifact)" : "Describe a dashboard, or type @ to name a file or artifact…") : "Connecting…"}
               rows={1}
             />
             {state.busy ? (
@@ -265,6 +276,9 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
               e.target.value = "";
             }}
           />
+          <button type="button" className="icon-button mention-button" onClick={mentions.insertAt} title="Name a file or artifact (@)" aria-label="Name a file or artifact">
+            @
+          </button>
           <Dictation disabled={!connected} onText={dictated} />
           <ModelPicker
             model={state.model}
@@ -298,7 +312,7 @@ const Entry = memo(function Entry({
   if (entry.kind === "pi.user" && message?.role === "user") return <User text={userText(message)} author={ownerName} />;
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as unknown as ChatMessageData;
-    return <User text={data.text} author={data.uid !== uid ? data.name : undefined} attachments={data.attachments} />;
+    return <User text={data.text} author={data.uid !== uid ? data.name : undefined} attachments={data.attachments} mentions={data.mentions} />;
   }
   if (entry.kind === CHAT_PEOPLE_KIND) {
     const data = entry.data as unknown as ChatPeopleData;
@@ -341,7 +355,7 @@ function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
     const mine = message.uid === uid;
     return (
       <div key={message.id} className={mine ? "queued mine" : "queued"}>
-        <User text={message.text} author={mine ? undefined : message.name} attachments={message.attachments} />
+        <User text={message.text} author={mine ? undefined : message.name} attachments={message.attachments} mentions={message.mentions} />
         <small className="queued-label">{queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"}</small>
       </div>
     );
@@ -358,7 +372,7 @@ function userText(message: UserMessage): string {
 }
 
 /** A person's message: yours on the right; someone else's on the left, under their name. Attachments show above the text. */
-function User({ text, author, attachments = [] }: { text: string; author?: string; attachments?: Attachment[] }) {
+function User({ text, author, attachments = [], mentions }: { text: string; author?: string; attachments?: Attachment[]; mentions?: Mention[] }) {
   const mine = author === undefined;
   const files = attachments.length > 0 && (
     <div className={mine ? "attachments mine" : "attachments"}>
@@ -371,7 +385,11 @@ function User({ text, author, attachments = [] }: { text: string; author?: strin
     return (
       <>
         {files}
-        {text && <div className="bubble user">{text}</div>}
+        {text && (
+          <div className="bubble user">
+            <MentionText text={text} mentions={mentions} />
+          </div>
+        )}
       </>
     );
   }
@@ -379,7 +397,11 @@ function User({ text, author, attachments = [] }: { text: string; author?: strin
     <div className="other">
       <small>{author}</small>
       {files}
-      {text && <div className="bubble peer">{text}</div>}
+      {text && (
+        <div className="bubble peer">
+          <MentionText text={text} mentions={mentions} />
+        </div>
+      )}
     </div>
   );
 }

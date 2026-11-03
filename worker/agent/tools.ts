@@ -9,7 +9,7 @@ import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import { normalisePath, PathError, type ArtifactStore, type FileEntry, type UserFiles } from "../storage/index.ts";
+import { literalPath, normalisePath, PathError, type ArtifactStore, type FileEntry, type UserFiles } from "../storage/index.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
@@ -22,18 +22,10 @@ export interface ChatScope {
   /** This chat's user's files: scoped to the uid and encrypted with that user's key. */
   files: () => Promise<UserFiles>;
   onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
+  /** Whether the owner named this artifact from another of their chats with "@" here, so the agent may read it. */
+  broughtIn(id: string): boolean;
   /** Save a skill for the user, turned off until they turn it on. */
   proposeSkill(skill: SkillInput): Promise<SkillResult>;
-}
-
-/** `path` as a stored path, or undefined when it cannot be one ("data/", a name with characters paths do not allow). */
-function literalPath(path: string): string | undefined {
-  try {
-    return normalisePath(path);
-  } catch (error) {
-    if (error instanceof PathError) return undefined;
-    throw error;
-  }
 }
 
 /**
@@ -257,10 +249,14 @@ export async function publishArtifact(scope: ChatScope, input: PublishInput): Pr
   return meta;
 }
 
-/** An artifact this chat published. Anything else reads as missing. */
+/**
+ * An artifact of this chat, or one of the owner's from another chat that the owner named here with "@": the agent may
+ * read it, but publishes a new version only of this chat's (ArtifactStore.publishVersion). Anything else reads as missing.
+ */
 async function ownArtifact(scope: ChatScope, id: string): Promise<ArtifactMeta> {
   const meta = await scope.artifacts.readMeta(id);
-  if (!meta || !isOwnedBy(meta, scope.uid, scope.chatId)) throw new Error(`No artifact ${id} in this chat.`);
+  const readable = meta && (isOwnedBy(meta, scope.uid, scope.chatId) || (meta.ownerUid === scope.uid && scope.broughtIn(meta.id)));
+  if (!readable) throw new Error(`No artifact ${id} in this chat. One from another chat must be named with @ by the chat's owner first.`);
   return meta;
 }
 
@@ -272,7 +268,7 @@ export function artifactExtension(scope: ChatScope): Extension {
         name: PUBLISH_TOOL,
         description:
           "Publish an HTML page as an artifact the user sees in the preview panel. Pass artifact_id to publish a new version of an artifact " +
-          "you published in this chat; omit it to create a new one. Declare in `mcp` every server and tool the page calls; the page can call nothing else.",
+          "you published in this chat; omit it to create a new one (also to build on an artifact from another chat, which stays as it is). Declare in `mcp` every server and tool the page calls; the page can call nothing else.",
         parameters: Type.Object({
           title: Type.String({ description: "Two to five words." }),
           html: Type.String({ description: "The page: a full HTML document, or a body fragment." }),
@@ -296,7 +292,7 @@ export function artifactExtension(scope: ChatScope): Extension {
       }),
       defineTool({
         name: "artifact_read",
-        description: "Read the HTML of an artifact published in this chat, to revise it.",
+        description: "Read the HTML of an artifact published in this chat, to revise it, or of one the user named with @ from another of their chats, to build on it.",
         parameters: Type.Object({ artifact_id: Type.String(), version: Type.Optional(Type.Number()) }),
         replay: "safe",
         execute: async (args) => {
@@ -310,7 +306,7 @@ export function artifactExtension(scope: ChatScope): Extension {
       }),
       defineTool({
         name: "artifact_history",
-        description: "List the versions of an artifact published in this chat: when each was published and what it changed.",
+        description: "List the versions of an artifact published in this chat (or named with @ from another): when each was published and what it changed.",
         parameters: Type.Object({ artifact_id: Type.String() }),
         replay: "safe",
         execute: async (args) => {

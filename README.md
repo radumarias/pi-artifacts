@@ -184,6 +184,10 @@ streamed by the Worker and stored uncompressed (`worker/zip.ts`), up to 1 GB and
 `nosniff`, a sandboxing CSP and `Cross-Origin-Resource-Policy: same-origin`; only raster images and SVG open in the
 browser (an SVG's scripts stay off under the sandbox), anything else only downloads.
 
+The panel's search filters the tree by path. **Select** picks files and folders to download together: one zip named
+after the folder holding them all, with that folder at its root (`files.zip` with the top folders when they share
+none), posted as a form into a hidden frame (`POST /api/files/zip/`), which shows the Worker's reason when it refuses.
+
 Before each message, the agent's prompt gets a list of your files, newest first (at most 150, then a count per folder),
 so "the sales file from q3" maps to its path without a tool call. `files_read`, `run_python` and `run_bash` also take a
 file's name or the end of its path when only one file matches, and answer with the candidates when several do

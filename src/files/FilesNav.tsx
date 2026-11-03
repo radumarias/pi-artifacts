@@ -1,6 +1,6 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { baseName } from "../../shared/attachments.ts";
-import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, zipRefusal } from "../../shared/uploads.ts";
+import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, ZIP_ROUTE, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -60,28 +60,37 @@ interface Folder {
   name: string;
   path: string;
   folders: Map<string, Folder>;
+  /** The files matching the search, the only ones listed. */
   files: FileInfo[];
+  /** All its files, matching or not: what its zip and its pick hold. */
   count: number;
   bytes: number;
+  /** How many of them match the search (all without one); a folder with none is not shown. */
+  matches: number;
 }
 
-const newFolder = (name: string, path: string): Folder => ({ name, path, folders: new Map(), files: [], count: 0, bytes: 0 });
+const newFolder = (name: string, path: string): Folder => ({ name, path, folders: new Map(), files: [], count: 0, bytes: 0, matches: 0 });
 
-function tree(files: readonly FileInfo[]): Folder {
+/** The folder tree of `files`, listing those whose path holds `search` (lower case; all when empty). */
+function tree(files: readonly FileInfo[], search: string): Folder {
   const root = newFolder("", "");
   for (const file of files) {
+    const match = !search || file.path.toLowerCase().includes(search);
     const segments = file.path.split("/");
     let folder = root;
-    folder.count++;
-    folder.bytes += file.size;
+    const add = () => {
+      folder.count++;
+      folder.bytes += file.size;
+      if (match) folder.matches++;
+    };
+    add();
     for (const name of segments.slice(0, -1)) {
       let next = folder.folders.get(name);
       if (!next) folder.folders.set(name, (next = newFolder(name, folder.path ? `${folder.path}/${name}` : name)));
       folder = next;
-      folder.count++;
-      folder.bytes += file.size;
+      add();
     }
-    folder.files.push(file);
+    if (match) folder.files.push(file);
   }
   return root;
 }
@@ -92,17 +101,58 @@ const DownloadIcon = () => (
   </Icon>
 );
 
-/** Re-renders only when its folder changes: tree() keeps a folder's object while the files stay the same. */
-const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
+type Kind = "file" | "folder";
+
+/** What is picked for download, while the panel is in select mode. */
+interface Selection {
+  picked: ReadonlyMap<string, Kind>;
+  toggle(path: string, kind: Kind): void;
+}
+
+/** Null outside select mode: the tree then shows no checkboxes. */
+const SelectionContext = createContext<Selection | null>(null);
+
+/** Whether a folder above `path` is picked, which picks `path` too. */
+function inPickedFolder(picked: ReadonlyMap<string, Kind>, path: string): boolean {
+  for (let slash = path.indexOf("/"); slash !== -1; slash = path.indexOf("/", slash + 1)) {
+    if (picked.get(path.slice(0, slash)) === "folder") return true;
+  }
+  return false;
+}
+
+/** A file's or folder's checkbox in select mode; checked and fixed when a folder above it is picked. */
+function Pick({ path, kind }: { path: string; kind: Kind }) {
+  const selection = useContext(SelectionContext);
+  if (!selection) return null;
+  const inside = inPickedFolder(selection.picked, path);
+  return (
+    <input
+      type="checkbox"
+      className="file-pick"
+      checked={inside || selection.picked.has(path)}
+      disabled={inside}
+      onChange={() => selection.toggle(path, kind)}
+      aria-label={`Pick ${baseName(path)}`}
+    />
+  );
+}
+
+/**
+ * A folder's subfolders and files. Re-renders only when its folder changes (tree() runs again only when the files or
+ * the search do); a selection change re-renders just the checkboxes. While searching, `expand` opens every folder, so the matches show.
+ */
+const FolderView = memo(function FolderView({ folder, depth, expand }: { folder: Folder; depth: number; expand: boolean }) {
   return (
     <>
       {[...folder.folders.values()].map((sub) => {
+        if (!sub.matches) return null;
         // From the sidebar's listing, which may be cut short; the Worker checks again.
         const refusal = zipRefusal(sub.count, sub.bytes);
         return (
           // Top-level folders (uploads/, out/) start open; folders inside them start closed.
-          <details key={sub.path} className="file-folder" open={depth === 0}>
+          <details key={sub.path} className="file-folder" open={depth === 0 || expand}>
             <summary title={sub.path}>
+              <Pick path={sub.path} kind="folder" />
               {sub.name}/ <small>{sub.count}</small>
               {/* Without an href when the folder is too big to zip, so it says why and does nothing; without preventDefault its click would open or close the folder. */}
               <a
@@ -116,7 +166,7 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
                 <DownloadIcon />
               </a>
             </summary>
-            <FolderView folder={sub} depth={depth + 1} />
+            <FolderView folder={sub} depth={depth + 1} expand={expand} />
           </details>
         );
       })}
@@ -125,13 +175,16 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
         const title = `${file.path} · ${formatBytes(file.size)}`;
         return (
           <div key={file.path} className="file-row">
+            <Pick path={file.path} kind="file" />
             {previewType(file.path) ? (
               // An image opens in a new tab to look at; the Worker serves it so nothing in it can run.
-              <a href={api.fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
+              <a className="file-name" href={api.fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
                 {name}
               </a>
             ) : (
-              <span title={title}>{name}</span>
+              <span className="file-name" title={title}>
+                {name}
+              </span>
             )}
             <a className="file-action" href={api.fileUrl(file.path)} download={name} title={`Download ${name}`}>
               <DownloadIcon />
@@ -142,6 +195,87 @@ const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder;
     </>
   );
 });
+
+/** The frame a picked set's zip downloads into: the page stays, and an error the Worker answers lands there to be read. */
+const DOWNLOAD_FRAME = "files-download";
+
+/**
+ * Select mode's bar: how much is picked and its download, as one zip posted into a hidden frame (a form, since a long
+ * pick would not fit a URL); one file alone downloads as itself.
+ */
+function SelectionBar({
+  files,
+  picked,
+  error,
+  onSubmit,
+  onDone,
+}: {
+  files: readonly FileInfo[];
+  picked: ReadonlyMap<string, Kind>;
+  error: string | null;
+  onSubmit: () => void;
+  onDone: () => void;
+}) {
+  // What the zip would hold, from the sidebar's listing (the Worker checks again).
+  const refusal = useMemo(() => {
+    const held = files.filter((file) => picked.has(file.path) || inPickedFolder(picked, file.path));
+    return zipRefusal(
+      held.length,
+      held.reduce((sum, file) => sum + file.size, 0),
+    );
+  }, [files, picked]);
+  // One file downloads as it does from the tree; anything else, one folder too, goes through the form and its checks.
+  const [only] = picked.size === 1 ? [...picked].filter(([, kind]) => kind === "file") : [];
+  return (
+    <div className="files-selection">
+      <span>{picked.size ? `${picked.size} picked` : "Pick files and folders"}</span>
+      {only ? (
+        <a className="button" href={api.fileUrl(only[0])} download={baseName(only[0])}>
+          Download
+        </a>
+      ) : (
+        <button type="submit" form="files-zip" disabled={!picked.size || !!refusal} title={refusal ?? "Download them as one zip"} onClick={onSubmit}>
+          Download
+        </button>
+      )}
+      <button type="button" onClick={onDone}>
+        Done
+      </button>
+      {error && <small className="upload-status error">{error}</small>}
+      <form id="files-zip" method="post" action={ZIP_ROUTE} target={DOWNLOAD_FRAME} hidden>
+        {[...picked].map(([path, kind]) => (
+          <input key={path} type="hidden" name={kind} value={path} />
+        ))}
+      </form>
+    </div>
+  );
+}
+
+/**
+ * The hidden frame the picked set's zip downloads into. It lives on document.body, outside React: removed before the
+ * Worker answers (the panel closed or the sidebar collapsed right after Download), it would take the download with it.
+ * A saved zip loads nothing here; an error page does, and says why, to the FilesNav mounted at the time.
+ */
+let downloadFrame: HTMLIFrameElement | undefined;
+let reportZipError: ((error: string) => void) | undefined;
+
+function ensureDownloadFrame(): void {
+  if (downloadFrame) return;
+  const frame = document.createElement("iframe");
+  frame.name = DOWNLOAD_FRAME;
+  frame.title = "Downloads";
+  frame.hidden = true;
+  frame.addEventListener("load", () => {
+    try {
+      const text = frame.contentDocument?.body?.textContent;
+      if (text) reportZipError?.((JSON.parse(text) as { error?: string }).error ?? text);
+    } catch {
+      // Not readable or not JSON: nothing to say.
+    }
+  });
+  document.body.append(frame);
+  downloadFrame = frame;
+}
 
 const Chevron = () => (
   <Icon size={14} box={16} stroke={1.8}>
@@ -155,7 +289,33 @@ const Chevron = () => (
  */
 export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
   const [open, setOpen] = useStoredState("layout.filesOpen", true, (value) => typeof value === "boolean");
-  const root = useMemo(() => tree(files), [files]);
+  const [query, setQuery] = useState("");
+  // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
+  const search = useDeferredValue(query).trim().toLowerCase();
+  const root = useMemo(() => tree(files, search), [files, search]);
+  const [picked, setPicked] = useState<ReadonlyMap<string, Kind> | null>(null);
+  const [zipError, setZipError] = useState<string | null>(null);
+  useEffect(() => {
+    reportZipError = setZipError;
+    return () => {
+      if (reportZipError === setZipError) reportZipError = undefined;
+    };
+  }, []);
+  const selection = useMemo<Selection | null>(
+    () =>
+      picked && {
+        picked,
+        toggle: (path, kind) =>
+          setPicked((before) => {
+            const next = new Map(before);
+            if (next.delete(path)) return next;
+            // A picked folder holds what is under it; picks inside it go.
+            if (kind === "folder") for (const key of next.keys()) if (key.startsWith(`${path}/`)) next.delete(key);
+            return next.set(path, kind);
+          }),
+      },
+    [picked],
+  );
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
     // Cleared, so picking the same files again (after changing them) uploads them again.
@@ -172,8 +332,38 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
       </button>
       {open && (
         <>
+          <div className="files-tools">
+            <input type="search" placeholder="Search files" aria-label="Search files" value={query} onChange={(e) => setQuery(e.target.value)} />
+            {!picked && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPicked(new Map());
+                  setZipError(null);
+                }}
+                title="Pick files and folders to download together"
+              >
+                Select
+              </button>
+            )}
+          </div>
+          {picked && (
+            <SelectionBar
+              files={files}
+              picked={picked}
+              error={zipError}
+              onSubmit={() => {
+                ensureDownloadFrame();
+                setZipError(null);
+              }}
+              onDone={() => setPicked(null)}
+            />
+          )}
           <nav className="files">
-            <FolderView folder={root} depth={0} />
+            <SelectionContext.Provider value={selection}>
+              <FolderView folder={root} depth={0} expand={!!search} />
+            </SelectionContext.Provider>
+            {search && !root.matches && <small className="files-empty">No files match.</small>}
           </nav>
           <div className="upload-actions">
             <label className="upload" title="Pick one or more files">
