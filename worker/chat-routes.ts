@@ -93,6 +93,8 @@ export async function chatRoute(
     if (refused) return answer(refused);
     // Last, once the chat holds nothing: until then it stays in the owner's list, to delete again should a step fail.
     await directory.forgetChat(chatId);
+    // Its object restarts, and the call fails as it does.
+    await chat.resetDeleted().catch(() => {});
     return json({});
   }
   if (what === "deletion" && method === "GET" && !item) {

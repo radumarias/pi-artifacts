@@ -69,6 +69,7 @@ function refuse(status: ChatRefusal["status"], error: string): ChatRefusal {
 }
 
 const DELETED = "This chat was deleted.";
+const DELETING = "This chat is being deleted.";
 const GONE_KEY = "deleted";
 
 const SOCKET_TAG = "chat";
@@ -738,6 +739,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
     // Deleted already, with only the owner's list entry left: nothing else goes, and the conversation must not reopen.
     if (this.#deleted()) return { title: (await this.#directory.chatTitle(this.chatId)) ?? "", artifacts: [], files: [], members: 0 };
+    if (this.#gone) return refuse(409, DELETING);
     const [traces, title, stored] = await Promise.all([
       this.#traces(),
       this.#directory.chatTitle(this.chatId),
@@ -764,6 +766,8 @@ export class ChatAgent extends DurableObject<Env> {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
     // A try whose answer was lost deleted it already: the Worker only has the owner's list left to update.
     if (this.#deleted()) return null;
+    // Another try is deleting it now: a second would race it, and on failing would reopen the chat it deleted.
+    if (this.#gone) return refuse(409, DELETING);
     this.#gone = true;
     // The abort below ends the run: no status may be published while the chat is deleted.
     this.#unwatchRuns();
@@ -796,9 +800,17 @@ export class ChatAgent extends DurableObject<Env> {
       if (disposed) setTimeout(() => this.ctx.abort(errorMessage(error)), 0);
       throw error;
     }
-    // Not ctx.abort(): this answer waits for the mark to be stored, and an abort meanwhile would fail it, leaving the
-    // chat in the owner's list. The object is idle from here, and the mark keeps it shut once it is evicted.
+    // Not ctx.abort() here: this answer waits for the mark to be stored, and an abort meanwhile would fail it, leaving
+    // the chat in the owner's list. The Worker calls resetDeleted once it has the answer.
     return null;
+  }
+
+  /**
+   * Drop everything a deleted chat still holds in memory (its pages' manifests, MCP connections, the disposed agent) by
+   * restarting the object, which the mark then keeps shut. The call itself fails, as every call does that a reset ends.
+   */
+  resetDeleted(): void {
+    if (this.#deleted()) this.ctx.abort(DELETED);
   }
 
   /** Whether the chat was deleted: its storage holds only the mark deleteChat leaves. */
