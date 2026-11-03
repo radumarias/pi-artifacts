@@ -284,15 +284,7 @@ const Chevron = () => (
  * The sidebar's files, in a panel at its bottom that opens and closes (remembered in this browser): a folder tree,
  * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
  */
-export const FilesNav = memo(function FilesNav({
-  files,
-  status,
-  upload,
-}: {
-  files: readonly FileInfo[];
-  status: UploadStatus | null;
-  upload: (picked: Picked[]) => Promise<void>;
-}) {
+export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
   const [open, setOpen] = useStoredState("layout.filesOpen", true, (value) => typeof value === "boolean");
   const [query, setQuery] = useState("");
   // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
@@ -324,13 +316,7 @@ export const FilesNav = memo(function FilesNav({
   return (
     <section className={open ? "files-panel open" : "files-panel"}>
       <DownloadFrame onError={setZipError} />
-      <button
-        type="button"
-        className="files-panel-head"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        title={open ? "Hide your files" : "Show your files"}
-      >
+      <button type="button" className="files-panel-head" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? "Hide your files" : "Show your files"}>
         Files <small>{files.length.toLocaleString("en")}</small>
         {/* Closed, the panel still shows that an upload is going. */}
         {!open && status?.busy && <span className="spinner" />}
@@ -369,13 +355,7 @@ export const FilesNav = memo(function FilesNav({
             </label>
             <label className="upload" title="Pick a folder; its layout is kept under uploads/">
               Upload a folder
-              <input
-                type="file"
-                hidden
-                disabled={status?.busy}
-                ref={(input) => input?.setAttribute("webkitdirectory", "")}
-                onChange={(e) => pick(e.target)}
-              />
+              <input type="file" hidden disabled={status?.busy} ref={(input) => input?.setAttribute("webkitdirectory", "")} onChange={(e) => pick(e.target)} />
             </label>
           </div>
           <small className={status?.error ? "upload-status error" : "upload-status"}>
