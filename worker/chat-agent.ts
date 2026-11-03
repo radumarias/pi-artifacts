@@ -121,8 +121,6 @@ export class ChatAgent extends DurableObject<Env> {
   readonly storage = new Storage(this.env);
   readonly ai = createAI({ binding: this.env.AI, gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
   readonly registry = createRegistry();
-  /** For the one call that names a chat (#nameChat), made when it is needed. */
-  #titleModels: ReturnType<typeof piModels> | undefined;
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
       const models = piModels(this.ai.provider);
@@ -176,6 +174,8 @@ export class ChatAgent extends DurableObject<Env> {
   #runWatch: Promise<AgentEventStream> | undefined;
   /** Publishes an idle status once the chat has stayed idle for SETTLE_MS. */
   #settle: ReturnType<typeof setTimeout> | undefined;
+  /** The status the run watch last saw: what a cancelled settle starts again from (#resumeSettle). */
+  #watched: ChatStatus | null = null;
   /** Status writes to the sidebars, in order: a later status must not land before an earlier one. */
   #statusWrites: Promise<unknown> = Promise.resolve();
   /** The last read of the queue, by the inbox ids it was for: every socket asks after the same commit. */
@@ -485,12 +485,18 @@ export class ChatAgent extends DurableObject<Env> {
     await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
     const said = this.members.hasAny() ? `${author.name}: ${text}` : text;
     const content = attached ? [...attached.content, ...(text ? [{ type: "text" as const, text: said }] : [])] : said;
-    await this.harness.submit(content, {
-      entry: {
-        kind: CHAT_MESSAGE_KIND,
-        data: { uid: author.uid, name: author.name, text, ...(attached && { attachments: attached.attachments }) } satisfies ChatMessageData,
-      },
-    });
+    try {
+      await this.harness.submit(content, {
+        entry: {
+          kind: CHAT_MESSAGE_KIND,
+          data: { uid: author.uid, name: author.name, text, ...(attached && { attachments: attached.attachments }) } satisfies ChatMessageData,
+        },
+      });
+    } catch (error) {
+      // No run follows: the watch settles as it would have, or the sidebars keep what they were last told.
+      this.#resumeSettle();
+      throw error;
+    }
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     const title = text || attachments.map((a) => baseName(a.path)).join(", ");
     void this.#touchIndexes(title, author.uid).catch((error) => console.error("chat index:", errorMessage(error)));
@@ -524,7 +530,7 @@ export class ChatAgent extends DurableObject<Env> {
    * message cut to fit), in everyone's sidebar. A chat renamed meanwhile keeps its name.
    */
   async #nameChat(message: string, placeholder: string): Promise<void> {
-    const title = await titleFor((this.#titleModels ??= piModels(this.ai.provider)), this.ai(this.env.TITLE_MODEL), message);
+    const title = await titleFor(piModels(this.ai.provider), this.ai(this.env.TITLE_MODEL), message);
     if (!title || title === placeholder) return;
     const indexes = this.#everyonesIndexes();
     await Promise.allSettled(indexes.map((index) => index.nameChat(this.chatId, this.uid, title, placeholder)));
@@ -560,11 +566,14 @@ export class ChatAgent extends DurableObject<Env> {
         shown = tracker.status;
         this.#onStatus(shown);
       });
-      // A stream pi closed delivers nothing more: the next prompt attaches a new one.
+      // A stream pi closed delivers nothing more: the next prompt attaches a new one. Closed mid-run (its session closed),
+      // the run goes on: follow it on a new stream, or the sidebars would show it working until the next prompt.
       void events.closed
         .catch(() => {})
         .then(() => {
-          if (this.#runWatch === watch) this.#runWatch = undefined;
+          if (this.#runWatch !== watch) return;
+          this.#runWatch = undefined;
+          if (shown === "running" && !this.#gone) void this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
         });
       return events;
     })();
@@ -578,14 +587,25 @@ export class ChatAgent extends DurableObject<Env> {
   /** A working chat shows at once; an idle one once it has stayed idle for SETTLE_MS, and the watch then ends. */
   #onStatus(status: ChatStatus | null): void {
     this.#cancelSettle();
+    this.#watched = status;
     if (status === "running") return this.#publishStatus(status);
     this.#settle = setTimeout(() => {
-      this.#settle = undefined;
-      const watch = this.#runWatch;
-      this.#runWatch = undefined;
+      this.#unwatchRuns();
       this.#publishStatus(status);
-      void watch?.then((events) => events.stop()).catch(() => {});
     }, SETTLE_MS);
+  }
+
+  /** A watch whose settle a prompt cancelled, for a run that did not come: settle it again. */
+  #resumeSettle(): void {
+    if (this.#runWatch && this.#settle === undefined && this.#watched !== "running") this.#onStatus(this.#watched);
+  }
+
+  /** Stop following the chat's events, and drop a pending settle. */
+  #unwatchRuns(): void {
+    this.#cancelSettle();
+    const watch = this.#runWatch;
+    this.#runWatch = undefined;
+    void watch?.then((events) => events.stop()).catch(() => {});
   }
 
   /**
@@ -706,6 +726,8 @@ export class ChatAgent extends DurableObject<Env> {
   async deleteChat(by: Person, { files }: { files: readonly string[] }): Promise<ChatRefusal | null> {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can delete it.");
     this.#gone = true;
+    // The abort below ends the run: no status may be published while the chat is deleted.
+    this.#unwatchRuns();
     let disposed = false;
     try {
       // Nothing may publish or save while its traces are read: abort resolves once the run's tools have stopped.
@@ -730,6 +752,7 @@ export class ChatAgent extends DurableObject<Env> {
       this.ctx.storage.kv.put(GONE_KEY, true);
     } catch (error) {
       this.#gone = false;
+      if (!disposed && this.#status() === "running") void this.#watchRuns().catch((e: unknown) => console.error("chat status:", errorMessage(e)));
       // A disposed lifecycle cannot serve the chat again: start afresh from what is still stored.
       if (disposed) setTimeout(() => this.ctx.abort(errorMessage(error)), 0);
       throw error;

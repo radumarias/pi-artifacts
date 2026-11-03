@@ -3,15 +3,24 @@ import type { AgentEvent, EntryRecord, SnapshotEvent } from "@earendil-works/pi-
 import { textOf } from "../shared/canonical.ts";
 import type { ChatStatus } from "../shared/protocol.ts";
 
+/** A question mark at the end, give or take closing quotes, brackets, Markdown emphasis or an emoji. */
+const QUESTION_END = /[?？]["'”’)\]*_`\s\p{Extended_Pictographic}\uFE0F]*$/u;
+/** A Markdown list item: "- ", "* ", "+ ", "• ", "1. " or "1) ". */
+const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+/;
+
 /**
- * Whether a reply ends by asking the user something: its last paragraph ends with a question mark, give or take
- * closing quotes, brackets, Markdown emphasis or an emoji. Only the end counts: a question in passing earlier in a
- * reply that then goes on is not one the agent waits on.
+ * Whether a reply ends by asking the user something: its last paragraph ends with a question mark, or the line just
+ * before a closing list does (a question, then the options to pick from). Only the end counts: a question in passing
+ * earlier in a reply that then goes on is not one the agent waits on.
  */
 export function asksUser(text: string): boolean {
-  const paragraphs = text.trim().split(/\n\s*\n/);
-  const last = paragraphs[paragraphs.length - 1];
-  return /[?？]["'”’)\]*_`\s\p{Extended_Pictographic}\uFE0F]*$/u.test(last);
+  const trimmed = text.trim();
+  const paragraphs = trimmed.split(/\n\s*\n/);
+  if (QUESTION_END.test(paragraphs[paragraphs.length - 1])) return true;
+  const lines = trimmed.split("\n");
+  let end = lines.length;
+  while (end > 0 && (LIST_ITEM.test(lines[end - 1]) || !lines[end - 1].trim())) end--;
+  return end > 0 && end < lines.length && QUESTION_END.test(lines[end - 1]);
 }
 
 /**

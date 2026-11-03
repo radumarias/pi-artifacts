@@ -9,11 +9,14 @@ describe("asksUser", () => {
     expect(asksUser("Want me to add a chart? 🙂")).toBe(true);
     expect(asksUser('Should I call it "Prices"?**')).toBe(true);
     expect(asksUser("Shall I go on? ")).toBe(true);
+    expect(asksUser("Which theme should it use?\n\n1. Light\n2. Dark")).toBe(true);
+    expect(asksUser("Which one?\n- Prices\n- Volumes")).toBe(true);
   });
 
   it("is false when a question is only in passing, or there is none", () => {
     expect(asksUser("Why does it lag? The feed updates every minute.\n\nI set the refresh to 60 s.")).toBe(false);
     expect(asksUser("Published version 2.")).toBe(false);
+    expect(asksUser("Here is what changed:\n\n- a chart\n- a table")).toBe(false);
     expect(asksUser("")).toBe(false);
   });
 });
