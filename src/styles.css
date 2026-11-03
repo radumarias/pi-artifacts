@@ -95,8 +95,8 @@ body.resizing iframe { pointer-events: none; }
 .files-panel.open { flex: 0 1 auto; max-height: 60%; }
 .files-panel .files { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 /* A section heading that opens and closes it (artifacts, files), styled as the other headings. Its text lines up with
-   theirs; its hover background reaches out to the rows' edges. */
-.section-head { display: flex; flex: none; align-items: center; gap: 6px; margin: 0 -8px; padding: 8px 8px 6px; border: 0; border-radius: 6px; background: none; }
+   theirs; its hover background reaches 8px past its text, as a row's does past the row's text. */
+.section-head { display: flex; align-items: center; gap: 6px; margin: 0 -8px; padding: 8px 8px 6px; border: 0; border-radius: 6px; background: none; }
 .section-head:hover { background: var(--surface-2); color: var(--text); }
 .section-head small { font-weight: 400; letter-spacing: 0; }
 .section-head svg { margin-left: auto; transition: transform 0.15s; }
@@ -109,6 +109,10 @@ body.resizing iframe { pointer-events: none; }
 .sidebar h3, .section-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 /* After .sidebar h3, whose margin shorthand would otherwise win at equal specificity. */
 .sidebar .sidebar-pinned h3 { margin-top: 10px; }
+/* A section heading's h3 (SectionHead) adds no space of its own; its button pads it. */
+.sidebar h3.section-title { flex: none; display: flex; flex-direction: column; margin: 0; }
+/* Its list then starts as close below it as skills do below their heading (the section's gap is wider than the panel's). */
+.sidebar .sidebar-pinned h3.section-title { margin-bottom: -4px; }
 .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
 /* Rows keep their height in a list capped to scroll (their overflow: hidden would let the column squeeze them). */
 .sidebar nav > * { flex: none; }

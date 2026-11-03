@@ -53,20 +53,23 @@ export function SectionHead({
   upward?: boolean;
   children?: ReactNode;
 }) {
+  // In a heading, so moving through the page by headings still finds the section.
   return (
-    <button
-      type="button"
-      className="section-head"
-      aria-expanded={open}
-      onClick={() => onToggle(!open)}
-      title={`${open ? "Hide" : "Show"} your ${name.toLowerCase()}`}
-    >
-      {name} <small>{count.toLocaleString("en")}</small>
-      {children}
-      <Icon size={14} box={16} stroke={1.8}>
-        <path d={upward ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
-      </Icon>
-    </button>
+    <h3 className="section-title">
+      <button
+        type="button"
+        className="section-head"
+        aria-expanded={open}
+        onClick={() => onToggle(!open)}
+        title={`${open ? "Hide" : "Show"} your ${name.toLowerCase()}`}
+      >
+        {name} <small>{count.toLocaleString("en")}</small>
+        {children}
+        <Icon size={14} box={16} stroke={1.8}>
+          <path d={upward ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
+        </Icon>
+      </button>
+    </h3>
   );
 }
 
