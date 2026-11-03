@@ -1,7 +1,7 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL } from "../../shared/protocol.ts";
+import { CHECK_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
 import { clip } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
@@ -88,6 +88,7 @@ const LABELS: Record<string, string> = {
   run_python: "Python",
   run_bash: "Bash",
   [PUBLISH_TOOL]: "Publish artifact",
+  [CHECK_TOOL]: "Check page",
   artifact_read: "Read artifact",
   artifact_history: "Artifact history",
   artifact_diff: "Compare versions",
@@ -103,6 +104,7 @@ const INPUT_LABELS: Record<string, Record<string, string>> = {
   run_python: { code: "Python" },
   run_bash: { script: "Bash" },
   [PUBLISH_TOOL]: { html: "HTML" },
+  [CHECK_TOOL]: { html: "HTML" },
 };
 
 export function stepLabel(name: string): string {
@@ -117,8 +119,15 @@ export function stepLabel(name: string): string {
 /** Lines that say nothing about what a script does: blank, a shebang, shell options. */
 const BOILERPLATE = /^\s*($|#!|set -)/;
 
+/** One line on what a check does: its first argument is the page, whose first line says nothing. */
+function checkHint(args: Record<string, unknown> | undefined): string {
+  const tests = Array.isArray(args?.tests) ? args.tests.length : 0;
+  return [args?.viewport === "mobile" ? "Mobile" : "Desktop", tests && `${tests} test${tests === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+}
+
 /** One line on what the call does: the first telling line of its first text argument, or its arguments in short. */
-export function stepHint(args: Record<string, unknown> | undefined): string {
+export function stepHint(args: Record<string, unknown> | undefined, name?: string): string {
+  if (name === CHECK_TOOL) return checkHint(args);
   const values = Object.values(args ?? {});
   const first = values.find((value): value is string => typeof value === "string" && value.trim() !== "");
   if (first !== undefined) {
@@ -222,11 +231,13 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const { text, icon, tone } = STATUS[status];
   const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
   return (
-    <Panel openKey={call.id} tone={tone} icon={icon ?? <Spark />} label={stepLabel(call.name)} hint={stepHint(call.arguments)} status={text + time}>
+    <Panel openKey={call.id} tone={tone} icon={icon ?? <Spark />} label={stepLabel(call.name)} hint={stepHint(call.arguments, call.name)} status={text + time}>
       {() => {
         const output = result ? resultText(result) : live!.tools.get(call.id)?.output;
+        const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
         return (
           <>
+            {check && <CheckShot check={check} />}
             {inputSections(call.name, call.arguments).map((section, i) => (
               <Section key={i} {...section} />
             ))}
@@ -240,6 +251,17 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
         );
       }}
     </Panel>
+  );
+}
+
+/** What a page check saw: its screenshot, and how many errors and warnings it found. */
+function CheckShot({ check }: { check: CheckedDetails }) {
+  const count = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
+  return (
+    <figure className={check.errors ? "step-shot error" : "step-shot"}>
+      {check.thumb.startsWith("data:image/jpeg;base64,") && <img src={check.thumb} alt="The page as the check rendered it" />}
+      <figcaption>{check.errors || check.warnings ? `${count(check.errors, "error")}, ${count(check.warnings, "warning")}` : "No errors or warnings"}</figcaption>
+    </figure>
   );
 }
 

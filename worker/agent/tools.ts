@@ -1,10 +1,23 @@
 import { Type } from "@earendil-works/pi-ai";
 import { exports } from "cloudflare:workers";
-import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, section, type Extension, type ToolExecutionResult } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
-import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type SavedFilesDetails } from "../../shared/protocol.ts";
+import {
+  CHECK_TOOL,
+  isOwnedBy,
+  manifestOf,
+  PUBLISH_TOOL,
+  type ArtifactManifest,
+  type ArtifactMeta,
+  type ArtifactSummary,
+  type CheckedDetails,
+  type PublishedDetails,
+  type SavedFilesDetails,
+} from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
+import { BrowserUnavailable } from "../artifacts/browser.ts";
+import { describeReport, type CheckInput, type CheckReport, type CheckViewport } from "../artifacts/check.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
 import type { McpHub } from "../mcp/hub.ts";
@@ -26,6 +39,8 @@ export interface ChatScope {
   broughtIn(id: string): boolean;
   /** Save a skill for the user, turned off until they turn it on. */
   proposeSkill(skill: SkillInput): Promise<SkillResult>;
+  /** Render a page in a headless browser and report on it (worker/artifacts/check.ts). Throws BrowserUnavailable without one. */
+  checkPage(input: CheckInput): Promise<CheckReport>;
 }
 
 /**
@@ -230,12 +245,17 @@ export interface PublishInput {
   message?: string;
 }
 
-/** Check the declaration, store a new version and index it for the user. Throws with what to fix. */
-export async function publishArtifact(scope: ChatScope, input: PublishInput): Promise<ArtifactMeta> {
-  if (new TextEncoder().encode(input.html).byteLength > MAX_HTML_BYTES) throw new Error("The page is over 2 MB; summarise the data instead of inlining it.");
-  const manifest: ArtifactManifest = input.mcp?.length ? { mcp: { servers: input.mcp } } : {};
+/** The manifest a page declares, checked against the chat's servers, and the page's size. Throws with what to fix. */
+async function validPage(scope: ChatScope, html: string, mcp: PublishInput["mcp"], what: string): Promise<ArtifactManifest> {
+  if (new TextEncoder().encode(html).byteLength > MAX_HTML_BYTES) throw new Error("The page is over 2 MB; summarise the data instead of inlining it.");
+  const manifest: ArtifactManifest = mcp?.length ? { mcp: { servers: mcp } } : {};
   const problems = await checkManifest(scope.hub, manifest);
-  if (problems.length) throw new Error(`Not published. Fix the mcp declaration:\n${problems.join("\n")}`);
+  if (problems.length) throw new Error(`${what} Fix the mcp declaration:\n${problems.join("\n")}`);
+  return manifest;
+}
+
+/** Store a new version with its checked manifest and index it for the user. */
+async function publishArtifact(scope: ChatScope, input: PublishInput, manifest: ArtifactManifest): Promise<ArtifactMeta> {
   const meta = await scope.artifacts.publishVersion({
     id: input.artifactId,
     ownerUid: scope.uid,
@@ -260,15 +280,119 @@ async function ownArtifact(scope: ChatScope, id: string): Promise<ArtifactMeta> 
   return meta;
 }
 
+const mcpParameter = Type.Optional(
+  Type.Array(Type.Object({ server: Type.String(), tools: Type.Array(Type.String()) }), {
+    description: 'e.g. [{"server": "CoinGecko", "tools": ["execute"]}]',
+  }),
+);
+
+/** A page and its manifest, as a key: the same page checked twice, or checked and then published, is checked once. */
+async function pageKey(html: string, manifest: ArtifactManifest): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${JSON.stringify(manifest)}\u0000${html}`));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The pages that passed a check in this chat lately, by pageKey: publishing one of them as it is needs no second check. */
+export class PassedPages {
+  static readonly MAX = 20;
+  readonly #keys = new Set<string>();
+
+  has(key: string): boolean {
+    return this.#keys.has(key);
+  }
+
+  add(key: string): void {
+    this.#keys.delete(key);
+    this.#keys.add(key);
+    if (this.#keys.size > PassedPages.MAX) this.#keys.delete(this.#keys.values().next().value!);
+  }
+}
+
+/**
+ * Publish a page, but only one without errors: one that passed a check as it is now, or passes one here. Without a
+ * browser to check in, the page is published unchecked, and the result says so.
+ */
+export async function publishChecked(scope: ChatScope, input: PublishInput, passed: PassedPages): Promise<ToolExecutionResult<Partial<PublishedDetails>>> {
+  const manifest = await validPage(scope, input.html, input.mcp, "Not published.");
+  const key = await pageKey(input.html, manifest);
+  let report: CheckReport | undefined;
+  let unchecked = "";
+  if (!passed.has(key)) {
+    try {
+      report = await scope.checkPage({ html: input.html, manifest, tests: [], viewport: "desktop" });
+    } catch (error) {
+      if (!(error instanceof BrowserUnavailable)) throw error;
+      unchecked = ` It was not checked in a browser: ${error.message}.`;
+    }
+    if (report?.errors.length) return { output: checkOutput(report, ""), details: { check: checkedDetails(report) }, isError: true };
+    if (report) passed.add(key);
+  }
+  const meta = await publishArtifact(scope, input, manifest);
+  const done = `Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.${unchecked}`;
+  const details: PublishedDetails = { artifactId: meta.id, version: meta.latest, title: meta.title, ...(report && { check: checkedDetails(report) }) };
+  return { output: report ? checkOutput(report, done) : text(done), details };
+}
+
+/** What a check's result gives the model: the report, then the screenshot. */
+function checkOutput(report: CheckReport, published?: string) {
+  const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = text(clip(describeReport(report, published)));
+  content.push({ type: "image", data: report.screenshot, mimeType: "image/jpeg" });
+  return content;
+}
+
+function checkedDetails(report: CheckReport): CheckedDetails {
+  return { thumb: report.thumb, errors: report.errors.length, warnings: report.warnings.length };
+}
+
 export function artifactExtension(scope: ChatScope): Extension {
+  const passed = new PassedPages();
   return defineExtension({
     name: "artifacts",
     tools: [
       defineTool({
+        name: CHECK_TOOL,
+        description:
+          "Render a page in a headless browser before publishing it, with its live MCP calls answered as the viewer's would be (read-only tools only; " +
+          "a write tool gets a not_granted error instead of running). Returns errors (uncaught exceptions, console errors, blocked or failed loads, " +
+          "calls the page got wrong, failed tests), warnings, how the live calls went, the visible text and a screenshot. Nothing is published, " +
+          "so fixing and checking again uses up no versions. Pass `tests`: a few short checks of what the page must show once its data arrived.",
+        parameters: Type.Object({
+          html: Type.String({ description: "The page, exactly as you would publish it." }),
+          mcp: mcpParameter,
+          tests: Type.Optional(
+            Type.Array(
+              Type.Object({
+                name: Type.String({ description: 'What it checks, e.g. "price table has rows".' }),
+                run: Type.String({
+                  description:
+                    "The body of an async function run in the page after it settled: throw (or return false) to fail, return a string to report a value. " +
+                    'e.g. "const rows = document.querySelectorAll(\'#prices tbody tr\').length; if (rows < 1) throw new Error(\'no rows\'); return rows + \' rows\';"',
+                }),
+              }),
+              { maxItems: 10 },
+            ),
+          ),
+          viewport: Type.Optional(Type.Union([Type.Literal("desktop"), Type.Literal("mobile")], { description: "desktop (1280 wide, the default) or mobile (390 wide)." })),
+        }),
+        execute: async (args) => {
+          const manifest = await validPage(scope, args.html, args.mcp, "Not checked.");
+          let report: CheckReport;
+          try {
+            report = await scope.checkPage({ html: args.html, manifest, tests: args.tests ?? [], viewport: (args.viewport ?? "desktop") as CheckViewport });
+          } catch (error) {
+            if (!(error instanceof BrowserUnavailable)) throw error;
+            return { output: text(`The page could not be checked: ${error.message}. Publishing works without the check.`) };
+          }
+          if (report.errors.length === 0) passed.add(await pageKey(args.html, manifest));
+          return { output: checkOutput(report), details: { check: checkedDetails(report) }, isError: report.errors.length > 0 };
+        },
+      }),
+      defineTool({
         name: PUBLISH_TOOL,
         description:
           "Publish an HTML page as an artifact the user sees in the preview panel. Pass artifact_id to publish a new version of an artifact " +
-          "you published in this chat; omit it to create a new one (also to build on an artifact from another chat, which stays as it is). Declare in `mcp` every server and tool the page calls; the page can call nothing else.",
+          "you published in this chat; omit it to create a new one (also to build on an artifact from another chat, which stays as it is). Declare in `mcp` every server and tool the page calls; the page can call nothing else. " +
+          `A page that has not passed ${CHECK_TOOL} as it is gets checked first, and is not published while the check finds errors.`,
         parameters: Type.Object({
           title: Type.String({ description: "Two to five words." }),
           html: Type.String({ description: "The page: a full HTML document, or a body fragment." }),
@@ -276,19 +400,10 @@ export function artifactExtension(scope: ChatScope): Extension {
           message: Type.Optional(
             Type.String({ description: "One line on what this version changes, e.g. \"Add a 7-day sparkline\". It becomes the version's commit message." }),
           ),
-          mcp: Type.Optional(
-            Type.Array(Type.Object({ server: Type.String(), tools: Type.Array(Type.String()) }), {
-              description: 'e.g. [{"server": "CoinGecko", "tools": ["execute"]}]',
-            }),
-          ),
+          mcp: mcpParameter,
         }),
-        execute: async (args) => {
-          const meta = await publishArtifact(scope, { title: args.title, html: args.html, artifactId: args.artifact_id, mcp: args.mcp, message: args.message });
-          return {
-            output: text(`Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.`),
-            details: { artifactId: meta.id, version: meta.latest, title: meta.title } satisfies PublishedDetails,
-          };
-        },
+        execute: (args) =>
+          publishChecked(scope, { title: args.title, html: args.html, artifactId: args.artifact_id, mcp: args.mcp, message: args.message }, passed),
       }),
       defineTool({
         name: "artifact_read",

@@ -45,6 +45,9 @@ describe("step header", () => {
     expect(stepHint({ script: "set -e" })).toBe("set -e");
     expect(stepHint({ ids: ["bitcoin"], days: 7 })).toBe('{"ids":["bitcoin"],"days":7}');
     expect(stepHint(undefined)).toBe("");
+    // A page check's first argument is the page: its hint is how it checks.
+    expect(stepHint({ html: "<!doctype html>", tests: [{}, {}], viewport: "mobile" }, "artifact_check")).toBe("Mobile · 2 tests");
+    expect(stepHint({ html: "<!doctype html>" }, "artifact_check")).toBe("Desktop");
   });
 });
 

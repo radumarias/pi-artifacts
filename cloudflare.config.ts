@@ -68,6 +68,9 @@ export default defineConfig({
       // Live calls from published pages: 120 a minute per viewer and chat, counted by Cloudflare across the Worker's
       // isolates. The namespace is any number unique within the account.
       PAGE_CALLS: bindings.rateLimit({ namespace: "4201", simple: { limit: 120, period: 60 } }),
+      // Headless Chrome (Browser Rendering): the agent checks each page in it before publishing (worker/artifacts/check.ts).
+      // Local development runs a local Chrome, which miniflare downloads on first use.
+      BROWSER: bindings.browser({ dev: { remote: false } }),
       // Workers AI binding. Pi's createAI() routes Claude through AI Gateway with it.
       AI: bindings.ai({}),
       // Each user's files (users/<uid>/files/…), and a read cache of artifact versions (artifacts/<id>/…).

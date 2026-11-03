@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
+    "@cloudflare/puppeteer": "1.4.0",
     "@cloudflare/sandbox": "1.0.3",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",

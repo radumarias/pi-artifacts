@@ -31,6 +31,10 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
 - Shared chats (`worker/chat-routes.ts`, `worker/members.ts`): the owner invites people by single-use link; they share
   the one conversation and the one agent, which always acts as the owner (owner's MCP sign-ins, files, skills; artifacts
   owned by the owner). The chat object checks membership on every socket and prompt; keep it that way.
+- Before a page becomes a version it is checked in a headless browser (`BROWSER` binding, `worker/artifacts/check.ts`):
+  `artifact_check` and `artifact_publish` report console errors, failed calls, a screenshot and the agent's tests, and
+  publish refuses a page with errors; keep it that way. `test/check.test.ts` runs the check in a local Chrome
+  (`CHROME_PATH`, else Playwright's) and skips without one.
 - Each artifact is the repo `artifact-<id>`: one commit and tag `v<n>` per publish, pushed with isomorphic-git
   (`worker/storage/git.ts`), since the binding cannot write files. `pnpm dev` uses a local Git backend for it (needs
   `git`); `test/artifact-store.test.ts` runs the real Git code against `git http-backend`. Shared test doubles (R2 bucket, local

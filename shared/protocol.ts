@@ -133,11 +133,22 @@ export const MCP_TOOL_SEPARATOR = "__";
 
 /** The tool that publishes an artifact, and the details its result carries: the chat UI opens the preview from them. */
 export const PUBLISH_TOOL = "artifact_publish";
-export interface PublishedDetails {
+// Types, not interfaces: tool details must be JSON, which an interface does not promise.
+export type PublishedDetails = {
   artifactId: string;
   version: number;
   title: string;
-}
+  check?: CheckedDetails;
+};
+
+/** The tool that renders a page in a headless browser before it is published, and what its result shows in the chat. */
+export const CHECK_TOOL = "artifact_check";
+export type CheckedDetails = {
+  /** A small JPEG data URL of the rendered page. */
+  thumb: string;
+  errors: number;
+  warnings: number;
+};
 
 /**
  * What a chat's agent is up to, as the sidebar shows it: "running" while it works (or messages wait for it), "waiting"

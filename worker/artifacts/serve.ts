@@ -1,7 +1,7 @@
 import RUNTIME from "../../runtime/pi-runtime.js?raw";
 
 /** The only hosts a page may load scripts from, as on claude.ai. */
-const SCRIPT_HOSTS = [
+export const SCRIPT_HOSTS = [
   "https://cdnjs.cloudflare.com",
   "https://cdn.jsdelivr.net/npm/",
   "https://unpkg.com",
@@ -19,8 +19,10 @@ const SCRIPT_HOSTS = [
  * frame's sandbox. Without it, a page loaded top-level would run on the app's
  * origin and could script the app as the viewer.
  */
-export const ARTIFACT_CSP = [
-  "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox",
+export const ARTIFACT_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
+
+/** The policy without its sandbox directive, which a <meta> policy cannot carry: the check (check.ts) sandboxes its frame instead. */
+export const PAGE_POLICY = [
   "default-src 'none'",
   `script-src 'unsafe-inline' ${SCRIPT_HOSTS.join(" ")}`,
   "style-src 'unsafe-inline' https://fonts.googleapis.com",
@@ -33,13 +35,16 @@ export const ARTIFACT_CSP = [
   "base-uri 'none'",
 ].join("; ");
 
+export const ARTIFACT_CSP = `sandbox ${ARTIFACT_SANDBOX}; ${PAGE_POLICY}`;
+
 /**
  * Wrap the HTML the agent published in a document that loads the runtime
  * first. A page that is already a full document gets the runtime as the first
- * thing in its head.
+ * thing in its head. `prelude` goes before the runtime (the check's policy and
+ * error capture).
  */
-export function renderArtifact(html: string): string {
-  const runtime = `<script>${RUNTIME}</script>`;
+export function renderArtifact(html: string, prelude = ""): string {
+  const runtime = `${prelude}<script>${RUNTIME}</script>`;
   if (/<head[\s>]/i.test(html)) return html.replace(/<head(\s[^>]*)?>/i, (head) => `${head}${runtime}`);
   if (/<html[\s>]/i.test(html)) return html.replace(/<html(\s[^>]*)?>/i, (tag) => `${tag}<head>${runtime}</head>`);
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${runtime}</head><body>${html}</body></html>`;

@@ -283,6 +283,10 @@ body.resizing iframe { pointer-events: none; }
 .step-section pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .step-section.error pre { color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }
 .step-note { margin: 0; color: var(--muted); }
+.step-shot { margin: 0 0 10px; }
+.step-shot img { display: block; max-width: min(100%, 480px); max-height: 360px; object-fit: cover; object-position: top; border: 1px solid var(--border); border-radius: 6px; }
+.step-shot figcaption { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.step-shot.error figcaption { color: var(--error); }
 .step-thought { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
 /* Waiting on the model: pulsing dots, a rotating word with a light sweeping across it, and the elapsed time (Thinking.tsx). */
 .thinking { display: flex; align-items: center; gap: 10px; padding: 2px 4px; color: var(--muted); }

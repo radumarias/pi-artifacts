@@ -43,7 +43,20 @@ import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
-import { artifactExtension, filesExtension, filesIndexExtension, publishArtifact, sandboxExtension, sandboxName, skillsExtension, type ChatScope, type PublishInput } from "./agent/tools.ts";
+import {
+  artifactExtension,
+  filesExtension,
+  filesIndexExtension,
+  PassedPages,
+  publishChecked,
+  sandboxExtension,
+  sandboxName,
+  skillsExtension,
+  type ChatScope,
+  type PublishInput,
+} from "./agent/tools.ts";
+import { CheckBrowser } from "./artifacts/browser.ts";
+import { checkPage, type Bridge } from "./artifacts/check.ts";
 import { chatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
@@ -77,6 +90,10 @@ const OWNER = "chat-sockets";
 /** Set by the Worker on a chat socket's upgrade request, from the verified identity; never taken from the browser. */
 export const PERSON_HEADER = "x-pi-person";
 const MAX_STALE_MS = 24 * 60 * 60_000;
+/** A page check reuses results this young, so checking a page again and again does not call the servers each time. */
+const CHECK_STALE_MS = 2 * 60_000;
+/** The live calls one page check may make. */
+const MAX_CHECK_CALLS = 40;
 const MEMBERS_TOUCH_MS = 60_000;
 /**
  * How long a chat must stay idle before the sidebars hear its run ended: the next queued message starts its run right
@@ -162,6 +179,8 @@ export class ChatAgent extends DurableObject<Env> {
 
   readonly scope: ChatScope;
   readonly #manifests = new Map<string, ArtifactManifest>();
+  /** The headless browser the agent checks its pages in. */
+  readonly #checkBrowser = new CheckBrowser(this.env.BROWSER);
   /**
    * The servers whose tools the agent has now (`key`), so a refresh reinstalls only on a change, what mcp_discover
    * says about them, and which listing they came from (`generation`): a listing started later has lists at least as new, so one that
@@ -200,6 +219,7 @@ export class ChatAgent extends DurableObject<Env> {
       onPublished: (artifact) => this.#directory.recordArtifact({ ...artifact, chatId: this.chatId }),
       broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
+      checkPage: (input) => this.#checkBrowser.withPage((page) => checkPage(page, input, this.#checkBridge(input.manifest))),
     });
     this.registry.install(promptExtension);
     this.registry.install(peopleExtension(() => this.people()));
@@ -835,10 +855,15 @@ export class ChatAgent extends DurableObject<Env> {
     return { artifacts: [...traces.artifacts], files: [...traces.files] };
   }
 
-  /** Publish without the model, through the same checks as the agent's tool. Only routed when DEV_TOOLS is on. */
+  /**
+   * Publish without the model, through the same checks as the agent's tool, the browser check included: a page with
+   * errors throws the check's report. Only routed when DEV_TOOLS is on.
+   */
   async devPublish(input: PublishInput) {
-    const meta = await publishArtifact(this.scope, input);
-    return { artifactId: meta.id, version: meta.latest };
+    const result = await publishChecked(this.scope, input, new PassedPages());
+    const report = (result.output ?? []).flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+    if (result.isError || !result.details?.artifactId) throw new Error(report);
+    return { artifactId: result.details.artifactId, version: result.details.version, report };
   }
 
   async abort(by: Person): Promise<void> {
@@ -898,6 +923,39 @@ export class ChatAgent extends DurableObject<Env> {
       if (error instanceof McpFailure) return fail(error.error);
       return fail({ code: "upstream_error", server, message: errorMessage(error) });
     }
+  }
+
+  /**
+   * Answers a page's calls while it is checked, before it is published: as its author would get them, from the
+   * manifest it is checked with. Only read-only tools run, from results up to CHECK_STALE_MS old; the check never
+   * changes anything.
+   */
+  #checkBridge(manifest: ArtifactManifest): Bridge {
+    let calls = 0;
+    return async (request) => {
+      const { server, tool } = request;
+      const fail = (error: Omit<McpError, "server">) => ({ ok: false as const, error: { ...error, server } });
+      if (!manifest.mcp?.servers.find((entry) => entry.server === server)?.tools.includes(tool)) {
+        return fail({ code: "not_in_manifest", message: `This page does not declare ${server}/${tool}.` });
+      }
+      try {
+        const info = await this.hub.tool(server, tool);
+        if (!info) return fail({ code: "not_in_manifest", message: `${server} has no tool named ${tool}.` });
+        if (request.method === "describe") {
+          return { ok: true as const, tool: { name: info.name, description: info.description, inputSchema: info.inputSchema, annotations: info.annotations } };
+        }
+        if (!isReadOnly(info)) {
+          if (request.mode === "read") return fail({ code: "bad_request", message: `${tool} is not read-only, so it cannot be watched or cached; use callTool.` });
+          return fail({ code: "not_granted", message: `${tool} can change data, so the check does not run it; the page gets this error instead.` });
+        }
+        if (++calls > MAX_CHECK_CALLS) return fail({ code: "rate_limited", message: `A check makes at most ${MAX_CHECK_CALLS} live calls.` });
+        const read = await this.hub.read(server, tool, request.input, { staleMs: CHECK_STALE_MS, viewer: this.uid });
+        return { ok: true as const, result: read.result };
+      } catch (error) {
+        if (error instanceof McpFailure) return { ok: false as const, error: error.error };
+        return fail({ code: "upstream_error", message: errorMessage(error) });
+      }
+    };
   }
 
   /**

@@ -10,7 +10,8 @@ Users can attach files to a message; they come before its text, each named by it
 const DASHBOARDS = `How to build a live dashboard:
 1. Find the data. Use the MCP tools to discover what a server offers, then make ONE real read-only call with exactly the input the page will send (the same code, for code-mode tools), not a summary of it. The page receives that call's result as \`payload\`: write the page against the full shape you saw, wrapper objects included. Never guess a shape you have not seen.
 2. Write the page so it fetches its own data at view time with pi.use("mcp") and watchTool (see the runtime contract). The observed values are the user's real data: learn the shape from them, but never embed them in the page as sample or placeholder data.
-3. Publish with artifact_publish, declaring exactly the servers and tools the page calls. To change a page, publish again with the same artifact_id and a one-line message saying what changed; the open preview updates. Each version is kept: artifact_history lists them and artifact_diff shows what changed between two.
+3. Check it with artifact_check before publishing: it renders the page in a headless browser with its live data and returns its errors, how its calls went, its visible text and a screenshot. Pass 2 to 4 tests of what the page must show once its data arrived (rows in a table, a chart drawn, numbers that are not NaN). Fix every error and anything that looks wrong in the screenshot, then check again, until it passes. Checks publish nothing, so fixes never use up versions.
+4. Publish that exact page with artifact_publish, declaring exactly the servers and tools the page calls. A page that has not passed a check is checked there, and is not published while it has errors. To change a page, check the new page, then publish it with the same artifact_id and a one-line message saying what changed; the open preview updates. Each version is kept: artifact_history lists them and artifact_diff shows what changed between two.
 
 Rules every page follows:
 - One self-contained HTML page. Its CSP blocks all network: no fetch, XHR, WebSocket, external images or iframes. Data comes only through pi.use("mcp").
@@ -19,6 +20,7 @@ Rules every page follows:
 - The page runs in a sandboxed frame with an opaque origin: localStorage and cookies throw, so wrap any storage in try/catch or avoid it.
 - Render the layout first, then light up live sections when pi.use resolves. If it resolves null, show the page with a note that live data needs the viewer.
 - Each live section shows its own loading state, its own error (branch on error.code) and a "updated Ns ago" label driven by result.cache?.storedAt (fall back to the time the result arrived).
+- Pass every error you catch to console.error as well as showing it, so the check sees it.
 - Poll with refetchInterval no faster than 30 000 ms; give one-off actions a button that calls callTool.
 - The page is the widget and nothing else: data, titles, labels, units, legends and the states above. No explanatory prose: no intro or "about this page" paragraph, no notes on how it works or where the data comes from, no footer describing it.
 - Use the full width of the frame: no max-width container or centered column; let a responsive grid fill the space, with modest padding.

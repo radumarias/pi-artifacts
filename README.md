@@ -170,6 +170,29 @@ await mcp.invalidate("CoinGecko");                                    // refetch
 
 [`examples/crypto-dashboard.html`](examples/crypto-dashboard.html) is a complete page written against it.
 
+## Checking a page before it is published
+
+The agent checks every page in a headless browser (Cloudflare Browser Rendering, the `BROWSER` binding) before it
+becomes a version, so the versions a user sees are pages that rendered without errors, and fixes along the way use up
+none. `artifact_check` (`worker/artifacts/check.ts`) renders the page as a viewer would: in a sandboxed frame under the
+page's CSP, with its live calls answered by the chat's MCP connections. It returns:
+
+- **errors:** uncaught exceptions and unhandled rejections (their lines mapped back to the page's own), `console.error`
+  calls, loads the CSP blocked or that failed, live calls the page got wrong (`not_in_manifest`, `bad_request`,
+  `tool_error`), a script error the page caught and only showed on screen ("L.map is not a function"), a page that shows
+  nothing, and failed tests;
+- **warnings:** `console.warn`, calls that failed for reasons outside the page (sign-in, an upstream outage, limits),
+  and text such as `NaN` or `undefined` on screen;
+- how each live call went, the page's visible text, and a **screenshot**, which the model looks at (and the chat's step
+  panel shows as a thumbnail);
+- the results of **tests** the agent passes: short scripts run in the page once its data arrived, such as "the price
+  table has rows".
+
+`artifact_publish` runs the same check on a page that has not passed one as it is, and refuses it while it has errors.
+During a check only read-only tools run, from results up to two minutes old; a write tool answers `not_granted`. The
+browser may reach only the page's script hosts and Google Fonts. A deployment without a browser (or one that fails to
+start) publishes pages unchecked, and the agent says so. `pnpm dev` runs a local Chrome, which miniflare downloads.
+
 ## Your files
 
 Upload from the sidebar (several files, or a whole folder) or drop files and folders anywhere on the app. Uploads land
@@ -502,13 +525,15 @@ before reading R2. Changing the runtime or the CSP changes the fingerprint, so a
   - R2 refuses to read that file without its key ("stored using a form of Server Side Encryption");
   - a publish created the artifact's repo, and its `git` button produced a working clone command.
 
+  The page check before publishing has been verified only locally, against a real Chrome (`test/check.test.ts`), not
+  yet with Browser Rendering in a deployed Worker.
+
   The per-user sign-in to an MCP portal has been verified only locally, against a stand-in portal: the deployed
   portal so far refuses the code exchange with Cloudflare error 1014 (see
   [MCP servers, and servers that need your own sign-in](#mcp-servers-and-servers-that-need-your-own-sign-in)).
 - **Pi Durable is experimental.** It has no tool approvals, conversations can't be deleted yet, and a reconnecting
   client resumes from a fresh snapshot rather than a cursor.
 - **Next:**
-  - a screenshot self-check in the sandbox before publishing
   - live data from sign-in servers for every viewer, each with their own sign-in
   - in shared chats, members bringing their own files and sign-ins to the agent
   - WebSocket push for sources that stream
