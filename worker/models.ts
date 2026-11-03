@@ -2,6 +2,7 @@ import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, t
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { createAI } from "agents/models/pi-ai";
 import { EFFORT_LABELS, VENDORS, type ModelChoice, type ModelInfo, type Vendor } from "../shared/models.ts";
+import prices from "./prices.json";
 
 /**
  * The Workers AI models the picker offers, best first. Workers AI runs on Cloudflare, within the account's free daily
@@ -25,25 +26,23 @@ const VENDOR_ORDER = Object.keys(VENDORS) as Vendor[];
 type ModelCost = Model<Api>["cost"];
 
 /**
- * Prices, in dollars per million tokens, that changed after the pi-ai release this app ships with, from the vendors'
- * own price pages (checked 2026-11-03). pi-ai prices every model reply from its model's `cost` when the reply comes
- * in, and stores that price with the reply, so a change here prices replies from then on and leaves earlier ones as
- * they were charged. Drop an entry once pi-ai has the price.
+ * The vendors' own prices, by model id, read from their price pages into worker/prices.json by scripts/prices.ts: a
+ * build refreshes the file once it is a week old, and fails if it cannot read the pages. They replace pi-ai's prices,
+ * which are as old as the pi-ai release the app ships with; a model the pages do not list keeps pi-ai's. pi-ai prices
+ * every model reply from its model's `cost` when the reply comes in, and stores that price with the reply, so a change
+ * prices replies from then on and leaves earlier ones as they were charged.
  */
-export const PRICE_UPDATES: ReadonlyMap<string, Partial<ModelCost>> = new Map([
-  // Anthropic halved Claude Sonnet 5.5's cache reads, to 0.05 times its input price, on 2026-10-07.
-  ["anthropic/claude-sonnet-5.5", { cacheRead: 0.1 }],
-]);
+export const PRICES: ReadonlyMap<string, ModelCost> = new Map(Object.entries((prices as { models: Record<string, ModelCost> }).models));
 
-/** Each updated model's copy at its current price, made once: pi looks a model up several times per model call. */
+/** Each model's copy at its current price, made once: pi looks a model up several times per model call. */
 const priced = new WeakMap<object, object>();
 
-/** `model` at its current price: what PRICE_UPDATES says, else what pi-ai says. */
+/** `model` at its current price: the vendor's, else pi-ai's. */
 function withCurrentPrice<T extends { id: string; cost: ModelCost }>(model: T): T {
-  const update = PRICE_UPDATES.get(model.id);
-  if (!update) return model;
+  const cost = PRICES.get(model.id);
+  if (!cost) return model;
   let copy = priced.get(model) as T | undefined;
-  if (!copy) priced.set(model, (copy = { ...model, cost: { ...model.cost, ...update } }));
+  if (!copy) priced.set(model, (copy = { ...model, cost }));
   return copy;
 }
 

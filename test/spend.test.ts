@@ -1,17 +1,9 @@
-import { calculateCost, type Usage } from "@earendil-works/pi-ai";
-import { createModels } from "@earendil-works/pi-ai/models";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
-import { createAI } from "agents/models/pi-ai";
 import { describe, expect, it } from "vitest";
 import { chatSpend, formatCost, promptSpend } from "../src/chat/spend.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
-import { PRICE_UPDATES, withCurrentPrices } from "../worker/models.ts";
 
-const provider = createAI({ binding: {} as never }).provider;
-const models = createModels();
-models.setProvider(withCurrentPrices(provider));
-/** A model as the agent finds it: through the provider, at its current price. */
-const model = (id: string) => models.getModel("cloudflare", id)!;
 /** A reply's usage: `tokens`, at `total` dollars. */
 const usage = (tokens: Partial<Usage>, total = 0): Usage => ({
   input: 0,
@@ -21,27 +13,6 @@ const usage = (tokens: Partial<Usage>, total = 0): Usage => ({
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
   ...tokens,
-});
-
-describe("model prices", () => {
-  it("prices the agent's models at the vendors' current prices, per million tokens", () => {
-    // Published by Anthropic, checked 2026-11-03.
-    expect(model("anthropic/claude-opus-5.5").cost).toMatchObject({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
-    expect(model("anthropic/claude-sonnet-5.5").cost).toMatchObject({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 });
-    expect(model("anthropic/claude-haiku-5.5").cost.tiers).toEqual([{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }]);
-    // pi-ai prices a reply from the model it ran on.
-    const reply = usage({ input: 1_000, output: 2_000, cacheRead: 100_000, cacheWrite: 10_000 });
-    expect(calculateCost(model("anthropic/claude-sonnet-5.5"), reply).total).toBeCloseTo(0.002 + 0.02 + 0.01 + 0.025);
-  });
-
-  it("updates only prices pi-ai has not caught up with", () => {
-    for (const [id, update] of PRICE_UPDATES) {
-      const shipped = provider.getModels().find((entry) => entry.id === id);
-      expect(shipped, `${id} is in pi-ai's catalog`).toBeDefined();
-      // Once pi-ai has the price, the entry can go.
-      expect(shipped!.cost, `pi-ai still has the old price of ${id}`).not.toMatchObject(update);
-    }
-  });
 });
 
 let id = 0;

@@ -286,6 +286,8 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               «
             </button>
           </div>
+          {/* Chats, artifacts and skills scroll here, above the files panel. */}
+          <div className="sidebar-scroll">
           <h3>Chats</h3>
           <nav>
             {chats.map((chat) => (
@@ -326,7 +328,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               {proposed > 0 && <small> · {proposed} to review</small>}
             </a>
           </nav>
-          <h3>Files</h3>
+          </div>
           <FilesNav files={files} status={uploadStatus} upload={upload} />
           <footer>
             <span title={label}>{label}</span>

@@ -1,7 +1,10 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { MAX_FILE_BYTES, MAX_LISTED, underUploads, uploadBatches, uploadTargets } from "../../shared/uploads.ts";
+import { baseName } from "../../shared/attachments.ts";
+import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
+import { Icon } from "../Icon.tsx";
+import { useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
@@ -59,48 +62,99 @@ interface Folder {
   folders: Map<string, Folder>;
   files: FileInfo[];
   count: number;
+  bytes: number;
 }
 
+const newFolder = (name: string, path: string): Folder => ({ name, path, folders: new Map(), files: [], count: 0, bytes: 0 });
+
 function tree(files: readonly FileInfo[]): Folder {
-  const root: Folder = { name: "", path: "", folders: new Map(), files: [], count: 0 };
+  const root = newFolder("", "");
   for (const file of files) {
     const segments = file.path.split("/");
     let folder = root;
     folder.count++;
+    folder.bytes += file.size;
     for (const name of segments.slice(0, -1)) {
       let next = folder.folders.get(name);
-      if (!next) folder.folders.set(name, (next = { name, path: folder.path ? `${folder.path}/${name}` : name, folders: new Map(), files: [], count: 0 }));
+      if (!next) folder.folders.set(name, (next = newFolder(name, folder.path ? `${folder.path}/${name}` : name)));
       folder = next;
       folder.count++;
+      folder.bytes += file.size;
     }
     folder.files.push(file);
   }
   return root;
 }
 
-function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
+const DownloadIcon = () => (
+  <Icon size={15} box={16} stroke={1.6}>
+    <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" />
+  </Icon>
+);
+
+/** Re-renders only when its folder changes: tree() keeps a folder's object while the files stay the same. */
+const FolderView = memo(function FolderView({ folder, depth }: { folder: Folder; depth: number }) {
   return (
     <>
-      {[...folder.folders.values()].map((sub) => (
-        // Top-level folders (uploads/, out/) start open; folders inside them start closed.
-        <details key={sub.path} className="file-folder" open={depth === 0}>
-          <summary title={sub.path}>
-            {sub.name}/ <small>{sub.count}</small>
-          </summary>
-          <FolderView folder={sub} depth={depth + 1} />
-        </details>
-      ))}
-      {folder.files.map((file) => (
-        <span key={file.path} title={`${file.path} · ${formatBytes(file.size)}`}>
-          {file.path.split("/").pop()}
-        </span>
-      ))}
+      {[...folder.folders.values()].map((sub) => {
+        // From the sidebar's listing, which may be cut short; the Worker checks again.
+        const refusal = zipRefusal(sub.count, sub.bytes);
+        return (
+          // Top-level folders (uploads/, out/) start open; folders inside them start closed.
+          <details key={sub.path} className="file-folder" open={depth === 0}>
+            <summary title={sub.path}>
+              {sub.name}/ <small>{sub.count}</small>
+              {/* Without an href when the folder is too big to zip, so it says why and does nothing; without preventDefault its click would open or close the folder. */}
+              <a
+                className="file-action"
+                href={refusal ? undefined : api.folderZipUrl(sub.path)}
+                download={`${sub.name}.zip`}
+                title={refusal ?? `Download ${sub.name} as a zip`}
+                aria-disabled={!!refusal}
+                onClick={refusal ? (event) => event.preventDefault() : undefined}
+              >
+                <DownloadIcon />
+              </a>
+            </summary>
+            <FolderView folder={sub} depth={depth + 1} />
+          </details>
+        );
+      })}
+      {folder.files.map((file) => {
+        const name = baseName(file.path);
+        const title = `${file.path} · ${formatBytes(file.size)}`;
+        return (
+          <div key={file.path} className="file-row">
+            {previewType(file.path) ? (
+              // An image opens in a new tab to look at; the Worker serves it so nothing in it can run.
+              <a href={api.fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
+                {name}
+              </a>
+            ) : (
+              <span title={title}>{name}</span>
+            )}
+            <a className="file-action" href={api.fileUrl(file.path)} download={name} title={`Download ${name}`}>
+              <DownloadIcon />
+            </a>
+          </div>
+        );
+      })}
     </>
   );
-}
+});
 
-/** The sidebar's files: a folder tree, the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app. */
+const Chevron = () => (
+  <Icon size={14} box={16} stroke={1.8}>
+    <path d="M4 10l4-4 4 4" />
+  </Icon>
+);
+
+/**
+ * The sidebar's files, in a panel at its bottom that opens and closes (remembered in this browser): a folder tree,
+ * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
+ */
 export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
+  const [open, setOpen] = useStoredState("layout.filesOpen", true, (value) => typeof value === "boolean");
   const root = useMemo(() => tree(files), [files]);
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
@@ -109,27 +163,39 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
     if (picked.length) void upload(picked);
   };
   return (
-    <nav className="files">
-      <FolderView folder={root} depth={0} />
-      <div className="upload-actions">
-        <label className="upload" title="Pick one or more files">
-          Upload files
-          <input type="file" multiple hidden disabled={status?.busy} onChange={(e) => pick(e.target)} />
-        </label>
-        <label className="upload" title="Pick a folder; its layout is kept under uploads/">
-          Upload a folder
-          <input type="file" hidden disabled={status?.busy} ref={(input) => input?.setAttribute("webkitdirectory", "")} onChange={(e) => pick(e.target)} />
-        </label>
-      </div>
-      <small className={status?.error ? "upload-status error" : "upload-status"}>
-        {status ? (
-          <>
-            {status.busy && <span className="spinner" />} {status.text}
-          </>
-        ) : (
-          "Or drop files and folders anywhere."
-        )}
-      </small>
-    </nav>
+    <section className={open ? "files-panel open" : "files-panel"}>
+      <button type="button" className="files-panel-head" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? "Hide your files" : "Show your files"}>
+        Files <small>{files.length.toLocaleString("en")}</small>
+        {/* Closed, the panel still shows that an upload is going. */}
+        {!open && status?.busy && <span className="spinner" />}
+        <Chevron />
+      </button>
+      {open && (
+        <>
+          <nav className="files">
+            <FolderView folder={root} depth={0} />
+          </nav>
+          <div className="upload-actions">
+            <label className="upload" title="Pick one or more files">
+              Upload files
+              <input type="file" multiple hidden disabled={status?.busy} onChange={(e) => pick(e.target)} />
+            </label>
+            <label className="upload" title="Pick a folder; its layout is kept under uploads/">
+              Upload a folder
+              <input type="file" hidden disabled={status?.busy} ref={(input) => input?.setAttribute("webkitdirectory", "")} onChange={(e) => pick(e.target)} />
+            </label>
+          </div>
+          <small className={status?.error ? "upload-status error" : "upload-status"}>
+            {status ? (
+              <>
+                {status.busy && <span className="spinner" />} {status.text}
+              </>
+            ) : (
+              "Or drop files and folders anywhere."
+            )}
+          </small>
+        </>
+      )}
+    </section>
   );
 });

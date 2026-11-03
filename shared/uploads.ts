@@ -1,3 +1,5 @@
+import { extension } from "./attachments.ts";
+import { formatBytes } from "./util.ts";
 /** What one file may weigh. */
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 /** What one upload request may hold. The Worker refuses more; the app splits a bigger pick into several requests. */
@@ -104,4 +106,42 @@ export function uploadBatches<T>(files: readonly T[], size: (file: T) => number)
   }
   if (current.length) batches.push(current);
   return batches;
+}
+
+/**
+ * The image types a user file opens as in the browser, by extension; every
+ * other file only downloads. Raster formats and SVG, which the Worker serves
+ * with a sandboxing CSP so its scripts cannot run.
+ */
+const PREVIEW_TYPES: ReadonlyMap<string, string> = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+  ["avif", "image/avif"],
+  ["bmp", "image/bmp"],
+  ["ico", "image/x-icon"],
+  ["svg", "image/svg+xml"],
+]);
+
+/** The content type `path` opens as in the browser, or undefined when it only downloads. */
+export function previewType(path: string): string | undefined {
+  return PREVIEW_TYPES.get(extension(path));
+}
+
+/** Where a user file is served from (`<prefix><path>`): an image opens in the browser, anything else downloads. */
+export const FILE_ROUTE = "/api/files/raw/";
+/** Where a user folder downloads from (`<prefix><path>`), as a zip named after it with the folder itself at its root. */
+export const ZIP_ROUTE = "/api/files/zip/";
+
+/** What one folder's zip may hold: past either, the Worker refuses and the user downloads its subfolders. */
+export const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
+export const MAX_ZIP_FILES = MAX_LISTED;
+
+/** Why a folder of `count` files and `bytes` cannot be zipped, or undefined when it can. */
+export function zipRefusal(count: number, bytes: number): string | undefined {
+  if (count > MAX_ZIP_FILES) return `Too many files to zip (over ${MAX_ZIP_FILES.toLocaleString("en")}); download its folders one at a time.`;
+  if (bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download its folders one at a time.`;
+  return undefined;
 }

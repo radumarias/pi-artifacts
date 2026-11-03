@@ -13,16 +13,26 @@ export class FakeBucket {
     for (const key of keys) this.objects.set(key, "");
   }
 
-  async list({ prefix }: { prefix: string }) {
+  /** Pages as R2 does: at most `limit` objects, and a cursor while more remain. */
+  async list({ prefix, cursor, limit = 1000 }: { prefix: string; cursor?: string; limit?: number }) {
     this.calls.push({ op: "list", prefix });
     const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix));
-    return { objects: keys.map((key) => ({ key, size: 1, uploaded: new Date(0) })), truncated: false };
+    const start = Number(cursor ?? 0);
+    const page = keys.slice(start, start + limit);
+    const truncated = start + limit < keys.length;
+    return {
+      objects: page.map((key) => ({ key, size: new TextEncoder().encode(this.objects.get(key)!).byteLength, uploaded: new Date(0) })),
+      truncated,
+      cursor: truncated ? String(start + limit) : undefined,
+    };
   }
 
   async get(key: string, options?: { ssecKey?: unknown }) {
     this.calls.push({ op: "get", key, ssecKey: options?.ssecKey });
     const value = this.objects.get(key);
-    return value === undefined ? null : { text: async () => value, json: async () => JSON.parse(value) };
+    if (value === undefined) return null;
+    const bytes = new TextEncoder().encode(value);
+    return { text: async () => value, json: async () => JSON.parse(value), size: bytes.byteLength, body: new Blob([bytes]).stream() };
   }
 
   async put(key: string, body: unknown, options?: { ssecKey?: unknown }) {

@@ -177,6 +177,13 @@ in `uploads/`, a folder keeping its layout (`reports/q3/sales.csv` is `uploads/r
 whose names start with a dot (`.git`, `.DS_Store`) are left out of a folder. A file may be up to 10 MB; the app splits a
 big pick into requests of at most 50 files and 40 MB (`shared/uploads.ts`, `worker/files-routes.ts`).
 
+Your files sit in a panel at the bottom of the sidebar that opens and closes (chats scroll above it). An image's name
+opens it in a new tab, and every file and folder has a download button. A folder
+downloads as a zip named after it with the folder itself at its root (`q3.zip` holds `q3/sales.csv`, `q3/2024/…`),
+streamed by the Worker and stored uncompressed (`worker/zip.ts`), up to 1 GB and 2,000 files. Files are served with
+`nosniff`, a sandboxing CSP and `Cross-Origin-Resource-Policy: same-origin`; only raster images and SVG open in the
+browser (an SVG's scripts stay off under the sandbox), anything else only downloads.
+
 Before each message, the agent's prompt gets a list of your files, newest first (at most 150, then a count per folder),
 so "the sales file from q3" maps to its path without a tool call. `files_read`, `run_python` and `run_bash` also take a
 file's name or the end of its path when only one file matches, and answer with the candidates when several do
@@ -306,10 +313,12 @@ out), and the chat's total in the header, which opens each model's share. pi-ai 
 comes in, from the tokens the provider reports and its model's prices per million tokens (input, output, cache reads
 and writes, and the higher rates of a long prompt where a model has them), and stores the price with the reply; pi
 keeps a ledger of the conversation's spend by model, which the total comes from, so it also counts the calls that
-summarize a long conversation. The prices are pi-ai's, except where a vendor changed a price after the pi-ai release
-the app ships with: `PRICE_UPDATES` in `worker/models.ts` has those, from the vendors' own price pages, and a test
-fails once pi-ai has caught up. They are list prices: Workers AI's free daily allowance, and any discount the
-account has, are not taken off. Everyone in a shared chat sees them.
+summarize a long conversation. The prices come from the vendors' own price pages (Anthropic, OpenAI and Workers AI,
+read as Markdown), kept in `worker/prices.json` and applied to every model in place of pi-ai's. A build reads the
+pages again once the file is a week old (`scripts/prices.ts`, a Vite plugin) and fails if a page cannot be fetched or
+read, or the file is not a valid price list, rather than ship prices that may be wrong; commit the file it writes.
+`pnpm prices` reads them now. A model none of the pages lists keeps pi-ai's price. They are list prices: Workers AI's
+free daily allowance, and any discount the account has, are not taken off. Everyone in a shared chat sees them.
 
 ## Layout
 
@@ -318,7 +327,7 @@ account has, are not taken off. Everyone in a shared chat sees them.
 | `worker/index.ts`, `worker/files-routes.ts` | Routes: identity, chats, artifact pages (`/u/:id/v:n`), the rate-limited MCP proxy, files and uploads |
 | `worker/chat-agent.ts` | `ChatAgent` DO: `PiHarness`, the chat socket (a capability on the Agents lifecycle API), `artifactCall`, members |
 | `worker/chat-routes.ts`, `worker/members.ts` | Shared chats: the chat socket, people, invite links and their routes |
-| `worker/models.ts` | The models a chat can pick, the check on a pick, and price updates pi-ai lacks |
+| `worker/models.ts`, `worker/prices.json`, `scripts/prices.ts` | The models a chat can pick, the check on a pick, and their prices, read from the vendors' pages at build time |
 | `worker/mcp/`, `worker/mcp-routes.ts` | `McpHub` (connections, cache, coalescing, hint), the MCP SDK connector, the server list, per-user OAuth sign-in and its routes |
 | `worker/agent/` | Pi tools (MCP, files, artifacts, `run_python`, `run_bash`, `skill_propose`), the system prompt, built-in skills |
 | `worker/skills/`, `worker/skills-routes.ts` | Built-in skills, the SKILL.md format, and the `/api/skills` routes |

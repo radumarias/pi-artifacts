@@ -74,9 +74,34 @@ body.resizing iframe { pointer-events: none; }
   gap: 6px;
   padding: 14px;
   background: var(--surface);
-  overflow-y: auto;
+  /* Chats and the rest scroll in .sidebar-scroll; the files panel and the footer stay at the bottom. */
+  overflow: hidden;
   min-width: 0;
 }
+.sidebar-scroll { flex: 1 1 0; min-height: 48px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 0 -14px; padding: 0 14px; }
+.files-panel { flex: none; display: flex; flex-direction: column; gap: 2px; min-height: 0; margin: 0 -14px; padding: 6px 14px 0; border-top: 1px solid var(--border); }
+/* Open, the panel takes what its files need, up to most of the sidebar; its tree scrolls inside. */
+.files-panel.open { flex: 0 1 auto; max-height: 60%; }
+.files-panel .files { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.files-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 8px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.files-panel-head:hover { background: var(--surface-2); color: var(--text); }
+.files-panel-head small { font-weight: 400; letter-spacing: 0; }
+.files-panel-head svg { margin-left: auto; transition: transform 0.15s; }
+.files-panel.open .files-panel-head svg { transform: rotate(180deg); }
 .sidebar-top { display: flex; gap: 6px; }
 .sidebar-top .primary { flex: 1; }
 .sidebar.rail { align-items: center; padding: 14px 8px; }
@@ -100,9 +125,22 @@ body.resizing iframe { pointer-events: none; }
 .upload-actions { display: flex; flex-wrap: wrap; }
 .upload-status { padding: 2px 8px; overflow-wrap: anywhere; }
 .upload-status.error { color: var(--error); }
-.file-folder > summary { padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-folder > summary { position: relative; padding: 5px 30px 5px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-folder > summary:hover { background: var(--surface-2); }
 .file-folder > :not(summary) { display: block; margin-left: 12px; }
+/* A file's name (an image's opens it in a new tab) and its download button; a folder's zip download sits at its summary's end. */
+.files .file-row { display: flex; align-items: center; border-radius: 6px; }
+.file-row:hover { background: var(--surface-2); }
+.file-row > :first-child { flex: 1; min-width: 0; }
+.sidebar .file-row > a:first-child:hover { background: none; text-decoration: underline; }
+.sidebar .file-action { display: inline-flex; flex: none; padding: 4px; margin-right: 2px; border-radius: 5px; color: var(--muted); opacity: 0; }
+.file-folder > summary > .file-action { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); }
+.file-row:hover .file-action, .file-folder > summary:hover > .file-action, .file-action:focus-visible { opacity: 1; }
+.sidebar .file-action[href]:hover { color: var(--text); background: var(--border); }
+/* Too big to zip: no href, so it is inert; its title says why. */
+.file-action:not([href]) { cursor: not-allowed; }
+.file-action:not([href]) svg { opacity: 0.45; }
+@media (hover: none) { .sidebar .file-action { opacity: 1; } }
 /* A drag of files over the app: one target over everything, and the preview's iframe must not take the drop. */
 .drop-target {
   position: fixed;
@@ -392,6 +430,9 @@ a.mention-chip:hover { text-decoration: underline; }
   .resize-handle { display: none; }
   .sidebar.rail { flex-direction: row; justify-content: flex-start; }
   .sidebar { border-bottom: 1px solid var(--border); max-height: 40vh; }
+  /* Stacked above the chat and short, the sidebar scrolls as a whole: chats first, then the files. */
+  .sidebar:not(.rail) { overflow-y: auto; }
+  .sidebar-scroll, .files-panel.open, .files-panel .files { flex: none; overflow: visible; max-height: none; }
   .workspace.with-preview .main { display: none; }
 }
 

@@ -1,6 +1,7 @@
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelInfo } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
+import { FILE_ROUTE, ZIP_ROUTE } from "../shared/uploads.ts";
 import type { ArtifactSummary, ArtifactView, ChatSummary, CloneAccess, CreatedInvite, ProxyRequest, ProxyResponse, DeclaredTool } from "../shared/protocol.ts";
 
 export type { ArtifactSummary };
@@ -38,6 +39,8 @@ function uploadForm(files: readonly { file: File; path: string }[]): FormData {
   }
   return form;
 }
+
+const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
 const send = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const post = (body: unknown) => send("POST", body);
@@ -80,6 +83,10 @@ export const api = {
   deleteSkill: (skill: SkillInfo) => request<object>(skillPath(skill), { method: "DELETE" }),
   skillMarkdownUrl: (skill: SkillInfo) => `${skillPath(skill)}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),
+  /** Where a user file is served: an image opens in the browser, anything else downloads. */
+  fileUrl: (path: string) => FILE_ROUTE + encodePath(path),
+  /** Where a user folder downloads as a zip named after it, with the folder itself at its root. */
+  folderZipUrl: (path: string) => ZIP_ROUTE + encodePath(path),
   /** One request's worth of files (see uploadBatches), each with its name or its path inside a picked folder. */
   upload: (files: readonly { file: File; path: string }[]) => request<{ paths: string[] }>("/api/files", { method: "POST", body: uploadForm(files) }),
   /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */

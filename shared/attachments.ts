@@ -63,3 +63,10 @@ export function checkThumb(value: unknown): string | undefined {
 export function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
+
+/** A file's extension, lowercase, or "" when it has none (a name starting with its only dot, ".env", has none). */
+export function extension(path: string): string {
+  const name = baseName(path);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
