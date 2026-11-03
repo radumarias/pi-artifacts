@@ -10,7 +10,7 @@ Change the page the user has, not a page you remember.
 3. Save the change with artifact_write: the artifact_id and edits to its latest version for just what changes, not the whole page. Keep the manifest it declares unless the change needs another tool; then declare in mcp every server and tool the page still calls.
 4. Check the draft it gives with artifact_check and a test of what you changed. Fix what it finds with artifact_write, that draft_id and edits, and check the new draft, until it passes. Each page you write is kept as a draft: artifact_drafts gets an earlier attempt back if a fix went wrong.
 5. Publish the draft that passed by its draft_id, with the same artifact_id and a one-line message saying what changed.
-6. To go back to an earlier version, read that version with artifact_read, write it as a draft with its artifact_id, check it and publish it as a new version with a message such as "Restore v3". Versions are never deleted.
+6. To go back to an earlier version, write it as a draft with artifact_write, the artifact_id and that version and no edits, check it and publish it as a new version with a message such as "Restore v3". Versions are never deleted.
 7. When asked what changed, use artifact_history and artifact_diff instead of guessing.
 
 Guardrails:

@@ -45,7 +45,7 @@ import { titleFor } from "./agent/title.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
-import { FailedChecks, publishChecked, type PublishInput } from "./agent/publish.ts";
+import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
 import { chatTraces } from "./chat-traces.ts";
@@ -859,12 +859,14 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /**
-   * Publish without the model, through the same checks as the agent's tool, the browser check included: a page with
+   * Publish without the model, the way the agent does (write, check, publish), the browser check included: a page with
    * errors throws the check's errors. Only routed when DEV_TOOLS is on.
    */
-  async devPublish(input: PublishInput) {
-    const { meta, report, unchecked } = await publishChecked(this.scope, input);
-    if (!meta) throw new Error(report ? `The check found errors:\n${report.errors.join("\n")}` : `Not checked, so not published: ${unchecked}`);
+  async devPublish({ html, mcp, ...target }: PublishTarget & { html: string; mcp?: WriteInput["mcp"] }) {
+    const { id } = await writeDraft(this.scope, { html, mcp });
+    const { report, unchecked } = await checkDraft(this.scope, id, {});
+    if (report?.errors.length) throw new Error(`The check found errors:\n${report.errors.join("\n")}`);
+    const { meta } = await publishDraft(this.scope, { ...target, draftId: id });
     return { artifactId: meta.id, version: meta.latest, checked: report ? { errors: 0, warnings: report.warnings } : { unchecked } };
   }
 

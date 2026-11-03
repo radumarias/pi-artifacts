@@ -30,7 +30,8 @@ export interface DraftCheck {
 
 /**
  * A page the agent wrote (artifact_write), kept until it is published: what a fix starts again from, and what a
- * passed check publishes by its id, also after the chat object restarted.
+ * passed check publishes by its id, also after the chat object restarted. Its check is kept in the index only, so
+ * recording one does not write the page again.
  */
 export type Draft = DraftPage & DraftCheck & { savedAt: number };
 
@@ -65,27 +66,37 @@ export class ChatDrafts {
     return (await this.#index()).reverse();
   }
 
-  /** A draft as the index lists it, without its page: enough to tell whether it passed. */
-  async summary(id: string): Promise<DraftSummary | undefined> {
-    return (await this.#index()).find((entry) => entry.id === id);
-  }
-
+  /** A draft, with how its check went (not checked, when the index lost it). */
   async get(id: string): Promise<Draft | null> {
     if (!DRAFT_ID.test(id)) return null;
-    const object = await this.#bucket.get(this.#draftKey(id), { ssecKey: this.#key });
-    return object ? ((await object.json()) as Draft) : null;
+    const [object, index] = await Promise.all([this.#bucket.get(this.#draftKey(id), { ssecKey: this.#key }), this.#index()]);
+    if (!object) return null;
+    const { html, manifest, artifactId, savedAt } = (await object.json()) as Draft;
+    const entry = index.find((e) => e.id === id);
+    return { id, html, manifest, artifactId, savedAt, errors: entry?.errors ?? null, warnings: entry?.warnings ?? 0 };
   }
 
   /**
    * Save a page as the newest draft, with what its check found (`check`; null when it was not checked). A page saved
    * before keeps the artifact it was for, and its check when this save has none. Beyond MAX_DRAFTS the oldest go.
    */
-  async save(page: DraftPage, check: DraftCheck | null): Promise<Draft> {
+  async save(page: DraftPage, check: DraftCheck | null): Promise<Draft & { bytes: number }> {
     if (!DRAFT_ID.test(page.id)) throw new Error("Invalid draft id.");
     return this.#serial(() => this.#save(page, check));
   }
 
-  async #save(page: DraftPage, check: DraftCheck | null): Promise<Draft> {
+  /** Keep what a check of a saved draft found: in the index only, where it stays in its place. A draft not listed is skipped. */
+  async recordCheck(id: string, check: DraftCheck): Promise<void> {
+    await this.#serial(async () => {
+      const index = await this.#index();
+      const entry = index.find((e) => e.id === id);
+      if (!entry) return;
+      Object.assign(entry, check);
+      await this.#putJson(this.#indexKey, index);
+    });
+  }
+
+  async #save(page: DraftPage, check: DraftCheck | null): Promise<Draft & { bytes: number }> {
     const index = await this.#index();
     const before = index.find((entry) => entry.id === page.id);
     const draft: Draft = {
@@ -94,15 +105,16 @@ export class ChatDrafts {
       savedAt: Date.now(),
       ...(check ?? { errors: before?.errors ?? null, warnings: before?.warnings ?? 0 }),
     };
-    const { html, manifest: _manifest, ...summary } = draft;
-    const kept = [...index.filter((entry) => entry.id !== page.id), { ...summary, bytes: new TextEncoder().encode(html).byteLength }];
+    const { html, manifest, ...summary } = draft;
+    const bytes = new TextEncoder().encode(html).byteLength;
+    const kept = [...index.filter((entry) => entry.id !== page.id), { ...summary, bytes }];
     const dropped = kept.splice(0, Math.max(0, kept.length - MAX_DRAFTS));
     await Promise.all([
-      this.#putJson(this.#draftKey(page.id), draft),
+      this.#putJson(this.#draftKey(page.id), { id: page.id, html, manifest, artifactId: draft.artifactId, savedAt: draft.savedAt }),
       this.#putJson(this.#indexKey, kept),
       dropped.length && this.#bucket.delete(dropped.map((entry) => this.#draftKey(entry.id))),
     ]);
-    return draft;
+    return { ...draft, bytes };
   }
 
   /** Drop a draft: it was published. A draft that is not there is skipped. */

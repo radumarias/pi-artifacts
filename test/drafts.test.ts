@@ -17,7 +17,8 @@ async function setup() {
 describe("ChatDrafts", () => {
   it("keeps each draft under the owner's drafts folder for the chat, every read and write with the owner's key", async () => {
     const { key, bucket, drafts } = await setup();
-    const saved = await drafts.save(page(1), failed);
+    const { bytes, ...saved } = await drafts.save(page(1), failed);
+    expect(bytes).toBe(8);
     expect(await drafts.get(draftId(1))).toEqual(saved);
     expect(saved).toMatchObject({ ...page(1), ...failed });
     expect([...bucket.objects.keys()].sort()).toEqual([`users/ada/drafts/${CHAT}/${draftId(1)}.json`, `users/ada/drafts/${CHAT}/index.json`]);
@@ -35,7 +36,6 @@ describe("ChatDrafts", () => {
     expect(list.map((entry) => entry.id)).toEqual([draftId(1), draftId(2)]);
     expect(list[0]).toMatchObject({ id: draftId(1), errors: 0, warnings: 2, bytes: 8 });
     expect(list[1].artifactId).toBe("a1");
-    expect(await drafts.summary(draftId(2))).toEqual(list[1]);
   });
 
   it("keeps a page's artifact, and its pass, when it is saved again without them", async () => {
@@ -43,6 +43,19 @@ describe("ChatDrafts", () => {
     await drafts.save(page(1, { artifactId: "a1" }), { errors: 0, warnings: 1 });
     expect(await drafts.save(page(1), null)).toMatchObject({ artifactId: "a1", errors: 0, warnings: 1 });
     expect(await drafts.save(page(2), null)).toMatchObject({ errors: null, warnings: 0 });
+  });
+
+  it("records a check in the index only, keeping the draft's place and its page", async () => {
+    const { bucket, drafts } = await setup();
+    await drafts.save(page(1), null);
+    await drafts.save(page(2), null);
+    const pageKey = `users/ada/drafts/${CHAT}/${draftId(1)}.json`;
+    const pagePuts = () => bucket.calls.filter((call) => call.op === "put" && call.key === pageKey).length;
+    await drafts.recordCheck(draftId(1), { errors: 0, warnings: 1 });
+    await drafts.recordCheck(draftId(7), { errors: 0, warnings: 0 });
+    expect(pagePuts()).toBe(1);
+    expect((await drafts.list()).map((entry) => entry.id)).toEqual([draftId(2), draftId(1)]);
+    expect(await drafts.get(draftId(1))).toMatchObject({ html: "<p>1</p>", errors: 0, warnings: 1 });
   });
 
   it(`keeps the newest ${MAX_DRAFTS}, deleting the pages of the ones it drops`, async () => {

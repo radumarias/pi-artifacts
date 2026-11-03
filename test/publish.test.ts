@@ -6,7 +6,8 @@ import {
   checkInBrowser,
   FailedChecks,
   MAX_FAILED_CHECKS,
-  publishChecked,
+  publishDraft,
+  checkDraft,
   writeDraft,
   type PublishScope,
 } from "../worker/agent/publish.ts";
@@ -75,86 +76,74 @@ function chat(check: (html: string) => CheckReport | Error, publishUnchecked = f
   return { scope, versions, checked, drafts };
 }
 
-describe("publishChecked", () => {
+const a1 = { id: "a1", latest: 2, versions: [{ version: 1 }, { version: 2 }] } as unknown as ArtifactMeta;
+
+describe("write, check, publish", () => {
   const broken = "<p>broken</p>";
   const fixed = "<p>fixed</p>";
   const errorsIn = (html: string) => report(html === broken ? ["TypeError: L.map is not a function"] : []);
 
-  it("makes no version of a page with errors, but keeps it as a draft; the fixed page is published and its draft goes", async () => {
-    const { scope, versions, drafts } = chat(errorsIn);
-    const failed = await publishChecked(scope, { title: "Map", html: broken, artifactId: "a1" });
-    expect(failed.meta).toBeUndefined();
-    expect(failed.draft).toMatchObject({ id: await draftId(broken, {}), html: broken, artifactId: "a1", errors: 1 });
+  it("checks a draft and keeps what it found; publishes the fixed one into its artifact, and its draft goes", async () => {
+    const { scope, versions, checked, drafts } = chat(errorsIn);
+    const first = await writeDraft(scope, { html: broken, artifact: a1 });
+    const bad = await checkDraft(scope, first.id, {});
+    expect(bad.draft).toMatchObject({ id: first.id, artifactId: "a1", errors: 1 });
+    expect(await drafts.get(first.id)).toMatchObject({ errors: 1 });
+    await expect(publishDraft(scope, { title: "Map", draftId: first.id })).rejects.toThrow('found 1 error in draft "' + first.id + '"');
     expect(versions).toEqual([]);
 
-    const done = await publishChecked(scope, { title: "Map", html: fixed, artifactId: "a1" });
-    expect(done.meta?.id).toBe("a1");
+    const second = await writeDraft(scope, { draftId: first.id, edits: [{ old: "broken", new: "fixed" }] });
+    expect(second).toMatchObject({ html: fixed, artifactId: "a1", errors: null });
+    await checkDraft(scope, second.id, {});
+    const done = await publishDraft(scope, { title: "Map", draftId: second.id });
+    expect(done.meta.id).toBe("a1");
     expect(versions).toEqual([{ id: "a1", html: fixed }]);
-    expect((await drafts.list()).map((d) => d.id)).toEqual([await draftId(broken, {})]);
+    expect(checked).toEqual([broken, fixed]);
+    expect((await drafts.list()).map((d) => d.id)).toEqual([first.id]);
   });
 
-  it("publishes a page whose draft passed without checking it again, into the artifact it was checked for", async () => {
-    const { scope, versions, checked, drafts } = chat(errorsIn);
-    const page = { id: await draftId(fixed, {}), html: fixed, manifest: {}, artifactId: "a1" };
-    await drafts.save(page, { errors: 0, warnings: 0 });
-    const done = await publishChecked(scope, { title: "Map", html: fixed });
-    expect(checked).toEqual([]);
-    expect(versions).toEqual([{ id: "a1", html: fixed }]);
-    expect(done.report).toBeUndefined();
-    expect(await drafts.list()).toEqual([]);
-
-    await drafts.save(page, { errors: 0, warnings: 0 });
-    await publishChecked(scope, { title: "Map", draftId: page.id });
-    expect(checked).toEqual([]);
-    expect(versions).toHaveLength(2);
+  it("publishes only a draft that passed: none not checked, and none that is gone", async () => {
+    const { scope, versions } = chat(errorsIn);
+    await expect(publishDraft(scope, { title: "Map", draftId: "0000000000000001" })).rejects.toThrow("No draft");
+    const { id } = await writeDraft(scope, { html: fixed });
+    await expect(publishDraft(scope, { title: "Map", draftId: id })).rejects.toThrow("has not passed a check");
+    expect(versions).toEqual([]);
   });
 
-  it("keeps a page that passed here as a passed draft when its version could not be stored", async () => {
-    const { scope, checked, drafts } = chat(errorsIn);
+  it("keeps a passed draft when its version could not be stored, to publish again", async () => {
+    const { scope, drafts } = chat(errorsIn);
     scope.artifacts.publishVersion = async () => {
       throw new Error("push failed");
     };
-    await expect(publishChecked(scope, { title: "Map", html: fixed })).rejects.toThrow("push failed");
-    expect(await drafts.summary(await draftId(fixed, {}))).toMatchObject({ errors: 0 });
-    expect(checked).toEqual([fixed]);
-  });
-
-  it("publishes by draft id a draft that passed, checks one not checked yet, and refuses one with errors", async () => {
-    const { scope, versions, checked, drafts } = chat(errorsIn);
-    await expect(publishChecked(scope, { title: "Map", draftId: "0000000000000001" })).rejects.toThrow("No draft");
-    const bad = await drafts.save({ id: await draftId(broken, {}), html: broken, manifest: {} }, { errors: 1, warnings: 0 });
-    await expect(publishChecked(scope, { title: "Map", draftId: bad.id })).rejects.toThrow("has 1 error from its check");
-    expect(checked).toEqual([]);
-
-    const unchecked = await writeDraft(scope, { html: fixed, artifactId: "a1" });
-    expect((await publishChecked(scope, { title: "Map", draftId: unchecked.id })).meta?.id).toBe("a1");
-    expect(checked).toEqual([fixed]);
-    expect(versions).toEqual([{ id: "a1", html: fixed }]);
+    const { id } = await writeDraft(scope, { html: fixed });
+    await checkDraft(scope, id, {});
+    await expect(publishDraft(scope, { title: "Map", draftId: id })).rejects.toThrow("push failed");
+    expect(await drafts.get(id)).toMatchObject({ errors: 0 });
   });
 
   it("does not publish a page no browser could check, except in local development", async () => {
     const down = () => new BrowserUnavailable("no browser");
     const deployed = chat(down);
-    const outcome = await publishChecked(deployed.scope, { title: "Map", html: fixed });
-    expect(outcome).toMatchObject({ unchecked: "no browser", draft: { html: fixed, errors: null } });
-    expect(deployed.versions).toEqual([]);
+    const { id } = await writeDraft(deployed.scope, { html: fixed });
+    expect(await checkDraft(deployed.scope, id, {})).toMatchObject({ unchecked: "no browser", draft: { errors: null } });
+    await expect(publishDraft(deployed.scope, { title: "Map", draftId: id })).rejects.toThrow("has not passed a check");
 
     const local = chat(down, true);
-    expect((await publishChecked(local.scope, { title: "Map", html: fixed })).meta).toBeDefined();
+    const page = await writeDraft(local.scope, { html: fixed });
+    expect(await publishDraft(local.scope, { title: "Map", draftId: page.id })).toMatchObject({ unchecked: true });
     expect(local.versions).toHaveLength(1);
   });
 });
 
 describe("writeDraft", () => {
-  it("saves a new page unchecked, and a draft changed by edits as a new draft keeping its artifact", async () => {
-    const { scope, drafts, checked } = chat(() => report([]));
-    const first = await writeDraft(scope, { html: "<p>a</p>", artifactId: "a1" });
-    expect(first).toMatchObject({ id: await draftId("<p>a</p>", {}), errors: null, artifactId: "a1" });
-    const second = await writeDraft(scope, { draftId: first.id, edits: [{ old: "a", new: "b" }] });
-    expect(second).toMatchObject({ html: "<p>b</p>", artifactId: "a1", errors: null });
-    expect((await drafts.list()).map((d) => d.id)).toEqual([second.id, first.id]);
+  it("saves a new page unchecked, and refuses mixed or missing input", async () => {
+    const { scope, checked } = chat(() => report([]));
+    expect(await writeDraft(scope, { html: "<p>a</p>" })).toMatchObject({ id: await draftId("<p>a</p>", {}), errors: null, bytes: 8 });
     expect(checked).toEqual([]);
     await expect(writeDraft(scope, { draftId: "0000000000000001", edits: [] })).rejects.toThrow("No draft");
+    await expect(writeDraft(scope, { html: "<p>a</p>", edits: [{ old: "a", new: "b" }] })).rejects.toThrow("not both");
+    await expect(writeDraft(scope, { html: "<p>a</p>", version: 1 })).rejects.toThrow("with artifact_id alone");
+    await expect(writeDraft(scope, {})).rejects.toThrow("Pass a new page as html");
   });
 
   it("keeps how a page's check went when the same page is written again", async () => {
@@ -164,13 +153,12 @@ describe("writeDraft", () => {
     expect(await writeDraft(scope, { html: "<p>a</p>" })).toMatchObject({ id, errors: 0, warnings: 1 });
   });
 
-  it("edits the latest version of an artifact, keeping what it declared", async () => {
+  it("edits an artifact's latest version, or the version named, and restores one with no edits", async () => {
     const { scope } = chat(() => report([]));
-    const meta = { id: "a1", latest: 2, versions: [{ version: 1 }, { version: 2 }] } as unknown as ArtifactMeta;
-    scope.artifacts.readMeta = async (id: string) => (id === "a1" ? meta : null);
-    scope.artifacts.readHtml = async (_id: string, version: number) => `<p>v${version}</p>`;
-    expect(await writeDraft(scope, { artifactId: "a1", edits: [{ old: "v2", new: "v3" }] })).toMatchObject({ html: "<p>v3</p>", artifactId: "a1" });
-    await expect(writeDraft(scope, { artifactId: "a2", edits: [] })).rejects.toThrow("No artifact a2");
+    scope.artifacts.readHtml = async (_id: string, version: number) => (version <= 2 ? `<p>v${version}</p>` : null);
+    expect(await writeDraft(scope, { artifact: a1, edits: [{ old: "v2", new: "v3" }] })).toMatchObject({ html: "<p>v3</p>", artifactId: "a1" });
+    expect(await writeDraft(scope, { artifact: a1, version: 1 })).toMatchObject({ html: "<p>v1</p>", artifactId: "a1" });
+    await expect(writeDraft(scope, { artifact: a1, version: 5 })).rejects.toThrow("has versions 1 to 2");
   });
 });
 

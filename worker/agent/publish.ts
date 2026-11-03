@@ -5,7 +5,7 @@ import { timedOutReport, type CheckInput, type CheckReport } from "../artifacts/
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { ArtifactStore } from "../storage/artifacts.ts";
-import { draftId, passed, type ChatDrafts, type Draft, type DraftCheck, type DraftPage, type DraftSummary } from "../storage/drafts.ts";
+import { draftId, passed, type ChatDrafts, type Draft, type DraftCheck, type DraftSummary } from "../storage/drafts.ts";
 
 /** What publishing a page needs from the chat it is published in (and the tools, ChatScope, more). */
 export interface PublishScope {
@@ -38,8 +38,8 @@ export interface PublishTarget {
 
 type McpDeclaration = NonNullable<ArtifactManifest["mcp"]>["servers"];
 
-/** A page to publish: by its draft's id (the agent's way), or as html with what it declares (local development's). */
-export type PublishInput = PublishTarget & ({ draftId: string } | { html: string; mcp?: McpDeclaration });
+/** A draft to publish, by its id, and where it goes. */
+export type PublishInput = PublishTarget & { draftId: string };
 
 /** The manifest a page declares, checked against the chat's servers, and the page's size. Throws with what to fix. */
 export async function validPage(scope: PublishScope, html: string, mcp: McpDeclaration | undefined, what: string): Promise<ArtifactManifest> {
@@ -61,11 +61,16 @@ export async function checkInBrowser(scope: PublishScope, input: CheckInput, sig
   }
 }
 
+export interface PageEdit {
+  old: string;
+  new: string;
+}
+
 /**
  * `html` with `edits` applied in order: each `old` must occur exactly once in the page as the edits before left it, so
  * an edit never lands somewhere the model did not mean. Throws naming every edit that does not apply.
  */
-export function applyEdits(html: string, edits: readonly { old: string; new: string }[]): string {
+export function applyEdits(html: string, edits: readonly PageEdit[]): string {
   const problems: string[] = [];
   for (const [i, edit] of edits.entries()) {
     const at = edit.old ? html.indexOf(edit.old) : -1;
@@ -78,52 +83,86 @@ export function applyEdits(html: string, edits: readonly { old: string; new: str
   return html;
 }
 
-export interface PageEdit {
-  old: string;
-  new: string;
+/**
+ * A page to save as a draft (artifact_write's arguments): a new one as `html`; or the draft `draftId`, or else version
+ * `version` (the latest by default) of `artifact`, changed by `edits`. `artifact` is this chat's artifact the page is a
+ * version of; the caller checked it is this chat's.
+ */
+export interface WriteInput {
+  html?: string;
+  draftId?: string;
+  edits?: readonly PageEdit[];
+  mcp?: McpDeclaration;
+  artifact?: ArtifactMeta;
+  version?: number;
+}
+
+/** A draft of the chat by its id; else throws, starting with `what`. */
+async function draftNamed(drafts: ChatDrafts, id: string, what: string): Promise<Draft> {
+  const draft = await drafts.get(id);
+  if (!draft) throw new Error(`${what} No draft "${id}" in this chat: it was published, or dropped as one of the oldest. List them with ${DRAFTS_TOOL}.`);
+  return draft;
 }
 
 /**
- * A page to save as a draft: a new one as html, a draft changed by `edits`, or the latest version of this chat's
- * artifact `artifactId` changed by `edits`; with what it declares and the artifact it is a version of.
+ * Save a page as a draft of the chat, unchecked: what checkDraft and publishDraft then take by its id. A page made by
+ * edits keeps what its draft or version declared, and a draft the artifact it was for, unless the input says otherwise.
+ * Saving a page that is already a draft keeps how its check went.
  */
-export type WriteInput = ({ html: string } | { draftId: string; edits: readonly PageEdit[] } | { edits: readonly PageEdit[]; artifactId: string }) & {
-  mcp?: McpDeclaration;
-  artifactId?: string;
-};
-
-/**
- * Save a page as a draft of the chat, unchecked: what artifact_check and artifact_publish then take by its id. A page
- * made by edits keeps what its draft or version declared, and a draft the artifact it was for, unless the input says
- * otherwise. Saving a page that is already a draft keeps how its check went. The caller checks an artifactId is this chat's.
- */
-export async function writeDraft(scope: PublishScope, input: WriteInput): Promise<Draft> {
+export async function writeDraft(scope: PublishScope, input: WriteInput): Promise<Draft & { bytes: number }> {
+  const { draftId: from, edits = [], artifact, version } = input;
+  if (input.html !== undefined && (from !== undefined || edits.length))
+    throw new Error("Pass a new page as html, or edits with the draft_id or artifact_id they change: not both.");
+  if (version !== undefined && (input.html !== undefined || from !== undefined))
+    throw new Error("version picks the artifact's page that edits change: pass it with artifact_id alone.");
   const drafts = await scope.drafts();
-  let { mcp, artifactId } = input;
-  let html: string;
-  if ("html" in input) html = input.html;
-  else if ("draftId" in input) {
-    const draft = await drafts.get(input.draftId);
-    if (!draft) throw new Error(`No draft "${input.draftId}" in this chat. List them with ${DRAFTS_TOOL}.`);
-    html = applyEdits(draft.html, input.edits);
-    mcp ??= draft.manifest.mcp?.servers;
-    artifactId ??= draft.artifactId;
-  } else {
-    const meta = await scope.artifacts.readMeta(input.artifactId);
-    const latest = meta && (await scope.artifacts.readHtml(meta.id, meta.latest));
-    if (!meta || latest === null) throw new Error(`No artifact ${input.artifactId} to edit.`);
-    html = applyEdits(latest, input.edits);
-    mcp ??= manifestOf(meta, meta.latest)?.mcp?.servers;
+  let { html, mcp } = input;
+  let artifactId = artifact?.id;
+  if (html === undefined) {
+    if (from !== undefined) {
+      const draft = await draftNamed(drafts, from, "Not saved.");
+      html = applyEdits(draft.html, edits);
+      mcp ??= draft.manifest.mcp?.servers;
+      artifactId ??= draft.artifactId;
+    } else if (artifact) {
+      const at = version ?? artifact.latest;
+      const published = await scope.artifacts.readHtml(artifact.id, at);
+      if (published === null) throw new Error(`Not saved: artifact ${artifact.id} has versions 1 to ${artifact.latest}.`);
+      html = applyEdits(published, edits);
+      mcp ??= manifestOf(artifact, at)?.mcp?.servers;
+    } else throw new Error("Pass a new page as html, or edits with the draft_id or artifact_id they change.");
   }
   const manifest = await validPage(scope, html, mcp, "Not saved.");
   return drafts.save({ id: await draftId(html, manifest), html, manifest, artifactId }, null);
+}
+
+/** What checking a draft came to: the draft, and the check's report, or why no browser checked it. */
+export interface CheckedDraft {
+  draft: Draft;
+  report?: CheckReport;
+  unchecked?: string;
+}
+
+/** Check a draft in the headless browser, and keep with it what the check found. */
+export async function checkDraft(
+  scope: PublishScope,
+  id: string,
+  options: Pick<CheckInput, "tests" | "viewport">,
+  signal?: AbortSignal,
+): Promise<CheckedDraft> {
+  const drafts = await scope.drafts();
+  const draft = await draftNamed(drafts, id, "Not checked.");
+  const checked = await checkInBrowser(scope, { html: draft.html, manifest: draft.manifest, ...options }, signal);
+  const check = draftCheck(checked.report);
+  if (check) await drafts.recordCheck(id, check);
+  return { draft: { ...draft, ...check }, ...checked };
 }
 
 /** How many checks in a row may find errors before the agent stops fixing and asks the user. */
 export const MAX_FAILED_CHECKS = 5;
 
 /**
- * The checks and publishes that found errors since the last that passed or the user's last message: a model that
+ * The checks that found errors since the last that passed or the user's last message: a model that
  * cannot fix a page would otherwise go on rewriting it for as long as the run lasts.
  */
 export class FailedChecks {
@@ -181,17 +220,13 @@ export function draftLine(draft: Draft | DraftSummary): string {
   return `${draft.id}  ${new Date(draft.savedAt).toISOString()}  ${draft.artifactId ? `for artifact ${draft.artifactId}` : "no artifact named"}  ${check}${warnings}${size}`;
 }
 
-/** What came of a publish: the version, else the check's report or `unchecked` on why there is none, and the draft kept. */
-export interface PublishOutcome {
-  meta?: ArtifactMeta;
-  /** The draft the page was saved as, when it was not published. */
-  draft?: Draft;
-  /** The check run here, if the page had not passed one already. */
-  report?: CheckReport;
-  /** Why no browser checked the page, when none did. */
-  unchecked?: string;
+/** What came of a publish: the version, and whether it went to this chat's artifact by its title or went unchecked. */
+export interface Published {
+  meta: ArtifactMeta;
   /** Set when the page was published as a new version of this chat's artifact by its title, without an artifact_id. */
   byTitle?: boolean;
+  /** Set when no browser checked the page: local development only (PublishScope.publishUnchecked). */
+  unchecked?: boolean;
 }
 
 /** A title as publishes compare it: case and runs of spaces do not count. */
@@ -208,81 +243,45 @@ export function artifactByTitle(artifacts: readonly ArtifactSummary[], title: st
 }
 
 /**
- * The artifact a publish goes to: the one it names; a new one with newArtifact; else the one the page was checked as a
- * version of (`checkedFor`); else this chat's by its title (artifactByTitle); else a new one.
+ * The artifact a publish goes to: the one it names; a new one with newArtifact; else the one the draft was written as a
+ * version of (`writtenFor`); else this chat's by its title (artifactByTitle); else a new one.
  */
-async function artifactFor(scope: PublishScope, target: PublishTarget, checkedFor?: string): Promise<{ id?: string; byTitle?: boolean }> {
+async function artifactFor(scope: PublishScope, target: PublishTarget, writtenFor?: string): Promise<{ id?: string; byTitle?: boolean }> {
   if (target.artifactId !== undefined) return { id: target.artifactId };
   if (target.newArtifact) return {};
-  if (checkedFor !== undefined) return { id: checkedFor };
+  if (writtenFor !== undefined) return { id: writtenFor };
   const same = artifactByTitle(await scope.chatArtifacts(), target.title);
   return same ? { id: same.id, byTitle: true } : {};
 }
 
 /**
- * The page a publish names, and its draft if it has one: by draftId one that passed its check, or that no check has
- * found errors in yet (publishChecked checks that one first).
+ * Publish a draft as a version, but only one that passed its check: also in local development
+ * (PublishScope.publishUnchecked), one no browser checked. A published draft goes: its version holds it now.
  */
-async function pageToPublish(scope: PublishScope, drafts: ChatDrafts, input: PublishInput): Promise<{ page: DraftPage; prior?: DraftSummary | Draft }> {
-  if ("draftId" in input) {
-    const draft = await drafts.get(input.draftId);
-    if (!draft) throw new Error(`No draft "${input.draftId}" in this chat: it was published, or dropped as one of the oldest. List them with ${DRAFTS_TOOL}.`);
-    if (draft.errors)
-      throw new Error(
-        `Not published: draft "${input.draftId}" has ${plural(draft.errors, "error")} from its check. Fix them with ${WRITE_TOOL}, ` +
-          `passing draft_id "${input.draftId}" and edits, then ${CHECK_TOOL} the new draft.`,
-      );
-    // The chat's servers may have changed since the page was written.
-    await validPage(scope, draft.html, draft.manifest.mcp?.servers, "Not published.");
-    return { page: draft, prior: draft };
-  }
-  const manifest = await validPage(scope, input.html, input.mcp, "Not published.");
-  const id = await draftId(input.html, manifest);
-  return { page: { id, html: input.html, manifest, artifactId: input.artifactId }, prior: await drafts.summary(id) };
-}
-
-/**
- * Publish a page, but only one without errors: one whose draft passed a check as it is now, or that passes one here.
- * A page that does not is kept as a draft and makes no version. Without a browser to check in, the page is not
- * published either, except in local development (PublishScope.publishUnchecked), and `unchecked` says why. A published
- * page's draft goes: its version holds it now.
- */
-export async function publishChecked(
-  scope: PublishScope,
-  input: PublishInput,
-  signal?: AbortSignal,
-  /** Called before the page is checked here (not when it passed a check already); may throw to refuse the check. */
-  beforeCheck?: () => void,
-): Promise<PublishOutcome> {
+export async function publishDraft(scope: PublishScope, input: PublishInput): Promise<Published> {
   const drafts = await scope.drafts();
-  const { page, prior } = await pageToPublish(scope, drafts, input);
-  const publish = async (outcome: Omit<PublishOutcome, "meta" | "byTitle" | "draft">): Promise<PublishOutcome> => {
-    const target = await artifactFor(scope, input, prior?.artifactId);
-    const meta = await scope.artifacts.publishVersion({
-      id: target.id,
-      ownerUid: scope.uid,
-      chatId: scope.chatId,
-      title: input.title,
-      html: page.html,
-      manifest: page.manifest,
-      message: input.message,
-    });
-    await scope.onPublished({ id: meta.id, title: meta.title, latest: meta.latest, updatedAt: meta.updatedAt });
-    // Published already: a draft left behind is only clutter, never a reason to fail.
-    if (prior) await drafts.remove(page.id).catch((error: unknown) => console.error("draft:", errorMessage(error)));
-    return { ...outcome, meta, byTitle: target.byTitle };
-  };
-  if (prior && passed(prior)) return publish({});
-  beforeCheck?.();
-  const checked = await checkInBrowser(scope, { html: page.html, manifest: page.manifest }, signal);
-  if (checked.report ? !checked.report.errors.length : scope.publishUnchecked) {
-    try {
-      return await publish(checked);
-    } catch (error) {
-      // Keep the page and how its check went, so publishing it again (by its id, as the draft) needs no second check.
-      await drafts.save(page, draftCheck(checked.report)).catch((e: unknown) => console.error("draft:", errorMessage(e)));
-      throw error;
-    }
-  }
-  return { ...checked, draft: await drafts.save(page, draftCheck(checked.report)) };
+  const draft = await draftNamed(drafts, input.draftId, "Not published.");
+  const unchecked = draft.errors === null;
+  if (draft.errors)
+    throw new Error(
+      `Not published: the check found ${plural(draft.errors, "error")} in draft "${draft.id}". Fix them with ${WRITE_TOOL}, ` +
+        `draft_id "${draft.id}" and edits, then ${CHECK_TOOL} the new draft.`,
+    );
+  if (unchecked && !scope.publishUnchecked) throw new Error(`Not published: draft "${draft.id}" has not passed a check. Check it with ${CHECK_TOOL} first.`);
+  // The chat's servers may have changed since the page was written.
+  await validPage(scope, draft.html, draft.manifest.mcp?.servers, "Not published.");
+  const target = await artifactFor(scope, input, draft.artifactId);
+  const meta = await scope.artifacts.publishVersion({
+    id: target.id,
+    ownerUid: scope.uid,
+    chatId: scope.chatId,
+    title: input.title,
+    html: draft.html,
+    manifest: draft.manifest,
+    message: input.message,
+  });
+  await scope.onPublished({ id: meta.id, title: meta.title, latest: meta.latest, updatedAt: meta.updatedAt });
+  // Published already: a draft left behind is only clutter, never a reason to fail.
+  await drafts.remove(draft.id).catch((error: unknown) => console.error("draft:", errorMessage(error)));
+  return { meta, byTitle: target.byTitle, ...(unchecked && { unchecked }) };
 }

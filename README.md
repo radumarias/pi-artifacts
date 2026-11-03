@@ -192,15 +192,15 @@ page's CSP, with its live calls answered by the chat's MCP connections. It retur
 
 A draft that passes is published by its `draft_id`. A publish without an `artifact_id` goes to the artifact the draft was
 written for, else to the chat's artifact whose title matches (`new_artifact: true` makes a separate one), so a fix the
-model publishes without the id never turns into a second artifact stuck at version 1. `artifact_publish` checks a draft
-that was not checked yet, and refuses one with errors.
+model publishes without the id never turns into a second artifact stuck at version 1. `artifact_publish` takes only a
+draft that passed its check.
 
 Until a page passes, it is a **draft**, not a version: every page the agent writes is saved as one of its chat's drafts
 (`worker/storage/drafts.ts`), so no attempt is lost and the Git repo only ever gets pages that passed. Drafts live in
 the chat owner's R2 folder (`users/<uid>/drafts/<chatId>/`), encrypted with the owner's key like their files but apart
 from them, keyed by a hash of the page and what it declares, so the same page is one draft. A chat keeps its newest 20;
 publishing a page drops its draft, and deleting the chat deletes them all. To fix a page, or to change a published one,
-the agent sends `artifact_write` a `draft_id` (or the `artifact_id`, for its latest version) and `edits` (text replaced
+the agent sends `artifact_write` a `draft_id` (or the `artifact_id`, for its latest version or `version`) and `edits` (text replaced
 exactly once each), so a fix costs the model only what changes, not the whole page again. Right after a check found
 errors, `artifact_write` refuses a whole new page: the model has to fix the draft by edits. The agent lists drafts and
 gets one back with `artifact_drafts` (an earlier attempt, or the page it was working on after the chat restarted).
