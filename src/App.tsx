@@ -269,23 +269,24 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
               «
             </button>
           </div>
-          {/* Chats and artifacts scroll here; skills and the files panel stay below them. */}
+          {/* Chats scroll here; artifacts, skills and the files panel stay below them. */}
           <div className="sidebar-scroll">
           <h3>Chats</h3>
           <ChatList chats={chats} openId={chatId} navigate={navigate} onDelete={setDeleting} />
-          <h3>Artifacts</h3>
-          <nav>
-            {artifacts.map((a) => (
-              <a key={a.id} href={`/a/${a.id}`} target="_blank" rel="noreferrer" className={a.unread ? "nav-item unread" : "nav-item"}>
-                <span className="nav-title">
-                  {a.title} <small>v{a.latest}</small>
-                </span>
-                {a.unread && <UnreadDot label="New version you have not opened" />}
-              </a>
-            ))}
-          </nav>
           </div>
           <section className="sidebar-pinned">
+            <h3>Artifacts</h3>
+            {/* A long list scrolls on its own, so skills and the files panel stay in view. */}
+            <nav className="artifact-list">
+              {artifacts.map((a) => (
+                <a key={a.id} href={`/a/${a.id}`} target="_blank" rel="noreferrer" className={a.unread ? "nav-item unread" : "nav-item"}>
+                  <span className="nav-title">
+                    {a.title} <small>v{a.latest}</small>
+                  </span>
+                  {a.unread && <UnreadDot label="New version you have not opened" />}
+                </a>
+              ))}
+            </nav>
             <h3>Skills</h3>
             <nav>
               <a
