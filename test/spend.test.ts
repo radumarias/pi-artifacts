@@ -1,7 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { chatSpend, formatCost, promptSpend } from "../src/chat/spend.ts";
+import { chatSpend, describeTime, formatCost, formatDuration, promptSpend, totalTime } from "../src/chat/spend.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
 /** A reply's usage: `tokens`, at `total` dollars. */
@@ -41,6 +41,36 @@ describe("prompt spend", () => {
     const entries = [prompt(), reply(0.01), prompt(), reply(0.02), result()];
     expect([...promptSpend(entries, true).keys()]).toEqual([entries[1].id]);
     expect([...promptSpend(entries, false).keys()]).toEqual([entries[1].id, entries[4].id]);
+  });
+});
+
+describe("prompt time", () => {
+  const said = (timestamp: number) => entry(CHAT_MESSAGE_KIND, { role: "user", content: "hi", timestamp });
+  const answered = (timestamp: number, durationMs?: number) =>
+    entry("pi.assistant", { role: "assistant", content: [], usage: usage({}), timestamp, ...(durationMs !== undefined && { durationMs }) });
+  const ran = (timestamp: number, durationMs: number) =>
+    entry("pi.tool-result", { role: "toolResult", toolCallId: "c", toolName: "t", content: [], timestamp, durationMs });
+
+  it("runs from the person's message to the last reply or tool result, and says how long models and tools ran", () => {
+    const first = [said(1_000), answered(1_500, 2_000), ran(6_000, 2_500), answered(6_100, 3_900)];
+    // Placed together: the prompt starts at the last of them. A reply from before pi timed replies counts from its start.
+    const second = [said(20_000), said(20_010), answered(20_100), ran(21_000, 800)];
+    const spend = promptSpend([...first, ...second], false);
+    expect(spend.get(first[3].id)!.time).toEqual({ ms: 9_000, modelMs: 5_900, toolMs: 2_500, calls: 2, tools: 1 });
+    expect(spend.get(second[3].id)!.time).toEqual({ ms: 990, modelMs: 0, toolMs: 800, calls: 1, tools: 1 });
+    expect(totalTime(spend.values())).toEqual({ ms: 9_990, modelMs: 5_900, toolMs: 3_300, calls: 3, tools: 2 });
+    expect(describeTime(spend.get(first[3].id)!.time)).toBe("model replies 5.9s (2), tools 2.5s (1)");
+  });
+
+  it("counts from the first reply when the message has no time", () => {
+    const entries = [prompt(), answered(5_000, 1_000)];
+    expect(promptSpend(entries, false).get(entries[1].id)!.time.ms).toBe(1_000);
+  });
+
+  it("formats durations", () => {
+    expect([0, 400, 4_240, 9_960, 42_400, 59_600, 185_000, 3_599_700, 3_840_000].map(formatDuration)).toEqual([
+      "0.0s", "0.4s", "4.2s", "10s", "42s", "1m 0s", "3m 5s", "1h 0m", "1h 4m",
+    ]);
   });
 });
 

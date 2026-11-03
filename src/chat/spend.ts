@@ -27,35 +27,75 @@ function plus(a: Spend, b: Spend): Spend {
   return { cost: a.cost + b.cost, input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite };
 }
 
+/** How long work took: wall-clock time, and how long model replies and tools ran within it (tools can overlap). */
+export interface Timing {
+  ms: number;
+  modelMs: number;
+  toolMs: number;
+  /** Model replies and tool calls. */
+  calls: number;
+  tools: number;
+}
+
+/** What a prompt cost, and how long it took. */
+export type PromptSpend = Spend & { time: Timing };
+
+const NO_TIME: Timing = { ms: 0, modelMs: 0, toolMs: 0, calls: 0, tools: 0 };
+
 /**
- * What each prompt cost: the model replies, and the tool results that report a spend, from a person's message up to
- * the next one. Keyed by the id of the prompt's last reply or tool result, which is where the app shows it. Messages
- * placed together (sent while the agent was busy) make one prompt; one the model never answered is left out. While
- * `running`, the newest prompt no one has written after is left out too: it may cost more yet.
+ * What each prompt cost and took: the model replies, and the tool results that report a spend, from a person's
+ * message up to the next one. Keyed by the id of the prompt's last reply or tool result, which is where the app shows
+ * it. Messages placed together (sent while the agent was busy) make one prompt; one the model never answered is left
+ * out. While `running`, the newest prompt no one has written after is left out too: it may cost more yet. Its time
+ * runs from when the person's message was placed (the run's start, as the app's timer has it) to when its last reply
+ * or tool result came in.
  */
-export function promptSpend(entries: readonly EntryRecord[], running: boolean): Map<number, Spend> {
-  const spend = new Map<number, Spend>();
+export function promptSpend(entries: readonly EntryRecord[], running: boolean): Map<number, PromptSpend> {
+  const spend = new Map<number, PromptSpend>();
   let total = NONE;
+  let time = NO_TIME;
+  let start: number | undefined;
   let at: number | undefined;
   for (const entry of entries) {
+    const message = entry.model?.[0];
     // A person's message: a prompt starts. `pi.user` is one from before chats were shared.
     if (entry.kind === CHAT_MESSAGE_KIND || entry.kind === "pi.user") {
       total = NONE;
+      time = NO_TIME;
+      start = message?.role === "user" ? message.timestamp : undefined;
       at = undefined;
       continue;
     }
-    const message = entry.model?.[0];
     let usage: Usage | undefined;
-    if (entry.kind === "pi.assistant" && message?.role === "assistant") usage = message.usage;
-    else if (entry.kind === "pi.tool-result" && message?.role === "toolResult" && at !== undefined) usage = message.usage;
-    else continue;
+    let end: number;
+    if (entry.kind === "pi.assistant" && message?.role === "assistant") {
+      usage = message.usage;
+      // Replies from before pi timed them have no duration: they count from their start.
+      end = message.timestamp + (message.durationMs ?? 0);
+      start ??= message.timestamp;
+      time = { ...time, modelMs: time.modelMs + (message.durationMs ?? 0), calls: time.calls + 1 };
+    } else if (entry.kind === "pi.tool-result" && message?.role === "toolResult" && at !== undefined) {
+      usage = message.usage;
+      end = message.timestamp;
+      time = { ...time, toolMs: time.toolMs + (message.durationMs ?? 0), tools: time.tools + 1 };
+    } else continue;
     if (usage) total = plus(total, spendOf(usage));
+    time = { ...time, ms: Math.max(time.ms, end - (start ?? end)) };
     if (at !== undefined) spend.delete(at);
     at = entry.id;
-    spend.set(at, total);
+    spend.set(at, { ...total, time });
   }
   if (running && at !== undefined) spend.delete(at);
   return spend;
+}
+
+/** The time of all the prompts in `prompts`, added up. */
+export function totalTime(prompts: Iterable<PromptSpend>): Timing {
+  let sum = NO_TIME;
+  for (const { time } of prompts) {
+    sum = { ms: sum.ms + time.ms, modelMs: sum.modelMs + time.modelMs, toolMs: sum.toolMs + time.toolMs, calls: sum.calls + time.calls, tools: sum.tools + time.tools };
+  }
+  return sum;
 }
 
 /**
@@ -84,6 +124,24 @@ export function formatCost(dollars: number): string {
   if (dollars < 0.0001) return "<$0.0001";
   // Below 0.995, two significant digits stay below a dollar.
   return dollars < 0.995 ? SMALL.format(dollars) : LARGE.format(dollars);
+}
+
+/** A duration: 0.4s, 4.2s, 42s, 3m 5s, 1h 4m. */
+export function formatDuration(ms: number): string {
+  const seconds = Math.max(0, ms) / 1000;
+  if (seconds < 9.95) return `${seconds.toFixed(1)}s`;
+  if (seconds < 59.5) return `${Math.round(seconds)}s`;
+  const minutes = Math.round(seconds) / 60;
+  if (minutes < 60) return `${Math.floor(minutes)}m ${Math.round(seconds) % 60}s`;
+  const rounded = Math.round(minutes);
+  return `${Math.floor(rounded / 60)}h ${rounded % 60}m`;
+}
+
+/** Where the time went, for a tooltip: "model replies 48s (3), tools 31s (2)". */
+export function describeTime(time: Timing): string {
+  const parts = [`model replies ${formatDuration(time.modelMs)} (${time.calls})`];
+  if (time.tools) parts.push(`tools ${formatDuration(time.toolMs)} (${time.tools})`);
+  return parts.join(", ");
 }
 
 const COUNT = new Intl.NumberFormat("en-US");

@@ -308,8 +308,11 @@ then on, even before its first message, until someone changes it. Before a user 
 
 ### What a chat costs
 
-The chat shows what its model calls cost: each prompt's under the agent's last reply to it (with the tokens in and
-out), and the chat's total in the header, which opens each model's share. pi-ai prices every model reply when it
+The chat shows what its model calls cost and how long they took: each prompt's under the agent's last reply to it
+(with the tokens in and out), and the chat's total in the header, which opens each model's share and where the time
+went. A prompt's time runs from when its message was placed to its last reply or tool result; pi times every model
+reply and tool call, and the tooltip splits the time between them (tools can run side by side). The chat's time adds
+up its finished prompts. pi-ai prices every model reply when it
 comes in, from the tokens the provider reports and its model's prices per million tokens (input, output, cache reads
 and writes, and the higher rates of a long prompt where a model has them), and stores the price with the reply; pi
 keeps a ledger of the conversation's spend by model, which the total comes from, so it also counts the calls that
