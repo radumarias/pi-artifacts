@@ -136,7 +136,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
     el.style.height = `${el.scrollHeight}px`;
   }, [draft]);
 
-  const prompts = useMemo(() => promptSpend(state.entries), [state.entries]);
+  const prompts = useMemo(() => promptSpend(state.entries, state.busy), [state.entries, state.busy]);
 
   const isOwner = people?.owner.uid === uid;
   const sendLabel = attachments.sending ? "Sending…" : "Send";
@@ -177,12 +177,11 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onGone, onLeft }
             </div>
           )}
           {state.entries.map((entry) => {
-            const spend = prompts.spend.get(entry.id);
+            const spend = prompts.get(entry.id);
             return (
               <Fragment key={entry.id}>
                 <Entry entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
-                {/* The prompt a run is answering can cost more yet: its cost shows once the run ends. */}
-                {spend && !(state.busy && entry.id === prompts.open) && <PromptCost spend={spend} />}
+                {spend && <PromptCost spend={spend} />}
               </Fragment>
             );
           })}

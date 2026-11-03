@@ -134,10 +134,13 @@ body.resizing iframe { pointer-events: none; }
 .other small { color: var(--muted); padding-left: 4px; }
 .bubble.peer { background: var(--surface-2); max-width: none; }
 
-.chat-header { display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; min-height: 40px; }
+/* Relative: the cost panel hangs from its right edge, so it stays on screen however wide the header is. */
+.chat-header { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; min-height: 40px; }
 .chat-people { flex: 1; min-width: 0; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.share-panel { margin: 8px 20px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-.share-panel ul { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.share-panel, .cost-panel { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
+.share-panel ul, .cost-panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.share-panel { margin: 8px 20px 0; align-items: flex-start; }
+.share-panel ul { width: 100%; gap: 4px; }
 .share-panel li { display: flex; align-items: center; gap: 8px; }
 .share-panel li button { margin-left: auto; padding: 2px 8px; font-size: 13px; }
 .share-panel small { color: var(--muted); }
@@ -403,11 +406,9 @@ body.resizing iframe { pointer-events: none; }
 .person.online::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--live); }
 /* What the model calls cost: per prompt under the agent's last reply to it, and for the whole chat in the header. */
 .prompt-cost { align-self: flex-start; padding-left: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-/* The panel hangs from the header's right edge, so it stays on screen however wide the header is. */
-.chat-header { position: relative; }
 .chat-cost > button { font-variant-numeric: tabular-nums; }
-.cost-panel { position: absolute; right: 20px; top: calc(100% + 6px); z-index: 5; width: min(340px, calc(100% - 40px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
-.cost-panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cost-panel { position: absolute; right: 20px; top: calc(100% + 6px); z-index: 5; width: min(340px, calc(100% - 40px)); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); font-size: 14px; }
+.cost-panel ul { gap: 6px; }
 .cost-panel li { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; }
 .cost-panel li small { grid-row: 2; color: var(--muted); }
 .cost-panel .cost-amount { grid-row: 1 / 3; grid-column: 2; align-self: center; font-variant-numeric: tabular-nums; }

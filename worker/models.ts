@@ -22,30 +22,40 @@ const WORKERS_AI_MODELS = [
 
 const VENDOR_ORDER = Object.keys(VENDORS) as Vendor[];
 
+type ModelCost = Model<Api>["cost"];
+
 /**
  * Prices, in dollars per million tokens, that changed after the pi-ai release this app ships with, from the vendors'
  * own price pages (checked 2026-11-03). pi-ai prices every model reply from its model's `cost` when the reply comes
  * in, and stores that price with the reply, so a change here prices replies from then on and leaves earlier ones as
  * they were charged. Drop an entry once pi-ai has the price.
  */
-export const PRICE_UPDATES: Readonly<Record<string, Partial<Model<Api>["cost"]>>> = {
+export const PRICE_UPDATES: ReadonlyMap<string, Partial<ModelCost>> = new Map([
   // Anthropic halved Claude Sonnet 5.5's cache reads, to 0.05 times its input price, on 2026-10-07.
-  "anthropic/claude-sonnet-5.5": { cacheRead: 0.1 },
-};
+  ["anthropic/claude-sonnet-5.5", { cacheRead: 0.1 }],
+]);
+
+/** Each updated model's copy at its current price, made once: pi looks a model up several times per model call. */
+const priced = new WeakMap<object, object>();
 
 /** `model` at its current price: what PRICE_UPDATES says, else what pi-ai says. */
-export function withCurrentPrice<T extends Model<Api>>(model: T): T {
-  const update = Object.hasOwn(PRICE_UPDATES, model.id) ? PRICE_UPDATES[model.id] : undefined;
-  return update ? { ...model, cost: { ...model.cost, ...update } } : model;
+function withCurrentPrice<T extends { id: string; cost: ModelCost }>(model: T): T {
+  const update = PRICE_UPDATES.get(model.id);
+  if (!update) return model;
+  let copy = priced.get(model) as T | undefined;
+  if (!copy) priced.set(model, (copy = { ...model, cost: { ...model.cost, ...update } }));
+  return copy;
 }
 
-/** `provider` with its models at their current prices: the agent finds the models it runs on through its provider. */
-export function withCurrentPrices<T extends Provider>(provider: T): T {
-  const priced = <M,>(models: readonly M[]) => models.map((model) => withCurrentPrice(model as Model<Api>) as M);
+/**
+ * `provider` with its models at their current prices. The agent finds the models it runs on through its provider, and
+ * the picker lists the same ones, so every price the app reads goes through here.
+ */
+export function withCurrentPrices(provider: Provider): Provider {
   return {
     ...provider,
-    getModels: () => priced(provider.getModels()),
-    ...(provider.getAllModels && { getAllModels: () => priced(provider.getAllModels!()) }),
+    getModels: () => provider.getModels().map(withCurrentPrice),
+    getAllModels: () => (provider.getAllModels?.() ?? provider.getModels()).map(withCurrentPrice),
   };
 }
 
@@ -111,7 +121,7 @@ let catalog: Map<string, ModelEntry> | undefined;
 
 /** The models ship with pi-ai, so the list is built once per isolate. Listing them never touches the AI binding. */
 function entries(): Map<string, ModelEntry> {
-  return (catalog ??= new Map(chatModels(createAI({ binding: {} as never }).provider.getModels()).map((entry) => [entry.info.id, entry])));
+  return (catalog ??= new Map(chatModels(withCurrentPrices(createAI({ binding: {} as never }).provider).getModels()).map((entry) => [entry.info.id, entry])));
 }
 
 /** The models a chat can pick, as the picker lists them. */

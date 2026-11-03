@@ -5,20 +5,10 @@ import { memoAsync } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
 // The choices change only with a deploy, so every chat shares one fetch.
-export const loadCatalog = memoAsync(() => api.models());
+const loadCatalog = memoAsync(() => api.models());
 
-interface Props {
-  model?: string;
-  thinkingLevel?: ModelThinkingLevel;
-  disabled: boolean;
-  /** Whether images wait in the composer: a model that cannot see them says so. */
-  attachingImages?: boolean;
-  /** Ask for a model and effort; the chat answers with the effort the model takes, through its agent state. */
-  onChange: (model: string, thinkingLevel?: ModelThinkingLevel) => void;
-}
-
-/** The chat's model and, for a model that reasons, its effort. Memoized: the chat re-renders on every streamed token. */
-export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, disabled, attachingImages, onChange }: Props) {
+/** The models a chat can pick, once they have come: empty until then. A failed load is tried again until it works. */
+export function useCatalog(): ModelInfo[] {
   const [models, setModels] = useState<ModelInfo[]>([]);
   useEffect(() => {
     let live = true;
@@ -37,6 +27,22 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
       clearTimeout(retry);
     };
   }, []);
+  return models;
+}
+
+interface Props {
+  model?: string;
+  thinkingLevel?: ModelThinkingLevel;
+  disabled: boolean;
+  /** Whether images wait in the composer: a model that cannot see them says so. */
+  attachingImages?: boolean;
+  /** Ask for a model and effort; the chat answers with the effort the model takes, through its agent state. */
+  onChange: (model: string, thinkingLevel?: ModelThinkingLevel) => void;
+}
+
+/** The chat's model and, for a model that reasons, its effort. Memoized: the chat re-renders on every streamed token. */
+export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, disabled, attachingImages, onChange }: Props) {
+  const models = useCatalog();
   const groups = useMemo(
     () => Object.entries(VENDORS).map(([vendor, label]) => ({ label, models: models.filter((entry) => entry.vendor === vendor) })).filter((group) => group.models.length),
     [models],

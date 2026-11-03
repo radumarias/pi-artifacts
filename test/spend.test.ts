@@ -4,6 +4,7 @@ import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { createAI } from "agents/models/pi-ai";
 import { describe, expect, it } from "vitest";
 import { chatSpend, formatCost, promptSpend } from "../src/chat/spend.ts";
+import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 import { PRICE_UPDATES, withCurrentPrices } from "../worker/models.ts";
 
 const provider = createAI({ binding: {} as never }).provider;
@@ -11,10 +12,16 @@ const models = createModels();
 models.setProvider(withCurrentPrices(provider));
 /** A model as the agent finds it: through the provider, at its current price. */
 const model = (id: string) => models.getModel("cloudflare", id)!;
-const usage = (tokens: Partial<Usage>): Usage => {
-  const full = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, ...tokens };
-  return full;
-};
+/** A reply's usage: `tokens`, at `total` dollars. */
+const usage = (tokens: Partial<Usage>, total = 0): Usage => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
+  ...tokens,
+});
 
 describe("model prices", () => {
   it("prices the agent's models at the vendors' current prices, per million tokens", () => {
@@ -28,7 +35,7 @@ describe("model prices", () => {
   });
 
   it("updates only prices pi-ai has not caught up with", () => {
-    for (const [id, update] of Object.entries(PRICE_UPDATES)) {
+    for (const [id, update] of PRICE_UPDATES) {
       const shipped = provider.getModels().find((entry) => entry.id === id);
       expect(shipped, `${id} is in pi-ai's catalog`).toBeDefined();
       // Once pi-ai has the price, the entry can go.
@@ -39,29 +46,30 @@ describe("model prices", () => {
 
 let id = 0;
 const entry = (kind: string, message?: unknown): EntryRecord => ({ id: ++id, conversationId: 1, kind, ...(message !== undefined && { model: [message] }) }) as never;
-const prompt = () => entry("chat.message", undefined);
-const reply = (cost: number, input = 100, output = 10) =>
-  entry("pi.assistant", { role: "assistant", content: [], usage: usage({ input, output, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } }) });
-const result = () => entry("pi.tool-result", { role: "toolResult", toolCallId: "c", toolName: "t", content: [] });
+const prompt = () => entry(CHAT_MESSAGE_KIND);
+const reply = (cost: number, input = 100, output = 10) => entry("pi.assistant", { role: "assistant", content: [], usage: usage({ input, output }, cost) });
+const result = (cost?: number) =>
+  entry("pi.tool-result", { role: "toolResult", toolCallId: "c", toolName: "t", content: [], ...(cost !== undefined && { usage: usage({ input: 1 }, cost) }) });
 const notice = () => entry("chat.people");
 
 describe("prompt spend", () => {
-  it("sums each prompt's replies under its last reply or tool result, and leaves out unanswered prompts", () => {
-    const first = [prompt(), reply(0.01), result(), reply(0.02)];
+  it("sums each prompt's replies and tool spend under its last reply or tool result, and leaves out unanswered prompts", () => {
+    const first = [prompt(), reply(0.01), result(0.005), reply(0.02)];
     const second = [prompt(), prompt(), reply(0.5), result(), notice()];
     const unanswered = [prompt()];
-    const { spend, open } = promptSpend([...first, ...second, ...unanswered]);
+    const spend = promptSpend([...first, ...second, ...unanswered], false);
     expect([...spend.keys()]).toEqual([first[3].id, second[3].id]);
-    expect(spend.get(first[3].id)).toMatchObject({ input: 200, output: 20 });
-    expect(spend.get(first[3].id)!.cost).toBeCloseTo(0.03);
+    expect(spend.get(first[3].id)).toMatchObject({ input: 201, output: 20 });
+    expect(spend.get(first[3].id)!.cost).toBeCloseTo(0.035);
     expect(spend.get(second[3].id)!.cost).toBeCloseTo(0.5);
-    // Someone wrote after the last answered prompt: no prompt is still running up costs.
-    expect(open).toBeUndefined();
+    // Someone wrote after the last answered prompt: a run going now is not adding to it.
+    expect(promptSpend([...first, ...second, ...unanswered], true).size).toBe(2);
   });
 
-  it("marks the newest prompt open until someone writes again", () => {
-    const entries = [prompt(), reply(0.01), result()];
-    expect(promptSpend(entries).open).toBe(entries[2].id);
+  it("leaves out the newest prompt while a run may still add to it", () => {
+    const entries = [prompt(), reply(0.01), prompt(), reply(0.02), result()];
+    expect([...promptSpend(entries, true).keys()]).toEqual([entries[1].id]);
+    expect([...promptSpend(entries, false).keys()]).toEqual([entries[1].id, entries[4].id]);
   });
 });
 
@@ -69,8 +77,8 @@ describe("chat spend", () => {
   it("sums pi's ledger by model, costliest first", () => {
     const ledger = {
       models: {
-        "cloudflare/anthropic/claude-opus-5.5": usage({ input: 10, output: 5, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.3 } }),
-        "cloudflare/@cf/zai-org/glm-5.3": usage({ input: 7, output: 1, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 } }),
+        "cloudflare/anthropic/claude-opus-5.5": usage({ input: 10, output: 5 }, 0.3),
+        "cloudflare/@cf/zai-org/glm-5.3": usage({ input: 7, output: 1 }, 0.001),
       },
       tools: { run_python: usage({}) },
     } as unknown as UsageState;
