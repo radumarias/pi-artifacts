@@ -169,25 +169,32 @@ describe("sandboxLayout", () => {
 });
 
 describe("filesIndex", () => {
+  const OUT = { outFolder: "out/0123456789abcdef/" };
+
   it("lists the files newest first, with sizes", () => {
-    const index = filesIndex(files);
+    const index = filesIndex(files, OUT);
     const lines = index.split("\n").slice(1);
     expect(lines[0]).toBe("out/summary.json\t10 B");
     expect(lines.at(-1)).toBe("uploads/prices.csv\t10 B");
   });
 
   it("says when there are none", () => {
-    expect(filesIndex([])).toContain("no files yet");
+    expect(filesIndex([], OUT)).toContain("no files yet");
   });
 
   it("mentions the sandbox tools only when there is a sandbox", () => {
-    expect(filesIndex(files)).toContain("run_python");
-    expect(filesIndex(files, { sandbox: false })).not.toContain("run_python");
+    expect(filesIndex(files, OUT)).toContain("run_python");
+    expect(filesIndex(files, { ...OUT, sandbox: false })).not.toContain("run_python");
+  });
+
+  it("names this chat's folder, also when there are no files", () => {
+    expect(filesIndex(files, OUT)).toContain("This chat's folder is out/0123456789abcdef/");
+    expect(filesIndex([], { ...OUT, sandbox: false })).toContain("This chat's folder is out/0123456789abcdef/: files you write");
   });
 
   it("cuts a long list and counts the files per folder", () => {
     const many = Array.from({ length: 400 }, (_, i) => entry(`uploads/batch/${i}.csv`, 2048, i));
-    const index = filesIndex([...many, entry("uploads/one.csv")]);
+    const index = filesIndex([...many, entry("uploads/one.csv")], OUT);
     expect(index).toContain("uploads/batch/399.csv\t2.0 KB");
     expect(index).not.toContain("uploads/batch/0.csv");
     expect(index).toMatch(/and \d+ more/);

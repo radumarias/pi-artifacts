@@ -103,7 +103,7 @@ export function filesExtension(scope: ChatScope): Extension {
         name: FILES_WRITE_TOOL,
         description:
           "Write a UTF-8 text file into the user's files, replacing any file at that path. " +
-          `Keep files you make for this chat, such as a page you are drafting, in ${chatOutFolder(scope.chatId)}: the user's other chats write to their own folders under out/.`,
+          "Keep files you make for this chat, such as notes or an intermediate CSV, in this chat's folder under out/ (named with the user's files): the user's other chats save to their own.",
         parameters: Type.Object({ path: Type.String(), content: Type.String() }),
         execute: async (args) => {
           const path = await (await scope.files()).put(args.path, args.content, "text/plain; charset=utf-8");
@@ -119,10 +119,10 @@ export function filesIndexExtension(index: string): Extension {
   return defineExtension({ name: "files-index", sections: [section("user_files", () => index)] });
 }
 
-const sandboxFiles = (outFolder: string) =>
+const SANDBOX_FILES =
   "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
-  "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/report.csv is ./files/out/report.csv). " +
-  `Anything written to ./out/ (top level, not subfolders) is saved back to the user's files in this chat's folder, ${outFolder}. ` +
+  "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/<chat>/report.csv is ./files/out/<chat>/report.csv). " +
+  "Anything written to ./out/ (top level, not subfolders) is saved back to this chat's folder under out/ in the user's files (named with them). " +
   "Each run starts with fresh ./files and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
   "Returns exit code, stdout and stderr.";
 
@@ -197,13 +197,12 @@ const inputFiles = Type.Optional(
 );
 
 export function sandboxExtension(scope: ChatScope): Extension {
-  const aboutFiles = sandboxFiles(chatOutFolder(scope.chatId));
   return defineExtension({
     name: "sandbox",
     tools: [
       defineTool({
         name: RUN_PYTHON_TOOL,
-        description: `Run a Python 3.13 script (pandas and numpy installed) in this chat's isolated Linux sandbox: no internet, 60 s limit. ${aboutFiles}`,
+        description: `Run a Python 3.13 script (pandas and numpy installed) in this chat's isolated Linux sandbox: no internet, 60 s limit. ${SANDBOX_FILES}`,
         parameters: Type.Object({ code: Type.String(), files: inputFiles }),
         execute: async (args) => runInSandbox(scope, args.files, (sandbox, inputs) => sandbox.runPython(args.code, inputs)),
       }),
@@ -211,7 +210,7 @@ export function sandboxExtension(scope: ChatScope): Extension {
         name: RUN_BASH_TOOL,
         description:
           "Run a bash script in the same sandbox as run_python (Debian with coreutils, grep, sed, awk, tar, gzip, python3): no internet, so no package installs or downloads; 60 s limit. " +
-          `Runs as written; start with set -e to stop at the first failing command. ${aboutFiles}`,
+          `Runs as written; start with set -e to stop at the first failing command. ${SANDBOX_FILES}`,
         parameters: Type.Object({ script: Type.String(), files: inputFiles }),
         execute: async (args) => runInSandbox(scope, args.files, (sandbox, inputs) => sandbox.runBash(args.script, inputs)),
       }),

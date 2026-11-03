@@ -104,14 +104,17 @@ const INDEX_MAX_FOLDERS = 40;
 /**
  * The prompt's list of the user's files, newest first, so the agent can match
  * what the user calls a file to its path without a tool call. A long list is
- * cut; then it names the folders, with how many files each holds.
+ * cut; then it names the folders, with how many files each holds. It also names
+ * this chat's folder (chatOutFolder): here, after the tools and the static
+ * sections, so those stay the same for all of a user's chats.
  */
-export function filesIndex(entries: readonly FileEntry[], { sandbox = true } = {}): string {
+export function filesIndex(entries: readonly FileEntry[], { sandbox = true, outFolder }: { sandbox?: boolean; outFolder: string }): string {
   const intro =
     "The user's files (uploads, and files your scripts saved). When the user names a file or folder, match it here and use its path. " +
     (sandbox
-      ? "files_read, run_python and run_bash also take a file's name or the end of its path when only one file matches, and a folder for all the files in it."
-      : "files_read also takes a file's name or the end of its path when only one file matches.");
+      ? "files_read, run_python and run_bash also take a file's name or the end of its path when only one file matches, and a folder for all the files in it. "
+      : "files_read also takes a file's name or the end of its path when only one file matches. ") +
+    `This chat's folder is ${outFolder}: ${sandbox ? "sandbox runs save ./out there, and " : ""}files you write for this chat go there too.`;
   if (entries.length === 0) return `${intro}\nThe user has no files yet; they upload them from the sidebar, or by dropping them on the app.`;
   const newest = [...entries].sort((a, b) => +b.uploaded - +a.uploaded);
   const lines: string[] = [];

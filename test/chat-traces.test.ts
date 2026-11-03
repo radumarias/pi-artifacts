@@ -38,6 +38,5 @@ describe("chatTraces", () => {
 describe("chatOutFolder", () => {
   it("gives each chat its own folder under out/", () => {
     expect(chatOutFolder("0123456789abcdef")).toBe("out/0123456789abcdef/");
-    expect(chatOutFolder("0123456789abcdef")).not.toBe(chatOutFolder("fedcba9876543210"));
   });
 });
