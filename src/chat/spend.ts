@@ -27,35 +27,78 @@ function plus(a: Spend, b: Spend): Spend {
   return { cost: a.cost + b.cost, input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite };
 }
 
+/** How long work took: wall-clock time, and how long model replies and tools ran within it (tools can overlap). */
+export interface Timing {
+  ms: number;
+  modelMs: number;
+  toolMs: number;
+  replies: number;
+  tools: number;
+  prompts: number;
+}
+
+/** What a prompt cost, and how long it took. */
+export type PromptSpend = Spend & { time: Timing };
+
+const NO_TIME: Timing = { ms: 0, modelMs: 0, toolMs: 0, replies: 0, tools: 0, prompts: 0 };
+
+function plusTime(a: Timing, b: Timing): Timing {
+  return { ms: a.ms + b.ms, modelMs: a.modelMs + b.modelMs, toolMs: a.toolMs + b.toolMs, replies: a.replies + b.replies, tools: a.tools + b.tools, prompts: a.prompts + b.prompts };
+}
+
 /**
- * What each prompt cost: the model replies, and the tool results that report a spend, from a person's message up to
- * the next one. Keyed by the id of the prompt's last reply or tool result, which is where the app shows it. Messages
- * placed together (sent while the agent was busy) make one prompt; one the model never answered is left out. While
- * `running`, the newest prompt no one has written after is left out too: it may cost more yet.
+ * What each prompt cost and took: the model replies, and the tool results that report a spend, from a person's
+ * message up to the next one. Keyed by the id of the prompt's last reply or tool result, which is where the app shows
+ * it. Messages placed together (sent while the agent was busy) make one prompt; one the model never answered is left
+ * out. While `running`, the newest prompt no one has written after is left out too: it may cost more yet. Its time
+ * runs from when its messages were placed (where the app's run timer starts too) to when its last reply or tool
+ * result came in.
  */
-export function promptSpend(entries: readonly EntryRecord[], running: boolean): Map<number, Spend> {
-  const spend = new Map<number, Spend>();
+export function promptSpend(entries: readonly EntryRecord[], running: boolean): Map<number, PromptSpend> {
+  const spend = new Map<number, PromptSpend>();
   let total = NONE;
+  let [modelMs, toolMs, replies, tools, end] = [0, 0, 0, 0, 0];
+  let start: number | undefined;
   let at: number | undefined;
   for (const entry of entries) {
+    const message = entry.model?.[0];
     // A person's message: a prompt starts. `pi.user` is one from before chats were shared.
     if (entry.kind === CHAT_MESSAGE_KIND || entry.kind === "pi.user") {
       total = NONE;
+      [modelMs, toolMs, replies, tools, end] = [0, 0, 0, 0, 0];
+      // Messages placed together share one time, so the newest one's is the prompt's. An earlier one whose run failed
+      // before any reply is not part of it: the person wrote again later.
+      start = message?.role === "user" ? message.timestamp : undefined;
       at = undefined;
       continue;
     }
-    const message = entry.model?.[0];
     let usage: Usage | undefined;
-    if (entry.kind === "pi.assistant" && message?.role === "assistant") usage = message.usage;
-    else if (entry.kind === "pi.tool-result" && message?.role === "toolResult" && at !== undefined) usage = message.usage;
-    else continue;
+    if (entry.kind === "pi.assistant" && message?.role === "assistant") {
+      usage = message.usage;
+      // Replies from before pi timed them have no duration: they count from their start.
+      modelMs += message.durationMs ?? 0;
+      replies++;
+      start ??= message.timestamp;
+      end = Math.max(end, message.timestamp + (message.durationMs ?? 0));
+    } else if (entry.kind === "pi.tool-result" && message?.role === "toolResult" && at !== undefined) {
+      usage = message.usage;
+      toolMs += message.durationMs ?? 0;
+      tools++;
+      end = Math.max(end, message.timestamp);
+    } else continue;
     if (usage) total = plus(total, spendOf(usage));
     if (at !== undefined) spend.delete(at);
     at = entry.id;
-    spend.set(at, total);
+    // A reply came first in this prompt (a tool result needs one), so `start` is set.
+    spend.set(at, { ...total, time: { ms: Math.max(0, end - start!), modelMs, toolMs, replies, tools, prompts: 1 } });
   }
   if (running && at !== undefined) spend.delete(at);
   return spend;
+}
+
+/** The time of all the prompts in `prompts`, added up. */
+export function totalTime(prompts: Iterable<PromptSpend>): Timing {
+  return [...prompts].reduce((sum, prompt) => plusTime(sum, prompt.time), NO_TIME);
 }
 
 /**

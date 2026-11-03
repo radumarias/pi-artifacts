@@ -47,6 +47,7 @@ button, .button, select {
 }
 button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+button.danger { background: var(--error); color: var(--surface); border-color: transparent; }
 
 .workspace {
   display: grid;
@@ -119,6 +120,24 @@ body.resizing iframe { pointer-events: none; }
   font-size: 14px;
 }
 .sidebar nav a:hover, .sidebar nav a.active { background: var(--surface-2); }
+/* A chat in the list, with its delete button: shown on hover or focus, and always on touch screens. */
+.chat-link { position: relative; display: flex; border-radius: 6px; }
+.chat-link > a { flex: 1; min-width: 0; }
+.chat-link:hover, .chat-link.active, .chat-link:focus-within { background: var(--surface-2); }
+.chat-link:hover > a, .chat-link > a:hover { background: none; }
+.chat-delete { flex: none; display: grid; place-items: center; padding: 0 6px; border: 0; background: none; color: var(--muted); opacity: 0; }
+.chat-link:hover .chat-delete, .chat-delete:focus-visible { opacity: 1; }
+.chat-delete:hover { color: var(--error); }
+@media (hover: none) { .chat-delete { opacity: 1; } }
+.confirm-dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: 0 12px 40px rgb(0 0 0 / 0.2); }
+.confirm-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+.confirm-dialog h2 { margin: 0 0 10px; font-size: 18px; }
+.confirm-dialog p { margin: 0 0 10px; }
+.confirm-dialog > small { display: block; color: var(--muted); font-size: 13px; }
+.confirm-list { margin: 0 0 10px; padding-left: 20px; max-height: 140px; overflow-y: auto; font-size: 14px; overflow-wrap: anywhere; }
+.confirm-check { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 6px; cursor: pointer; }
+.confirm-check input { margin-top: 4px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .sidebar small { color: var(--muted); }
 .sidebar .upload { padding: 5px 8px; color: var(--accent); cursor: pointer; font-size: 14px; }
 .sidebar .upload:has(input:disabled) { opacity: 0.5; cursor: default; }
@@ -481,3 +500,5 @@ a.mention-chip:hover { text-decoration: underline; }
 .cost-panel li small { grid-row: 2; color: var(--muted); }
 .cost-panel .cost-amount { grid-row: 1 / 3; grid-column: 2; align-self: center; font-variant-numeric: tabular-nums; }
 .cost-panel > small { color: var(--muted); font-size: 12px; }
+.cost-panel .cost-time { padding-top: 8px; border-top: 1px solid var(--border); }
+@media (max-width: 480px) { .chat-time { display: none; } }

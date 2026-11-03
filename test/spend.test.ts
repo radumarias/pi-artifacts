@@ -1,7 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { chatSpend, formatCost, promptSpend } from "../src/chat/spend.ts";
+import { chatSpend, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
 /** A reply's usage: `tokens`, at `total` dollars. */
@@ -17,10 +17,13 @@ const usage = (tokens: Partial<Usage>, total = 0): Usage => ({
 
 let id = 0;
 const entry = (kind: string, message?: unknown): EntryRecord => ({ id: ++id, conversationId: 1, kind, ...(message !== undefined && { model: [message] }) }) as never;
-const prompt = () => entry(CHAT_MESSAGE_KIND);
-const reply = (cost: number, input = 100, output = 10) => entry("pi.assistant", { role: "assistant", content: [], usage: usage({ input, output }, cost) });
-const result = (cost?: number) =>
-  entry("pi.tool-result", { role: "toolResult", toolCallId: "c", toolName: "t", content: [], ...(cost !== undefined && { usage: usage({ input: 1 }, cost) }) });
+/** `timestamp` and `durationMs`, where a test needs them. */
+type Times = { timestamp?: number; durationMs?: number };
+const prompt = (timestamp?: number) => entry(CHAT_MESSAGE_KIND, timestamp === undefined ? undefined : { role: "user", content: "hi", timestamp });
+const reply = (cost: number, input = 100, output = 10, times: Times = {}) =>
+  entry("pi.assistant", { role: "assistant", content: [], usage: usage({ input, output }, cost), ...times });
+const result = (cost?: number, times: Times = {}) =>
+  entry("pi.tool-result", { role: "toolResult", toolCallId: "c", toolName: "t", content: [], ...(cost !== undefined && { usage: usage({ input: 1 }, cost) }), ...times });
 const notice = () => entry("chat.people");
 
 describe("prompt spend", () => {
@@ -41,6 +44,31 @@ describe("prompt spend", () => {
     const entries = [prompt(), reply(0.01), prompt(), reply(0.02), result()];
     expect([...promptSpend(entries, true).keys()]).toEqual([entries[1].id]);
     expect([...promptSpend(entries, false).keys()]).toEqual([entries[1].id, entries[4].id]);
+  });
+});
+
+describe("prompt time", () => {
+  const answered = (timestamp: number, durationMs?: number) => reply(0, 0, 0, { timestamp, durationMs });
+  const ran = (timestamp: number, durationMs: number) => result(undefined, { timestamp, durationMs });
+
+  it("runs from the person's message to the last reply or tool result, and says how long models and tools ran", () => {
+    const first = [prompt(1_000), answered(1_500, 2_000), ran(6_000, 2_500), answered(6_100, 3_900)];
+    // Placed together, at one time. A reply from before pi timed replies counts from its start.
+    const second = [prompt(20_000), prompt(20_000), answered(20_100), ran(21_000, 800)];
+    const spend = promptSpend([...first, ...second], false);
+    expect(spend.get(first[3].id)!.time).toEqual({ ms: 9_000, modelMs: 5_900, toolMs: 2_500, replies: 2, tools: 1, prompts: 1 });
+    expect(spend.get(second[3].id)!.time).toEqual({ ms: 1_000, modelMs: 0, toolMs: 800, replies: 1, tools: 1, prompts: 1 });
+    expect(totalTime(spend.values())).toEqual({ ms: 10_000, modelMs: 5_900, toolMs: 3_300, replies: 3, tools: 2, prompts: 2 });
+  });
+
+  it("starts at the newest message when an earlier one's run failed before any reply", () => {
+    const entries = [prompt(1_000), prompt(600_000), answered(600_500, 1_500)];
+    expect(promptSpend(entries, false).get(entries[2].id)!.time.ms).toBe(2_000);
+  });
+
+  it("counts from the first reply when the message has no time", () => {
+    const entries = [prompt(), answered(5_000, 1_000)];
+    expect(promptSpend(entries, false).get(entries[1].id)!.time.ms).toBe(1_000);
   });
 });
 

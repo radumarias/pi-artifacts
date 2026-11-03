@@ -140,6 +140,22 @@ export interface PublishedDetails {
   title: string;
 }
 
+/** What a tool that writes the user's files (files_write, run_python, run_bash) says it saved: deleting the chat can delete them. */
+export interface SavedFilesDetails {
+  saved: string[];
+}
+
+/** GET /api/chats/:id/deletion, for the owner: what deleting the chat would delete with it. */
+export interface ChatDeletion {
+  title: string;
+  /** Published from this chat: deleted with it, and their links stop working. */
+  artifacts: { id: string; title: string }[];
+  /** The owner's files attached to its messages or saved by its agent, that are still there. Only those the owner sends back with the DELETE are deleted. */
+  files: string[];
+  /** How many people it is shared with: they lose it at once. */
+  members: number;
+}
+
 export interface ChatSummary {
   id: string;
   title: string;
@@ -233,6 +249,8 @@ export type ChatServerMessage =
   | { type: "presence"; online: Presence[] }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
+  /** Sent to everyone just before the chat closes their sockets, when its owner deleted it. */
+  | { type: "deleted" }
   | { type: "error"; message: string };
 
 /** The close code of a chat socket whose user is not (or no longer) in the chat: the app stops reconnecting. */

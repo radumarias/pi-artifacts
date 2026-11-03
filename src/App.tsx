@@ -5,7 +5,9 @@ import { errorMessage } from "../shared/util.ts";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
+import { DeleteChat } from "./chat/DeleteChat.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import { Icon } from "./Icon.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
 import { ResizeHandle, useStoredState } from "./layout.tsx";
@@ -174,6 +176,8 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PublishedDetails | null>(null);
+  // The chat whose deletion is being confirmed.
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.
@@ -291,19 +295,27 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           <h3>Chats</h3>
           <nav>
             {chats.map((chat) => (
-              <a
-                key={chat.id}
-                href={`/c/${chat.id}`}
-                className={chat.id === chatId ? "active" : ""}
-                title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate(`/c/${chat.id}`);
-                }}
-              >
-                {chat.title}
-                {chat.sharedBy && <small> · {chat.sharedBy}</small>}
-              </a>
+              <div key={chat.id} className={chat.id === chatId ? "chat-link active" : "chat-link"}>
+                <a
+                  href={`/c/${chat.id}`}
+                  title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(`/c/${chat.id}`);
+                  }}
+                >
+                  {chat.title}
+                  {chat.sharedBy && <small> · {chat.sharedBy}</small>}
+                </a>
+                {/* Only the owner can delete a chat; someone it is shared with leaves it from the chat's People panel. */}
+                {!chat.sharedBy && (
+                  <button type="button" className="chat-delete" title="Delete chat" aria-label={`Delete chat ${chat.title}`} onClick={() => setDeleting(chat.id)}>
+                    <Icon size={15} box={24}>
+                      <path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+                    </Icon>
+                  </button>
+                )}
+              </div>
             ))}
           </nav>
           <h3>Artifacts</h3>
@@ -382,6 +394,18 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           max={() => (chatRef.current?.parentElement?.offsetWidth ?? innerWidth) - (collapsed ? RAIL_WIDTH : sidebarWidth) - PREVIEW_MIN}
           onResize={setChatWidth}
           onReset={() => setChatWidth(null)}
+        />
+      )}
+      {deleting && (
+        <DeleteChat
+          chatId={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            setDeleting(null);
+            // Leaving the chat closes its preview; another chat's deletion leaves this one's open.
+            if (deleting === chatId) navigate("/");
+            refresh();
+          }}
         />
       )}
       {dragging && (

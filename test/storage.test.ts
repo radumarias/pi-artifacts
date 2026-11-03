@@ -84,4 +84,12 @@ describe("UserFiles", () => {
     expect((await files.list("uploads")).map((e) => e.path)).toEqual(["uploads/b.txt"]);
     expect(calls.map((c) => c.prefix)).toEqual(["users/ada/files/", "users/ada/files/uploads/"]);
   });
+
+  it("deletes only the user's own files, by their paths", async () => {
+    const { r2: bucket, objects } = new FakeBucket(["users/ada/files/out/a.csv", "users/ada/files/uploads/b.txt", "users/adam/files/out/a.csv"]);
+    const files = new UserFiles(bucket, "ada", await deriveUserKey(MASTER, "ada"));
+    await files.delete(["out/a.csv", "uploads/missing.txt"]);
+    expect([...objects.keys()]).toEqual(["users/ada/files/uploads/b.txt", "users/adam/files/out/a.csv"]);
+    await expect(files.delete(["../adam/files/out/a.csv"])).rejects.toThrow(PathError);
+  });
 });

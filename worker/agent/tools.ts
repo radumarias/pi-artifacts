@@ -2,10 +2,11 @@ import { Type } from "@earendil-works/pi-ai";
 import { exports } from "cloudflare:workers";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { createTwoFilesPatch } from "diff";
-import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails } from "../../shared/protocol.ts";
+import { isOwnedBy, manifestOf, PUBLISH_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary, type PublishedDetails, type SavedFilesDetails } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome } from "../../shared/util.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
+import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
 import { literalPath, normalisePath, PathError, type ArtifactStore, type FileEntry, type UserFiles } from "../storage/index.ts";
@@ -92,12 +93,12 @@ export function filesExtension(scope: ChatScope): Extension {
         },
       }),
       defineTool({
-        name: "files_write",
+        name: FILES_WRITE_TOOL,
         description: "Write a UTF-8 text file into the user's files, replacing any file at that path.",
         parameters: Type.Object({ path: Type.String(), content: Type.String() }),
         execute: async (args) => {
           const path = await (await scope.files()).put(args.path, args.content, "text/plain; charset=utf-8");
-          return { output: text(`Wrote ${path} (${args.content.length} characters).`) };
+          return { output: text(wroteReport(path, args.content.length)), details: { saved: [path] } satisfies SavedFilesDetails };
         },
       }),
     ],
@@ -154,6 +155,11 @@ function tooMuch(bytes: number): string {
   return `Those files hold ${formatBytes(bytes)}; one run takes at most ${formatBytes(MAX_SANDBOX_BYTES)}. Pass fewer.`;
 }
 
+/** The name of a chat's sandbox object. */
+export function sandboxName(uid: string, chatId: string): string {
+  return `${uid}-${chatId}`;
+}
+
 /**
  * Copy the named user files in, run in this chat's sandbox, save ./out back to
  * the user's files. The files go through the user's UserFiles, so they are
@@ -162,14 +168,14 @@ function tooMuch(bytes: number): string {
 async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
   const files = await scope.files();
   const inputs = await sandboxInputs(files, refs ?? []);
-  const result = await run(exports.Sandbox.getByName(`${scope.uid}-${scope.chatId}`), inputs);
+  const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs);
   const toSave = new Map<string, ArrayBuffer>();
   const skipped = [];
   for (const output of result.outputs) {
     // A name the user's files do not allow must not throw away the run's output and the files already saved.
     try {
       // Names that differ only in what normalising trims ("a.csv" and "a.csv ") would overwrite each other.
-      const path = normalisePath(`out/${output.name}`);
+      const path = normalisePath(`${SANDBOX_OUT}${output.name}`);
       if (toSave.has(path)) skipped.push(`${output.name} (same file as ${path})`);
       else toSave.set(path, output.bytes);
     } catch (error) {
@@ -183,10 +189,9 @@ async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (
     `exit code ${result.exitCode}`,
     `stdout:\n${result.stdout}`,
     result.stderr && `stderr:\n${result.stderr}`,
-    saved.length && `saved: ${saved.join(", ")}`,
-    skipped.length && `not saved: ${skipped.join("; ")}`,
+    ...savedReport(saved, skipped),
   ];
-  return { output: text(clip(report.filter(Boolean).join("\n\n"))), isError: result.exitCode !== 0 };
+  return { output: text(clip(report.filter(Boolean).join("\n\n"))), details: { saved } satisfies SavedFilesDetails, isError: result.exitCode !== 0 };
 }
 
 const inputFiles = Type.Optional(
@@ -200,13 +205,13 @@ export function sandboxExtension(scope: ChatScope): Extension {
     name: "sandbox",
     tools: [
       defineTool({
-        name: "run_python",
+        name: RUN_PYTHON_TOOL,
         description: `Run a Python 3.13 script (pandas and numpy installed) in this chat's isolated Linux sandbox: no internet, 60 s limit. ${SANDBOX_FILES}`,
         parameters: Type.Object({ code: Type.String(), files: inputFiles }),
         execute: async (args) => runInSandbox(scope, args.files, (sandbox, inputs) => sandbox.runPython(args.code, inputs)),
       }),
       defineTool({
-        name: "run_bash",
+        name: RUN_BASH_TOOL,
         description:
           "Run a bash script in the same sandbox as run_python (Debian with coreutils, grep, sed, awk, tar, gzip, python3): no internet, so no package installs or downloads; 60 s limit. " +
           `Runs as written; start with set -e to stop at the first failing command. ${SANDBOX_FILES}`,

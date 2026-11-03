@@ -37,6 +37,12 @@ export class Sandbox extends DurableObject<Env> {
     return this.#run({ name: "run.sh", contents: script }, ["bash", "run.sh"], inputs);
   }
 
+  /** Stop the container, if it is up, and forget everything: its chat was deleted. */
+  async destroy(): Promise<void> {
+    if (this.ctx.container?.running) await this.ctx.container.destroy();
+    await this.ctx.storage.deleteAll();
+  }
+
   async #run(entry: { name: string; contents: string }, argv: string[], inputs: SandboxFile[]): Promise<SandboxRun> {
     const container = await this.#ensureRunning();
     const files = new Files(container);
