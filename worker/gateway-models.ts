@@ -89,11 +89,20 @@ const listOf =
 const idList = (keep: (id: string, item: Json) => boolean = () => true) =>
   listOf("data", (item, id) => (keep(id, item) ? { contextWindow: count(item.context_window) ?? count(item.context_length) } : undefined));
 
-/** A dated snapshot of a model also listed by its plain name: claude-haiku-4-5-20251001, gpt-4o-2024-08-06. */
-const SNAPSHOT = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+/** A dated snapshot's suffix: claude-haiku-4-5-20251001, gpt-4o-2024-08-06. */
+export const SNAPSHOT = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 /** Ids of models that do not chat in text: speech, images, video, embeddings, moderation, retrieval. */
 const NOT_CHAT =
-  /audio|realtime|tts|transcribe|whisper|speech|image|imagine|video|embed|moderation|guard|search|instruct|davinci|babbage|dall-e|sora|aqa|live|robotics|orpheus|playai|distil/i;
+  /audio|realtime|tts|transcribe|whisper|speech|image|imagine|video|embed|moderation|guard|search|davinci|babbage|dall-e|sora|aqa|live|robotics|orpheus|playai|distil/i;
+
+/** `parse`, leaving out a dated snapshot whose plain name the list also has; one listed only by its date stays. */
+const withoutTwinSnapshots =
+  (parse: (body: unknown) => ListedModel[]) =>
+  (body: unknown): ListedModel[] => {
+    const models = parse(body);
+    const ids = new Set(models.map((model) => model.id));
+    return models.filter((model) => !SNAPSHOT.test(model.id) || !ids.has(model.id.replace(SNAPSHOT, "")));
+  };
 
 /** A price: a number, or a number in a string, not below zero. */
 const dollars = (value: unknown): number | undefined => {
@@ -120,14 +129,16 @@ export const GATEWAY_PROVIDERS: Record<GatewayProviderId, GatewayProvider> = {
   anthropic: {
     list: "v1/models?limit=1000",
     headers: { "anthropic-version": "2023-06-01" },
-    parse: listOf("data", (item, id) => (SNAPSHOT.test(id) ? undefined : { name: text(item.display_name), images: true })),
+    // Anthropic lists many models only by their dated ids (claude-haiku-4-5-20251001).
+    parse: withoutTwinSnapshots(listOf("data", (item) => ({ name: text(item.display_name), images: true }))),
     known: ANTHROPIC_MODELS as Record<string, Model<Api>>,
     wire: { api: "anthropic-messages", baseUrl: "https://api.anthropic.com" },
   },
   openai: {
     list: "v1/models",
-    // OpenAI lists every model the key may use, chat or not: keep the GPT and o-series chat models.
-    parse: idList((id) => /^(gpt-|o\d|chatgpt-)/.test(id) && !NOT_CHAT.test(id) && !SNAPSHOT.test(id)),
+    // OpenAI lists every model the key may use, chat or not: keep the GPT and o-series chat models (not the
+    // completions-only -instruct ones).
+    parse: idList((id) => /^(gpt-|o\d|chatgpt-)/.test(id) && !/instruct/.test(id) && !NOT_CHAT.test(id) && !SNAPSHOT.test(id)),
     known: OPENAI_MODELS as Record<string, Model<Api>>,
     wire: { api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
   },

@@ -230,7 +230,11 @@ function ModelMenu({
   // The models by id, and by provider in the catalog's order: made once per catalog, not per keystroke.
   const { byId, byProvider } = useMemo(() => {
     const byProvider = new Map<ProviderId, ModelInfo[]>();
-    for (const model of catalog.models) byProvider.set(model.provider, [...(byProvider.get(model.provider) ?? []), model]);
+    for (const model of catalog.models) {
+      const models = byProvider.get(model.provider);
+      if (models) models.push(model);
+      else byProvider.set(model.provider, [model]);
+    }
     return { byId: new Map(catalog.models.map((model) => [model.id, model])), byProvider };
   }, [catalog.models]);
 
@@ -274,8 +278,17 @@ function ModelMenu({
   const setActive = (index: number) => setActiveKey(options[index]?.key);
   const optionId = (key: string) => `${id}-${key.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 
-  // Keep the active row in view.
+  // Whether the pointer moved the active row last: it is under the pointer, so in view already.
+  const byPointer = useRef(false);
+  const hover = (index: number) => {
+    byPointer.current = true;
+    if (index !== activeIndex) setActive(index);
+  };
+
+  // Keep the active row in view, when the keys (or the list) moved it: scrolling to a row the pointer is on, half
+  // shown at the list's edge, would slide the next row under the pointer and keep the list creeping.
   useEffect(() => {
+    if (byPointer.current) return;
     const key = options[activeIndex]?.key;
     if (key) document.getElementById(optionId(key))?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, options]);
@@ -315,6 +328,7 @@ function ModelMenu({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    byPointer.current = false;
     const step = { ArrowDown: 1, ArrowUp: -1, PageDown: 8, PageUp: -8 }[event.key];
     if (step && options.length) {
       event.preventDefault();
@@ -385,7 +399,7 @@ function ModelMenu({
                     role="option"
                     aria-selected={model.id === current}
                     className={`model-option${index === activeIndex ? " active" : ""}${model.id === current ? " current" : ""}`}
-                    onMouseMove={() => index !== activeIndex && setActive(index)}
+                    onMouseMove={() => hover(index)}
                     onClick={() => choose(model)}
                   >
                     <span className="model-option-text">
@@ -394,7 +408,7 @@ function ModelMenu({
                         title={
                           model.price
                             ? "Context window; dollars per million input / output tokens"
-                            : "No list price is known for this model: its replies count as free in the cost panel."
+                            : "No list price is known for this model: the cost panel leaves its replies out of the total."
                         }
                       >
                         {/* Favorites and recent picks mix providers: say whose each is. */}

@@ -3,7 +3,7 @@ import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.mode
 import { createAI } from "agents/models/pi-ai";
 import { EFFORT_LABELS, modelKey, PROVIDERS, providerLabel, type ModelCatalog, type ModelChoice, type ModelInfo, type ProviderId } from "../shared/models.ts";
 import { errorMessage } from "../shared/util.ts";
-import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, type Discovery, type GatewayFetcher, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
+import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discovery, type GatewayFetcher, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
 import prices from "./prices.json";
 import type { ModelCache } from "./storage/model-cache.ts";
 
@@ -180,9 +180,12 @@ const NO_COST: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
-/** The AI Gateway catalog's id for a vendor's own: Anthropic's dashes between version numbers become dots. */
+/**
+ * The AI Gateway catalog's id for a vendor's own: Anthropic's dated snapshot is its model, and its dashes between
+ * version numbers become dots (claude-haiku-4-5-20251001 → anthropic/claude-haiku-4.5).
+ */
 function catalogId(provider: GatewayProviderId, id: string): string {
-  return `${provider}/${provider === "anthropic" ? id.replace(/(\d)-(\d)(?!\d)/g, "$1.$2") : id}`;
+  return `${provider}/${provider === "anthropic" ? id.replace(SNAPSHOT, "").replace(/(\d)-(\d)(?!\d)/g, "$1.$2") : id}`;
 }
 
 /**
@@ -251,7 +254,10 @@ export class Catalog {
     for (const entry of [...entries.values()].sort(byPickerOrder)) {
       this.#entries.set(entry.info.id, entry);
       const { provider } = entry.model;
-      if (Object.hasOwn(GATEWAY_PROVIDERS, provider)) this.#listed.set(provider as GatewayProviderId, [...this.listed(provider as GatewayProviderId), entry.model]);
+      if (!Object.hasOwn(GATEWAY_PROVIDERS, provider)) continue;
+      const own = this.#listed.get(provider as GatewayProviderId);
+      if (own) own.push(entry.model);
+      else this.#listed.set(provider as GatewayProviderId, [entry.model]);
     }
   }
 
@@ -397,10 +403,13 @@ function readCached(cache: ModelCache): Promise<Discovery | null> {
     }));
 }
 
-/** Ask the providers, keep the answer for every isolate, and hold it here. */
-function rediscover(source: CatalogSource): Promise<Catalog> {
+/**
+ * Ask the providers, keep the answer for every isolate, and hold it here. `previous` (the last discovery read, else
+ * the one held) gives a provider whose list cannot be read now the models it had.
+ */
+function rediscover(source: CatalogSource, previous: Discovery | null | undefined): Promise<Catalog> {
   return (discovering ??= (async () => {
-    const discovery = await discoverModels({ ai: source.ai, gateway: source.gateway, byokAlias: source.byokAlias, previous: held?.discovery });
+    const discovery = await discoverModels({ ai: source.ai, gateway: source.gateway, byokAlias: source.byokAlias, previous: previous ?? held?.discovery });
     await source.cache.write(discovery).catch((error: unknown) => console.error("models: could not keep the discovery:", errorMessage(error)));
     return hold(discovery);
   })().finally(() => {
@@ -419,7 +428,7 @@ export async function loadCatalog(source: CatalogSource, { refresh = false } = {
   const age = discovery ? Date.now() - discovery.checkedAt : Infinity;
   if (!discovery || (refresh && age >= MIN_REFRESH_MS)) {
     try {
-      return await rediscover(source);
+      return await rediscover(source, discovery);
     } catch (error) {
       console.error("models: could not ask the providers:", errorMessage(error));
       return hold(discovery);
@@ -427,7 +436,7 @@ export async function loadCatalog(source: CatalogSource, { refresh = false } = {
   }
   const catalog = hold(discovery);
   if (age >= FRESH_MS) {
-    const renew = rediscover(source).catch((error: unknown) => console.error("models: could not ask the providers:", errorMessage(error)));
+    const renew = rediscover(source, discovery).catch((error: unknown) => console.error("models: could not ask the providers:", errorMessage(error)));
     source.waitUntil?.(renew);
   }
   return catalog;

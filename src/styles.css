@@ -478,7 +478,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .model-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .model-option-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 /* Favorites and recent picks have no chevron before them. */
-.model-group.static + .model-option, .model-group.static ~ .model-option { padding-left: 8px; }
+.model-group.static ~ .model-option { padding-left: 8px; }
 .model-star { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; background: transparent; color: var(--muted); opacity: 0; }
 .model-option:is(.active, :hover) .model-star, .model-star.on { opacity: 1; }
 .model-star.on { color: var(--accent); }

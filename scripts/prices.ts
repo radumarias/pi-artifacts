@@ -6,6 +6,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { PROVIDERS } from "../shared/models.ts";
 
@@ -225,7 +226,7 @@ export async function fetchPrices(fetchPage: (url: string) => Promise<string> = 
  * every provider is priced.
  */
 export function keyedProviders(gateway = AI_GATEWAY): string[] | undefined {
-  const cf = new URL("../node_modules/.bin/cf", import.meta.url).pathname;
+  const cf = fileURLToPath(new URL("../node_modules/.bin/cf", import.meta.url));
   const run = spawnSync(cf, ["ai-gateway", "gateways", "providers", "list", "--gateway-id", gateway, "--per-page", "100"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -297,7 +298,8 @@ export async function refreshPrices({
 }: { file?: URL | string; force?: boolean; now?: number; providers?: readonly string[]; fetchPage?: (url: string) => Promise<string> } = {}) {
   // A first run (forced) starts the file; a build without it fails.
   const current: PriceList = force && !existsSync(file) ? { checkedAt: new Date(0).toISOString(), models: {} } : readPrices(readFileSync(file, "utf8"));
-  const providers = [...(wanted ?? current.providers ?? ALL_PROVIDERS)].sort();
+  // Only providers models.dev prices: a file's list can name one the app has since dropped.
+  const providers = (wanted ?? current.providers ?? ALL_PROVIDERS).filter((provider) => Object.hasOwn(MODELS_DEV_PROVIDERS, provider)).sort();
   const sameProviders = JSON.stringify(current.providers ?? []) === JSON.stringify(providers);
   if (!force && sameProviders && now - Date.parse(current.checkedAt) < MAX_AGE_MS) return { refreshed: false, changes: [] as string[] };
   const models = await fetchPrices(fetchPage, providers);
@@ -320,9 +322,12 @@ export function pricesPlugin(): Plugin {
     name: "pi-artifacts:prices",
     apply: "build",
     async buildStart() {
-      const keyed = process.env.PI_OFFLINE === "1" ? undefined : keyedProviders();
-      this.info(describeKeyed(keyed));
-      const { refreshed, changes } = await (run ??= refreshPrices({ providers: keyed }));
+      // Ask Cloudflare once per build, not once per environment: the CLI call can take seconds.
+      const { refreshed, changes } = await (run ??= (() => {
+        const keyed = process.env.PI_OFFLINE === "1" ? undefined : keyedProviders();
+        this.info(describeKeyed(keyed));
+        return refreshPrices({ providers: keyed });
+      })());
       if (!refreshed) return;
       this.info(`Read the prices into worker/prices.json: ${changes.length ? `\n${changes.join("\n")}` : "no changes"}`);
       // Even with no changes: the new date keeps the next builds from reading the pages again.

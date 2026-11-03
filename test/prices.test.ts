@@ -161,6 +161,10 @@ describe("price list", () => {
     expect(written.models["groq/llama-3.3-70b-versatile"]?.input).toBe(0.59);
     // A list from before providers were priced, with no one to tell: every provider.
     expect(ALL_PROVIDERS).toContain("groq");
+    // A provider the app has since dropped is left out, not asked of models.dev.
+    const dropped = file(new Date(now - 60_000).toISOString(), ["groq", "dropped-provider"]);
+    expect((await refreshPrices({ file: dropped, now, fetchPage: page })).refreshed).toBe(true);
+    expect(readPrices(readFileSync(dropped, "utf8")).providers).toEqual(["groq"]);
   });
 
   it("leaves a list younger than a week alone, and reads the pages again once it is older", async () => {

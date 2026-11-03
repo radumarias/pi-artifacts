@@ -81,7 +81,14 @@ describe("default model", () => {
 
 /** What each provider's list says, in its own format, as of 2026-11. */
 const LISTS: Record<string, unknown> = {
-  anthropic: { data: [{ id: "claude-opus-5-5", display_name: "Claude Opus 5.5" }, { id: "claude-haiku-4-5-20251001" }, { id: "claude-nova-6", display_name: "Claude Nova 6" }] },
+  anthropic: {
+    data: [
+      { id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
+      { id: "claude-haiku-4-5-20251001" },
+      { id: "claude-nova-6", display_name: "Claude Nova 6" },
+      { id: "claude-nova-6-20261001" },
+    ],
+  },
   openai: { data: [{ id: "gpt-5.5" }, { id: "gpt-4o-2024-08-06" }, { id: "text-embedding-3-large" }, { id: "gpt-realtime-2.1" }, { id: "whisper-1" }] },
   "google-ai-studio": {
     models: [
@@ -90,7 +97,14 @@ const LISTS: Record<string, unknown> = {
       { name: "models/gemini-9-ultra", displayName: "Gemini 9 Ultra", inputTokenLimit: 2000000, supportedGenerationMethods: ["generateContent"], thinking: true },
     ],
   },
-  groq: { data: [{ id: "llama-3.3-70b-versatile", active: true, context_window: 131072 }, { id: "whisper-large-v3", active: true }, { id: "old-model", active: false }] },
+  groq: {
+    data: [
+      { id: "llama-3.3-70b-versatile", active: true, context_window: 131072 },
+      { id: "moonshotai/kimi-k2-instruct", active: true, context_window: 131072 },
+      { id: "whisper-large-v3", active: true },
+      { id: "old-model", active: false },
+    ],
+  },
   openrouter: {
     data: [
       {
@@ -129,11 +143,18 @@ describe("model discovery", () => {
     expect(anthropic.headers.get("anthropic-version")).toBe("2023-06-01");
     expect(anthropic.headers.get("cf-aig-byok-alias")).toBe("team");
     expect(binding.calls.find((call) => call.url.includes("/groq/"))!.url).toMatch(/\/groq\/models$/);
-    expect(discovery.providers.groq).toEqual({ status: "ok", models: [{ id: "llama-3.3-70b-versatile", contextWindow: 131072 }] });
+    expect(discovery.providers.groq).toEqual({
+      status: "ok",
+      models: [
+        { id: "llama-3.3-70b-versatile", contextWindow: 131072 },
+        { id: "moonshotai/kimi-k2-instruct", contextWindow: 131072 },
+      ],
+    });
     expect(discovery.providers.deepseek?.status).toBe("no-key");
     expect(discovery.providers.mistral?.status).toBe("failed");
     expect(discovery.providers.openai?.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
-    expect(discovery.providers.anthropic?.models.map((model) => model.id)).toEqual(["claude-opus-5-5", "claude-nova-6"]);
+    // A dated snapshot goes when its plain name is listed too; one listed only by its date stays.
+    expect(discovery.providers.anthropic?.models.map((model) => model.id)).toEqual(["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-nova-6"]);
     expect(discovery.providers.openrouter?.models).toEqual([
       { id: "acme/rocket-1", name: "Acme: Rocket 1", contextWindow: 200000, maxTokens: 64000, images: true, reasoning: true, cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 } },
     ]);
@@ -157,6 +178,9 @@ describe("catalog from a discovery", () => {
     expect(ids).toContain("anthropic/claude-opus-5.5");
     expect(ids).toContain("anthropic/claude-nova-6");
     expect(ids).not.toContain("anthropic/claude-sonnet-5.5");
+    // A model Anthropic lists only by its dated id is the gateway catalog's, when the catalog has it.
+    if (baseCatalog().models.some((model) => model.id === "anthropic/claude-haiku-4.5")) expect(ids).toContain("anthropic/claude-haiku-4.5");
+    expect(ids.some((id) => id.startsWith("anthropic/claude-haiku-4"))).toBe(true);
     expect(ids.filter((id) => id.startsWith("openai/"))).toEqual(["openai/gpt-5.5"]);
     expect(ids).toContain("groq/llama-3.3-70b-versatile");
     expect(ids).toContain("google-ai-studio/gemini-2.5-flash");
