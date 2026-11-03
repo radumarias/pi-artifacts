@@ -132,16 +132,31 @@ export function previewType(path: string): string | undefined {
 
 /** Where a user file is served from (`<prefix><path>`): an image opens in the browser, anything else downloads. */
 export const FILE_ROUTE = "/api/files/raw/";
-/** Where a user folder downloads from (`<prefix><path>`), as a zip named after it with the folder itself at its root. */
+/**
+ * Where a user folder downloads from (GET `<prefix><path>`), as a zip named after it with the folder itself at its
+ * root; POSTed bare, a form of picked `file` and `folder` fields downloads as one zip (worker/files-routes.ts serveSelection).
+ */
 export const ZIP_ROUTE = "/api/files/zip/";
 
-/** What one folder's zip may hold: past either, the Worker refuses and the user downloads its subfolders. */
+/** What one zip may hold, of a folder or a pick: past either, the Worker refuses and the user downloads less at a time. */
 export const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
 export const MAX_ZIP_FILES = MAX_LISTED;
 
-/** Why a folder of `count` files and `bytes` cannot be zipped, or undefined when it can. */
+/** Why `count` files of `bytes` cannot be zipped together, or undefined when they can. */
 export function zipRefusal(count: number, bytes: number): string | undefined {
-  if (count > MAX_ZIP_FILES) return `Too many files to zip (over ${MAX_ZIP_FILES.toLocaleString("en")}); download its folders one at a time.`;
-  if (bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download its folders one at a time.`;
+  if (count > MAX_ZIP_FILES) return `Too many files to zip (over ${MAX_ZIP_FILES.toLocaleString("en")}); download fewer at a time.`;
+  if (bytes > MAX_ZIP_BYTES) return `Too big to zip (${formatBytes(bytes)}, over ${formatBytes(MAX_ZIP_BYTES)}); download fewer at a time.`;
   return undefined;
+}
+
+/**
+ * What a zip of picked `files` and `folders` is rooted at: the deepest folder holding them all, a picked folder
+ * counting as its own (so one folder roots at itself, as its own download does), or "" when only the top level does.
+ */
+export function commonFolder(files: readonly string[], folders: readonly string[]): string {
+  const parents = [...files.map((path) => path.split("/").slice(0, -1)), ...folders.map((path) => path.split("/"))];
+  const first = parents[0] ?? [];
+  let depth = 0;
+  while (depth < first.length && parents.every((parent) => parent[depth] === first[depth])) depth++;
+  return first.slice(0, depth).join("/");
 }

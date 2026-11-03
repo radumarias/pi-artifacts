@@ -29,3 +29,13 @@ export function normalisePath(path: string, { allowEmpty = false } = {}): string
 }
 
 export class PathError extends Error {}
+
+/** `path` as a stored path, or undefined when it cannot be one ("data/", a name with characters paths do not allow). */
+export function literalPath(path: string): string | undefined {
+  try {
+    return normalisePath(path);
+  } catch (error) {
+    if (error instanceof PathError) return undefined;
+    throw error;
+  }
+}

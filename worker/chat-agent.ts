@@ -32,10 +32,12 @@ import {
   type QueuedMessage,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
+import { parseMentions, type MentionInput } from "../shared/mentions.ts";
 import type { ModelChoice } from "../shared/models.ts";
 import { errorMessage, memoAsync, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
+import { resolveMentions } from "./agent/mentions.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
@@ -52,6 +54,9 @@ import { ChatMembers, formatInviteToken } from "./members.ts";
 import { checkModelChoice, defaultModelChoice, withCurrentPrices } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore } from "./users.ts";
+
+/** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
+const MAX_BROUGHT_IN = 200;
 
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
 export interface ChatRefusal {
@@ -149,7 +154,7 @@ export class ChatAgent extends DurableObject<Env> {
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
     queued: (ids) => this.queued(ids),
-    prompt: (text, author, attachments) => this.prompt(text, author, attachments),
+    prompt: (text, author, attachments, mentions) => this.prompt(text, author, attachments, mentions),
     abort: (by) => this.abort(by),
     setModel: (input, by) => this.setModel(input, by),
   });
@@ -193,6 +198,7 @@ export class ChatAgent extends DurableObject<Env> {
       // Deriving the user's key is not free, so derive it once per object.
       files: memoAsync(() => this.storage.userFiles(this.uid)),
       onPublished: (artifact) => this.#directory.recordArtifact({ ...artifact, chatId: this.chatId }),
+      broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
     });
     this.registry.install(promptExtension);
@@ -429,6 +435,21 @@ export class ChatAgent extends DurableObject<Env> {
     return !this.#gone && (uid === this.uid || this.members.has(uid));
   }
 
+  /**
+   * Artifacts from the owner's other chats that the owner named here with "@": the agent may read them in this chat
+   * (ChatScope.broughtIn). Kept in the chat's storage, so they stay readable for later messages; newest last, at most
+   * MAX_BROUGHT_IN.
+   */
+  #broughtIn(): string[] {
+    return this.ctx.storage.kv.get<string[]>("broughtIn") ?? [];
+  }
+
+  #bringIn(ids: readonly string[]): void {
+    if (!ids.length) return;
+    const kept = [...this.#broughtIn().filter((id) => !ids.includes(id)), ...ids].slice(-MAX_BROUGHT_IN);
+    this.ctx.storage.kv.put("broughtIn", kept);
+  }
+
   /** For what a socket sends: its person may have been removed since it opened. */
   #requireInChat(person: Person): void {
     if (!this.isInChat(person.uid)) throw new Error("You are no longer in this chat.");
@@ -467,13 +488,20 @@ export class ChatAgent extends DurableObject<Env> {
    * Once the chat has members, the model reads it as "name: text"; until then
    * it gets the text alone, so no name reaches the model for a chat nobody shares.
    * Attached files (already uploaded to the owner's files) come before the text,
-   * as images, text or names (see attachmentContent).
+   * as images, text or names (see attachmentContent). Files and artifacts picked
+   * with "@" come after it, by exact path and id (see resolveMentions).
    * While a run is going, it waits in pi's inbox, where everyone sees it queued (see queued), and is answered next.
    */
-  async prompt(text: string, author: Person, attachments: readonly AttachmentInput[] = []): Promise<void> {
+  async prompt(text: string, author: Person, attachments: readonly AttachmentInput[] = [], mentionInputs: readonly MentionInput[] = []): Promise<void> {
     this.#requireInChat(author);
-    const [attached] = await Promise.all([
+    const [attached, { mentions, note, broughtIn }] = await Promise.all([
       attachments.length ? this.scope.files().then((files) => attachmentContent(attachments, files, this.#toMarkdown)) : undefined,
+      resolveMentions(mentionInputs, {
+        ownerUid: this.uid,
+        chatId: this.chatId,
+        byOwner: author.uid === this.uid,
+        readMeta: (id) => this.storage.artifacts.readMeta(id),
+      }),
       this.refreshMcpTools().catch(() => {}),
       this.refreshSkills(),
       this.refreshFiles(),
@@ -483,13 +511,21 @@ export class ChatAgent extends DurableObject<Env> {
     // Watching before the input goes in, so the sidebars hear the run start. Not alongside the refreshes: an idle watch
     // lets go after SETTLE_MS, which they can outlast. Only a view: the prompt goes on without it.
     await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
-    const said = this.members.hasAny() ? `${author.name}: ${text}` : text;
-    const content = attached ? [...attached.content, ...(text ? [{ type: "text" as const, text: said }] : [])] : said;
+    this.#bringIn(broughtIn);
+    const written = note ? `${text}\n\n${note}` : text;
+    const said = this.members.hasAny() ? `${author.name}: ${written}` : written;
+    const content = attached ? [...attached.content, ...(written ? [{ type: "text" as const, text: said }] : [])] : said;
     try {
       await this.harness.submit(content, {
         entry: {
           kind: CHAT_MESSAGE_KIND,
-          data: { uid: author.uid, name: author.name, text, ...(attached && { attachments: attached.attachments }) } satisfies ChatMessageData,
+          data: {
+            uid: author.uid,
+            name: author.name,
+            text,
+            ...(attached && { attachments: attached.attachments }),
+            ...(mentions.length && { mentions }),
+          } satisfies ChatMessageData,
         },
       });
     } catch (error) {
@@ -876,7 +912,7 @@ interface ChatSession {
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
   queued(ids: readonly number[]): Promise<QueuedMessage[]>;
-  prompt(text: string, author: Person, attachments: readonly AttachmentInput[]): Promise<void>;
+  prompt(text: string, author: Person, attachments: readonly AttachmentInput[], mentions: readonly MentionInput[]): Promise<void>;
   abort(by: Person): Promise<void>;
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
 }
@@ -990,8 +1026,9 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     try {
       if (message.type === "prompt") {
         const attachments = parseAttachments(message.attachments);
+        const mentions = parseMentions(message.mentions);
         const text = String(message.text ?? "").trim().slice(0, 20_000);
-        if (text || attachments.length) await this.#chat.prompt(text, person, attachments);
+        if (text || attachments.length) await this.#chat.prompt(text, person, attachments, mentions);
       }
       else if (message.type === "abort") await this.#chat.abort(person);
       else if (message.type === "model") await this.#chat.setModel(message, person);

@@ -164,8 +164,19 @@ body.resizing iframe { pointer-events: none; }
 /* A file's name (an image's opens it in a new tab) and its download button; a folder's zip download sits at its summary's end. */
 .files .file-row { display: flex; align-items: center; border-radius: 6px; }
 .file-row:hover { background: var(--surface-2); }
-.file-row > :first-child { flex: 1; min-width: 0; }
-.sidebar .file-row > a:first-child:hover { background: none; text-decoration: underline; }
+.file-row > .file-name { flex: 1; min-width: 0; }
+.sidebar .file-row > a.file-name:hover { background: none; text-decoration: underline; }
+/* Search and select mode, above the tree. */
+.files-tools { display: flex; gap: 6px; padding: 2px 0 4px; }
+.files-tools input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 14px; }
+.files-tools button { padding: 4px 10px; font-size: 13px; }
+.files-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0 6px; font-size: 13px; }
+.files-selection > span { flex: 1; color: var(--muted); }
+.files-selection .button, .files-selection button { padding: 3px 10px; font-size: 13px; }
+.files-selection .upload-status { flex-basis: 100%; padding: 0; }
+.file-pick { flex: none; margin: 0 2px 0 6px; accent-color: var(--accent); }
+.file-folder > summary > .file-pick { margin: 0 4px 0 2px; vertical-align: -2px; }
+.files-empty { padding: 4px 8px; }
 .sidebar .file-action { display: inline-flex; flex: none; padding: 4px; margin-right: 2px; border-radius: 5px; color: var(--muted); opacity: 0; }
 .file-folder > summary > .file-action { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); }
 .file-row:hover .file-action, .file-folder > summary:hover > .file-action, .file-action:focus-visible { opacity: 1; }
@@ -323,7 +334,34 @@ body.resizing iframe { pointer-events: none; }
 .artifact-card-icon { font-size: 22px; color: var(--accent); }
 .artifact-card small { display: block; color: var(--muted); }
 
-.composer { display: flex; flex-direction: column; gap: 6px; padding: 12px 20px 14px; }
+.composer { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 20px 14px; }
+/* What "@" offers, over the transcript just above the input. */
+.mention-list {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: calc(100% - 8px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.12);
+}
+.mention-choice { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; text-align: left; font-size: 14px; }
+.mention-choice.active { background: var(--surface-2); }
+.mention-icon { flex: none; color: var(--muted); }
+.mention-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-choice small { flex: none; margin-left: auto; color: var(--muted); }
+.mention-empty { padding: 6px 8px; color: var(--muted); font-size: 14px; }
+.mention-button { font-size: 17px; color: var(--muted); }
+/* A mention in a sent message: set off from the text around it. */
+.mention-chip, .bubble a.mention-chip { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); color: inherit; font-weight: 500; text-decoration: none; }
+a.mention-chip:hover { text-decoration: underline; }
 /* The input and Send/Stop sit in one rounded box; attach, dictation and the model under it. */
 .composer-box {
   display: flex;

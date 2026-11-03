@@ -1,10 +1,9 @@
 import { crc32 } from "node:zlib";
 
-/** One file of a zip: its name inside the archive, and how to read it. `open` resolves null for a file gone since it was listed. */
+/** One file of a zip: its name inside the archive, and how to read it. `open` resolves null for a file that is not there (gone since it was listed). */
 export interface ZipEntry {
   name: string;
-  modified: Date;
-  open(): Promise<{ size: number; body: ReadableStream<Uint8Array> } | null>;
+  open(): Promise<{ size: number; modified: Date; body: ReadableStream<Uint8Array> } | null>;
 }
 
 // Past these a zip needs ZIP64, which this writer leaves out: callers keep well under them.
@@ -26,10 +25,11 @@ const EXTRA_LENGTH = 9;
  * they are (most uploads are compressed already, and storing keeps the CPU
  * time to a CRC); the next file is opened while one streams, so a folder of
  * small files does not wait a round trip per file. Fails the stream when the
- * archive would outgrow plain zip, or a file is not the size it said.
+ * files would weigh more than `maxBytes` (no cap unless given) or the archive outgrow plain zip, or
+ * a file is not the size it said.
  */
-export function zipStream(entries: readonly ZipEntry[]): ReadableStream<Uint8Array> {
-  const chunks = zipChunks(entries);
+export function zipStream(entries: readonly ZipEntry[], { maxBytes = Infinity } = {}): ReadableStream<Uint8Array> {
+  const chunks = zipChunks(entries, maxBytes);
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       const { value, done } = await chunks.next();
@@ -42,10 +42,11 @@ export function zipStream(entries: readonly ZipEntry[]): ReadableStream<Uint8Arr
   });
 }
 
-async function* zipChunks(entries: readonly ZipEntry[]): AsyncGenerator<Uint8Array, void> {
+async function* zipChunks(entries: readonly ZipEntry[], maxBytes: number): AsyncGenerator<Uint8Array, void> {
   const encoder = new TextEncoder();
   const central: Uint8Array[] = [];
   let offset = 0;
+  let content = 0;
   const counted = (bytes: Uint8Array) => {
     offset += bytes.byteLength;
     if (offset > MAX_BYTES) throw new Error("The zip would be over 4 GB.");
@@ -67,9 +68,11 @@ async function* zipChunks(entries: readonly ZipEntry[]): AsyncGenerator<Uint8Arr
       if (!opened) continue;
       current = opened.body;
       if (central.length === MAX_ENTRIES) throw new Error(`A zip holds at most ${MAX_ENTRIES} files.`);
+      content += opened.size;
+      if (content > maxBytes) throw new Error("The files are too big to zip together.");
       const entry = entries[i];
       const name = encoder.encode(entry.name);
-      const header: Header = { name, modified: entry.modified, ...dosDateTime(entry.modified), crc: 0, size: opened.size, offset };
+      const header: Header = { name, modified: opened.modified, ...dosDateTime(opened.modified), crc: 0, size: opened.size, offset };
       yield counted(localHeader(header));
       let size = 0;
       for await (const chunk of opened.body) {

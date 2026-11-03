@@ -57,6 +57,7 @@
     "worker/models.ts",
     "worker/prices.json",
     "worker/agent/file-refs.ts",
+    "worker/agent/mentions.ts",
     "worker/files-routes.ts",
     "worker/zip.ts",
     "worker/http.ts",

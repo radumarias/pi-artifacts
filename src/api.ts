@@ -1,3 +1,4 @@
+import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelInfo } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import { FILE_ROUTE, ZIP_ROUTE } from "../shared/uploads.ts";
@@ -101,6 +102,8 @@ export const api = {
   /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */
   attach: (chatId: string, files: readonly { file: File; path: string }[]) =>
     request<{ paths: string[] }>(`/api/chats/${chatId}/attachments`, { method: "POST", body: uploadForm(files) }),
+  /** What "@" offers in a chat's composer: the files and artifacts the chat's agent can open. */
+  mentions: (chatId: string) => request<MentionOptions>(`/api/chats/${chatId}/mentions`),
   chatSocketUrl: (chatId: string) => socketUrl(`/api/chats/${chatId}/ws`),
   /** The sidebar's socket, which says when the chat list changed. */
   sidebarSocketUrl: () => socketUrl("/api/me/ws"),
