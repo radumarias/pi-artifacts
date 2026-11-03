@@ -87,19 +87,23 @@ export const MAX_FAILED_CHECKS = 5;
  */
 export class FailedChecks {
   #count = 0;
+  /** The draft the last failed check saved. */
+  #draft: string | undefined;
 
   /** Throws once MAX_FAILED_CHECKS failed in a row, before another check runs. */
-  allow(draft?: string): void {
+  allow(): void {
     if (this.#count < MAX_FAILED_CHECKS) return;
+    const draft = this.#draft;
     throw new Error(
       `Not checked: ${MAX_FAILED_CHECKS} checks in a row found errors. Stop fixing and tell the user what still fails and what you tried` +
         `${draft ? ` (the last page is draft "${draft}")` : ""}, and ask how to go on. Their next message lets you check again.`,
     );
   }
 
-  /** Counts a check's outcome; returns what to add to a failed check's result when that was the last one allowed. */
-  record(failed: boolean): string {
+  /** Counts a check's outcome, and the draft it saved; returns what to add to a failed check's result when that was the last one allowed. */
+  record(failed: boolean, draft?: string): string {
     this.#count = failed ? this.#count + 1 : 0;
+    this.#draft = failed ? draft : undefined;
     return this.#count >= MAX_FAILED_CHECKS
       ? ` That is ${MAX_FAILED_CHECKS} failed checks in a row: do not check again. Tell the user what still fails and what you tried, and ask how to go on.`
       : "";
@@ -183,7 +187,13 @@ async function pageToPublish(scope: PublishScope, drafts: ChatDrafts, input: Pub
  * published either, except in local development (PublishScope.publishUnchecked), and `unchecked` says why. A published
  * page's draft goes: its version holds it now.
  */
-export async function publishChecked(scope: PublishScope, input: PublishInput, signal?: AbortSignal): Promise<PublishOutcome> {
+export async function publishChecked(
+  scope: PublishScope,
+  input: PublishInput,
+  signal?: AbortSignal,
+  /** Called before the page is checked here (not when it passed a check already); may throw to refuse the check. */
+  beforeCheck?: () => void,
+): Promise<PublishOutcome> {
   const drafts = await scope.drafts();
   const { page, prior } = await pageToPublish(scope, drafts, input);
   const publish = async (outcome: Omit<PublishOutcome, "meta" | "byTitle" | "draft">): Promise<PublishOutcome> => {
@@ -203,6 +213,7 @@ export async function publishChecked(scope: PublishScope, input: PublishInput, s
     return { ...outcome, meta, byTitle: target.byTitle };
   };
   if (prior && passed(prior)) return publish({});
+  beforeCheck?.();
   const checked = await checkInBrowser(scope, { html: page.html, manifest: page.manifest }, signal);
   if (checked.report ? !checked.report.errors.length : scope.publishUnchecked) {
     try {

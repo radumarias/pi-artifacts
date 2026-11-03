@@ -170,7 +170,8 @@ describe("FailedChecks", () => {
     const checks = new FailedChecks();
     for (let n = 1; n < MAX_FAILED_CHECKS; n++) expect(checks.record(true)).toBe("");
     expect(checks.record(true)).toContain("do not check again");
-    expect(() => checks.allow("0000000000000001")).toThrow(/draft "0000000000000001"/);
+    checks.record(true, "0000000000000001");
+    expect(() => checks.allow()).toThrow(/draft "0000000000000001"/);
     checks.reset();
     expect(() => checks.allow()).not.toThrow();
     checks.record(true);

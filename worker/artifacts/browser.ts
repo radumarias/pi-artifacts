@@ -32,6 +32,8 @@ export class CheckBrowser {
   #browser: Promise<Browser> | undefined;
   #idle: ReturnType<typeof setTimeout> | undefined;
   #using = 0;
+  /** Browsers dropped while a check still ran: closed once none does. */
+  readonly #retired = new Set<Promise<Browser>>();
 
   readonly #binding: BrowserWorker | undefined;
 
@@ -67,7 +69,10 @@ export class CheckBrowser {
         void deadline(page.close(), CLOSE_MS, () => new Error("closing the page took too long")).catch(() => {});
       }
     } finally {
-      if (--this.#using === 0) this.#idle = setTimeout(() => this.close(), IDLE_MS);
+      if (--this.#using === 0) {
+        this.#closeRetired();
+        this.#idle = setTimeout(() => this.close(), IDLE_MS);
+      }
     }
   }
 
@@ -77,21 +82,32 @@ export class CheckBrowser {
     void browser?.then((b) => b.close()).catch(() => {});
   }
 
-  /** Forget the browser, so the next check starts another, and close it unless another check still uses it. */
-  #drop(): void {
-    if (this.#using === 1) this.close();
-    else this.#browser = undefined;
+  /**
+   * Forget `browser` (the open one by default), so the next check starts another, and close it once no check runs: a
+   * check may still use it, also one that started after the check that dropped it gave up waiting.
+   */
+  #drop(browser = this.#browser): void {
+    if (!browser) return;
+    if (this.#browser === browser) this.#browser = undefined;
+    this.#retired.add(browser);
+    if (this.#using === 0) this.#closeRetired();
+  }
+
+  #closeRetired(): void {
+    for (const browser of this.#retired) void browser.then((b) => b.close()).catch(() => {});
+    this.#retired.clear();
   }
 
   async #page(): Promise<Page> {
     const binding = this.#binding;
     if (!binding) throw new BrowserUnavailable("this deployment has no browser binding");
+    const opened = this.#open(binding);
     try {
-      const browser = await this.#open(binding);
+      const browser = await opened;
       return await deadline(browser.newPage(), PAGE_MS, () => new Error(`no new page within ${PAGE_MS / 1000} s`));
     } catch (error) {
-      // The next check starts a new browser.
-      this.#drop();
+      // The next check starts a new browser. This one, not whatever another check opened since withPage gave up.
+      this.#drop(opened);
       // Only the first line: a launch failure can carry a whole log.
       const why = errorMessage(error).split("\n")[0].slice(0, 300);
       throw new BrowserUnavailable(`the browser did not start (${why})`);

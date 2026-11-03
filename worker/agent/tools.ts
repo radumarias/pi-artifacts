@@ -317,7 +317,7 @@ export function artifactExtension(scope: ChatScope): Extension {
           artifact_id: Type.Optional(Type.String({ description: "The artifact of this chat this page is a new version of: publishing the page goes there, unless the publish names another or new_artifact." })),
         }),
         execute: async (args, _api, context) => {
-          scope.failedChecks.allow(args.draft_id);
+          scope.failedChecks.allow();
           const [, drafts] = await Promise.all([args.artifact_id !== undefined && chatArtifact(scope, args.artifact_id), scope.drafts()]);
           let html: string;
           let mcp = args.mcp;
@@ -340,8 +340,9 @@ export function artifactExtension(scope: ChatScope): Extension {
           ]);
           const { report, unchecked } = checked;
           await drafts.save({ id, html, manifest, artifactId }, draftCheck(report));
-          // A check that could not run counts too: a browser that never starts must not be retried forever.
-          const stop = scope.failedChecks.record(!report || report.errors.length > 0);
+          // A check that could not run counts too, unless such a page is published anyway (local development): a browser
+          // that never starts must not be retried forever.
+          const stop = scope.failedChecks.record(report ? report.errors.length > 0 : !scope.publishUnchecked, id);
           if (!report) {
             const next = scope.publishUnchecked
               ? "Publish it with its html; it is published unchecked."
@@ -381,13 +382,12 @@ export function artifactExtension(scope: ChatScope): Extension {
           if (args.check_id !== undefined) {
             if (args.html !== undefined || args.mcp !== undefined) throw new Error("Pass check_id alone, or the page as html with its mcp: not both.");
             input = { ...target, checkId: args.check_id };
-          } else if (args.html !== undefined) {
-            scope.failedChecks.allow();
-            input = { ...target, html: args.html, mcp: args.mcp };
-          } else throw new Error("Pass check_id, or the page as html.");
-          const outcome = await publishChecked(scope, input, context.abortSignal);
+          } else if (args.html !== undefined) input = { ...target, html: args.html, mcp: args.mcp };
+          else throw new Error("Pass check_id, or the page as html.");
+          // Only a page that has not passed a check yet is checked here, so only that one waits on the failed checks.
+          const outcome = await publishChecked(scope, input, context.abortSignal, () => scope.failedChecks.allow());
           const { meta, report, draft } = outcome;
-          const stop = "html" in input ? scope.failedChecks.record(!meta) : "";
+          const stop = scope.failedChecks.record(!meta, draft?.id);
           if (!meta) {
             const saved = `The page is saved as draft "${draft!.id}"; no version was made.`;
             if (!report) {
