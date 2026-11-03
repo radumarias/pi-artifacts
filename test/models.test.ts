@@ -89,6 +89,14 @@ describe("effort per reply", () => {
     expect((await models.completeSimple(model, context)).thinkingLevel).toBe("off");
   });
 
+  it("marks the partials too, which a cut-off run keeps as its reply", async () => {
+    const { models, model } = answering(fauxAssistantMessage("a"));
+    const levels: unknown[] = [];
+    for await (const event of models.streamSimple(model, context, { reasoning: "high" })) if ("partial" in event) levels.push(event.partial.thinkingLevel);
+    expect(levels.length).toBeGreaterThan(0);
+    expect(new Set(levels)).toEqual(new Set(["high"]));
+  });
+
   it("marks no effort on a model that does not reason", async () => {
     const { models, model } = answeringAs(false, fauxAssistantMessage("a"));
     expect((await models.streamSimple(model, context, { reasoning: "high" }).result()).thinkingLevel).toBeUndefined();

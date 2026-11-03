@@ -113,14 +113,15 @@ export type Share = Spend & { model: string; effort?: ModelThinkingLevel };
 /** What a model's replies cost at each effort. */
 type EffortSpend = Map<ModelThinkingLevel | undefined, Spend>;
 
-/** What each model's replies in `entries` cost at each effort. */
+/** What each model's replies in `entries` cost at each effort, keyed like pi's ledger: `provider/modelId`. */
 function replySpend(entries: readonly EntryRecord[]): Map<string, EffortSpend> {
   const models = new Map<string, EffortSpend>();
   for (const entry of entries) {
     const message = entry.model?.[0];
     if (entry.kind !== "pi.assistant" || message?.role !== "assistant") continue;
-    let efforts = models.get(message.model);
-    if (!efforts) models.set(message.model, (efforts = new Map()));
+    const key = `${message.provider}/${message.model}`;
+    let efforts = models.get(key);
+    if (!efforts) models.set(key, (efforts = new Map()));
     efforts.set(message.thinkingLevel, plus(efforts.get(message.thinkingLevel) ?? NONE, spendOf(message.usage)));
   }
   return models;
@@ -128,13 +129,16 @@ function replySpend(entries: readonly EntryRecord[]): Map<string, EffortSpend> {
 
 /**
  * A model's share of the ledger, by the effort its replies were asked at. The ledger also counts calls that are no
- * reply (those that summarize a long conversation, at the chat's effort then). When the replies all ran at one effort,
- * those did too; otherwise which one is not known, and they go with the replies whose effort is not known either.
+ * reply (those that summarize a long conversation, at the chat's effort then). When `entries` hold every reply and
+ * they all ran at one effort, those did too; otherwise which one is not known (after a summary, a reloaded chat's
+ * entries start at it, and the replies before it are in the ledger only), and they go with the replies whose effort is
+ * not known either. A leftover without tokens is only the rounding of the same costs summed in another order.
  */
-function byEffort(model: string, total: Spend, efforts: EffortSpend | undefined): Share[] {
+function byEffort(model: string, total: Spend, efforts: EffortSpend | undefined, everyReply: boolean): Share[] {
   if (!efforts) return [{ ...total, model }];
-  const rest = minus(total, [...efforts.values()].reduce(plus, NONE));
-  const to = efforts.size === 1 ? efforts.keys().next().value : undefined;
+  const left = minus(total, [...efforts.values()].reduce(plus, NONE));
+  const rest = left.input + left.output + left.cacheRead + left.cacheWrite > 0 ? left : NONE;
+  const to = everyReply && efforts.size === 1 ? efforts.keys().next().value : undefined;
   const shares = new Map(efforts).set(to, plus(efforts.get(to) ?? NONE, rest));
   return [...shares].map(([effort, spend]) => ({ ...spend, model, effort }));
 }
@@ -146,12 +150,11 @@ function byEffort(model: string, total: Spend, efforts: EffortSpend | undefined)
  */
 export function chatSpend(usage: UsageState | undefined, entries: readonly EntryRecord[] = []): { total: Spend; models: Share[] } {
   const replies = replySpend(entries);
+  // Entries that open with a head marker (a summary's) start there: the replies before it are left out.
+  const everyReply = entries[0]?.head === undefined;
   const models = [
     // Keyed `provider/modelId`; every model comes through the one provider, so its name says nothing.
-    ...Object.entries(usage?.models ?? {}).flatMap(([key, value]) => {
-      const model = key.slice(key.indexOf("/") + 1);
-      return byEffort(model, spendOf(value as Usage), replies.get(model));
-    }),
+    ...Object.entries(usage?.models ?? {}).flatMap(([key, value]) => byEffort(key.slice(key.indexOf("/") + 1), spendOf(value as Usage), replies.get(key), everyReply)),
     ...Object.entries(usage?.tools ?? {}).map(([model, value]): Share => ({ ...spendOf(value as Usage), model })),
   ]
     .filter((spend) => spend.cost > 0 || spend.input + spend.output > 0)

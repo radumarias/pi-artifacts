@@ -90,7 +90,7 @@ describe("chat spend", () => {
 
   it("splits a model's share by the effort its replies were asked at", () => {
     const answer = (model: string, cost: number, thinkingLevel?: string) =>
-      entry("pi.assistant", { role: "assistant", model, content: [], usage: usage({ input: 10 }, cost), ...(thinkingLevel && { thinkingLevel }) });
+      entry("pi.assistant", { role: "assistant", provider: "cloudflare", model, content: [], usage: usage({ input: 10 }, cost), ...(thinkingLevel && { thinkingLevel }) });
     const ledger = {
       // Each model: its replies, and 0.05 summarizing the conversation.
       models: {
@@ -121,6 +121,18 @@ describe("chat spend", () => {
     expect(chatSpend(ledger, entries).total.cost).toBeCloseTo(1.11);
     // Without the replies (the panel is closed), one row a model.
     expect(rows([]).map((row) => row.effort)).toEqual([undefined, undefined, undefined]);
+    // A reloaded chat after a summary: its entries start at the summary, so the leftover's effort is not known.
+    const summarized = [entry("pi.compaction", { role: "user", content: [] }), ...entries.slice(4)];
+    (summarized[0] as { head?: number }).head = summarized[1].id;
+    expect(rows(summarized).find((row) => row.model === "openai/gpt-5.5" && row.effort === undefined)).toEqual({ model: "openai/gpt-5.5", effort: undefined, input: 15, cost: 0.05 });
+  });
+
+  it("leaves out a leftover that is only the rounding of costs summed in another order", () => {
+    const costs = [0.0563, 0.0231, 0.0874, 0.0119, 0.0652, 0.0347];
+    const levels = ["high", "medium", "high", "medium", "high", "medium"];
+    const ledger = { models: { "cloudflare/m": usage({ input: 60 }, costs.reduce((a, b) => a + b, 0)) }, tools: {} } as unknown as UsageState;
+    const entries = costs.map((cost, i) => entry("pi.assistant", { role: "assistant", provider: "cloudflare", model: "m", content: [], usage: usage({ input: 10 }, cost), thinkingLevel: levels[i] }));
+    expect(chatSpend(ledger, entries).models.map((row) => row.effort)).toEqual(["high", "medium"]);
   });
 
   it("formats small costs to two significant digits and larger ones to the cent", () => {
