@@ -54,9 +54,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   const method = request.method;
   const storage = new Storage(env);
 
-  // A form or script on another site could otherwise post as the signed-in user: run a page's write tools
-  // (a text/plain body still parses as JSON), upload files, or open a chat's socket. Browsers name the page
-  // a request comes from in Origin on all of these; requests without one (not from a browser) are not forms.
+  // A form or script on another site could otherwise post as the signed-in user: run a page's write tools, upload
+  // files, or open a chat's socket. Browsers name the page a request comes from in Origin on all of these; requests
+  // without one (not from a browser) are not forms.
   if ((method !== "GET" && method !== "HEAD") || request.headers.get("upgrade") === "websocket") {
     const origin = request.headers.get("origin");
     if (origin !== null && origin !== url.origin) return json({ error: "Cross-site request refused" }, 403);
