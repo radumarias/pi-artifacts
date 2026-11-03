@@ -37,7 +37,7 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
     return () => {
       cancelled = true;
     };
-  }, [artifactId, latestKnown]);
+  }, [artifactId, latestKnown, fullPage]);
 
   // Its owner has seen the newest version once the window shows it, as a chat is seen: no longer new in their sidebar.
   const visible = useVisible();

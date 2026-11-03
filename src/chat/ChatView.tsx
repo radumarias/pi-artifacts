@@ -52,6 +52,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   const mentions = useMentions(chatId, draft, setDraft, input);
   const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
+  // Whether the conversation so far has arrived: publishes in it are not new.
+  const loaded = useRef(false);
 
   // Follow new output only while the reader is at the bottom; scrolling up to read stops it,
   // scrolling back down (or sending a message) resumes it. Scroll the list itself, never the page.
@@ -74,11 +76,13 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   }, [state.busy, onActivity]);
 
   useEffect(() => {
+    // The first entries are the conversation as it was (the snapshot); a publish after them is new, even the chat's first.
+    const loading = !loaded.current;
+    if (state.entries.length > 0) loaded.current = true;
     const latest = state.entries.map(published).filter(Boolean).pop();
     if (!latest) return;
     const key = `${latest.artifactId}:${latest.version}`;
     if (key === lastArtifact.current) return;
-    const loading = lastArtifact.current === "";
     lastArtifact.current = key;
     onArtifact(latest, loading);
   }, [state.entries, onArtifact]);

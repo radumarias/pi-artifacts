@@ -208,7 +208,14 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   // may have saved some (run_python), so they are read again after each one.
   useSidebarSocket({ chats: loadChats, artifacts: loadArtifacts, skills: loadSkills });
   // Another chat shows its own artifacts: the one asked for at once, else the newest it published once it loads.
-  useEffect(() => setPreview(opening ? { artifactId: opening } : null), [chatId, opening]);
+  // Going to the same chat without one asked for (its sidebar link, Back) keeps what it shows: the chat does not load
+  // again, so it would not offer its newest artifact.
+  const previewChat = useRef(chatId);
+  useEffect(() => {
+    if (opening) setPreview({ artifactId: opening });
+    else if (previewChat.current !== chatId) setPreview(null);
+    previewChat.current = chatId;
+  }, [chatId, opening]);
   // A new publish always shows; the chat's newest artifact on load only when none was asked for.
   const onArtifact = useCallback(
     (artifact: Preview, loading?: boolean) => {
