@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { Icon } from "./Icon.tsx";
 
 /**
  * A layout setting kept in this browser. Storage can be missing or throw (private windows), or hold
@@ -27,6 +28,40 @@ export function useStoredState<T>(key: string, fallback: T, valid?: (value: unkn
     [key],
   );
   return [value, store];
+}
+
+/**
+ * The heading of a sidebar section that opens and closes: its name and count, then whatever else it shows (closed, the
+ * files panel shows that an upload is going), then a chevron (down while it is open, as the files panel opens upward).
+ */
+export function SectionHead({
+  name,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  name: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="section-head"
+      aria-expanded={open}
+      onClick={onToggle}
+      title={`${open ? "Hide" : "Show"} your ${name.toLowerCase()}`}
+    >
+      {name} <small>{count.toLocaleString("en")}</small>
+      {children}
+      <Icon size={14} box={16} stroke={1.8}>
+        <path d="M4 10l4-4 4 4" />
+      </Icon>
+    </button>
+  );
 }
 
 interface HandleProps {

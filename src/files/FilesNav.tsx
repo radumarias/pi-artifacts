@@ -4,7 +4,7 @@ import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, u
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
-import { useStoredState } from "../layout.tsx";
+import { SectionHead, useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
@@ -277,12 +277,6 @@ function ensureDownloadFrame(): void {
   downloadFrame = frame;
 }
 
-const Chevron = () => (
-  <Icon size={14} box={16} stroke={1.8}>
-    <path d="M4 10l4-4 4 4" />
-  </Icon>
-);
-
 /**
  * The sidebar's files, in a panel at its bottom that opens and closes (remembered in this browser): a folder tree,
  * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
@@ -324,12 +318,10 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
   };
   return (
     <section className={open ? "files-panel open" : "files-panel"}>
-      <button type="button" className="files-panel-head" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? "Hide your files" : "Show your files"}>
-        Files <small>{files.length.toLocaleString("en")}</small>
+      <SectionHead name="Files" count={files.length} open={open} onToggle={() => setOpen(!open)}>
         {/* Closed, the panel still shows that an upload is going. */}
         {!open && status?.busy && <span className="spinner" />}
-        <Chevron />
-      </button>
+      </SectionHead>
       {open && (
         <>
           <div className="files-tools">

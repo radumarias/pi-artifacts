@@ -10,7 +10,7 @@ import { DeleteChat } from "./chat/DeleteChat.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
-import { ResizeHandle, useStoredState } from "./layout.tsx";
+import { ResizeHandle, SectionHead, useStoredState } from "./layout.tsx";
 import { useLatest, useSidebarSocket } from "./sidebar.ts";
 import { SkillsView } from "./skills/SkillsView.tsx";
 
@@ -179,6 +179,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
+  const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", true, (value) => typeof value === "boolean");
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.
   const [chatWidth, setChatWidth] = useStoredState<number | null>("layout.chatWidth", null);
@@ -275,18 +276,23 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
           <ChatList chats={chats} openId={chatId} navigate={navigate} onDelete={setDeleting} />
           </div>
           <section className="sidebar-pinned">
-            <h3>Artifacts</h3>
+            <SectionHead name="Artifacts" count={artifacts.length} open={artifactsOpen} onToggle={() => setArtifactsOpen(!artifactsOpen)}>
+              {/* Closed, the section still shows that an artifact has a version the user has not opened. */}
+              {!artifactsOpen && artifacts.some((a) => a.unread) && <UnreadDot label="New versions you have not opened" />}
+            </SectionHead>
             {/* A long list scrolls on its own, so skills and the files panel stay in view. */}
-            <nav className="artifact-list">
-              {artifacts.map((a) => (
-                <a key={a.id} href={`/a/${a.id}`} target="_blank" rel="noreferrer" className={a.unread ? "nav-item unread" : "nav-item"}>
-                  <span className="nav-title">
-                    {a.title} <small>v{a.latest}</small>
-                  </span>
-                  {a.unread && <UnreadDot label="New version you have not opened" />}
-                </a>
-              ))}
-            </nav>
+            {artifactsOpen && (
+              <nav className="artifact-list">
+                {artifacts.map((a) => (
+                  <a key={a.id} href={`/a/${a.id}`} target="_blank" rel="noreferrer" className={a.unread ? "nav-item unread" : "nav-item"}>
+                    <span className="nav-title">
+                      {a.title} <small>v{a.latest}</small>
+                    </span>
+                    {a.unread && <UnreadDot label="New version you have not opened" />}
+                  </a>
+                ))}
+              </nav>
+            )}
             <h3>Skills</h3>
             <nav>
               <a
