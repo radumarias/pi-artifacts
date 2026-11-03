@@ -56,7 +56,10 @@ export class CheckBrowser {
     try {
       return await (await this.#open(binding)).newPage();
     } catch (error) {
+      // The next check starts a new browser. Close this one, if it started, unless another check still uses it.
+      const failed = this.#browser;
       this.#browser = undefined;
+      if (this.#using === 1) void failed?.then((b) => b.close()).catch(() => {});
       // Only the first line: a launch failure can carry a whole log.
       const why = errorMessage(error).split("\n")[0].slice(0, 300);
       throw new BrowserUnavailable(`the browser did not start (${why})`);

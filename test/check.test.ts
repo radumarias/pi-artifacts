@@ -202,6 +202,34 @@ fetch("https://example.com/data.json");
     expect(report.calls).toEqual(["Demo/quotes: 1 failed (auth_required)"]);
   }, 30_000);
 
+  it("gives a syntax error the page's own line", async () => {
+    const report = await check("<!doctype html><html><head></head><body>\n<p>x</p>\n<script>\nconst a = 1;\nfunction ( {\n</script></body></html>", {
+      manifest: {},
+    });
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toMatch(/^Uncaught SyntaxError: .*page line 5:/);
+  }, 30_000);
+
+  it("keeps a script error the page logged an error when a call failed outside it", async () => {
+    const report = await check(
+      `<p>x</p><script>pi.use("mcp").then(async (mcp) => { await mcp.callTool("Demo", "quotes", {}).catch((e) => console.error(e)); try { null.x } catch (e) { console.error("bug", e) } })</script>`,
+      {},
+      async () => ({ ok: false, error: { code: "not_granted", server: "Demo", message: "Not run in the check." } }),
+    );
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toMatch(/^console\.error: bug TypeError/);
+    expect(report.warnings.some((w) => w.endsWith("(may come from the live calls that failed)"))).toBe(true);
+  }, 30_000);
+
+  it("says a call that fails alike again and again once", async () => {
+    const report = await check(
+      `<p>x</p><script>pi.use("mcp").then(async (mcp) => { for (let i = 0; i < 20; i++) await mcp.callTool("Demo", "quotes", { i }).catch(() => {}) })</script>`,
+      {},
+      async () => ({ ok: false, error: { code: "bad_request", server: "Demo", message: "Bad input." } }),
+    );
+    expect(report.errors).toEqual(["Live call Demo/quotes failed with bad_request: Bad input. (×20)"]);
+  }, 30_000);
+
   it("reports a call the page got wrong as an error", async () => {
     const report = await check(
       `<p>x</p><script>pi.use("mcp").then((mcp) => mcp.callTool("Demo", "secret", {}).catch((e) => document.body.append(e.code)))</script>`,

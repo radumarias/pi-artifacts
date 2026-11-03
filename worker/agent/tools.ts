@@ -425,6 +425,7 @@ export function artifactExtension(scope: ChatScope): Extension {
         execute: async (args): Promise<ToolExecutionResult<Partial<PublishedDetails>>> => {
           let page: { html: string; mcp: PublishInput["mcp"] };
           if (args.check_id !== undefined) {
+            if (args.html !== undefined || args.mcp !== undefined) throw new Error("Pass check_id alone, or the page as html with its mcp: not both.");
             const passed = checked.get(args.check_id);
             if (!passed) throw new Error(`No passed check "${args.check_id}" is kept any more. Send the page as html, with its mcp.`);
             page = { html: passed.html, mcp: passed.manifest.mcp?.servers };

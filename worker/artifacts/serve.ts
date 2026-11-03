@@ -10,16 +10,6 @@ export const SCRIPT_HOSTS = [
   "https://code.jquery.com",
 ];
 
-/**
- * The page has no network of its own: `connect-src 'none'`. Every connector
- * call goes through the runtime's message port to the viewer page, which
- * sends it to the Worker.
- *
- * `sandbox` gives the page an opaque origin however it is loaded: framed by
- * the viewer, opened directly from a link, or as a popup that escaped the
- * frame's sandbox. Without it, a page loaded top-level would run on the app's
- * origin and could script the app as the viewer.
- */
 /** The policy without its sandbox directive, which a <meta> policy cannot carry: the check (check.ts) sandboxes its frame instead. */
 export const PAGE_POLICY = [
   "default-src 'none'",
@@ -34,6 +24,16 @@ export const PAGE_POLICY = [
   "base-uri 'none'",
 ].join("; ");
 
+/**
+ * The page has no network of its own: `connect-src 'none'`. Every connector
+ * call goes through the runtime's message port to the viewer page, which
+ * sends it to the Worker.
+ *
+ * `sandbox` gives the page an opaque origin however it is loaded: framed by
+ * the viewer, opened directly from a link, or as a popup that escaped the
+ * frame's sandbox. Without it, a page loaded top-level would run on the app's
+ * origin and could script the app as the viewer.
+ */
 export const ARTIFACT_CSP = `sandbox ${ARTIFACT_SANDBOX}; ${PAGE_POLICY}`;
 
 /**

@@ -98,6 +98,9 @@ const failedOutside = (call: CallRecord) => !call.ok && call.code !== undefined 
 const SCRIPT_ERROR_TEXT =
   /[^\n]*\b(?:is not a function|is not defined|is not a constructor|Cannot read propert(?:y|ies) of (?:undefined|null)|Unexpected token)\b[^\n]*/g;
 
+/** A logged error that is the page's own bug, whatever else failed: never put down to a live call. */
+const SCRIPT_ERROR_TYPE = /\b(?:TypeError|ReferenceError|SyntaxError|RangeError)\b/;
+
 /** Text a page shows when it rendered a value it did not have. */
 const SUSPECT_TEXT = /\bNaN\b|\bundefined\b|\[object Object\]|Invalid Date/g;
 
@@ -109,7 +112,9 @@ const CAPTURE =
   "(()=>{const send=(kind,text,url)=>{try{parent.postMessage({type:'pi:check',kind,text:String(text).slice(0,2000),url},'*')}catch{}};" +
   "const show=(v)=>{if(v instanceof Error)return v.stack&&v.stack.includes(v.message)?v.stack:v.name+': '+v.message+(v.stack?'\\n'+v.stack:'');if(typeof v==='string')return v;try{return JSON.stringify(v)}catch{return String(v)}};" +
   "for(const level of ['error','warn']){const original=console[level];console[level]=function(...args){send(level,args.map(show).join(' '));return original.apply(this,args)}}" +
-  "addEventListener('error',(e)=>{if(e instanceof ErrorEvent){send('exception',e.error?show(e.error):e.message+(e.lineno?' (line '+e.lineno+')':''));return}" +
+  "addEventListener('error',(e)=>{if(e instanceof ErrorEvent){const text=e.error?show(e.error):e.message;" +
+  // A syntax error's stack has no position: add the event's, which pageLines maps like a stack's.
+  "send('exception',e.lineno&&!text.includes(':'+e.lineno+':')?text+' (at '+(e.filename||'about:srcdoc')+':'+e.lineno+':'+e.colno+')':text);return}" +
   "const t=e.target;if(t&&t!==window){const url=t.src||t.href||t.tagName;send('resource','Failed to load '+url,url)}},true);" +
   "addEventListener('unhandledrejection',(e)=>send('rejection',show(e.reason)));" +
   "addEventListener('securitypolicyviolation',(e)=>{const url=e.blockedURI||'inline';send('csp','Blocked by the page policy ('+e.effectiveDirective+'): '+url,url)})})();";
@@ -327,11 +332,12 @@ export function judge({ log, calls, tests, text, graphics, mapLine, manifest }: 
     const line = `${KINDS[kind] ?? ""}${clip(pageLines(raw, mapLine), MAX_ENTRY)}${count > 1 ? ` (×${count})` : ""}`;
     if (kind === "warn") warnings.push(line);
     // The page shows a call's failure as it should, and may log it: not the page's fault when the call failed outside it.
-    else if (kind === "error" && outside) warnings.push(`${line} (may come from the live calls that failed)`);
+    else if (kind === "error" && outside && !SCRIPT_ERROR_TYPE.test(raw)) warnings.push(`${line} (may come from the live calls that failed)`);
     else errors.push(line);
   }
 
   const summary = new Map<string, { ok: number; failed: Map<string, number> }>();
+  const failedCalls = { errors: [] as string[], warnings: [] as string[] };
   for (const call of calls) {
     const key = `${call.server}/${call.tool}`;
     const entry = summary.get(key) ?? { ok: 0, failed: new Map<string, number>() };
@@ -341,7 +347,14 @@ export function judge({ log, calls, tests, text, graphics, mapLine, manifest }: 
       continue;
     }
     entry.failed.set(call.code ?? "error", (entry.failed.get(call.code ?? "error") ?? 0) + 1);
-    (failedOutside(call) ? warnings : errors).push(`Live call ${key} failed with ${call.code}: ${clip(call.message ?? "", 300)}`);
+    (failedOutside(call) ? failedCalls.warnings : failedCalls.errors).push(`Live call ${key} failed with ${call.code}: ${clip(call.message ?? "", 300)}`);
+  }
+  // A call the page makes again and again fails alike each time: say it once, with how often.
+  for (const [list, lines] of [
+    [warnings, failedCalls.warnings],
+    [errors, failedCalls.errors],
+  ] as const) {
+    for (const [line, count] of tally(lines)) list.push(`${line}${count > 1 ? ` (×${count})` : ""}`);
   }
   const callLines = [...summary].map(([key, { ok, failed }]) => {
     const parts = [ok && `${ok} ok`, ...[...failed].map(([code, n]) => `${n} failed (${code})`)].filter(Boolean);
