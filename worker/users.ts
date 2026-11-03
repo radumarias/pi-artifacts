@@ -251,6 +251,11 @@ export class UserDirectory extends DurableObject<Env> {
       }));
   }
 
+  /** The artifacts one chat published, newest first: where a publish by title finds the artifact it revises. */
+  listChatArtifacts(chatId: string): ArtifactSummary[] {
+    return this.listArtifacts().filter((artifact) => artifact.chatId === chatId);
+  }
+
   /** The owner opened `version` of an artifact: it and the ones before are no longer unread. */
   markArtifactSeen(id: string, version: number): void {
     if (this.ctx.storage.sql.exec("UPDATE artifacts SET seen = ? WHERE id = ? AND seen < ?", version, id, version).rowsWritten) this.#changed("artifacts");

@@ -188,7 +188,10 @@ page's CSP, with its live calls answered by the chat's MCP connections. It retur
 - the results of **tests** the agent passes: short scripts run in the page once its data arrived, such as "the price
   table has rows".
 
-A page that passes gets a `check_id`, and the agent publishes it by that id rather than writing the page out again.
+A page that passes gets a `check_id`, and the agent publishes it by that id rather than writing the page out again. A
+publish without an `artifact_id` whose title matches one of the chat's artifacts becomes that artifact's next version
+(`new_artifact: true` makes a separate one), so a fix the model publishes without the id never turns into a second
+artifact stuck at version 1.
 `artifact_publish` runs the same check on a page sent as HTML that has not passed one, and refuses it while it has
 errors.
 During a check only read-only tools run, from results up to two minutes old; a write tool answers `not_granted`. The

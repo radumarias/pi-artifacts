@@ -225,6 +225,7 @@ export class ChatAgent extends DurableObject<Env> {
       broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
       checkPage: (input) => this.#checkBrowser.withPage((page) => checkPage(page, input, this.#checkBridge(input.manifest))),
+      chatArtifacts: () => this.#directory.listChatArtifacts(this.chatId),
     });
     this.registry.install(promptExtension);
     this.registry.install(peopleExtension(() => this.people()));

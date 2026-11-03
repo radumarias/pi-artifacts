@@ -64,6 +64,7 @@
     "worker/skills/index.ts",
     "worker/raw.d.ts",
     "worker/artifacts/check.ts",
+    "worker/agent/publish-target.ts",
     "worker/artifacts/serve.ts"
   ]
 }
