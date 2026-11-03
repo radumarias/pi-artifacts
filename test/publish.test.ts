@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ArtifactMeta } from "../shared/protocol.ts";
-import { artifactByTitle, draftId, publishChecked, type PublishScope } from "../worker/agent/publish.ts";
+import { artifactByTitle, publishChecked, type PublishScope } from "../worker/agent/publish.ts";
 import { BrowserUnavailable } from "../worker/artifacts/browser.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
 import type { ArtifactStore } from "../worker/storage/artifacts.ts";
-import { ChatDrafts } from "../worker/storage/drafts.ts";
+import { ChatDrafts, draftId } from "../worker/storage/drafts.ts";
 import { FakeBucket } from "./fakes.ts";
 
 const artifact = (id: string, title: string, updatedAt: number) => ({ id, title, chatId: "c", latest: 1, updatedAt });
@@ -86,12 +86,26 @@ describe("publishChecked", () => {
 
   it("publishes a page whose draft passed without checking it again, into the artifact it was checked for", async () => {
     const { scope, versions, checked, drafts } = chat(errorsIn);
-    await drafts.save({ id: await draftId(fixed, {}), html: fixed, manifest: {}, artifactId: "a1", savedAt: 1, errors: 0, warnings: 0 });
+    const page = { id: await draftId(fixed, {}), html: fixed, manifest: {}, artifactId: "a1" };
+    await drafts.save(page, { errors: 0, warnings: 0 });
     const done = await publishChecked(scope, { title: "Map", html: fixed });
     expect(checked).toEqual([]);
     expect(versions).toEqual([{ id: "a1", html: fixed }]);
     expect(done.report).toBeUndefined();
     expect(await drafts.list()).toEqual([]);
+
+    await drafts.save(page, { errors: 0, warnings: 0 });
+    await publishChecked(scope, { title: "Map", checkId: page.id });
+    expect(checked).toEqual([]);
+    expect(versions).toHaveLength(2);
+  });
+
+  it("publishes by check id only a draft that passed", async () => {
+    const { scope, versions, drafts } = chat(errorsIn);
+    await expect(publishChecked(scope, { title: "Map", checkId: "0000000000000001" })).rejects.toThrow("No draft");
+    const { id } = await drafts.save({ id: await draftId(broken, {}), html: broken, manifest: {} }, { errors: 1, warnings: 0 });
+    await expect(publishChecked(scope, { title: "Map", checkId: id })).rejects.toThrow("has not passed a check");
+    expect(versions).toEqual([]);
   });
 
   it("does not publish a page no browser could check, except in local development", async () => {

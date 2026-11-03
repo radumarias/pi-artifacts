@@ -1,6 +1,7 @@
 import { isOwnedBy, type ArtifactManifest, type ArtifactMeta, type CloneAccess } from "../../shared/protocol.ts";
 import { randomHex } from "../../shared/util.ts";
 import { commitAndPush, tokenSecret, type GitHttp } from "./git.ts";
+import { deletePrefix } from "./r2.ts";
 
 const BRANCH = "main";
 const PAGE_FILE = "index.html";
@@ -82,14 +83,7 @@ export class ArtifactStore {
     const meta = cached ? ((await cached.json()) as ArtifactMeta) : await this.#readRepoMeta(id);
     if (meta && !isOwnedBy(meta, ownerUid, chatId)) return false;
     await this.#repos.delete(repoName(id));
-    let cursor: string | undefined;
-    do {
-      const page = await this.#cache.list({ prefix: cachePrefix(id), cursor });
-      const keys: string[] = [];
-      for (const object of page.objects) keys.push(object.key);
-      if (keys.length) await this.#cache.delete(keys);
-      cursor = page.truncated ? page.cursor : undefined;
-    } while (cursor);
+    await deletePrefix(this.#cache, cachePrefix(id));
     return true;
   }
 

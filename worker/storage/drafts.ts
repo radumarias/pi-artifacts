@@ -1,31 +1,43 @@
+import { canonicalJson } from "../../shared/canonical.ts";
 import { ID_PATTERN, type ArtifactManifest } from "../../shared/protocol.ts";
+import { sha256Hex } from "../../shared/util.ts";
+import { deletePrefix } from "./r2.ts";
 
 /** How many drafts one chat keeps: saving one more drops the oldest. */
 export const MAX_DRAFTS = 20;
 
-const DRAFT_ID = /^[0-9a-f]{16}$/;
+const ID_LENGTH = 16;
+const DRAFT_ID = new RegExp(`^[0-9a-f]{${ID_LENGTH}}$`);
+
+/** The id a page is saved as a draft by: the start of a SHA-256 of its manifest and the page. */
+export async function draftId(html: string, manifest: ArtifactManifest): Promise<string> {
+  return (await sha256Hex(`${canonicalJson(manifest)}\u0000${html}`)).slice(0, ID_LENGTH);
+}
+
+/** A page as it is saved: by its draftId, with the artifact of this chat it is a new version of, when the agent said. */
+export interface DraftPage {
+  id: string;
+  html: string;
+  manifest: ArtifactManifest;
+  artifactId?: string;
+}
+
+/** What a page's check found: errors is null when no browser could check it. */
+export interface DraftCheck {
+  errors: number | null;
+  warnings: number;
+}
 
 /**
  * A page the agent checked or tried to publish, kept until it is published: what a fix starts again from, and what a
  * passed check publishes by its id, also after the chat object restarted.
  */
-export interface Draft {
-  /** The start of a SHA-256 of the manifest and the page (see draftId): the same page saved again is the same draft. */
-  id: string;
-  html: string;
-  manifest: ArtifactManifest;
-  /** The artifact of this chat the page is a new version of, when the agent said. */
-  artifactId?: string;
-  savedAt: number;
-  /** What the check found; errors is null when no browser could check the page. */
-  errors: number | null;
-  warnings: number;
-}
+export type Draft = DraftPage & DraftCheck & { savedAt: number };
 
 export type DraftSummary = Omit<Draft, "html" | "manifest"> & { bytes: number };
 
 /** Whether a draft passed its check: only those may be published by their id. */
-export const passed = (draft: Pick<Draft, "errors">) => draft.errors === 0;
+export const passed = (draft: Pick<DraftCheck, "errors">) => draft.errors === 0;
 
 /**
  * One chat's drafts, in its owner's folder and encrypted with the owner's key like their files (UserFiles), but kept
@@ -50,51 +62,67 @@ export class ChatDrafts {
     return (await this.#index()).reverse();
   }
 
+  /** A draft as the index lists it, without its page: enough to tell whether it passed. */
+  async summary(id: string): Promise<DraftSummary | undefined> {
+    return (await this.#index()).find((entry) => entry.id === id);
+  }
+
   async get(id: string): Promise<Draft | null> {
     if (!DRAFT_ID.test(id)) return null;
     const object = await this.#bucket.get(this.#draftKey(id), { ssecKey: this.#key });
     return object ? ((await object.json()) as Draft) : null;
   }
 
-  /** Save a draft, or save it again as the newest; beyond MAX_DRAFTS the oldest go. */
-  async save(draft: Draft): Promise<void> {
-    if (!DRAFT_ID.test(draft.id)) throw new Error("Invalid draft id.");
-    const body = JSON.stringify(draft);
-    await this.#bucket.put(this.#draftKey(draft.id), body, { ssecKey: this.#key, httpMetadata: { contentType: "application/json" } });
-    const { html: _html, manifest: _manifest, ...summary } = draft;
-    const index = [...(await this.#index()).filter((entry) => entry.id !== draft.id), { ...summary, bytes: new TextEncoder().encode(draft.html).byteLength }];
-    const dropped = index.splice(0, Math.max(0, index.length - MAX_DRAFTS));
-    await this.#writeIndex(index);
-    if (dropped.length) await this.#bucket.delete(dropped.map((entry) => this.#draftKey(entry.id)));
+  /**
+   * Save a page as the newest draft, with what its check found (`check`; null when it was not checked). A page saved
+   * before keeps the artifact it was for, and its check when this save has none. Beyond MAX_DRAFTS the oldest go.
+   */
+  async save(page: DraftPage, check: DraftCheck | null): Promise<Draft> {
+    if (!DRAFT_ID.test(page.id)) throw new Error("Invalid draft id.");
+    const index = await this.#index();
+    const before = index.find((entry) => entry.id === page.id);
+    const draft: Draft = {
+      ...page,
+      artifactId: page.artifactId ?? before?.artifactId,
+      savedAt: Date.now(),
+      ...(check ?? { errors: before?.errors ?? null, warnings: before?.warnings ?? 0 }),
+    };
+    const { html, manifest: _manifest, ...summary } = draft;
+    const kept = [...index.filter((entry) => entry.id !== page.id), { ...summary, bytes: new TextEncoder().encode(html).byteLength }];
+    const dropped = kept.splice(0, Math.max(0, kept.length - MAX_DRAFTS));
+    await Promise.all([
+      this.#putJson(this.#draftKey(page.id), draft),
+      this.#putJson(this.#indexKey, kept),
+      dropped.length && this.#bucket.delete(dropped.map((entry) => this.#draftKey(entry.id))),
+    ]);
+    return draft;
   }
 
   /** Drop a draft: it was published. A draft that is not there is skipped. */
   async remove(id: string): Promise<void> {
     if (!DRAFT_ID.test(id)) return;
     const index = await this.#index();
-    if (index.some((entry) => entry.id === id)) await this.#writeIndex(index.filter((entry) => entry.id !== id));
-    await this.#bucket.delete(this.#draftKey(id));
+    const kept = index.filter((entry) => entry.id !== id);
+    await Promise.all([kept.length < index.length && this.#putJson(this.#indexKey, kept), this.#bucket.delete(this.#draftKey(id))]);
   }
 
   /** Every draft of the chat and its index, for deleting the chat; by listing, so a draft the index lost goes too. */
   async deleteAll(): Promise<void> {
-    let cursor: string | undefined;
-    do {
-      const page = await this.#bucket.list({ prefix: this.#prefix, cursor });
-      const keys: string[] = page.objects.map((object: R2Object) => object.key);
-      if (keys.length) await this.#bucket.delete(keys);
-      cursor = page.truncated ? page.cursor : undefined;
-    } while (cursor);
+    await deletePrefix(this.#bucket, this.#prefix);
   }
 
   /** Oldest first. */
   async #index(): Promise<DraftSummary[]> {
-    const object = await this.#bucket.get(`${this.#prefix}index.json`, { ssecKey: this.#key });
+    const object = await this.#bucket.get(this.#indexKey, { ssecKey: this.#key });
     return object ? ((await object.json()) as DraftSummary[]) : [];
   }
 
-  async #writeIndex(index: DraftSummary[]): Promise<void> {
-    await this.#bucket.put(`${this.#prefix}index.json`, JSON.stringify(index), { ssecKey: this.#key, httpMetadata: { contentType: "application/json" } });
+  async #putJson(key: string, value: unknown): Promise<void> {
+    await this.#bucket.put(key, JSON.stringify(value), { ssecKey: this.#key, httpMetadata: { contentType: "application/json" } });
+  }
+
+  get #indexKey(): string {
+    return `${this.#prefix}index.json`;
   }
 
   #draftKey(id: string): string {

@@ -8,35 +8,18 @@ import {
   isOwnedBy,
   manifestOf,
   PUBLISH_TOOL,
-  type ArtifactManifest,
   type ArtifactMeta,
-  type ArtifactSummary,
   type CheckedDetails,
   type PublishedDetails,
   type SavedFilesDetails,
 } from "../../shared/protocol.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
-import { canonicalJson } from "../../shared/canonical.ts";
-import { errorMessage, formatBytes, listSome, plural, sha256Hex } from "../../shared/util.ts";
-import { BrowserUnavailable } from "../artifacts/browser.ts";
-import { describeReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
-import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
+import { formatBytes, listSome, plural } from "../../shared/util.ts";
+import { describeReport, type CheckReport } from "../artifacts/check.ts";
 import { FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, SANDBOX_OUT, savedReport, wroteReport } from "../chat-traces.ts";
-import type { McpHub } from "../mcp/hub.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
-import {
-  literalPath,
-  MAX_DRAFTS,
-  normalisePath,
-  passed,
-  PathError,
-  type ArtifactStore,
-  type ChatDrafts,
-  type Draft,
-  type FileEntry,
-  type UserFiles,
-} from "../storage/index.ts";
-import { draftId, publishChecked, saveDraft, validPage, type PublishInput, type PublishScope } from "./publish.ts";
+import { draftId, literalPath, MAX_DRAFTS, normalisePath, PathError, type FileEntry, type UserFiles } from "../storage/index.ts";
+import { checkInBrowser, draftCheck, draftLine, publishChecked, validPage, type PublishInput, type PublishScope } from "./publish.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
@@ -283,14 +266,6 @@ function passedLine(report: CheckReport): string {
   return `The check passed${report.warnings.length ? ` with ${plural(report.warnings.length, "warning")}` : ""}.`;
 }
 
-/** One draft in a listing: its id, when, what it is for and how its check went. */
-function draftLine(draft: Omit<Draft, "html" | "manifest"> & { bytes?: number }): string {
-  const check = draft.errors === null ? "not checked" : passed(draft) ? "passed its check" : plural(draft.errors, "error");
-  const warnings = draft.warnings ? `, ${plural(draft.warnings, "warning")}` : "";
-  const size = draft.bytes === undefined ? "" : `, ${formatBytes(draft.bytes)}`;
-  return `${draft.id}  ${new Date(draft.savedAt).toISOString()}  ${draft.artifactId ? `for artifact ${draft.artifactId}` : "no artifact named"}  ${check}${warnings}${size}`;
-}
-
 export function artifactExtension(scope: ChatScope): Extension {
   return defineExtension({
     name: "artifacts",
@@ -325,21 +300,19 @@ export function artifactExtension(scope: ChatScope): Extension {
         execute: async (args) => {
           if (args.artifact_id !== undefined) await chatArtifact(scope, args.artifact_id);
           const manifest = await validPage(scope, args.html, args.mcp, "Not checked.");
-          const [id, drafts] = await Promise.all([draftId(args.html, manifest), scope.drafts()]);
-          const before = await drafts.get(id);
-          const page = { html: args.html, manifest, artifactId: args.artifact_id };
-          let report: CheckReport;
-          try {
-            report = await scope.checkPage({ html: args.html, manifest, tests: args.tests, viewport: args.viewport });
-          } catch (error) {
-            if (!(error instanceof BrowserUnavailable)) throw error;
-            await saveDraft(drafts, id, page, null, before);
+          const [id, drafts, checked] = await Promise.all([
+            draftId(args.html, manifest),
+            scope.drafts(),
+            checkInBrowser(scope, { html: args.html, manifest, tests: args.tests, viewport: args.viewport }),
+          ]);
+          const { report, unchecked } = checked;
+          await drafts.save({ id, html: args.html, manifest, artifactId: args.artifact_id }, draftCheck(report));
+          if (!report) {
             const next = scope.publishUnchecked
               ? "Publish it with its html; it is published unchecked."
               : "A page is published only once a check passes: check it again in a while.";
-            return { output: text(`The page could not be checked: ${error.message}. It is saved as draft "${id}"; nothing was published. ${next}`) };
+            return { output: text(`The page could not be checked: ${unchecked}. It is saved as draft "${id}"; nothing was published. ${next}`) };
           }
-          await saveDraft(drafts, id, page, report, before);
           const failed = report.errors.length > 0;
           const headline = failed
             ? `The check found ${plural(report.errors.length, "error")}. The page is saved as draft "${id}"; fix them and check again. Nothing was published.`
@@ -367,18 +340,13 @@ export function artifactExtension(scope: ChatScope): Extension {
           mcp: mcpParameter,
         }),
         execute: async (args): Promise<ToolExecutionResult<Partial<PublishedDetails>>> => {
-          let page: { html: string; mcp: PublishInput["mcp"] };
+          const target = { title: args.title, artifactId: args.artifact_id, newArtifact: args.new_artifact, message: args.message };
+          let input: PublishInput;
           if (args.check_id !== undefined) {
             if (args.html !== undefined || args.mcp !== undefined) throw new Error("Pass check_id alone, or the page as html with its mcp: not both.");
-            const draft = await (await scope.drafts()).get(args.check_id);
-            if (!draft) {
-              throw new Error(`No draft "${args.check_id}" in this chat: it was published, or dropped as one of the oldest. Send the page as html, with its mcp.`);
-            }
-            if (!passed(draft)) throw new Error(`Draft "${args.check_id}" has not passed a check (${draftLine(draft)}). Fix it, and check it again.`);
-            page = { html: draft.html, mcp: draft.manifest.mcp?.servers };
-          } else if (args.html !== undefined) page = { html: args.html, mcp: args.mcp };
+            input = { ...target, checkId: args.check_id };
+          } else if (args.html !== undefined) input = { ...target, html: args.html, mcp: args.mcp };
           else throw new Error("Pass check_id, or the page as html.");
-          const input = { title: args.title, artifactId: args.artifact_id, newArtifact: args.new_artifact, message: args.message, ...page };
           const outcome = await publishChecked(scope, input);
           const { meta, report, draft } = outcome;
           if (!meta) {

@@ -48,6 +48,7 @@
     "worker/storage/keys.ts",
     "worker/storage/user-files.ts",
     "worker/storage/drafts.ts",
+    "worker/storage/r2.ts",
     "worker/artifacts/browser.ts",
     "worker/artifacts/manifest.ts",
     "worker/auth/access.ts",
