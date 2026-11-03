@@ -90,9 +90,13 @@ function score(label: string, q: string): number {
   return lower.includes(q) ? 1 : 0;
 }
 
-/** The picks whose "@" text is still in the message: one deleted from the text is no longer sent. */
+/**
+ * The picks whose "@" text is still in the message: one deleted from the text is no longer sent. Read as the
+ * transcript shows them (splitMentions), so "@Sales" does not count as still there inside "@Sales dashboard".
+ */
 export function keptMentions<T extends Mention>(text: string, mentions: readonly T[]): T[] {
-  return mentions.filter((mention) => text.includes(mentionToken(mention)));
+  const found = new Set(splitMentions(text, mentions));
+  return mentions.filter((mention) => found.has(mention));
 }
 
 /**

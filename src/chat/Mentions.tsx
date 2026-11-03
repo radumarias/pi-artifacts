@@ -31,7 +31,12 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
   const loading = useRef(false);
 
   const typed = activeQuery(draft, caret);
-  const query = typed && typed.start !== dismissedAt ? typed : null;
+  // A picked mention's "@" is done while its text is there and the caret is within or just after it, wherever the caret
+  // came from; edit the text, or type on past it, and the list reopens.
+  const done =
+    typed !== null &&
+    picked.some((m) => draft.startsWith(mentionToken(m), typed.start) && typed.query.trimEnd().length <= mentionLabel(m).length);
+  const query = typed && !done && typed.start !== dismissedAt ? typed : null;
 
   // Read when an "@" opens the list, so files uploaded and artifacts published since are in it.
   const wanted = query !== null;
@@ -80,9 +85,8 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
   const pick = (choice: MentionChoice) => {
     if (!query) return;
     replace(query.start, caret, `${mentionToken(choice.mention)} `);
+    // Its text now follows the "@", so the list closes for it (see `done`).
     setPicked((current) => (current.some((m) => sameMention(m, choice.mention)) ? current : [...current, choice.mention]));
-    // The "@" is done: its text still reads as a query, but the list should not reopen for it.
-    setDismissedAt(query.start);
   };
 
   /** Keys the list takes while it is open; true when it took this one. */

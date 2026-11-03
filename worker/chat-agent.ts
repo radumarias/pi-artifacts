@@ -400,7 +400,6 @@ export class ChatAgent extends DurableObject<Env> {
     return uid === this.uid || this.members.has(uid);
   }
 
-  /** For what a socket sends: its person may have been removed since it opened. */
   /**
    * Artifacts from the owner's other chats that the owner named here with "@": the agent may read them in this chat
    * (ChatScope.broughtIn). Kept in the chat's storage, so they stay readable for later messages; newest last, at most
@@ -416,6 +415,7 @@ export class ChatAgent extends DurableObject<Env> {
     this.ctx.storage.kv.put("broughtIn", kept);
   }
 
+  /** For what a socket sends: its person may have been removed since it opened. */
   #requireInChat(person: Person): void {
     if (!this.isInChat(person.uid)) throw new Error("You are no longer in this chat.");
   }

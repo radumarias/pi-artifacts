@@ -39,7 +39,11 @@ export async function resolveMentions(
         const path = literalPath(input.path);
         return path ? { mention: { kind: "file", path }, said: `the file ${path}` } : null;
       }
-      const meta = await scope.readMeta(input.id);
+      // One artifact that cannot be read is dropped like a missing one, not a reason to refuse the whole message.
+      const meta = await scope.readMeta(input.id).catch((error: unknown) => {
+        console.error("mention:", input.id, error instanceof Error ? error.message : error);
+        return null;
+      });
       if (!meta || meta.ownerUid !== scope.ownerUid || !mentionable(meta, scope.chatId, scope.byOwner)) return null;
       const here = isOwnedBy(meta, scope.ownerUid, scope.chatId);
       return {

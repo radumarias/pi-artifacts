@@ -73,6 +73,7 @@ describe("mentions in text", () => {
       { kind: "artifact", id: "bbbbbbbb", title: "Sales dashboard" },
     ];
     expect(splitMentions("@Sales dashboard", both)).toEqual([both[1]]);
+    expect(keptMentions("@Sales dashboard", both)).toEqual([both[1]]);
   });
 });
 
