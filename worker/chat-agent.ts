@@ -526,7 +526,7 @@ export class ChatAgent extends DurableObject<Env> {
   async #nameChat(message: string, placeholder: string): Promise<void> {
     const title = await titleFor((this.#titleModels ??= piModels(this.ai.provider)), this.ai(this.env.TITLE_MODEL), message);
     if (!title || title === placeholder) return;
-    const indexes = [this.#directory, ...this.members.list().map((member) => this.#index(member.uid))];
+    const indexes = this.#everyonesIndexes();
     await Promise.allSettled(indexes.map((index) => index.nameChat(this.chatId, this.uid, title, placeholder)));
   }
 
@@ -597,7 +597,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (status === previous) return;
     this.ctx.storage.kv.put(STATUS_KEY, status);
     const replied = previous === "running";
-    const indexes = [this.#directory, ...this.members.list().map((member) => this.#index(member.uid))];
+    const indexes = this.#everyonesIndexes();
     this.#statusWrites = this.#statusWrites.then(() =>
       Promise.allSettled(indexes.map((index) => index.setChatStatus(this.chatId, this.uid, status, replied))).then((results) => {
         for (const result of results) if (result.status === "rejected") console.error("chat status:", errorMessage(result.reason));
@@ -607,6 +607,11 @@ export class ChatAgent extends DurableObject<Env> {
 
   #index(uid: string) {
     return exports.UserDirectory.getByName(uid);
+  }
+
+  /** The owner's directory and each member's: every sidebar that lists this chat. */
+  #everyonesIndexes() {
+    return [this.#directory, ...this.members.list().map((member) => this.#index(member.uid))];
   }
 
   /** A single-use link's token, shown once to the owner. The chat itself decides who may: only its owner. */

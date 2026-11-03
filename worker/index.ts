@@ -86,7 +86,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   // Only what a page needs is here; the chat it came from, its owner and everything else need a sign-in below.
   const [, matchedId, artifactSub] = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone|\/seen)?$/) ?? [];
   const artifactId = matchedId && ID_PATTERN.test(matchedId) ? matchedId : undefined;
-  if (artifactId && artifactSub !== "/clone" && artifactSub !== "/seen") {
+  // Only these: any other path under an artifact is the owner's, and needs the sign-in.
+  const isPublic = artifactSub === undefined || artifactSub === "/mcp" || artifactSub === "/tools";
+  if (artifactId && isPublic) {
     const response = await publicArtifactRoute(request, url, env, storage, artifactId, artifactSub, identity?.uid ?? null);
     if (response) return response;
   }

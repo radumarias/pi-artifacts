@@ -136,12 +136,10 @@ export class UserDirectory extends DurableObject<Env> {
    * `shared_chats`. `set` is an SQL SET list written here, never input; its `?` take `values`. Tells the open sidebars
    * when a row changed.
    */
-  #updateChat(id: string, ownerUid: string, set: string, ...values: SqlStorageValue[]): boolean {
+  #updateChat(id: string, ownerUid: string, set: string, ...values: SqlStorageValue[]): void {
     const own = ownerUid === this.ctx.id.name;
     const sql = own ? `UPDATE chats SET ${set} WHERE id = ?` : `UPDATE shared_chats SET ${set} WHERE id = ? AND owner_uid = ?`;
-    const changed = this.ctx.storage.sql.exec(sql, ...values, id, ...(own ? [] : [ownerUid])).rowsWritten > 0;
-    if (changed) this.#changed("chats");
-    return changed;
+    if (this.ctx.storage.sql.exec(sql, ...values, id, ...(own ? [] : [ownerUid])).rowsWritten) this.#changed("chats");
   }
 
   /** What the chat's agent is doing now. `replied`: it just ended a run, so the chat has a reply this user has not seen. */

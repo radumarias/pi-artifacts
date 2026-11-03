@@ -173,7 +173,7 @@ const PREVIEW_MIN = 360;
 function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: WorkspaceProps) {
   const { chats, load: loadChats } = useChatList(chatId);
   const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
-  const [files, setFiles] = useState<FileInfo[]>([]);
+  const [files, loadFiles] = useLatest<FileInfo[]>(api.files, []);
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [skills, loadSkills] = useLatest<SkillInfo[] | null>(api.skills, null, (e) => setSkillsError(e?.message ?? null));
   const [preview, setPreview] = useState<PublishedDetails | null>(null);
@@ -185,7 +185,6 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [chatWidth, setChatWidth] = useStoredState<number | null>("layout.chatWidth", null);
   const chatRef = useRef<HTMLElement>(null);
 
-  const loadFiles = useCallback(() => void api.files().then(setFiles, () => {}), []);
   useEffect(() => {
     loadArtifacts();
     loadFiles();
