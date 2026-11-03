@@ -41,23 +41,26 @@ export class UserDirectory extends DurableObject<Env> {
     // Added later: what the chat's agent is doing (ChatStatus), when something last came in that this user did not
     // write, and when they last saw the chat. activity_at > seen_at is unread.
     for (const table of ["chats", "shared_chats"]) {
-      const columns = new Set(ctx.storage.sql.exec<{ name: string }>(`SELECT name FROM pragma_table_info('${table}')`).toArray().map((row) => row.name));
-      if (!columns.has("status")) ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN status TEXT`);
-      if (!columns.has("activity_at")) ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN activity_at INTEGER NOT NULL DEFAULT 0`);
-      if (!columns.has("seen_at")) ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN seen_at INTEGER NOT NULL DEFAULT 0`);
+      this.#addColumn(table, "status", "TEXT");
+      this.#addColumn(table, "activity_at", "INTEGER NOT NULL DEFAULT 0");
+      this.#addColumn(table, "seen_at", "INTEGER NOT NULL DEFAULT 0");
     }
     // The newest version of each artifact its owner opened. Artifacts from before count as seen.
-    const artifactColumns = ctx.storage.sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('artifacts')").toArray();
-    if (!artifactColumns.some((column) => column.name === "seen")) {
-      ctx.storage.sql.exec("ALTER TABLE artifacts ADD COLUMN seen INTEGER NOT NULL DEFAULT 0");
-      ctx.storage.sql.exec("UPDATE artifacts SET seen = latest");
-    }
+    if (this.#addColumn("artifacts", "seen", "INTEGER NOT NULL DEFAULT 0")) ctx.storage.sql.exec("UPDATE artifacts SET seen = latest");
     // A sidebar's socket stays open for hours: answer its keep-alive pings without waking this object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = mcpServers(env).map((server) => server.name);
     const placeholders = configured.map(() => "?").join(", ");
     ctx.storage.sql.exec(`DELETE FROM mcp_auth${configured.length ? ` WHERE server NOT IN (${placeholders})` : ""}`, ...configured);
+  }
+
+  /** Add a column a table made before it lacks; true when it was added. `table`, `column` and `type` are written here, never input. */
+  #addColumn(table: string, column: string, type: string): boolean {
+    const columns = this.ctx.storage.sql.exec<{ name: string }>(`SELECT name FROM pragma_table_info('${table}')`).toArray();
+    if (columns.some((row) => row.name === column)) return false;
+    this.ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    return true;
   }
 
   /** This user's OAuth state for one MCP server (worker/mcp/oauth.ts): registration, tokens, a sign-in in progress. */
@@ -338,9 +341,10 @@ export class UserDirectory extends DurableObject<Env> {
 
   setBuiltinSkillEnabled(name: string, enabled: boolean): SkillResult {
     if (!builtinSkill(name)) return { error: `No built-in skill named "${name}".` };
-    if (enabled) this.ctx.storage.sql.exec("DELETE FROM builtin_skills_off WHERE name = ?", name);
-    else this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name);
-    this.#changed("skills");
+    const written = enabled
+      ? this.ctx.storage.sql.exec("DELETE FROM builtin_skills_off WHERE name = ?", name).rowsWritten
+      : this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name).rowsWritten;
+    if (written) this.#changed("skills");
     return this.getBuiltinSkill(name)!;
   }
 
@@ -350,17 +354,18 @@ export class UserDirectory extends DurableObject<Env> {
    * replaced while the user reviewed it) is refused, so they read it again.
    */
   setSkillEnabled(name: string, enabled: boolean, seen?: number): SkillResult {
+    let written: number;
     if (enabled) {
       const current = this.ctx.storage.sql.exec<{ updated_at: number }>("SELECT updated_at FROM skills WHERE name = ?", name).toArray()[0];
       if (current && seen !== undefined && current.updated_at !== seen) {
         return { error: `The skill "${name}" changed since you read it; read it again before turning it on.` };
       }
       // Turning a proposal on makes it the user's own: the agent can no longer replace it.
-      this.ctx.storage.sql.exec("UPDATE skills SET enabled = 1, origin = 'user', updated_at = ? WHERE name = ?", Date.now(), name);
+      written = this.ctx.storage.sql.exec("UPDATE skills SET enabled = 1, origin = 'user', updated_at = ? WHERE name = ?", Date.now(), name).rowsWritten;
     } else {
-      this.ctx.storage.sql.exec("UPDATE skills SET enabled = 0, updated_at = ? WHERE name = ?", Date.now(), name);
+      written = this.ctx.storage.sql.exec("UPDATE skills SET enabled = 0, updated_at = ? WHERE name = ?", Date.now(), name).rowsWritten;
     }
-    this.#changed("skills");
+    if (written) this.#changed("skills");
     return this.getSkill(name) ?? { error: `No skill named "${name}".` };
   }
 

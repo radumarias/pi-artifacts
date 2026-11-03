@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ArtifactView } from "../../shared/protocol.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
+import { useVisible } from "../sidebar.ts";
 import { ArtifactFrame } from "./ArtifactFrame.tsx";
 import { ViewportPicker, ViewportStage, useViewport } from "./viewport.tsx";
 
@@ -41,14 +42,24 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
         setMeta(m);
         setVersion(m.latest);
         setError(null);
-        // Its owner has now seen the newest version: it is no longer new in their sidebar.
-        if (m.isOwner) api.markArtifactSeen(artifactId, m.latest).catch(() => {});
       })
       .catch((e: Error) => !cancelled && setError(e.message));
     return () => {
       cancelled = true;
     };
   }, [artifactId, latestKnown]);
+
+  // Its owner has seen the newest version once the window shows it, as a chat is seen: no longer new in their sidebar.
+  const visible = useVisible();
+  const seenId = meta?.isOwner ? meta.id : undefined;
+  const seenVersion = meta?.latest;
+  // What this panel last reported, so showing the window again does not report it again.
+  const reported = useRef("");
+  useEffect(() => {
+    if (!seenId || seenVersion === undefined || !visible || reported.current === `${seenId}:${seenVersion}`) return;
+    reported.current = `${seenId}:${seenVersion}`;
+    api.markArtifactSeen(seenId, seenVersion).catch(() => {});
+  }, [seenId, seenVersion, visible]);
 
   async function showClone() {
     try {

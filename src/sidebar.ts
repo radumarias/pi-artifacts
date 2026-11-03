@@ -10,18 +10,29 @@ const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills"];
 
 /**
  * A value read by `read`, and a stable `load` that reads it again. Reads can overlap: only the newest one's answer is
- * kept, so a slow older read cannot put back a stale list. A failed read keeps what there is.
+ * kept, so a slow older read cannot put back a stale list. A failed read keeps what there is; `onError`, if given,
+ * hears the newest read's error, or null once a read succeeds.
  */
-export function useLatest<T>(read: () => Promise<T>, initial: T): [T, () => void, (update: (value: T) => T) => void] {
+export function useLatest<T>(
+  read: () => Promise<T>,
+  initial: T,
+  onError?: (error: Error | null) => void,
+): [T, () => void, (update: (value: T) => T) => void] {
   const [value, setValue] = useState(initial);
   const reads = useRef(0);
   const reader = useRef(read);
   reader.current = read;
+  const errors = useRef(onError);
+  errors.current = onError;
   const load = useCallback(() => {
     const n = ++reads.current;
     reader.current().then(
-      (next) => n === reads.current && setValue(next),
-      () => {},
+      (next) => {
+        if (n !== reads.current) return;
+        setValue(next);
+        errors.current?.(null);
+      },
+      (error: Error) => n === reads.current && errors.current?.(error),
     );
   }, []);
   return [value, load, setValue];

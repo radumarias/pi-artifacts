@@ -173,8 +173,8 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const { chats, load: loadChats } = useChatList(chatId);
   const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
   const [files, setFiles] = useState<FileInfo[]>([]);
-  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
   const [skillsError, setSkillsError] = useState<string | null>(null);
+  const [skills, loadSkills] = useLatest<SkillInfo[] | null>(api.skills, null, (e) => setSkillsError(e?.message ?? null));
   const [preview, setPreview] = useState<PublishedDetails | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
@@ -182,15 +182,6 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
   const [chatWidth, setChatWidth] = useStoredState<number | null>("layout.chatWidth", null);
   const chatRef = useRef<HTMLElement>(null);
 
-  const loadSkills = useCallback(() => {
-    api.skills().then(
-      (list) => {
-        setSkills(list);
-        setSkillsError(null);
-      },
-      (e: Error) => setSkillsError(e.message),
-    );
-  }, []);
   const loadFiles = useCallback(() => void api.files().then(setFiles, () => {}), []);
   useEffect(() => {
     loadArtifacts();
@@ -209,13 +200,6 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
     const chat = await api.createChat();
     navigate(`/c/${chat.id}`);
   };
-
-  const onArtifact = useCallback(
-    (artifact: PublishedDetails) => {
-      setPreview(artifact);
-    },
-    [],
-  );
 
   const { status: uploadStatus, upload } = useUploads(loadFiles);
   // Files dragged over the app: entries counted, since entering a child element leaves its parent first. Only whether
@@ -345,7 +329,7 @@ function Workspace({ uid, label, chatId, showSkills, navigate, onSignOut }: Work
             <ChatView
               chatId={chatId}
               uid={uid}
-              onArtifact={onArtifact}
+              onArtifact={setPreview}
               onActivity={loadFiles}
               onLeft={() => navigate("/")}
             />
