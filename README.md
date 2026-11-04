@@ -28,6 +28,7 @@ viewer page: ArtifactBroker (src/artifact/broker.ts)
   │  caches, groups identical watches, pauses while the tab is hidden, polls on the server's hint
   ▼  POST /api/artifacts/:id/mcp  {version, mode, server, tool, input, staleMs}
 Worker: finds the artifact's chat
+  ├─ a read the chat already allowed, with a young enough result? served here, the chat stays asleep
   ▼  RPC
 ChatAgent Durable Object (worker/chat-agent.ts)
   ├─ is (server, tool) in this version's manifest?      no → not_in_manifest
@@ -54,9 +55,19 @@ CoinGecko needs no sign-in. A server can also require each user's own; see [MCP 
 - The viewer asks again 0.25–1.25 s after that time, so it shows a new upstream result within about a second of the
   Durable Object fetching it. That is as fresh as WebSocket push would be, without the sockets.
 - `refetchInterval` has a 30 s floor, as at Claude.
-- Each server's results are cached per viewer by default (`cacheScope: "viewer"` in `worker/mcp/servers.ts`, the way
-  Claude keeps viewers apart). Switch a keyless server to `"shared"` to let every viewer reuse one upstream call per
-  interval.
+- Pages call as their author, so every viewer gets the same answer, and by default they share one cached result per
+  call (`cacheScope` in `worker/mcp/servers.ts`; `"viewer"` keeps each viewer's results apart). A server with
+  `auth: "oauth"` keeps them apart unless it says `"shared"`.
+- The Worker keeps those shared results too (`worker/artifacts/page-calls.ts`), keyed by chat, server, tool and input,
+  so a read that is young enough for the page (its `staleMs`, at most 10 min) is answered without waking the chat's
+  Durable Object, and identical reads that miss share one call to it. It serves a result only to a page version the
+  chat allowed that read in the last minute, never for `auth: "oauth"` servers (they load only for people in the
+  chat, which only the chat can check), and never for writes or uncached `callTool`s. Each Worker isolate keeps its
+  own copy (8 MB at most), so 1,000 people watching one dashboard cost about one chat call per interval per isolate,
+  not 1,000. (The Workers Cache API would share across a data center, but it is not available on workers.dev or
+  behind Cloudflare Access.)
+- While the viewer's tab is hidden, watches stop polling (a page opened in a background tab waits for its first
+  fetch too) and `callTool`s of read-only tools wait; identical waiting calls go out as one when the tab returns.
 - A chat keeps at most 16 MB of cached results. Expired entries go first, then the oldest; a single result larger than
   that is passed on but not cached.
 - Each viewer may make 120 calls a minute through the pages of one chat, counted by the Workers rate-limit binding `PAGE_CALLS`

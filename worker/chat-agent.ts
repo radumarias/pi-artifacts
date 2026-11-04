@@ -31,7 +31,6 @@ import {
   type Person,
   type Presence,
   type ProxyRequest,
-  type ProxyResponse,
   type QueuedMessage,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
@@ -50,12 +49,13 @@ import { artifactExtension, filesExtension, filesIndexExtension, sandboxExtensio
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
+import type { ChatAnswer } from "./artifacts/page-calls.ts";
 import { chatOutFolder, chatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
-import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
+import { mcpServers, sharesResults, type McpServerConfig } from "./mcp/servers.ts";
 import { GeminiCompat } from "./gemini.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
 import { catalogSource, currentCatalog, defaultModelChoice, listedProviders, loadCatalog, withCurrentPrices, withEffortRecorded, type Catalog } from "./models.ts";
@@ -923,9 +923,12 @@ export class ChatAgent extends DurableObject<Env> {
     return perServer.flat();
   }
 
-  /** One MCP call from a published page. The Worker has already resolved the viewer. */
-  async artifactCall({ artifactId, viewer, request }: ArtifactCall): Promise<ProxyResponse> {
-    const fail = (error: McpError): ProxyResponse => ({ ok: false, error });
+  /**
+   * One MCP call from a published page. The Worker has already resolved the viewer, and serves this answer again to
+   * other viewers when it is `shareable` (see PageCallCache).
+   */
+  async artifactCall({ artifactId, viewer, request }: ArtifactCall): Promise<ChatAnswer> {
+    const fail = (error: McpError): ChatAnswer => ({ response: { ok: false, error } });
     const { server, tool, input, mode } = request;
 
     const manifest = await this.#manifest(artifactId, request.version);
@@ -942,14 +945,18 @@ export class ChatAgent extends DurableObject<Env> {
       if (mode === "read") {
         const staleMs = Math.min(Math.max(Number(request.staleMs) || 0, 0), MAX_STALE_MS);
         const read = await this.hub.read(server, tool, input, { staleMs, viewer });
-        return { ok: true, result: read.result, storedAt: read.storedAt, nextRefreshAt: staleMs > 0 ? read.nextRefreshAt : undefined };
+        const config = this.hub.server(server);
+        return {
+          response: { ok: true, result: read.result, storedAt: read.storedAt, nextRefreshAt: staleMs > 0 ? read.nextRefreshAt : undefined },
+          ...(config && config.auth !== "oauth" && sharesResults(config) && { shareable: true }),
+        };
       }
 
       if (!isReadOnly(info) && viewer !== this.uid) {
         return fail({ code: "not_granted", server, message: `${tool} can change data, so only the page's author can call it.` });
       }
       const result = await this.hub.call(server, tool, input);
-      return { ok: true, result, storedAt: Date.now() };
+      return { response: { ok: true, result, storedAt: Date.now() } };
     } catch (error) {
       return fail(callFailure(error, server));
     }

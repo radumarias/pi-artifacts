@@ -79,7 +79,8 @@ interface PiMcp {
    * (marked with `cache`), fetches when it is missing or stale, then delivers
    * every newer result. `refetchInterval` (ms, floor 30 000) polls; polling
    * pauses while the viewer's tab is hidden and catches up when it returns.
-   * Identical watches share one request. Read-only tools only.
+   * Identical watches share one request, and every viewer of the page shares
+   * one result per interval. Read-only tools only.
    *
    * Returns a synchronous unsubscribe. Every failure arrives on the handler
    * as an `error` event: keep last-good data on `server_unavailable`,
@@ -98,7 +99,10 @@ interface PiMcp {
    * ACTIONS, or a one-off read. Resolves with the result, rejects with a
    * PiMcpError. `cache.staleTime` lets a read reuse a result that young (ms);
    * `cache.refresh` forces a fresh one. Write tools (not read-only) run only
-   * for the page's author and are never cached.
+   * for the page's author and are never cached. While the viewer's tab is
+   * hidden, calls to read-only tools wait until it is visible again (identical
+   * ones then share one request), so polling with callTool on a timer costs
+   * nothing in a background tab; prefer watchTool for data on display.
    */
   callTool(
     server: string,

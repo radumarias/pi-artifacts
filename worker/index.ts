@@ -1,6 +1,7 @@
 import { exports, waitUntil } from "cloudflare:workers";
 import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
+import { PageCallCache } from "./artifacts/page-calls.ts";
 import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { filesRoute } from "./files-routes.ts";
@@ -35,6 +36,9 @@ async function artifactChat(storage: Storage, id: string): Promise<string | unde
   }
   return name;
 }
+
+/** Pages' live reads, shared by every viewer of a chat's pages this isolate serves (worker/artifacts/page-calls.ts). */
+const pageCalls = new PageCallCache();
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -113,7 +117,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       // Counted per viewer and chat: a chat's pages share its Durable Object, whatever page they come from.
       const { success } = await env.PAGE_CALLS.limit({ key: `${uid}:${name}` });
       if (!success) return json({ ok: false, error: { code: "rate_limited", message: "Too many calls from this page.", retryAfterMs: 30_000 } }, 429);
-      return json(await chat.artifactCall({ artifactId: id, viewer: uid, request: body }));
+      // A fresh result another viewer's call brought in is served without waking the chat.
+      return json(await pageCalls.call(name, id, body, () => chat.artifactCall({ artifactId: id, viewer: uid, request: body })));
     }
     const meta = await storage.artifacts.readMeta(id);
     if (!meta) return json({ error: "No such artifact" }, 404);

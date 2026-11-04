@@ -1,6 +1,6 @@
 import { callIdentity, stripCache, withCache } from "../../shared/canonical.ts";
 import { errorMessage, memoAsync } from "../../shared/util.ts";
-import { MIN_REFETCH_MS, type ArtifactManifest, type CallToolResult, type McpError, type DeclaredTool, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
+import { isReadOnly, MIN_REFETCH_MS, type ArtifactManifest, type CallToolResult, type McpError, type DeclaredTool, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
 
 /** Sends one proxied call to the Worker. Swappable in tests. */
 export type Transport = (request: ProxyRequest) => Promise<ProxyResponse>;
@@ -65,6 +65,8 @@ export class ArtifactBroker {
   readonly #watchGroup = new Map<number, Group>();
   #port: MessagePort | undefined;
   #hidden = false;
+  /** Read-only calls the page made while the viewer's tab was hidden, by call: they go out once it is visible. */
+  readonly #waiting = new Map<string, { call: Omit<ProxyRequest, "version">; replies: ((response: ProxyResponse) => void)[] }>();
   #closed = false;
   /** A version's tool list never changes, so one describe call serves the page's whole life. */
   readonly #tools: () => Promise<DeclaredTool[]>;
@@ -88,13 +90,21 @@ export class ArtifactBroker {
     port.onmessage = (event: MessageEvent) => this.#onMessage(event.data);
   }
 
-  /** Pause polling while the viewer cannot see the page; catch up when it comes back. */
+  /** Pause polling and reads while the viewer cannot see the page; catch up when it comes back. */
   setHidden(hidden: boolean): void {
     if (this.#hidden === hidden) return;
     this.#hidden = hidden;
     for (const group of this.#groups.values()) {
       if (hidden) this.#clearTimer(group);
       else this.#schedule(group);
+    }
+    if (hidden) return;
+    const waiting = [...this.#waiting.values()];
+    this.#waiting.clear();
+    for (const { call, replies } of waiting) {
+      void this.#send(call).then((response) => {
+        for (const reply of replies) reply(response);
+      });
     }
   }
 
@@ -103,6 +113,7 @@ export class ArtifactBroker {
     for (const group of this.#groups.values()) this.#clearTimer(group);
     this.#groups.clear();
     this.#watchGroup.clear();
+    this.#waiting.clear();
     this.#port?.close();
   }
 
@@ -120,7 +131,7 @@ export class ArtifactBroker {
         const cache = params.cache;
         const read = typeof cache === "object" && cache !== null;
         const staleMs = read ? (cache.refresh ? 0 : Math.max(0, Number(cache.staleTime) || 0)) : 0;
-        const response = await this.#send({ mode: read ? "read" : "call", server: params.server, tool: params.tool, input: params.input, staleMs });
+        const response = await this.#sendWhenVisible({ mode: read ? "read" : "call", server: params.server, tool: params.tool, input: params.input, staleMs });
         if (!response.ok) return reply(false, response.error);
         if (read) this.#feed(callIdentity(params.server, params.tool, params.input), response);
         reply(true, response.result);
@@ -160,7 +171,12 @@ export class ArtifactBroker {
     const stale = !group.last || this.#o.now() - group.last.storedAt >= this.#staleMs(group);
     if (group.last) this.#deliverTo(message.watchId, { type: "data", result: withCache(group.last.result, group.last.storedAt, stale) });
     if (group.denied) return this.#deliverTo(message.watchId, { type: "error", error: group.denied });
-    if (stale && !group.inflight) return void this.#fetch(group);
+    if (stale && !group.inflight) {
+      // In a hidden tab (a page opened in the background), the first fetch waits until the viewer looks.
+      if (!this.#hidden) return void this.#fetch(group);
+      group.nextAt = this.#o.now();
+      return this.#schedule(group);
+    }
     // This subscriber may poll sooner than the group does, or be the first of it to poll at all.
     const polling = this.#interval(group);
     if (polling !== undefined && group.last) group.nextAt = Math.min(group.nextAt ?? Infinity, group.last.storedAt + polling);
@@ -278,6 +294,27 @@ export class ArtifactBroker {
       group.denied = undefined;
       void this.#fetch(group, 0);
     }
+  }
+
+  /**
+   * Send a page's call, unless the viewer's tab is hidden and the tool only reads: then it waits until the tab is
+   * visible, and identical waiting calls share one request. Calls to other tools go out at once.
+   */
+  async #sendWhenVisible(call: Omit<ProxyRequest, "version">): Promise<ProxyResponse> {
+    // Checked again after the tool list: the tab may have come back meanwhile.
+    if (!this.#hidden || !(call.mode === "read" || (await this.#readOnly(call.server, call.tool))) || !this.#hidden) return this.#send(call);
+    const key = `${call.mode}\u0000${callIdentity(call.server, call.tool, call.input)}`;
+    let waiting = this.#waiting.get(key);
+    if (waiting) waiting.call.staleMs = Math.min(waiting.call.staleMs ?? 0, call.staleMs ?? 0);
+    else this.#waiting.set(key, (waiting = { call, replies: [] }));
+    const replies = waiting.replies;
+    return new Promise((resolve) => replies.push(resolve));
+  }
+
+  /** Whether the version's tool is read-only, from its tool list; a tool the list does not have counts as a write. */
+  async #readOnly(server: string, tool: string): Promise<boolean> {
+    const tools = await this.#tools().catch(() => []);
+    return tools.some((t) => t.server === server && t.name === tool && isReadOnly(t));
   }
 
   async #send(call: Omit<ProxyRequest, "version">): Promise<ProxyResponse> {

@@ -16,11 +16,17 @@ export interface McpServerConfig {
    */
   auth?: "oauth";
   /**
-   * Who shares a cached result. `viewer` (the default) keeps each viewer's
-   * results apart, as Claude's artifacts do; `shared` lets every viewer reuse
-   * one result, for servers whose answers never depend on who asks.
+   * Who shares a cached result. Pages call as their author, so every viewer
+   * gets the same answer: `shared` (the default) lets them all reuse one
+   * result, and `viewer` keeps each viewer's results apart. A server with
+   * `auth: "oauth"` keeps them apart unless it says `shared`.
    */
   cacheScope?: "viewer" | "shared";
+}
+
+/** Whether every viewer of a page reuses one cached result of this server's tools (see `cacheScope`). */
+export function sharesResults(server: McpServerConfig): boolean {
+  return server.cacheScope ? server.cacheScope === "shared" : server.auth !== "oauth";
 }
 
 /** The servers from the MCP_SERVERS binding (cloudflare.config.ts), checked. */

@@ -76,6 +76,7 @@
     "worker/raw.d.ts",
     "worker/artifacts/check.ts",
     "worker/agent/publish.ts",
-    "worker/artifacts/serve.ts"
+    "worker/artifacts/serve.ts",
+    "worker/artifacts/page-calls.ts"
   ]
 }
