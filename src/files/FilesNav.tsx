@@ -6,6 +6,7 @@ import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
 import { isBoolean, opensElsewhere, SectionHead, useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
+import { fileMatcher } from "./search.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
 export interface UploadStatus {
@@ -71,11 +72,11 @@ interface Folder {
 
 const newFolder = (name: string, path: string): Folder => ({ name, path, folders: new Map(), files: [], count: 0, bytes: 0, matches: 0 });
 
-/** The folder tree of `files`, listing those whose path holds `search` (lower case; all when empty). */
-function tree(files: readonly FileInfo[], search: string): Folder {
+/** The folder tree of `files`, listing those whose path `matches`. */
+function tree(files: readonly FileInfo[], matches: (path: string) => boolean): Folder {
   const root = newFolder("", "");
   for (const file of files) {
-    const match = !search || file.path.toLowerCase().includes(search);
+    const match = matches(file.path);
     const segments = file.path.split("/");
     let folder = root;
     const add = () => {
@@ -320,8 +321,8 @@ export const FilesNav = memo(function FilesNav({
   const [open, setOpen] = useStoredState("layout.filesOpen", true, isBoolean);
   const [query, setQuery] = useState("");
   // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
-  const search = useDeferredValue(query).trim().toLowerCase();
-  const root = useMemo(() => tree(files, search), [files, search]);
+  const search = useDeferredValue(query).trim();
+  const root = useMemo(() => tree(files, fileMatcher(search)), [files, search]);
   const [picked, setPicked] = useState<ReadonlyMap<string, Kind> | null>(null);
   const [zipError, setZipError] = useState<string | null>(null);
   useEffect(() => {
@@ -361,7 +362,14 @@ export const FilesNav = memo(function FilesNav({
       {open && (
         <>
           <div className="files-tools">
-            <input type="search" placeholder="Search files" aria-label="Search files" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <input
+              type="search"
+              placeholder="Search files"
+              aria-label="Search files"
+              title="Text in a path, or a name pattern: * for any run, ? for one character (*.txt, te?t.txt)"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
             {!picked && (
               <button
                 type="button"

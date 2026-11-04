@@ -36,6 +36,7 @@
     "src/chat/Linkified.tsx",
     "src/files/highlight.ts",
     "src/files/preview.ts",
+    "src/files/search.ts",
     "src/artifact/viewport.tsx",
     "src/Icon.tsx",
     "src/layout.tsx",
