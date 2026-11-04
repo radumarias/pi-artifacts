@@ -65,11 +65,12 @@ export class ArtifactBroker {
   readonly #watchGroup = new Map<number, Group>();
   #port: MessagePort | undefined;
   #hidden = false;
-  /** Read-only calls the page made while the viewer's tab was hidden, by call: they go out once it is visible. */
-  readonly #waiting = new Map<string, { call: Omit<ProxyRequest, "version">; replies: ((response: ProxyResponse) => void)[] }>();
+  /** Read-only calls the page made while the viewer's tab was hidden, by call: `send` lets each out once it is visible. */
+  readonly #waiting = new Map<string, { call: Omit<ProxyRequest, "version">; send: () => void; response: Promise<ProxyResponse> }>();
   #closed = false;
   /** A version's tool list never changes, so one describe call serves the page's whole life. */
   readonly #tools: () => Promise<DeclaredTool[]>;
+  readonly #readOnlyTools: () => Promise<DeclaredTool[]>;
 
   constructor(options: BrokerOptions) {
     this.#o = {
@@ -81,6 +82,8 @@ export class ArtifactBroker {
       ...options,
     };
     this.#tools = memoAsync(() => this.#o.describe());
+    // Asked once per page at most, even when the list fails: only a hidden tab asks, and it should not keep waking the chat.
+    this.#readOnlyTools = memoAsync(() => this.#tools().then((tools) => tools.filter(isReadOnly), () => []));
     this.#sweepStorage();
   }
 
@@ -101,11 +104,7 @@ export class ArtifactBroker {
     if (hidden) return;
     const waiting = [...this.#waiting.values()];
     this.#waiting.clear();
-    for (const { call, replies } of waiting) {
-      void this.#send(call).then((response) => {
-        for (const reply of replies) reply(response);
-      });
-    }
+    for (const { send } of waiting) send();
   }
 
   close(): void {
@@ -172,10 +171,10 @@ export class ArtifactBroker {
     if (group.last) this.#deliverTo(message.watchId, { type: "data", result: withCache(group.last.result, group.last.storedAt, stale) });
     if (group.denied) return this.#deliverTo(message.watchId, { type: "error", error: group.denied });
     if (stale && !group.inflight) {
-      // In a hidden tab (a page opened in the background), the first fetch waits until the viewer looks.
       if (!this.#hidden) return void this.#fetch(group);
+      // In a hidden tab (a page opened in the background), the first fetch waits until the viewer looks: setHidden(false) schedules it.
       group.nextAt = this.#o.now();
-      return this.#schedule(group);
+      return;
     }
     // This subscriber may poll sooner than the group does, or be the first of it to poll at all.
     const polling = this.#interval(group);
@@ -301,20 +300,25 @@ export class ArtifactBroker {
    * visible, and identical waiting calls share one request. Calls to other tools go out at once.
    */
   async #sendWhenVisible(call: Omit<ProxyRequest, "version">): Promise<ProxyResponse> {
-    // Checked again after the tool list: the tab may have come back meanwhile.
-    if (!this.#hidden || !(call.mode === "read" || (await this.#readOnly(call.server, call.tool))) || !this.#hidden) return this.#send(call);
+    if (!this.#hidden) return this.#send(call);
+    const holds = call.mode === "read" || (await this.#readOnly(call.server, call.tool));
+    // The tab may have come back while the tool list loaded.
+    if (!holds || !this.#hidden) return this.#send(call);
     const key = `${call.mode}\u0000${callIdentity(call.server, call.tool, call.input)}`;
-    let waiting = this.#waiting.get(key);
-    if (waiting) waiting.call.staleMs = Math.min(waiting.call.staleMs ?? 0, call.staleMs ?? 0);
-    else this.#waiting.set(key, (waiting = { call, replies: [] }));
-    const replies = waiting.replies;
-    return new Promise((resolve) => replies.push(resolve));
+    const waiting = this.#waiting.get(key);
+    if (waiting) {
+      waiting.call.staleMs = Math.min(waiting.call.staleMs ?? 0, call.staleMs ?? 0);
+      return waiting.response;
+    }
+    let send!: () => void;
+    const response = new Promise<void>((resolve) => (send = resolve)).then(() => this.#send(call));
+    this.#waiting.set(key, { call, send, response });
+    return response;
   }
 
   /** Whether the version's tool is read-only, from its tool list; a tool the list does not have counts as a write. */
   async #readOnly(server: string, tool: string): Promise<boolean> {
-    const tools = await this.#tools().catch(() => []);
-    return tools.some((t) => t.server === server && t.name === tool && isReadOnly(t));
+    return (await this.#readOnlyTools()).some((t) => t.server === server && t.name === tool);
   }
 
   async #send(call: Omit<ProxyRequest, "version">): Promise<ProxyResponse> {

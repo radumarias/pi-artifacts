@@ -32,6 +32,7 @@ import {
   type Presence,
   type ProxyRequest,
   type QueuedMessage,
+  clampStaleMs,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { parseMentions, type MentionInput } from "../shared/mentions.ts";
@@ -943,12 +944,13 @@ export class ChatAgent extends DurableObject<Env> {
       if ("code" in info) return fail(info);
 
       if (mode === "read") {
-        const staleMs = Math.min(Math.max(Number(request.staleMs) || 0, 0), MAX_STALE_MS);
+        const staleMs = clampStaleMs(request.staleMs, MAX_STALE_MS);
         const read = await this.hub.read(server, tool, input, { staleMs, viewer });
         const config = this.hub.server(server);
         return {
           response: { ok: true, result: read.result, storedAt: read.storedAt, nextRefreshAt: staleMs > 0 ? read.nextRefreshAt : undefined },
-          ...(config && config.auth !== "oauth" && sharesResults(config) && { shareable: true }),
+          // Who may load it did not depend on this viewer, and the result is not theirs alone.
+          ...(config && !this.#membersOnly(server) && sharesResults(config) && { shareable: true }),
         };
       }
 
@@ -1011,7 +1013,12 @@ export class ChatAgent extends DurableObject<Env> {
    * the conversation anyway, may load it.
    */
   #mayLoad(server: string, viewer: string): boolean {
-    return this.hub.server(server)?.auth !== "oauth" || this.isInChat(viewer);
+    return !this.#membersOnly(server) || this.isInChat(viewer);
+  }
+
+  /** Whether only people in the chat may load this server's data (see #mayLoad). */
+  #membersOnly(server: string): boolean {
+    return this.hub.server(server)?.auth === "oauth";
   }
 
   /** Versions never change once published, so their manifests cache for the object's lifetime. */

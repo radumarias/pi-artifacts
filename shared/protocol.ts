@@ -55,6 +55,11 @@ export interface ProxyRequest {
   staleMs?: number;
 }
 
+/** A request's `staleMs` as a number from 0 to `max`: it comes from the page. */
+export function clampStaleMs(staleMs: unknown, max: number): number {
+  return Math.min(Math.max(Number(staleMs) || 0, 0), max);
+}
+
 export interface ToolInfo {
   name: string;
   description: string;

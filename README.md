@@ -56,8 +56,7 @@ CoinGecko needs no sign-in. A server can also require each user's own; see [MCP 
   Durable Object fetching it. That is as fresh as WebSocket push would be, without the sockets.
 - `refetchInterval` has a 30 s floor, as at Claude.
 - Pages call as their author, so every viewer gets the same answer, and by default they share one cached result per
-  call (`cacheScope` in `worker/mcp/servers.ts`; `"viewer"` keeps each viewer's results apart). A server with
-  `auth: "oauth"` keeps them apart unless it says `"shared"`.
+  call (`cacheScope` in `worker/mcp/servers.ts`; `"viewer"` keeps each viewer's results apart).
 - The Worker keeps those shared results too (`worker/artifacts/page-calls.ts`), keyed by chat, server, tool and input,
   so a read that is young enough for the page (its `staleMs`, at most 10 min) is answered without waking the chat's
   Durable Object, and identical reads that miss share one call to it. It serves a result only to a page version the

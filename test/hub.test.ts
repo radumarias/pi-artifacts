@@ -106,14 +106,12 @@ describe("McpHub.read", () => {
     expect(server.calls).toHaveLength(1);
   });
 
-  it("shares results by default, but keeps viewers apart on a server that signs in each user", async () => {
+  it("shares one result across viewers by default", async () => {
     const server = fakeServer(() => text({}));
-    const hub = new McpHub([{ name: "Open", url: "https://example.invalid/mcp" }, { name: "Own", url: "https://example.invalid/mcp", auth: "oauth" }], server.connector);
-    for (const viewer of ["ann", "bob"]) {
-      await hub.read("Open", "price", {}, { staleMs: 30_000, viewer });
-      await hub.read("Own", "price", {}, { staleMs: 30_000, viewer });
-    }
-    expect(server.calls).toHaveLength(3);
+    const hub = new McpHub([{ name: "Open", url: "https://example.invalid/mcp" }], server.connector);
+    await hub.read("Open", "price", {}, { staleMs: 30_000, viewer: "ann" });
+    await hub.read("Open", "price", {}, { staleMs: 30_000, viewer: "bob" });
+    expect(server.calls).toHaveLength(1);
   });
 
   it("coalesces identical calls in flight into one upstream request", async () => {

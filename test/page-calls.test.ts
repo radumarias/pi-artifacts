@@ -11,21 +11,21 @@ const read = (input: unknown = { ids: "btc" }, staleMs = 30_000, version = 1): P
   staleMs,
 });
 
+function shared(storedAt: number, payload: unknown = { at: storedAt }): ChatAnswer {
+  return { response: { ok: true, result: { content: [], payload }, storedAt, nextRefreshAt: storedAt + 30_000 }, shareable: true };
+}
+
 /** A cache on a fake clock, and a stand-in for the chat that counts how often it is woken. */
-function setup(answer: (request: ProxyRequest, now: number) => ChatAnswer = (_, now) => shared(now)) {
-  let now = 1_000_000;
+function setup(answer: (request: ProxyRequest, now: number) => ChatAnswer | Promise<ChatAnswer> = (_, now) => shared(now)) {
+  const clock = { now: 1_000_000 };
   const asked: ProxyRequest[] = [];
-  const cache = new PageCallCache(() => now);
+  const cache = new PageCallCache(() => clock.now);
   const call = (request: ProxyRequest, { chat = "ann:chat1", artifact = "art00001" } = {}) =>
     cache.call(chat, artifact, request, async () => {
       asked.push(request);
-      return answer(request, now);
+      return answer(request, clock.now);
     });
-  return { call, asked, advance: (ms: number) => (now += ms), clock: () => now };
-}
-
-function shared(storedAt: number, payload: unknown = { at: storedAt }): ChatAnswer {
-  return { response: { ok: true, result: { content: [], payload }, storedAt, nextRefreshAt: storedAt + 30_000 }, shareable: true };
+  return { call, asked, clock, advance: (ms: number) => (clock.now += ms) };
 }
 
 describe("PageCallCache", () => {
@@ -57,7 +57,8 @@ describe("PageCallCache", () => {
   });
 
   it("never serves a refresh (staleMs 0), a one-shot call or an unshareable read from the cache", async () => {
-    const t = setup((request, now) => (request.input && (request.input as { own?: boolean }).own ? { response: shared(now).response } : shared(now)));
+    const own = (request: ProxyRequest) => (request.input as { own?: boolean }).own;
+    const t = setup((request, now) => (own(request) ? { response: shared(now).response } : shared(now)));
     await t.call(read());
     await t.call(read(undefined, 0));
     await t.call({ ...read(), mode: "call" });
@@ -82,42 +83,37 @@ describe("PageCallCache", () => {
     // The chat's yes holds for a minute; then it is asked again, and its no sticks.
     t.advance(60_000);
     refuse = true;
-    const denied = await t.call(read(undefined, 120_000));
-    expect(denied.ok).toBe(false);
-    const again = await t.call(read(undefined, 120_000));
-    expect(again.ok).toBe(false);
+    expect((await t.call(read(undefined, 120_000))).ok).toBe(false);
+    expect((await t.call(read(undefined, 120_000))).ok).toBe(false);
     expect(t.asked).toHaveLength(6);
   });
 
   it("shares one call to the chat among identical reads that miss", async () => {
-    let now = 1_000_000;
-    const cache = new PageCallCache(() => now);
-    // A first answer allows the read; 30 s later its result is stale.
-    await cache.call("c", "a", read(), async () => shared(now));
-    now += 30_000;
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    let asked = 0;
-    const ask = async () => {
-      asked++;
+    let gate: Promise<void> | undefined;
+    const t = setup(async (_, now) => {
       await gate;
       return shared(now);
-    };
-    const calls = [cache.call("c", "a", read(), ask), cache.call("c", "a", read(), ask), cache.call("c", "a", read(), ask)];
+    });
+    // A first answer allows the read; 30 s later its result is stale, and the next answer waits, as a cold upstream call would.
+    await t.call(read());
+    t.advance(30_000);
+    let release!: () => void;
+    gate = new Promise((resolve) => (release = resolve));
+    const calls = [t.call(read()), t.call(read()), t.call(read())];
     release();
     const answers = await Promise.all(calls);
-    expect(asked).toBe(1);
-    expect(answers.map((a) => a.ok && a.storedAt)).toEqual([now, now, now]);
+    expect(t.asked).toHaveLength(2);
+    expect(answers.map((a) => a.ok && a.storedAt)).toEqual([t.clock.now, t.clock.now, t.clock.now]);
   });
 
   it("keeps the newest result when answers arrive out of order", async () => {
-    const t = setup();
-    const cache = new PageCallCache(() => t.clock());
-    await cache.call("c", "a", read(), async () => shared(t.clock()));
-    await cache.call("c", "a", read(undefined, 0), async () => shared(t.clock() - 5_000));
-    const hit = await cache.call("c", "a", read(), async () => {
-      throw new Error("asked");
-    });
-    expect(hit.ok && hit.storedAt).toBe(t.clock());
+    let lag = 0;
+    const t = setup((_, now) => shared(now - lag));
+    await t.call(read());
+    lag = 5_000;
+    await t.call(read(undefined, 0));
+    const hit = await t.call(read());
+    expect(t.asked).toHaveLength(2);
+    expect(hit.ok && hit.storedAt).toBe(t.clock.now);
   });
 });

@@ -1,3 +1,4 @@
+import { withCache } from "../../shared/canonical.ts";
 import type { CallToolResult } from "../../shared/protocol.ts";
 
 export interface CachedResult {
@@ -18,28 +19,38 @@ interface Entry extends CachedResult {
 export class ResultCache {
   readonly #entries = new Map<string, Entry>();
   #bytes = 0;
+  readonly #maxBytes: number;
+  readonly #lifetimeMs: number;
+  readonly #now: () => number;
 
-  constructor(
-    readonly maxBytes: number,
-    readonly lifetimeMs: number,
-    readonly now: () => number = Date.now,
-  ) {}
+  constructor(maxBytes: number, lifetimeMs: number, now: () => number = Date.now) {
+    this.#maxBytes = maxBytes;
+    this.#lifetimeMs = lifetimeMs;
+    this.#now = now;
+  }
 
   get(key: string): CachedResult | undefined {
     return this.#entries.get(key);
+  }
+
+  /** The result younger than `staleMs`, stamped as served from the cache, and when it goes stale. */
+  fresh(key: string, staleMs: number): (CachedResult & { nextRefreshAt: number }) | undefined {
+    const hit = this.#entries.get(key);
+    if (!hit || this.#now() - hit.storedAt >= staleMs) return undefined;
+    return { result: withCache(hit.result, hit.storedAt, false), storedAt: hit.storedAt, nextRefreshAt: hit.storedAt + staleMs };
   }
 
   /**
    * Keep a result within the budget. Entries are re-inserted on every store, so the map runs oldest first: expired
    * entries go from the front, then the oldest until the new one fits. A result bigger than the whole budget is not kept.
    */
-  set(key: string, result: CallToolResult, storedAt: number): void {
+  set(key: string, { result, storedAt }: CachedResult): void {
     this.#evict(key);
     const bytes = JSON.stringify(result).length;
-    if (bytes > this.maxBytes) return;
-    const now = this.now();
+    if (bytes > this.#maxBytes) return;
+    const now = this.#now();
     for (const [k, e] of this.#entries) {
-      if (now - e.storedAt <= this.lifetimeMs && this.#bytes + bytes <= this.maxBytes) break;
+      if (now - e.storedAt <= this.#lifetimeMs && this.#bytes + bytes <= this.#maxBytes) break;
       this.#evict(k);
     }
     this.#entries.set(key, { result, storedAt, bytes });

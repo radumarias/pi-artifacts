@@ -1,5 +1,5 @@
-import { callIdentity, stripCache, withCache } from "../../shared/canonical.ts";
-import type { ProxyRequest, ProxyResponse } from "../../shared/protocol.ts";
+import { callIdentity, stripCache } from "../../shared/canonical.ts";
+import { clampStaleMs, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
 import { ResultCache } from "../mcp/result-cache.ts";
 
 /** A chat's answer to one page call (ChatAgent.artifactCall). */
@@ -18,12 +18,11 @@ const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_AGE_MS = 10 * 60_000;
 /**
  * How long the chat's yes to a version calling a tool holds without asking it again. Manifests never change, but a server
- * can drop a tool or stop marking it read-only, and an artifact can be deleted; every answer from the chat renews it.
+ * can drop a tool or stop marking it read-only, and an artifact can be deleted; every shareable answer from the chat
+ * renews it, and any other answer ends it.
  */
 const GRANT_MS = 60_000;
 const MAX_GRANTS = 5_000;
-/** Answers after which the chat's yes no longer holds: what DENIALS in the broker stop polling on. */
-const DENIALS = new Set(["not_in_manifest", "server_not_connected", "not_granted", "bad_request"]);
 
 /**
  * Pages' live reads, cached in the Worker so that a fresh result is served without waking the chat's Durable Object.
@@ -50,7 +49,7 @@ export class PageCallCache {
     if (request.mode !== "read") return (await ask()).response;
     const resultKey = `${chat}\u0000${callIdentity(request.server, request.tool, request.input)}`;
     const grantKey = `${artifactId}\u0000${request.version}\u0000${request.server}\u0000${request.tool}`;
-    const staleMs = Math.min(Math.max(Number(request.staleMs) || 0, 0), MAX_AGE_MS);
+    const staleMs = clampStaleMs(request.staleMs, MAX_AGE_MS);
 
     if (this.#granted(grantKey)) {
       const hit = this.#fresh(resultKey, staleMs);
@@ -83,27 +82,19 @@ export class PageCallCache {
   }
 
   #fresh(resultKey: string, staleMs: number): ProxyResponse | undefined {
-    const hit = this.#results.get(resultKey);
-    if (!hit || this.#now() - hit.storedAt >= staleMs) return undefined;
-    return { ok: true, result: withCache(hit.result, hit.storedAt, false), storedAt: hit.storedAt, nextRefreshAt: hit.storedAt + staleMs };
+    const hit = this.#results.fresh(resultKey, staleMs);
+    return hit && { ok: true, ...hit };
   }
 
-  /** Remember what the chat said: a shareable result and its yes, or that its yes no longer holds. */
+  /** Remember what the chat said: a shareable result and its yes, or, for any other answer, that its yes is gone. */
   #learn(resultKey: string, grantKey: string, { response, shareable }: ChatAnswer): void {
-    if (!response.ok) {
-      if (DENIALS.has(response.error.code)) this.#grants.delete(grantKey);
-      return;
-    }
-    if (!shareable) {
-      this.#grants.delete(grantKey);
-      return;
-    }
     this.#grants.delete(grantKey);
+    if (!response.ok || !shareable) return;
     if (this.#grants.size >= MAX_GRANTS) this.#grants.delete(this.#grants.keys().next().value!);
     this.#grants.set(grantKey, this.#now());
     // Answers can arrive out of order: never replace a newer result with an older one.
-    if ((this.#results.get(resultKey)?.storedAt ?? -Infinity) <= response.storedAt) {
-      this.#results.set(resultKey, stripCache(response.result), response.storedAt);
+    if ((this.#results.get(resultKey)?.storedAt ?? -Infinity) < response.storedAt) {
+      this.#results.set(resultKey, { result: stripCache(response.result), storedAt: response.storedAt });
     }
   }
 }

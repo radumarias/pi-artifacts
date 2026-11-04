@@ -1,5 +1,5 @@
 import type { CallToolResult, McpError, ToolInfo } from "../../shared/protocol.ts";
-import { callIdentity, derivePayload, firstText, withCache } from "../../shared/canonical.ts";
+import { callIdentity, derivePayload, firstText } from "../../shared/canonical.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { ResultCache, type CachedResult } from "./result-cache.ts";
 import { sharesResults, type McpServerConfig } from "./servers.ts";
@@ -126,22 +126,14 @@ export class McpHub {
   async read(server: string, tool: string, input: unknown, options: { staleMs: number; viewer: string }): Promise<ReadResult> {
     const scope = sharesResults(this.#config(server)) ? "*" : options.viewer;
     const key = `${scope}\u0000${callIdentity(server, tool, input)}`;
-    const now = this.#now();
-
-    const hit = this.#cache.get(key);
-    if (hit && now - hit.storedAt < options.staleMs) {
-      return {
-        result: withCache(hit.result, hit.storedAt, false),
-        storedAt: hit.storedAt,
-        nextRefreshAt: hit.storedAt + options.staleMs,
-      };
-    }
+    const hit = this.#cache.fresh(key, options.staleMs);
+    if (hit) return hit;
 
     let flight = this.#inflight.get(key);
     if (!flight) {
       flight = this.call(server, tool, input).then((result) => {
         const entry = { result, storedAt: this.#now() };
-        this.#cache.set(key, result, entry.storedAt);
+        this.#cache.set(key, entry);
         return entry;
       });
       this.#inflight.set(key, flight);
