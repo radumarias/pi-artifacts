@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SidebarList } from "../shared/protocol.ts";
+import type { MentionNotice, SidebarList } from "../shared/protocol.ts";
 import { api, keepAlive } from "./api.ts";
 
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
@@ -40,10 +40,13 @@ export function useLatest<T>(
  * The sidebar's socket: the server names a list whenever it changed (a chat named or working, an artifact published,
  * a skill proposed, in any window or by anyone in a shared chat), and `loaders` reads it again, at most once per short
  * burst of changes. Every (re)connect reads all of them: whatever changed while it was closed, or before it opened.
+ * `onMention` hears when someone tags the user in a shared chat.
  */
-export function useSidebarSocket(loaders: Record<SidebarList, () => void>): void {
+export function useSidebarSocket(loaders: Record<SidebarList, () => void>, onMention?: (notice: MentionNotice) => void): void {
   const current = useRef(loaders);
   current.current = loaders;
+  const mentioned = useRef(onMention);
+  mentioned.current = onMention;
 
   useEffect(() => {
     const pending = new Map<SidebarList, ReturnType<typeof setTimeout>>();
@@ -70,7 +73,9 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>): void
         LISTS.forEach(load);
       };
       ws.onmessage = (event) => {
-        if (LISTS.includes(event.data)) load(event.data);
+        if (LISTS.includes(event.data)) return load(event.data);
+        const notice = parseNotice(event.data);
+        if (notice) mentioned.current?.(notice);
       };
       ws.onclose = () => {
         if (!closed) retry = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 30_000));
@@ -85,6 +90,16 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>): void
       ws?.close();
     };
   }, []);
+}
+
+function parseNotice(data: unknown): MentionNotice | null {
+  if (typeof data !== "string" || !data.startsWith("{")) return null;
+  try {
+    const notice = JSON.parse(data) as Partial<MentionNotice>;
+    return notice.type === "mention" && typeof notice.chatId === "string" ? (notice as MentionNotice) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function useVisible(): boolean {

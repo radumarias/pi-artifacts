@@ -29,6 +29,7 @@ import {
   type ChatStatus,
   type DeclaredTool,
   type McpError,
+  type MentionNotice,
   type ToolInfo,
   type Person,
   type Presence,
@@ -38,14 +39,14 @@ import {
   clampStaleMs,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
-import { parseMentions, summonsAgent, type MentionInput } from "../shared/mentions.ts";
+import { parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, UPLOADS, uploadTargets } from "../shared/uploads.ts";
 import type { ModelChoice } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
-import { replyLine, replyQuote } from "../shared/replies.ts";
+import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
@@ -115,6 +116,8 @@ const SETTLE_MS = 1_500;
 const PROGRESS = { partialIntervalMs: STREAM_STEP_MS, outputIntervalMs: STREAM_STEP_MS };
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
 const STATUS_KEY = "status";
+/** Whether the owner's sidebar last heard that the chat has members (#tellShared). */
+const SHARED_KEY = "shared";
 
 /**
  * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
@@ -531,6 +534,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (this.#gone) return false;
     if (person.uid === this.uid) {
       this.members.setOwnerName(person);
+      this.#tellShared();
       return true;
     }
     if (this.members.has(person.uid)) {
@@ -543,6 +547,11 @@ export class ChatAgent extends DurableObject<Env> {
 
   people(): ChatPeople {
     return { owner: { uid: this.uid, name: this.members.ownerName(this.uid) }, members: this.members.list() };
+  }
+
+  #everyone(): Person[] {
+    const { owner, members } = this.people();
+    return [owner, ...members];
   }
 
   /** What one person's app shows: everyone in the chat, and for the owner the invites still open. */
@@ -597,6 +606,7 @@ export class ChatAgent extends DurableObject<Env> {
           byOwner,
           readMeta: (id) => this.storage.artifacts.readMeta(id),
           mayName: (path) => this.#isChatFile(path),
+          person: (uid) => this.#everyone().find((person) => person.uid === uid) ?? null,
         },
       ),
       // A message to the people in the chat starts no run: the agent needs its tools only when it is called.
@@ -625,7 +635,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (summoned) await this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
     else await this.#aside(content, data);
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
-    void this.#touchIndexes(title, author.uid).catch((error) => console.error("chat index:", errorMessage(error)));
+    void this.#touchIndexes(title, author, { tagged: taggedPeople(mentions), text }).catch((error) => console.error("chat index:", errorMessage(error)));
   }
 
   /** What a reply quotes of the message at transcript entry `id`; null for one it cannot quote. */
@@ -748,16 +758,22 @@ export class ChatAgent extends DurableObject<Env> {
    * Move the chat up in everyone's sidebar, marked unread for all but the author. touchChat names a chat that has no
    * name yet after the prompt, so the first prompt names it, and a small model then gives it a better title.
    * Members' sidebars get a new title at once, but in a busy chat the others' are bumped at most once a minute: each is
-   * another object. The author's own always is.
+   * another object. The author's own always is. People the message tagged hear of it at once (UserDirectory.mentioned).
    */
-  async #touchIndexes(text: string, authorUid: string): Promise<void> {
-    const { title, named } = await this.#directory.touchChat(this.chatId, text, authorUid !== this.uid);
+  async #touchIndexes(text: string, author: Person, message: { tagged: readonly string[]; text: string }): Promise<void> {
+    const { title, named } = await this.#directory.touchChat(this.chatId, text, author.uid !== this.uid);
     if (named && text) void this.#nameChat(text, title).catch((error: unknown) => console.error("chat title:", errorMessage(error)));
     const now = Date.now();
     const all = title !== this.#membersTouched.title || now - this.#membersTouched.at >= MEMBERS_TOUCH_MS;
     if (all) this.#membersTouched = { title, at: now };
-    const members = this.members.list().filter((member) => all || member.uid === authorUid);
-    await Promise.allSettled(members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== authorUid)));
+    // Someone tagging themselves is told nothing; anyone else tagged is, owner or member.
+    const tagged = new Set(message.tagged.filter((uid) => uid !== author.uid));
+    const notice: MentionNotice = { type: "mention", chatId: this.chatId, title, from: author.name, text: excerpt(message.text), at: now };
+    const members = this.members.list().filter((member) => (all || member.uid === author.uid) && !tagged.has(member.uid));
+    await Promise.allSettled([
+      ...members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== author.uid)),
+      ...[...tagged].map((uid) => this.#index(uid).mentioned(this.chatId, this.uid, notice)),
+    ]);
   }
 
   /**
@@ -916,7 +932,21 @@ export class ChatAgent extends DurableObject<Env> {
     }
     this.sockets.broadcastPeople();
     this.#notePeople(person, "joined");
+    this.#tellShared();
     return null;
+  }
+
+  /**
+   * Tell the owner's sidebar whether the chat has members, when that changed since it was last told: on joins and
+   * leaves, and when the owner opens it (so chats shared before the sidebar knew get there too). Only a view.
+   */
+  #tellShared(): void {
+    const shared = this.members.hasAny();
+    if (this.ctx.storage.kv.get<boolean>(SHARED_KEY) === shared) return;
+    void this.#directory.setChatShared(this.chatId, shared).then(
+      () => this.ctx.storage.kv.put(SHARED_KEY, shared),
+      (error: unknown) => console.error("chat shared:", errorMessage(error)),
+    );
   }
 
   /** The owner removes a member, or a member leaves. Their open sockets close at once, and the chat leaves their sidebar. */
@@ -927,6 +957,7 @@ export class ChatAgent extends DurableObject<Env> {
     this.sockets.disconnect(uid);
     this.sockets.broadcastPeople();
     this.#notePeople(member, by.uid === uid ? "left" : "removed");
+    this.#tellShared();
     // The agent acts as the owner: a removed person's queued requests must not run after they are out.
     await this.#withdrawQueued(uid).catch((error: unknown) => console.error("withdraw queued:", errorMessage(error)));
     await this.#index(uid).removeSharedChat(this.chatId, this.uid);

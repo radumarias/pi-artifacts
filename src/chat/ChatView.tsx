@@ -2,7 +2,6 @@ import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
-import type { Mention } from "../../shared/mentions.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api } from "../api.ts";
@@ -23,7 +22,7 @@ import {
   type ReplyQuote,
 } from "../../shared/protocol.ts";
 import { textOf } from "../../shared/canonical.ts";
-import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
+import { AGENT_NAME, AGENT_TOKEN, taggedPeople, type Mention } from "../../shared/mentions.ts";
 import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
 import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
@@ -34,6 +33,7 @@ import { useChat, waitingOnModel } from "./useChat.ts";
 import { Dictation } from "./Dictation.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
+import { NotifyButton } from "./notify.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
@@ -68,7 +68,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const shared = people && people.members.length > 0 ? people : null;
-  const mentions = useMentions(chatId, draft, setDraft, input, shared !== null);
+  const mentions = useMentions(chatId, draft, setDraft, input, shared, uid);
   // The message the next one answers, quoted above the composer until it is sent or let go.
   const [replying, setReplying] = useState<ReplyQuote | null>(null);
   const reply = useCallback((quote: ReplyQuote) => {
@@ -197,6 +197,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
             <span className="chat-people">{mine > 1 && `Open in ${mine} of your windows`}</span>
           )}
           <ChatCost usage={state.usage} entries={state.entries} time={time} />
+          {shared && <NotifyButton />}
           {people && (
             <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
               {isOwner && !shared ? "Share" : "People"}
@@ -272,7 +273,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
                   !connected
                     ? "Connecting…"
                     : shared
-                      ? `Message everyone; ${AGENT_TOKEN} asks ${AGENT_NAME}, and @ names a file or artifact…`
+                      ? `Message everyone; ${AGENT_TOKEN} asks ${AGENT_NAME}, and @ names someone, a file or an artifact…`
                       : "Describe a dashboard, or type @ to name a file or artifact…"
                 }
                 rows={1}
@@ -535,6 +536,7 @@ function User({
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
   const tint = people ? tintOf(people, author?.uid ?? uid) : undefined;
+  const tagsMe = !mine && taggedPeople(mentions).includes(uid);
   const files = attachments.length > 0 && (
     <div className={mine ? "attachments mine" : "attachments"}>
       {attachments.map((attachment) => (
@@ -545,7 +547,7 @@ function User({
   const bubble = text && (
     <div className={mine ? "bubble user" : "bubble peer"}>
       {replyTo && <ReplyQuoteView quote={replyTo} />}
-      <MentionText text={text} mentions={mentions} />
+      <MentionText text={text} mentions={mentions} me={uid} />
     </div>
   );
   const reaction = picked && (
@@ -559,7 +561,7 @@ function User({
   return (
     <div
       ref={content}
-      className={[mine ? "message mine" : "message other", tint !== undefined && "tinted"].filter(Boolean).join(" ")}
+      className={[mine ? "message mine" : "message other", tint !== undefined && "tinted", tagsMe && "mentions-me"].filter(Boolean).join(" ")}
       style={tint === undefined ? undefined : tintStyle(tint)}
     >
       {!mine && (

@@ -16,8 +16,10 @@ import {
   type MentionInput,
   type MentionOptions,
 } from "../../shared/mentions.ts";
+import type { ChatPeople } from "../../shared/protocol.ts";
 import { formatBytes } from "../../shared/util.ts";
 import { api } from "../api.ts";
+import { Avatar, tintOf, tintStyle, useSharedChat } from "./people.tsx";
 
 /** The agent, as the picker offers it in a shared chat, where "@pi" is what calls it. */
 const AGENT_CHOICE = { agent: true, detail: "agent · asks it to answer" } as const;
@@ -26,10 +28,19 @@ type Choice = MentionChoice | typeof AGENT_CHOICE;
 /**
  * "@" in the composer: as the user types "@" (or presses the @ button), a list of the chat owner's files and
  * artifacts opens over the input, filtered by what follows the "@". Arrows move, Enter or Tab picks, Escape closes.
- * A pick puts `@<path>` or `@<title>` in the text and is sent with the message while that text is still there.
- * In a `shared` chat the agent comes first: "@pi" in a message is what calls it there.
+ * A pick puts `@<path>`, `@<title>` or `@<name>` in the text and is sent with the message while that text is still there.
+ * In a `shared` chat (its `people`, and the viewer's `uid`) the agent comes first: "@pi" in a message is what calls it
+ * there; then the others in the chat, who are told when a message tags them.
  */
-export function useMentions(chatId: string, draft: string, setDraft: (text: string) => void, input: RefObject<HTMLTextAreaElement | null>, shared = false) {
+export function useMentions(
+  chatId: string,
+  draft: string,
+  setDraft: (text: string) => void,
+  input: RefObject<HTMLTextAreaElement | null>,
+  people: ChatPeople | null = null,
+  uid = "",
+) {
+  const shared = people !== null;
   const [options, setOptions] = useState<MentionOptions | null>(null);
   const [picked, setPicked] = useState<Mention[]>([]);
   const [caret, setCaret] = useState(0);
@@ -63,10 +74,24 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
     if (!typing) setDismissedAt(null);
   }, [typing]);
 
+  // Everyone else in a shared chat: they are known before the files and artifacts load.
+  const others = useMemo<MentionChoice[]>(
+    () =>
+      people
+        ? [people.owner, ...people.members]
+            .filter((person) => person.uid !== uid)
+            .map((person) => ({
+              mention: { kind: "person" as const, uid: person.uid, name: person.name },
+              detail: person.uid === people.owner.uid ? "owner · gets a notice" : "in this chat · gets a notice",
+            }))
+        : [],
+    [people, uid],
+  );
   const all = useMemo<MentionChoice[]>(
     () =>
       options
         ? [
+            ...others,
             ...options.artifacts.map((a) => ({
               mention: { kind: "artifact" as const, id: a.id, title: a.title },
               detail: `artifact · v${a.latest}${a.chatId === chatId ? " · this chat" : ""}`,
@@ -76,8 +101,8 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
               detail: f.own ? `your file · ${formatBytes(f.size)}` : formatBytes(f.size),
             })),
           ]
-        : [],
-    [options, chatId],
+        : others,
+    [options, chatId, others],
   );
   const choices = useMemo<Choice[]>(() => {
     if (!query) return [];
@@ -144,19 +169,22 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
   const take = (text: string): MentionInput[] => keptMentions(text, picked);
   const clear = () => setPicked([]);
 
-  // The agent is there before the files and artifacts have loaded.
+  // The agent and the people are there before the files and artifacts have loaded.
   return { open, loaded: options !== null || choices.length > 0, choices, active, setActive, pick, onKeyDown, track, insertAt, take, clear };
 }
 
 export function MentionList({ mentions }: { mentions: ReturnType<typeof useMentions> }) {
   const { open, loaded, choices, active, setActive, pick } = mentions;
+  const people = useSharedChat();
   if (!open) return null;
   return (
-    <div className="mention-list" role="listbox" aria-label="Files and artifacts">
+    <div className="mention-list" role="listbox" aria-label={people ? "People, files and artifacts" : "Files and artifacts"}>
       {!loaded ? (
         <div className="mention-empty">Loading…</div>
       ) : choices.length === 0 ? (
-        <div className="mention-empty">No file or artifact matches. Upload files from the sidebar.</div>
+        <div className="mention-empty">
+          {people ? "No one, and no file or artifact, matches." : "No file or artifact matches."} Upload files from the sidebar.
+        </div>
       ) : (
         choices.map((choice, i) => (
           <button
@@ -172,7 +200,11 @@ export function MentionList({ mentions }: { mentions: ReturnType<typeof useMenti
             }}
             onMouseEnter={() => setActive(i)}
           >
-            <span className="mention-icon">{"agent" in choice ? "π" : choice.mention.kind === "file" ? "▤" : "▦"}</span>
+            {"mention" in choice && choice.mention.kind === "person" && people ? (
+              <Avatar name={choice.mention.name} tint={tintOf(people, choice.mention.uid)} />
+            ) : (
+              <span className="mention-icon">{"agent" in choice ? "π" : choice.mention.kind === "file" ? "▤" : "▦"}</span>
+            )}
             <span className="mention-label">{"agent" in choice ? AGENT_NAME : mentionLabel(choice.mention)}</span>
             <small>{choice.detail}</small>
           </button>
@@ -185,20 +217,31 @@ export function MentionList({ mentions }: { mentions: ReturnType<typeof useMenti
 function choiceKey(choice: Choice): string {
   if ("agent" in choice) return "agent";
   const { mention } = choice;
+  if (mention.kind === "person") return `p:${mention.uid}`;
   return mention.kind === "file" ? `f:${mention.own ? "own:" : ""}${mention.path}` : `a:${mention.id}`;
 }
 
 /**
  * A message's text with its mentions as chips: a file by its name (path on hover), an artifact as a link to its page,
- * and the agent where it was called.
+ * a person in their colour (stronger where it is the viewer, `me`), and the agent where it was called.
  */
-export function MentionText({ text, mentions }: { text: string; mentions?: Mention[] }) {
+export function MentionText({ text, mentions, me }: { text: string; mentions?: Mention[]; me?: string }) {
+  const people = useSharedChat();
   if (!text.includes("@")) return <>{text}</>;
   return (
     <>
       {splitMentions(text, mentions ?? []).map((part, i) =>
         typeof part === "string" ? (
           <AgentRun key={i} text={part} />
+        ) : part.kind === "person" ? (
+          <span
+            key={i}
+            className={part.uid === me ? "mention-chip person me" : "mention-chip person"}
+            style={people ? tintStyle(tintOf(people, part.uid)) : undefined}
+            title={part.uid === me ? "Mentions you" : `Mentions ${part.name}`}
+          >
+            @{part.name}
+          </span>
         ) : part.kind === "artifact" ? (
           <a key={i} className="mention-chip" href={`/a/${part.id}`} target="_blank" rel="noreferrer" title={`Artifact "${part.title}": open its page`}>
             @{part.title}

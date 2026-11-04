@@ -1,22 +1,27 @@
 import { baseName } from "./attachments.ts";
-import { ID_PATTERN } from "./protocol.ts";
+import { ID_PATTERN, UID_PATTERN } from "./protocol.ts";
 import { MAX_PATH } from "./uploads.ts";
 
 /**
- * Files and artifacts named in a message with "@". The composer offers them as
- * the user types "@", puts `@<path>` or `@<title>` in the text, and sends the
- * picks with the message, so the agent gets the exact path or artifact id
- * however the text reads. The text itself stays as the user wrote it.
+ * Files, artifacts and people named in a message with "@". The composer offers
+ * them as the user types "@", puts `@<path>`, `@<title>` or `@<name>` in the
+ * text, and sends the picks with the message, so the agent gets the exact path
+ * or artifact id however the text reads, and a person tagged hears of it. The
+ * text itself stays as the user wrote it.
  */
 
 /**
  * What the browser sends: a file by its path in the chat owner's files (or, with `own`, in the author's own files, for
- * someone the chat is shared with: the chat copies it to the owner's), an artifact by its id.
+ * someone the chat is shared with: the chat copies it to the owner's), an artifact by its id, a person in a shared chat
+ * by their uid (they are told they were tagged).
  */
-export type MentionInput = { kind: "file"; path: string; own?: true } | { kind: "artifact"; id: string };
+export type MentionInput = { kind: "file"; path: string; own?: true } | { kind: "artifact"; id: string } | { kind: "person"; uid: string };
 
 /** A mention as the message's transcript entry records it. A type, not an interface, so it is JSON pi can store. */
-export type Mention = { kind: "file"; path: string; own?: true } | { kind: "artifact"; id: string; title: string };
+export type Mention =
+  | { kind: "file"; path: string; own?: true }
+  | { kind: "artifact"; id: string; title: string }
+  | { kind: "person"; uid: string; name: string };
 
 /**
  * What the composer offers after "@", from GET /api/chats/:id/mentions. `own` files are the author's, offered to
@@ -57,18 +62,25 @@ export function splitAgent(text: string): { text: string; call: boolean }[] {
 /** Mentions one message may carry. */
 export const MAX_MENTIONS = 20;
 
-/** What a mention reads as in the text: "@" and the file's path, or the artifact's title. */
+/** What a mention reads as in the text: "@" and the file's path, the artifact's title, or the person's name. */
 export function mentionLabel(mention: Mention): string {
-  return mention.kind === "file" ? mention.path : mention.title;
+  return mention.kind === "file" ? mention.path : mention.kind === "artifact" ? mention.title : mention.name;
 }
 
 export function mentionToken(mention: Mention): string {
   return `@${mentionLabel(mention)}`;
 }
 
-/** The same file or artifact. */
+/** The same file, artifact or person. */
 export function sameMention(a: MentionInput, b: MentionInput): boolean {
-  return a.kind === "file" ? b.kind === "file" && a.path === b.path && !a.own === !b.own : b.kind === "artifact" && a.id === b.id;
+  if (a.kind === "file") return b.kind === "file" && a.path === b.path && !a.own === !b.own;
+  if (a.kind === "artifact") return b.kind === "artifact" && a.id === b.id;
+  return b.kind === "person" && a.uid === b.uid;
+}
+
+/** The people a message tags, by uid. */
+export function taggedPeople(mentions: readonly Mention[] = []): string[] {
+  return mentions.flatMap((mention) => (mention.kind === "person" ? [mention.uid] : []));
 }
 
 /** The longest "@query" the picker follows; longer, and it was not a mention. */
@@ -92,7 +104,7 @@ export function activeQuery(text: string, caret: number): { start: number; query
 /** One choice in the picker. */
 export interface MentionChoice {
   mention: Mention;
-  /** What the picker shows under the label: a file's size, an artifact's version and where it lives. */
+  /** What the picker shows under the label: a file's size, an artifact's version and where it lives, who a person is. */
   detail: string;
 }
 
@@ -103,15 +115,17 @@ export interface MentionChoice {
  */
 export function matchMentions(choices: readonly MentionChoice[], query: string, limit = 6): MentionChoice[] {
   const q = query.trim().toLowerCase();
-  // Artifacts first: there are fewer of them, and a page is often what a message is about.
-  const kind = (c: MentionChoice) => (c.mention.kind === "artifact" ? 0 : 1);
+  // People first, then artifacts: there are fewer of them, and a person or a page is often what a message is about.
+  const kind = (c: MentionChoice) => KIND_ORDER[c.mention.kind];
   const scored = choices
     .map((choice, order) => ({ choice, order, score: score(mentionLabel(choice.mention), q) }))
     .filter((c) => c.score > 0)
     .sort((a, b) => kind(a.choice) - kind(b.choice) || b.score - a.score || a.order - b.order);
-  const counts = { file: 0, artifact: 0 };
+  const counts = { person: 0, file: 0, artifact: 0 };
   return scored.filter(({ choice }) => counts[choice.mention.kind]++ < limit).map(({ choice }) => choice);
 }
+
+const KIND_ORDER: Record<Mention["kind"], number> = { person: 0, artifact: 1, file: 2 };
 
 function score(label: string, q: string): number {
   if (!q) return 1;
@@ -158,14 +172,16 @@ export function parseMentions(raw: unknown): MentionInput[] {
   if (!Array.isArray(raw)) throw new Error("Mentions must be a list.");
   if (raw.length > MAX_MENTIONS) throw new Error(`A message takes at most ${MAX_MENTIONS} mentions.`);
   const parsed: MentionInput[] = [];
-  for (const item of raw as Partial<{ kind: string; path: unknown; id: unknown; own: unknown }>[]) {
+  for (const item of raw as Partial<{ kind: string; path: unknown; id: unknown; own: unknown; uid: unknown }>[]) {
     const mention: MentionInput | null =
       item?.kind === "file" && typeof item.path === "string" && item.path.length > 0 && item.path.length <= MAX_PATH
         ? { kind: "file", path: item.path, ...(item.own === true && { own: true as const }) }
         : item?.kind === "artifact" && typeof item.id === "string" && ID_PATTERN.test(item.id)
           ? { kind: "artifact", id: item.id }
-          : null;
-    if (!mention) throw new Error("Each mention is a file with its path or an artifact with its id.");
+          : item?.kind === "person" && typeof item.uid === "string" && UID_PATTERN.test(item.uid)
+            ? { kind: "person", uid: item.uid }
+            : null;
+    if (!mention) throw new Error("Each mention is a file with its path, an artifact with its id or a person with their uid.");
     if (!parsed.some((other) => sameMention(other, mention))) parsed.push(mention);
   }
   return parsed;

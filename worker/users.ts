@@ -1,6 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelChoice } from "../shared/models.ts";
-import { SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type SidebarList } from "../shared/protocol.ts";
+import { SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type MentionNotice, type SidebarList } from "../shared/protocol.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
 import { titleFromMessage, UNNAMED_CHAT } from "./agent/title.ts";
@@ -41,12 +41,16 @@ export class UserDirectory extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS shared_chats (id TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, owner_name TEXT NOT NULL, title TEXT NOT NULL, joined_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
     `);
     // Added later: what the chat's agent is doing (ChatStatus), when something last came in that this user did not
-    // write, and when they last saw the chat. activity_at > seen_at is unread.
+    // write, and when they last saw the chat. activity_at > seen_at is unread. Then: when someone last tagged them in
+    // it; mentioned_at > seen_at is a tag they have not seen.
     for (const table of ["chats", "shared_chats"]) {
       this.#addColumn(table, "status", "TEXT");
       this.#addColumn(table, "activity_at", "INTEGER NOT NULL DEFAULT 0");
       this.#addColumn(table, "seen_at", "INTEGER NOT NULL DEFAULT 0");
+      this.#addColumn(table, "mentioned_at", "INTEGER NOT NULL DEFAULT 0");
     }
+    // Whether this user's own chat has members: the chat tells (setChatShared) when that changes, and when it opens.
+    this.#addColumn("chats", "shared", "INTEGER NOT NULL DEFAULT 0");
     // The newest version of each artifact its owner opened. Artifacts from before count as seen.
     if (this.#addColumn("artifacts", "seen", "INTEGER NOT NULL DEFAULT 0")) ctx.storage.sql.exec("UPDATE artifacts SET seen = latest");
     // A sidebar's socket stays open for hours: answer its keep-alive pings without waking this object.
@@ -79,9 +83,10 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /**
-   * The sidebar's socket: it only hears which list changed (SidebarList): a chat was added, named, bumped, or its agent
+   * The sidebar's socket: it hears which list changed (SidebarList): a chat was added, named, bumped, or its agent
    * started or stopped working; an artifact was published or opened; a skill was added, changed or proposed. The app
-   * reads that list again. The Worker opens it for the signed-in user only.
+   * reads that list again. It also hears when someone tagged this user (MentionNotice). The Worker opens it for the
+   * signed-in user only.
    */
   fetch(request: Request): Response {
     if (request.headers.get("upgrade") !== "websocket") return new Response("Expected a WebSocket upgrade", { status: 426 });
@@ -104,9 +109,13 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** Tell the open sidebars that a list changed. */
   #changed(list: SidebarList): void {
+    this.#send(list);
+  }
+
+  #send(message: string): void {
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        ws.send(list);
+        ws.send(message);
       } catch {
         // Closing; the app reads the list again when it reconnects.
       }
@@ -116,9 +125,19 @@ export class UserDirectory extends DurableObject<Env> {
   /** The user's own chats and the ones shared with them, most recent first. */
   listChats(): ChatSummary[] {
     return this.ctx.storage.sql
-      .exec<{ id: string; title: string; created_at: number; updated_at: number; shared_by: string | null; status: ChatStatus; unread: number }>(
-        `SELECT id, title, created_at, updated_at, NULL AS shared_by, status, activity_at > seen_at AS unread FROM chats
-         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, status, activity_at > seen_at FROM shared_chats
+      .exec<{
+        id: string;
+        title: string;
+        created_at: number;
+        updated_at: number;
+        shared_by: string | null;
+        shared: number;
+        status: ChatStatus;
+        unread: number;
+        mentioned: number;
+      }>(
+        `SELECT id, title, created_at, updated_at, NULL AS shared_by, shared, status, activity_at > seen_at AS unread, mentioned_at > seen_at AS mentioned FROM chats
+         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, 1, status, activity_at > seen_at, mentioned_at > seen_at FROM shared_chats
          ORDER BY updated_at DESC`,
       )
       .toArray()
@@ -127,21 +146,24 @@ export class UserDirectory extends DurableObject<Env> {
         title: row.title,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
-        ...(row.shared_by !== null && { sharedBy: row.shared_by }),
+        ...(row.shared_by !== null ? { sharedBy: row.shared_by } : row.shared === 1 && { shared: true as const }),
         ...(row.status && { status: row.status }),
         ...(row.unread === 1 && { unread: true as const }),
+        ...(row.mentioned === 1 && { mentioned: true as const }),
       }));
   }
 
   /**
    * Change this user's row for chat `id`, which `ownerUid` owns: in `chats` when that is this user, else in
    * `shared_chats`. `set` is an SQL SET list written here, never input; its `?` take `values`. Tells the open sidebars
-   * when a row changed.
+   * when a row changed, and returns whether one did.
    */
-  #updateChat(id: string, ownerUid: string, set: string, ...values: SqlStorageValue[]): void {
+  #updateChat(id: string, ownerUid: string, set: string, ...values: SqlStorageValue[]): boolean {
     const own = ownerUid === this.ctx.id.name;
     const sql = own ? `UPDATE chats SET ${set} WHERE id = ?` : `UPDATE shared_chats SET ${set} WHERE id = ? AND owner_uid = ?`;
-    if (this.ctx.storage.sql.exec(sql, ...values, id, ...(own ? [] : [ownerUid])).rowsWritten) this.#changed("chats");
+    const written = this.ctx.storage.sql.exec(sql, ...values, id, ...(own ? [] : [ownerUid])).rowsWritten > 0;
+    if (written) this.#changed("chats");
+    return written;
   }
 
   /** What the chat's agent is doing now. `replied`: it just ended a run, so the chat has a reply this user has not seen. */
@@ -152,6 +174,12 @@ export class UserDirectory extends DurableObject<Env> {
   /** The title a model gave the chat, unless it was renamed since it was called `placeholder`. */
   nameChat(id: string, ownerUid: string, title: string, placeholder: string): void {
     this.#updateChat(id, ownerUid, "title = CASE title WHEN ? THEN ? ELSE title END", placeholder, title);
+  }
+
+  /** Whether this user's own chat `id` has members now. */
+  setChatShared(id: string, shared: boolean): void {
+    const flag = shared ? 1 : 0;
+    if (this.ctx.storage.sql.exec("UPDATE chats SET shared = ? WHERE id = ? AND shared != ?", flag, id, flag).rowsWritten) this.#changed("chats");
   }
 
   /** This user has seen everything in the chat so far. */
@@ -195,6 +223,15 @@ export class UserDirectory extends DurableObject<Env> {
   #touch(id: string, ownerUid: string, title: string, byOther: boolean): void {
     const now = Date.now();
     this.#updateChat(id, ownerUid, "title = ?, updated_at = ?, activity_at = CASE WHEN ? THEN ? ELSE activity_at END", title, now, byOther ? 1 : 0, now);
+  }
+
+  /**
+   * Someone tagged this user in chat `id`: bump it, unread and marked as a tag until they look, and tell the open apps
+   * (MentionNotice), which show it. Nothing for a chat they are not in.
+   */
+  mentioned(id: string, ownerUid: string, notice: MentionNotice): void {
+    const { title, at } = notice;
+    if (this.#updateChat(id, ownerUid, "title = ?, updated_at = ?, activity_at = ?, mentioned_at = ?", title, at, at, at)) this.#send(JSON.stringify(notice));
   }
 
   removeSharedChat(id: string, ownerUid: string): void {

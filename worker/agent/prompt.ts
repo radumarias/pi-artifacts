@@ -53,6 +53,7 @@ export function peopleExtension(people: () => ChatPeople): Extension {
           `${about} ${owner.name} owns this chat; ${members.map((m) => m.name).join(", ")} joined it by invite. ` +
           `Here your name is ${AGENT_NAME}. The people also talk among themselves: you are called only by a message with ${AGENT_TOKEN} in it, and the others reach you only as context, ` +
           "possibly while you work. Answer the message that called you, using the talk around it where it helps, and never reply to the talk itself. " +
+          "People tag each other with @ and a name; such a tag is for that person, not a call to you. " +
           "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +
           "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner."
         );

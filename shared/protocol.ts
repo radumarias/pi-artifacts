@@ -199,13 +199,34 @@ export interface ChatSummary {
   updatedAt: number;
   /** Set on a chat someone else owns and invited you to: their name. */
   sharedBy?: string;
+  /** Set on your own chat once you invited people and they joined. */
+  shared?: true;
   status?: ChatStatus;
   /** Set when the chat has a reply, or someone else's message, that this user has not seen yet. */
   unread?: true;
+  /** Set when someone tagged this user ("@name") in a message they have not seen yet. */
+  mentioned?: true;
 }
 
-/** What the sidebar's socket (GET /api/me/ws) sends: the name of a list that changed, so the app reads it again. */
+/**
+ * What the sidebar's socket (GET /api/me/ws) sends: the name of a list that changed, so the app reads it again, or a
+ * MentionNotice as JSON.
+ */
 export type SidebarList = "chats" | "artifacts" | "skills";
+
+/** Someone tagged this user in a shared chat: the app shows it, and the browser too when it may and the app is not in view. */
+export interface MentionNotice {
+  type: "mention";
+  chatId: string;
+  /** The chat's title. */
+  title: string;
+  /** Who tagged them. */
+  from: string;
+  /** The start of the message. */
+  text: string;
+  /** When it was sent: one message's notices share it, so windows can show it once. */
+  at: number;
+}
 
 /** Someone in a chat: a verified uid, and the name the others see (their email, or the demo name). */
 export interface Person {

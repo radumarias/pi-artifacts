@@ -27,7 +27,7 @@ export function replyLine(quote: ReplyQuote): string {
 }
 
 /** The start of a message on one line, as a quote shows it. */
-function excerpt(text: string): string {
+export function excerpt(text: string): string {
   const flat = text.trim().replace(/\s+/g, " ");
   return flat.length > REPLY_QUOTE_CHARS ? `${flat.slice(0, REPLY_QUOTE_CHARS - 1)}…` : flat;
 }

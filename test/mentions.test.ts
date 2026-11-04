@@ -7,6 +7,7 @@ import {
   splitAgent,
   splitMentions,
   summonsAgent,
+  taggedPeople,
   type Mention,
   type MentionChoice,
 } from "../shared/mentions.ts";
@@ -204,6 +205,55 @@ describe("a member's file mentions", () => {
   it("leave the owner's own mentions alone", async () => {
     const { mentions } = await resolveMentions([{ kind: "file", path: "secret/plans.md" }], { ...scope, byOwner: true, mayName: async () => false });
     expect(mentions).toEqual([{ kind: "file", path: "secret/plans.md" }]);
+  });
+});
+
+describe("tagging people", () => {
+  const person = (uid: string, name: string): MentionChoice => ({ mention: { kind: "person", uid, name }, detail: "" });
+  const people = new Map([
+    ["ada", { uid: "ada", name: "Ada" }],
+    ["bob", { uid: "bob", name: "Bob Stone" }],
+  ]);
+  const scope = { ownerUid: "ada", chatId: "chat1", byOwner: false, readMeta: async () => null, person: (uid: string) => people.get(uid) ?? null };
+
+  it("offers people first, by name", () => {
+    const choices = [file("uploads/bob.csv"), artifact("a1", "Bobcat sales"), person("bob", "Bob Stone")];
+    expect(matchMentions(choices, "bo").map((c) => c.mention.kind)).toEqual(["person", "artifact", "file"]);
+    expect(matchMentions(choices, "sto").map((c) => c.mention.kind)).toEqual(["person"]);
+  });
+
+  it("parses a person by uid, and refuses one that is no uid", () => {
+    expect(
+      parseMentions([
+        { kind: "person", uid: "bob", name: "anything" },
+        { kind: "person", uid: "bob" },
+      ]),
+    ).toEqual([{ kind: "person", uid: "bob" }]);
+    expect(() => parseMentions([{ kind: "person", uid: "Bob Stone" }])).toThrow();
+  });
+
+  it("keeps only people in the chat, by the name it shows, and says nothing more to the model", async () => {
+    const { mentions, note } = await resolveMentions(
+      [
+        { kind: "person", uid: "bob" },
+        { kind: "person", uid: "eve" },
+      ],
+      scope,
+    );
+    expect(mentions).toEqual([{ kind: "person", uid: "bob", name: "Bob Stone" }]);
+    expect(note).toBe("");
+    expect((await resolveMentions([{ kind: "person", uid: "bob" }], { ...scope, person: undefined })).mentions).toEqual([]);
+  });
+
+  it("shows a tag as a chip, is no call of the agent, and names who to tell", () => {
+    const tags: Mention[] = [
+      { kind: "person", uid: "pi1", name: "pia" },
+      { kind: "file", path: "a.csv" },
+    ];
+    expect(splitMentions("hey @pia, see @a.csv", tags)).toEqual(["hey ", tags[0], ", see ", tags[1]]);
+    expect(summonsAgent("@pia look", tags)).toBe(false);
+    expect(taggedPeople(tags)).toEqual(["pi1"]);
+    expect(taggedPeople()).toEqual([]);
   });
 });
 
