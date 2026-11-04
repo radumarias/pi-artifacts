@@ -27,12 +27,17 @@ export class FakeBucket {
     };
   }
 
-  async get(key: string, options?: { ssecKey?: unknown }) {
+  /** With a range as R2 takes it: from an offset (for a length) or the last `suffix` bytes; one past the end throws, as R2 does. */
+  async get(key: string, options?: { ssecKey?: unknown; range?: { offset?: number; length?: number; suffix?: number } }) {
     this.calls.push({ op: "get", key, ssecKey: options?.ssecKey });
     const value = this.objects.get(key);
     if (value === undefined) return null;
     const bytes = new TextEncoder().encode(value);
-    return { text: async () => value, json: async () => JSON.parse(value), size: bytes.byteLength, uploaded: new Date(0), body: new Blob([bytes]).stream() };
+    const range = options?.range;
+    const start = range?.suffix !== undefined ? Math.max(0, bytes.byteLength - range.suffix) : (range?.offset ?? 0);
+    if (range && start >= bytes.byteLength) throw new Error("The requested range is not satisfiable");
+    const part = bytes.subarray(start, range?.length !== undefined ? start + range.length : undefined);
+    return { text: async () => value, json: async () => JSON.parse(value), size: bytes.byteLength, uploaded: new Date(0), body: new Blob([part]).stream() };
   }
 
   async put(key: string, body: unknown, options?: { ssecKey?: unknown }) {

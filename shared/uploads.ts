@@ -129,12 +129,29 @@ export function previewType(path: string): string | undefined {
   return IMAGE_TYPES.get(extension(path));
 }
 
+/** Sound and video the app plays, by extension, as the types browsers play. */
+const MEDIA_TYPES: ReadonlyMap<string, string> = new Map([
+  ["mp3", "audio/mpeg"],
+  ["wav", "audio/wav"],
+  ["ogg", "audio/ogg"],
+  ["oga", "audio/ogg"],
+  ["opus", "audio/ogg"],
+  ["m4a", "audio/mp4"],
+  ["aac", "audio/aac"],
+  ["flac", "audio/flac"],
+  ["mp4", "video/mp4"],
+  ["m4v", "video/mp4"],
+  ["webm", "video/webm"],
+  ["ogv", "video/ogg"],
+  ["mov", "video/quicktime"],
+]);
+
 /**
- * How the app previews a user file: an image as itself, a web page in a sandboxed frame, a PDF in the browser's
+ * How the app previews a user file: an image as itself, sound and video in the browser's player, a web page in a sandboxed frame, a PDF in the browser's
  * viewer, Markdown rendered, a CSV or TSV as a table, and plain text and code as text (highlighted where the app
  * knows the language). A file of another kind is read as text when it is text.
  */
-export type PreviewKind = "image" | "html" | "pdf" | "markdown" | "table" | "text";
+export type PreviewKind = "image" | "audio" | "video" | "html" | "pdf" | "markdown" | "table" | "text";
 
 const TEXT_EXTENSIONS =
   "txt text log out err json jsonl ndjson geojson yaml yml toml ini cfg conf properties xml rss plist " +
@@ -143,6 +160,7 @@ const TEXT_EXTENSIONS =
   "mk cmake gradle diff patch tex bib rst adoc org htmlpart jsblock b64 z64";
 const KINDS: ReadonlyMap<string, PreviewKind> = new Map([
   ...[...IMAGE_TYPES.keys()].map((ext) => [ext, "image"] as const),
+  ...[...MEDIA_TYPES].map(([ext, type]) => [ext, type.startsWith("audio/") ? "audio" : "video"] as const),
   ...TEXT_EXTENSIONS.split(" ").map((ext) => [ext, "text"] as const),
   ["html", "html"],
   ["htm", "html"],
@@ -160,13 +178,14 @@ export function previewKind(path: string): PreviewKind | undefined {
 }
 
 /**
- * The content type `path` is served as for viewing (FILE_ROUTE with VIEW_PARAM): an image as itself, a web page as
+ * The content type `path` is served as for viewing (FILE_ROUTE with VIEW_PARAM): an image, sound or video as itself, a web page as
  * HTML (under a sandboxing policy, see worker/files-routes.ts), a PDF as a PDF, and a text file as plain text.
  * Undefined for a file of another kind, which downloads.
  */
 export function viewType(path: string): string | undefined {
   const kind = previewKind(path);
   if (kind === "image") return previewType(path);
+  if (kind === "audio" || kind === "video") return MEDIA_TYPES.get(extension(path));
   if (kind === "html") return "text/html; charset=utf-8";
   if (kind === "pdf") return "application/pdf";
   return kind ? "text/plain; charset=utf-8" : undefined;

@@ -155,7 +155,7 @@ function TableView({ path, text }: { path: string; text: string }) {
 const RENDERED: Partial<Record<PreviewKind, string>> = { markdown: "Preview", table: "Table", html: "Preview" };
 
 /**
- * A user file beside the chat, where an artifact shows: an image as itself, a web page running in a sandboxed frame
+ * A user file beside the chat, where an artifact shows: an image as itself, sound and video in the browser's player, a web page running in a sandboxed frame
  * (as an artifact does, with no network of its own), a PDF in the browser's viewer, Markdown rendered, a table as
  * one, and any other text, code highlighted. A file that is not text offers its download. Keyed by its path, so
  * another file starts afresh.
@@ -170,7 +170,8 @@ export function FilePreview({ path, files, onOpen, onClose }: Props) {
   const reload = `${reloads}:${size ?? ""}`;
   const rendered = kind ? RENDERED[kind] : undefined;
   const showsSource = source && !!rendered;
-  const framed = (kind === "html" && !showsSource) || kind === "image" || kind === "pdf";
+  // Shown by the browser from its URL, not read as text here.
+  const framed = (kind === "html" && !showsSource) || kind === "image" || kind === "audio" || kind === "video" || kind === "pdf";
   const { text, binary, error } = useFileText(path, reload, !framed);
   const name = baseName(path);
   const folder = path.slice(0, -name.length);
@@ -181,6 +182,13 @@ export function FilePreview({ path, files, onOpen, onClose }: Props) {
     body = (
       <div className="file-image">
         <img src={viewUrl} alt={name} />
+      </div>
+    );
+  } else if (kind === "audio" || kind === "video") {
+    // The Worker answers range requests, so the player can seek (and Safari plays video at all).
+    body = (
+      <div className="file-image">
+        {kind === "audio" ? <audio key={viewUrl} src={viewUrl} controls /> : <video key={viewUrl} src={viewUrl} controls />}
       </div>
     );
   } else if (kind === "html" && !showsSource) {

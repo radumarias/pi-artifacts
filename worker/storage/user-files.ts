@@ -1,6 +1,9 @@
 import { MAX_LISTED } from "../../shared/uploads.ts";
 import { normalisePath } from "./paths.ts";
 
+/** A part of a file, as R2 reads it: from an offset (for a length), or its last `suffix` bytes. */
+export type ByteRange = { offset: number; length?: number } | { suffix: number };
+
 export interface FileEntry {
   path: string;
   size: number;
@@ -39,7 +42,7 @@ export class UserFiles {
     return entries.slice(0, limit);
   }
 
-  async get(path: string, range?: { offset: number; length: number }): Promise<R2ObjectBody | null> {
+  async get(path: string, range?: ByteRange): Promise<R2ObjectBody | null> {
     return this.#bucket.get(this.#objectKey(path), range ? { range, ssecKey: this.#key } : { ssecKey: this.#key });
   }
 

@@ -19,7 +19,7 @@ import { formatBytes } from "../shared/util.ts";
 import { ARTIFACT_CSP } from "./artifacts/serve.ts";
 import { json } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
-import type { FileEntry, UserFiles } from "./storage/user-files.ts";
+import type { ByteRange, FileEntry, UserFiles } from "./storage/user-files.ts";
 import { zipStream } from "./zip.ts";
 
 /** Room for the multipart boundaries and headers around the files themselves. */
@@ -34,7 +34,7 @@ const FORM_OVERHEAD = 1024 * 1024;
 export async function filesRoute(request: Request, userFiles: () => Promise<UserFiles>): Promise<Response | undefined> {
   const { pathname, searchParams } = new URL(request.url);
   if (request.method === "GET" && pathname.startsWith(FILE_ROUTE)) {
-    return serveFile(await userFiles(), urlPath(pathname.slice(FILE_ROUTE.length)), searchParams.has(VIEW_PARAM));
+    return serveFile(request, await userFiles(), urlPath(pathname.slice(FILE_ROUTE.length)), searchParams.has(VIEW_PARAM));
   }
   if (request.method === "GET" && pathname.startsWith(ZIP_ROUTE)) return serveZip(await userFiles(), urlPath(pathname.slice(ZIP_ROUTE.length)));
   if (request.method === "POST" && pathname === ZIP_ROUTE) return serveSelection(request, await userFiles());
@@ -117,21 +117,79 @@ const PAGE_HEADERS = {
 const PDF_HEADERS = { ...SERVED_HEADERS, "content-security-policy": "default-src 'none'; object-src 'self'; style-src 'unsafe-inline'" };
 
 /**
+ * Sound and video opened in a tab of their own: the browser's player page loads the file from its own URL, which a
+ * sandbox (an opaque origin) may not. Served as audio or video, nosniff, they hold nothing that runs.
+ */
+const MEDIA_HEADERS = { ...SERVED_HEADERS, "content-security-policy": "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'" };
+
+/**
+ * One byte range of a Range header ("bytes=0-", "bytes=100-199", "bytes=-500"), as R2 reads it, and the last byte it
+ * asks for. Undefined without one, or for one this does not serve (several ranges): the whole file answers that.
+ */
+function byteRange(header: string | null): { range: ByteRange; last?: number } | undefined {
+  const match = header?.trim().match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || (!match[1] && !Number(match[2]))) return undefined;
+  if (!match[1]) return { range: { suffix: Number(match[2]) } };
+  const first = Number(match[1]);
+  const last = match[2] ? Number(match[2]) : undefined;
+  return last === undefined || last >= first ? { range: { offset: first }, last } : undefined;
+}
+
+/** Workers' stream that tells the response its length; not in Node, where the tests run. */
+const FixedLength = (globalThis as { FixedLengthStream?: new (length: number) => TransformStream<Uint8Array, Uint8Array> }).FixedLengthStream;
+
+/** The first `count` bytes of `body`, reading no further; as a stream of known length, so the response says its length. */
+function firstBytes(body: ReadableStream<Uint8Array>, count: number): ReadableStream<Uint8Array> {
+  let left = count;
+  const cut = body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (left > 0) controller.enqueue(chunk.subarray(0, left));
+        left -= chunk.byteLength;
+        if (left <= 0) controller.terminate();
+      },
+    }),
+  );
+  return FixedLength ? cut.pipeThrough(new FixedLength(count)) : cut;
+}
+
+/**
  * One user file: an image shows in the browser (shared/uploads.ts previewType), anything else downloads. With
  * `view` (the app's preview, or opening it in a tab) a file of a kind the app previews shows too, as viewType says.
+ * A Range header gets that part (206): players seek in sound and video so, and Safari plays no video without it.
  */
-async function serveFile(files: UserFiles, path: string, view: boolean): Promise<Response> {
-  const object = await files.get(path);
+async function serveFile(request: Request, files: UserFiles, path: string, view: boolean): Promise<Response> {
+  const asked = byteRange(request.headers.get("range"));
+  let object: R2ObjectBody | null;
+  try {
+    object = await files.get(path, asked?.range);
+  } catch (error) {
+    // R2 refuses a range that starts past the end.
+    if (asked) return new Response(null, { status: 416, headers: SERVED_HEADERS });
+    throw error;
+  }
   if (!object) return json({ error: "No such file" }, 404);
   const inline = view ? viewType(path) : previewType(path);
   const kind = inline && previewKind(path);
-  return new Response(object.body, {
-    headers: {
-      ...(kind === "html" ? PAGE_HEADERS : kind === "pdf" ? PDF_HEADERS : SERVED_HEADERS),
-      "content-type": inline ?? "application/octet-stream",
-      "content-length": String(object.size),
-      "content-disposition": `${inline ? "inline" : "attachment"}; filename="${baseName(path)}"`,
-    },
+  const headers = {
+    ...(kind === "html" ? PAGE_HEADERS : kind === "pdf" ? PDF_HEADERS : kind === "audio" || kind === "video" ? MEDIA_HEADERS : SERVED_HEADERS),
+    "content-type": inline ?? "application/octet-stream",
+    "content-disposition": `${inline ? "inline" : "attachment"}; filename="${baseName(path)}"`,
+    "accept-ranges": "bytes",
+  };
+  const size = object.size;
+  if (!asked) return new Response(object.body, { headers: { ...headers, "content-length": String(size) } });
+  const start = "suffix" in asked.range ? Math.max(0, size - asked.range.suffix) : asked.range.offset;
+  if (start >= size) {
+    void object.body.cancel();
+    return new Response(null, { status: 416, headers: { ...SERVED_HEADERS, "content-range": `bytes */${size}` } });
+  }
+  const end = Math.min(size - 1, asked.last ?? size - 1);
+  // R2 reads from the start to the end of the file; a range that stops sooner is cut where it stops.
+  const body = end < size - 1 ? firstBytes(object.body, end - start + 1) : object.body;
+  return new Response(body, {
+    status: 206,
+    headers: { ...headers, "content-length": String(end - start + 1), "content-range": `bytes ${start}-${end}/${size}` },
   });
 }
 

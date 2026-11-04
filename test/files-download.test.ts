@@ -185,6 +185,34 @@ describe("file and folder downloads", () => {
     expect(download.headers.get("content-disposition")).toBe('attachment; filename="page.html"');
   });
 
+  it("answers a byte range, as players ask for sound and video", async () => {
+    const b = bucket();
+    b.objects.set("users/ada/files/out/clip.mp4", "0123456789");
+    const get = async (range: string) => {
+      const files = new UserFiles(b.r2, "ada", await deriveUserKey(MASTER, "ada"));
+      return (await filesRoute(new Request(`https://app.test${api.fileViewUrl("out/clip.mp4")}`, { headers: { range } }), async () => files))!;
+    };
+    const part = await get("bytes=2-5");
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-type")).toBe("video/mp4");
+    // Its own player page (opened in a tab) loads it from its URL, which a sandbox would forbid.
+    expect(part.headers.get("content-security-policy")).toBe("default-src 'none'; media-src 'self'; style-src 'unsafe-inline'");
+    expect(part.headers.get("content-range")).toBe("bytes 2-5/10");
+    expect(part.headers.get("content-length")).toBe("4");
+    expect(await part.text()).toBe("2345");
+    const rest = await get("bytes=7-");
+    expect([rest.headers.get("content-range"), await rest.text()]).toEqual(["bytes 7-9/10", "789"]);
+    const tail = await get("bytes=-3");
+    expect([tail.headers.get("content-range"), await tail.text()]).toEqual(["bytes 7-9/10", "789"]);
+    const past = await get("bytes=8-50");
+    expect([past.headers.get("content-range"), await past.text()]).toEqual(["bytes 8-9/10", "89"]);
+    expect((await get("bytes=10-")).status).toBe(416);
+    // Several ranges, or none that parses, get the whole file.
+    const whole = await get("bytes=0-1,4-5");
+    expect([whole.status, await whole.text()]).toEqual([200, "0123456789"]);
+    expect((await get("bytes=5-2")).status).toBe(200);
+  });
+
   it("zips a folder under its own name, with only what is inside it, and only the user's", async () => {
     const response = await route(api.folderZipUrl("uploads/q3"), bucket());
     expect(response.status).toBe(200);
@@ -294,6 +322,9 @@ describe("file and folder downloads", () => {
     expect(previewKind("out/sales.csv")).toBe("table");
     expect(previewKind("out/a.pdf")).toBe("pdf");
     expect(previewKind("out/a.svg")).toBe("image");
+    expect(previewKind("out/a.mp3")).toBe("audio");
+    expect(previewKind("out/a.webm")).toBe("video");
+    expect(viewType("out/a.mov")).toBe("video/quicktime");
     // Fragments and encoded data the agent writes read as text: a fragment of a page never runs.
     expect(previewKind("out/page.htmlpart")).toBe("text");
     expect(previewKind("out/script.jsblock")).toBe("text");
