@@ -11,6 +11,7 @@ import { attachmentInput, pastedName, type Pending } from "./attach.ts";
 import {
   CHAT_MESSAGE_KIND,
   CHAT_PEOPLE_KIND,
+  everyone,
   PUBLISH_TOOL,
   type ChatMessageData,
   type ChatPeople,
@@ -22,7 +23,7 @@ import {
   type ReplyQuote,
 } from "../../shared/protocol.ts";
 import { textOf } from "../../shared/canonical.ts";
-import { AGENT_NAME, AGENT_TOKEN, taggedPeople, type Mention } from "../../shared/mentions.ts";
+import { AGENT_NAME, AGENT_TOKEN, type Mention } from "../../shared/mentions.ts";
 import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
 import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
@@ -444,11 +445,11 @@ function endsInAgentTurn(entries: readonly EntryRecord[]): boolean {
 function PeopleBar({ people, online, uid }: { people: ChatPeople; online: Presence[]; uid: string }) {
   // Each open window is a socket; someone no longer in the chat may still show for a moment, so only people in it count.
   const windows = new Map(online.map((presence) => [presence.uid, presence.windows]));
-  const everyone = [people.owner, ...people.members];
-  const here = everyone.filter((person) => windows.has(person.uid)).length;
+  const all = everyone(people);
+  const here = all.filter((person) => windows.has(person.uid)).length;
   return (
-    <div className="people-bar" aria-label={`${everyone.length} people, ${here} here now`}>
-      {everyone.map((person) => {
+    <div className="people-bar" aria-label={`${all.length} people, ${here} here now`}>
+      {all.map((person) => {
         const count = windows.get(person.uid) ?? 0;
         const you = person.uid === uid;
         const state = count === 0 ? "away" : count > 1 ? `here now, in ${count} windows` : "here now";
@@ -536,7 +537,7 @@ function User({
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
   const tint = people ? tintOf(people, author?.uid ?? uid) : undefined;
-  const tagsMe = !mine && taggedPeople(mentions).includes(uid);
+  const tagsMe = !mine && mentions?.some((mention) => mention.kind === "person" && mention.uid === uid);
   const files = attachments.length > 0 && (
     <div className={mine ? "attachments mine" : "attachments"}>
       {attachments.map((attachment) => (

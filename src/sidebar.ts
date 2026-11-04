@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MentionNotice, SidebarList } from "../shared/protocol.ts";
+import { isObject, text } from "../shared/util.ts";
 import { api, keepAlive } from "./api.ts";
 
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
@@ -93,10 +94,9 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>, onMen
 }
 
 function parseNotice(data: unknown): MentionNotice | null {
-  if (typeof data !== "string" || !data.startsWith("{")) return null;
   try {
-    const notice = JSON.parse(data) as Partial<MentionNotice>;
-    return notice.type === "mention" && typeof notice.chatId === "string" ? (notice as MentionNotice) : null;
+    const notice: unknown = typeof data === "string" ? JSON.parse(data) : null;
+    return isObject(notice) && notice.type === "mention" && text(notice.chatId) ? (notice as unknown as MentionNotice) : null;
   } catch {
     return null;
   }

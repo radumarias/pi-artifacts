@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { ChatSummary } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
+import { useStoredState } from "../layout.tsx";
 import { useLatest, useVisible } from "../sidebar.ts";
 
 /**
@@ -50,48 +51,65 @@ export function UnreadDot({ label }: { label: string }) {
 }
 
 /** Which chats the list shows: all, only the user's own nobody else is in, or shared ones (by them, with them, or both). */
-export type ChatFilter = "all" | "private" | "shared" | "shared-by-me" | "shared-with-me";
+type ChatFilter = "all" | "private" | "shared" | "shared-by-me" | "shared-with-me";
+
+/** Whether other people are in the chat: the user shared it, or someone shared it with them. */
+const isShared = (chat: ChatSummary) => Boolean(chat.sharedBy || chat.shared);
 
 const FILTERS: Record<ChatFilter, { label: string; title: string; keep: (chat: ChatSummary) => boolean }> = {
   all: { label: "All", title: "All chats", keep: () => true },
-  private: { label: "Private", title: "Your chats nobody else is in", keep: (chat) => !chat.sharedBy && !chat.shared },
-  shared: { label: "Shared", title: "Chats with other people in them", keep: (chat) => Boolean(chat.sharedBy || chat.shared) },
+  private: { label: "Private", title: "Your chats nobody else is in", keep: (chat) => !isShared(chat) },
+  shared: { label: "Shared", title: "Chats with other people in them", keep: isShared },
   "shared-by-me": { label: "By me", title: "Your chats you shared with others", keep: (chat) => Boolean(chat.shared) },
   "shared-with-me": { label: "With me", title: "Chats others shared with you", keep: (chat) => Boolean(chat.sharedBy) },
 };
+const CHOICES = Object.keys(FILTERS) as ChatFilter[];
 const TOP: readonly ChatFilter[] = ["all", "private", "shared"];
 const SHARED: readonly ChatFilter[] = ["shared", "shared-by-me", "shared-with-me"];
 
-export function isChatFilter(value: unknown): value is ChatFilter {
-  return typeof value === "string" && value in FILTERS;
-}
-
-export function filterChats(chats: readonly ChatSummary[], filter: ChatFilter): ChatSummary[] {
-  return chats.filter(FILTERS[filter].keep);
-}
+const isChatFilter = (value: unknown): value is ChatFilter => typeof value === "string" && value in FILTERS;
 
 /**
- * Above the chat list: All, Private or Shared, and within Shared, by the user or with them. A choice that hides a chat
- * where someone tagged the user, or with something unread, shows a dot.
+ * The chat list's filter, remembered in this browser. Until a chat is shared there is nothing to filter: then `bar` is
+ * false and every chat shows. `waiting` names the choices that would show a chat the current one hides where someone
+ * tagged the user, or with something unread.
  */
-export function ChatFilterBar({ chats, filter, onChange }: { chats: readonly ChatSummary[]; filter: ChatFilter; onChange: (filter: ChatFilter) => void }) {
-  const inShared = SHARED.includes(filter);
-  const chip = (choice: ChatFilter, active: boolean, label = FILTERS[choice].label) => {
-    const waiting = !active && filterChats(chats, choice).some((chat) => (chat.mentioned || chat.unread) && !FILTERS[filter].keep(chat));
-    return (
-      <button
-        key={choice}
-        type="button"
-        className={active ? "chip active" : "chip"}
-        aria-pressed={active}
-        title={FILTERS[choice].title}
-        onClick={() => onChange(choice)}
-      >
-        {label}
-        {waiting && <span className="chip-dot" aria-label="Has something new" />}
-      </button>
-    );
+export function useChatFilter(chats: readonly ChatSummary[]) {
+  const [stored, setFilter] = useStoredState<ChatFilter>("layout.chatFilter", "all", isChatFilter);
+  return {
+    setFilter,
+    ...useMemo(() => {
+      const bar = chats.some(isShared);
+      const filter = bar ? stored : "all";
+      const { keep } = FILTERS[filter];
+      const hidden = chats.filter((chat) => (chat.mentioned || chat.unread) && !keep(chat));
+      return {
+        bar,
+        filter,
+        shown: chats.filter(keep),
+        empty: !bar ? undefined : filter === "private" ? "No private chats." : "No shared chats here.",
+        waiting: new Set(CHOICES.filter((choice) => hidden.some(FILTERS[choice].keep))),
+      };
+    }, [chats, stored]),
   };
+}
+
+/** Above the chat list: All, Private or Shared, and within Shared, both, by the user or with them. */
+export function ChatFilterBar({ filter, setFilter, waiting }: ReturnType<typeof useChatFilter>) {
+  const inShared = SHARED.includes(filter);
+  const chip = (choice: ChatFilter, active: boolean, label = FILTERS[choice].label) => (
+    <button
+      key={choice}
+      type="button"
+      className={active ? "chip active" : "chip"}
+      aria-pressed={active}
+      title={FILTERS[choice].title}
+      onClick={() => setFilter(choice)}
+    >
+      {label}
+      {!active && waiting.has(choice) && <span className="chip-dot" aria-label="Has something new" />}
+    </button>
+  );
   return (
     <div className="chat-filter">
       <div className="chips" role="group" aria-label="Show chats">
@@ -112,9 +130,11 @@ interface ChatListProps {
   navigate: (path: string) => void;
   /** Ask to delete one of the user's own chats. */
   onDelete: (chatId: string) => void;
+  /** What to say when there are none to show. */
+  empty?: string;
 }
 
-export function ChatList({ chats, openId, navigate, onDelete, empty }: ChatListProps & { empty?: string }) {
+export function ChatList({ chats, openId, navigate, onDelete, empty }: ChatListProps) {
   if (chats.length === 0 && empty) return <p className="nav-empty">{empty}</p>;
   return (
     <nav>

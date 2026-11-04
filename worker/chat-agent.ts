@@ -29,7 +29,6 @@ import {
   type ChatStatus,
   type DeclaredTool,
   type McpError,
-  type MentionNotice,
   type ToolInfo,
   type Person,
   type Presence,
@@ -37,6 +36,7 @@ import {
   type QueuedMessage,
   type ReplyQuote,
   clampStaleMs,
+  everyone,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
@@ -69,7 +69,7 @@ import { GeminiCompat } from "./gemini.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
 import { catalogSource, currentCatalog, defaultModelChoice, listedProviders, loadCatalog, withCurrentPrices, withEffortRecorded, type Catalog } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
-import { mcpAuthStore } from "./users.ts";
+import { mcpAuthStore, type Tag } from "./users.ts";
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
@@ -549,11 +549,6 @@ export class ChatAgent extends DurableObject<Env> {
     return { owner: { uid: this.uid, name: this.members.ownerName(this.uid) }, members: this.members.list() };
   }
 
-  #everyone(): Person[] {
-    const { owner, members } = this.people();
-    return [owner, ...members];
-  }
-
   /** What one person's app shows: everyone in the chat, and for the owner the invites still open. */
   peopleFor(uid: string): ChatPeopleView {
     return { ...this.people(), ...(uid === this.uid && { invites: this.members.invites() }) };
@@ -585,6 +580,8 @@ export class ChatAgent extends DurableObject<Env> {
     const repliesToAgent = quote !== null && "agent" in quote;
     const calling = !shared || repliesToAgent || summonsAgent(text);
     const byOwner = author.uid === this.uid;
+    // Who may be tagged: everyone in the chat.
+    const inChat = new Map(everyone(this.people()).map((person) => [person.uid, person]));
     // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works.
     const own = byOwner ? [] : mentionInputs.filter((input): input is OwnFile => input.kind === "file" && input.own === true);
     const attaching = Promise.all([
@@ -606,7 +603,7 @@ export class ChatAgent extends DurableObject<Env> {
           byOwner,
           readMeta: (id) => this.storage.artifacts.readMeta(id),
           mayName: (path) => this.#isChatFile(path),
-          person: (uid) => this.#everyone().find((person) => person.uid === uid) ?? null,
+          person: (uid) => inChat.get(uid) ?? null,
         },
       ),
       // A message to the people in the chat starts no run: the agent needs its tools only when it is called.
@@ -758,22 +755,22 @@ export class ChatAgent extends DurableObject<Env> {
    * Move the chat up in everyone's sidebar, marked unread for all but the author. touchChat names a chat that has no
    * name yet after the prompt, so the first prompt names it, and a small model then gives it a better title.
    * Members' sidebars get a new title at once, but in a busy chat the others' are bumped at most once a minute: each is
-   * another object. The author's own always is. People the message tagged hear of it at once (UserDirectory.mentioned).
+   * another object. The author's own always is, and so is everyone the message tagged, who hears of it at once (a Tag).
    */
   async #touchIndexes(text: string, author: Person, message: { tagged: readonly string[]; text: string }): Promise<void> {
-    const { title, named } = await this.#directory.touchChat(this.chatId, text, author.uid !== this.uid);
-    if (named && text) void this.#nameChat(text, title).catch((error: unknown) => console.error("chat title:", errorMessage(error)));
     const now = Date.now();
-    const all = title !== this.#membersTouched.title || now - this.#membersTouched.at >= MEMBERS_TOUCH_MS;
-    if (all) this.#membersTouched = { title, at: now };
     // Someone tagging themselves is told nothing; anyone else tagged is, owner or member.
     const tagged = new Set(message.tagged.filter((uid) => uid !== author.uid));
-    const notice: MentionNotice = { type: "mention", chatId: this.chatId, title, from: author.name, text: excerpt(message.text), at: now };
-    const members = this.members.list().filter((member) => (all || member.uid === author.uid) && !tagged.has(member.uid));
-    await Promise.allSettled([
-      ...members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== author.uid)),
-      ...[...tagged].map((uid) => this.#index(uid).mentioned(this.chatId, this.uid, notice)),
-    ]);
+    const tag: Tag = { from: author.name, text: excerpt(message.text), at: now };
+    const tagOf = (uid: string) => (tagged.has(uid) ? tag : undefined);
+    const { title, named } = await this.#directory.touchChat(this.chatId, text, author.uid !== this.uid, tagOf(this.uid));
+    if (named && text) void this.#nameChat(text, title).catch((error: unknown) => console.error("chat title:", errorMessage(error)));
+    const all = title !== this.#membersTouched.title || now - this.#membersTouched.at >= MEMBERS_TOUCH_MS;
+    if (all) this.#membersTouched = { title, at: now };
+    const members = this.members.list().filter((member) => all || member.uid === author.uid || tagged.has(member.uid));
+    await Promise.allSettled(
+      members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== author.uid, tagOf(member.uid))),
+    );
   }
 
   /**
@@ -942,7 +939,8 @@ export class ChatAgent extends DurableObject<Env> {
    */
   #tellShared(): void {
     const shared = this.members.hasAny();
-    if (this.ctx.storage.kv.get<boolean>(SHARED_KEY) === shared) return;
+    // Never told: the sidebar's default is not shared.
+    if ((this.ctx.storage.kv.get<boolean>(SHARED_KEY) ?? false) === shared) return;
     void this.#directory.setChatShared(this.chatId, shared).then(
       () => this.ctx.storage.kv.put(SHARED_KEY, shared),
       (error: unknown) => console.error("chat shared:", errorMessage(error)),

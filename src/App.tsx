@@ -6,7 +6,7 @@ import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
-import { ChatFilterBar, ChatList, filterChats, isChatFilter, UnreadDot, useChatList, type ChatFilter } from "./chat/ChatList.tsx";
+import { ChatFilterBar, ChatList, UnreadDot, useChatFilter, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { MentionToasts, useMentionNotices } from "./chat/notify.tsx";
 import { DeleteChat } from "./chat/DeleteChat.tsx";
@@ -218,10 +218,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false, isBoolean);
-  // Until a chat is shared there is nothing to filter: the bar is hidden and every chat shows.
-  const [storedFilter, setChatFilter] = useStoredState<ChatFilter>("layout.chatFilter", "all", isChatFilter);
-  const chatFilter = chats.some((chat) => chat.sharedBy || chat.shared) ? storedFilter : "all";
-  const filteredChats = useMemo(() => filterChats(chats, chatFilter), [chats, chatFilter]);
+  const chatFilter = useChatFilter(chats);
   const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", true, isBoolean);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.
@@ -350,14 +347,8 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
           {/* Chats scroll here; artifacts, skills and the files panel stay below them. */}
           <div className="sidebar-scroll">
           <h3>Chats</h3>
-          {chats.some((chat) => chat.sharedBy || chat.shared) && <ChatFilterBar chats={chats} filter={chatFilter} onChange={setChatFilter} />}
-          <ChatList
-            chats={filteredChats}
-            openId={chatId}
-            navigate={navigate}
-            onDelete={setDeleting}
-            empty={chats.length > 0 ? `No ${chatFilter === "private" ? "private" : "shared"} chats yet.` : undefined}
-          />
+          {chatFilter.bar && <ChatFilterBar {...chatFilter} />}
+          <ChatList chats={chatFilter.shown} openId={chatId} navigate={navigate} onDelete={setDeleting} empty={chatFilter.empty} />
           </div>
           <section className="sidebar-pinned">
             <SectionHead name="Artifacts" count={artifacts.length + chatArtifacts.length} open={artifactsOpen} onToggle={setArtifactsOpen}>

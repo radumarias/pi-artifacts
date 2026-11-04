@@ -1,6 +1,6 @@
 import { createContext, useContext, type CSSProperties } from "react";
 import { AGENT_NAME } from "../../shared/mentions.ts";
-import type { ChatPeople } from "../../shared/protocol.ts";
+import { everyone, type ChatPeople } from "../../shared/protocol.ts";
 
 /** How many colours people in a shared chat get (--person-0 to --person-7 in styles.css). */
 const TINTS = 8;
@@ -10,7 +10,7 @@ const TINTS = 8;
  * members as they joined), so up to eight people never share one; someone no longer in it gets one from their uid.
  */
 export function tintOf(people: ChatPeople, uid: string): number {
-  const place = [people.owner, ...people.members].findIndex((person) => person.uid === uid);
+  const place = everyone(people).findIndex((person) => person.uid === uid);
   if (place >= 0) return place % TINTS;
   let hash = 0;
   for (const char of uid) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;

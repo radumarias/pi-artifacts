@@ -16,7 +16,7 @@ import {
   type MentionInput,
   type MentionOptions,
 } from "../../shared/mentions.ts";
-import type { ChatPeople } from "../../shared/protocol.ts";
+import { everyone, type ChatPeople } from "../../shared/protocol.ts";
 import { formatBytes } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Avatar, tintOf, tintStyle, useSharedChat } from "./people.tsx";
@@ -78,7 +78,7 @@ export function useMentions(
   const others = useMemo<MentionChoice[]>(
     () =>
       people
-        ? [people.owner, ...people.members]
+        ? everyone(people)
             .filter((person) => person.uid !== uid)
             .map((person) => ({
               mention: { kind: "person" as const, uid: person.uid, name: person.name },
@@ -91,7 +91,6 @@ export function useMentions(
     () =>
       options
         ? [
-            ...others,
             ...options.artifacts.map((a) => ({
               mention: { kind: "artifact" as const, id: a.id, title: a.title },
               detail: `artifact · v${a.latest}${a.chatId === chatId ? " · this chat" : ""}`,
@@ -101,14 +100,14 @@ export function useMentions(
               detail: f.own ? `your file · ${formatBytes(f.size)}` : formatBytes(f.size),
             })),
           ]
-        : others,
-    [options, chatId, others],
+        : [],
+    [options, chatId],
   );
   const choices = useMemo<Choice[]>(() => {
     if (!query) return [];
     const callsAgent = shared && AGENT_NAME.startsWith(query.query.trim().toLowerCase());
-    return [...(callsAgent ? [AGENT_CHOICE] : []), ...matchMentions(all, query.query)];
-  }, [all, query?.query, shared]);
+    return [...(callsAgent ? [AGENT_CHOICE] : []), ...matchMentions([...others, ...all], query.query)];
+  }, [all, others, query?.query, shared]);
   // An "@" in running text ("@ the team") matches nothing once a space follows: then it was not a mention.
   const open = query !== null && !(options && choices.length === 0 && /\s/.test(query.query));
 

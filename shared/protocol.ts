@@ -209,8 +209,8 @@ export interface ChatSummary {
 }
 
 /**
- * What the sidebar's socket (GET /api/me/ws) sends: the name of a list that changed, so the app reads it again, or a
- * MentionNotice as JSON.
+ * What the sidebar's socket (GET /api/me/ws) sends: the name of a list that changed, so the app reads it again. A
+ * MentionNotice comes as JSON.
  */
 export type SidebarList = "chats" | "artifacts" | "skills";
 
@@ -218,8 +218,8 @@ export type SidebarList = "chats" | "artifacts" | "skills";
 export interface MentionNotice {
   type: "mention";
   chatId: string;
-  /** The chat's title. */
-  title: string;
+  /** The chat's title; none when the chat is named after this very message. */
+  title?: string;
   /** Who tagged them. */
   from: string;
   /** The start of the message. */
@@ -232,6 +232,11 @@ export interface MentionNotice {
 export interface Person {
   uid: string;
   name: string;
+}
+
+/** Everyone in a chat: its owner first, then its members as they joined. */
+export function everyone(people: ChatPeople): Person[] {
+  return [people.owner, ...people.members];
 }
 
 /** Who is in a chat. Members joined by an invite; only the owner can invite or remove them. */

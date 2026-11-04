@@ -13,6 +13,9 @@ export function mcpAuthStore(uid: string, server: string): McpAuthStore {
   return { get: () => directory.mcpAuth(server), update: (change) => directory.updateMcpAuth(server, change) };
 }
 
+/** A message that tagged this user: who wrote it, its start, and when. */
+export type Tag = Pick<MentionNotice, "from" | "text" | "at">;
+
 type ArtifactRow = { id: string; title: string; chat_id: string; latest: number; updated_at: number; seen: number };
 
 type SkillRow = {
@@ -107,15 +110,12 @@ export class UserDirectory extends DurableObject<Env> {
     }
   }
 
-  /** Tell the open sidebars that a list changed. */
-  #changed(list: SidebarList): void {
-    this.#send(list);
-  }
-
-  #send(message: string): void {
+  /** Tell the open sidebars that a list changed, or that someone tagged this user. */
+  #changed(message: SidebarList | MentionNotice): void {
+    const sent = typeof message === "string" ? message : JSON.stringify(message);
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        ws.send(message);
+        ws.send(sent);
       } catch {
         // Closing; the app reads the list again when it reconnects.
       }
@@ -137,7 +137,7 @@ export class UserDirectory extends DurableObject<Env> {
         mentioned: number;
       }>(
         `SELECT id, title, created_at, updated_at, NULL AS shared_by, shared, status, activity_at > seen_at AS unread, mentioned_at > seen_at AS mentioned FROM chats
-         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, 1, status, activity_at > seen_at, mentioned_at > seen_at FROM shared_chats
+         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, 0, status, activity_at > seen_at, mentioned_at > seen_at FROM shared_chats
          ORDER BY updated_at DESC`,
       )
       .toArray()
@@ -178,8 +178,7 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** Whether this user's own chat `id` has members now. */
   setChatShared(id: string, shared: boolean): void {
-    const flag = shared ? 1 : 0;
-    if (this.ctx.storage.sql.exec("UPDATE chats SET shared = ? WHERE id = ? AND shared != ?", flag, id, flag).rowsWritten) this.#changed("chats");
+    this.#updateChat(id, this.ctx.id.name!, "shared = ?", shared ? 1 : 0);
   }
 
   /** This user has seen everything in the chat so far. */
@@ -216,22 +215,19 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /** Bump a shared chat to the top with its current title, as touchChat does for the owner. `byOther`: someone else wrote. */
-  touchSharedChat(id: string, ownerUid: string, title: string, byOther: boolean): void {
-    this.#touch(id, ownerUid, title, byOther);
-  }
-
-  #touch(id: string, ownerUid: string, title: string, byOther: boolean): void {
-    const now = Date.now();
-    this.#updateChat(id, ownerUid, "title = ?, updated_at = ?, activity_at = CASE WHEN ? THEN ? ELSE activity_at END", title, now, byOther ? 1 : 0, now);
+  touchSharedChat(id: string, ownerUid: string, title: string, byOther: boolean, tag?: Tag): void {
+    this.#touch(id, ownerUid, title, byOther, tag);
   }
 
   /**
-   * Someone tagged this user in chat `id`: bump it, unread and marked as a tag until they look, and tell the open apps
-   * (MentionNotice), which show it. Nothing for a chat they are not in.
+   * Bump a chat. With `tag`, the message tagged this user: the chat is marked so until they look, and the open apps hear
+   * it (MentionNotice), with the chat's title unless the chat is named after this very message.
    */
-  mentioned(id: string, ownerUid: string, notice: MentionNotice): void {
-    const { title, at } = notice;
-    if (this.#updateChat(id, ownerUid, "title = ?, updated_at = ?, activity_at = ?, mentioned_at = ?", title, at, at, at)) this.#send(JSON.stringify(notice));
+  #touch(id: string, ownerUid: string, title: string, byOther: boolean, tag?: Tag): void {
+    const now = tag?.at ?? Date.now();
+    const set = "title = ?, updated_at = ?, activity_at = CASE WHEN ? THEN ? ELSE activity_at END, mentioned_at = CASE WHEN ? THEN ? ELSE mentioned_at END";
+    if (!this.#updateChat(id, ownerUid, set, title, now, byOther ? 1 : 0, now, tag ? 1 : 0, now) || !tag) return;
+    this.#changed({ type: "mention", chatId: id, ...(title !== titleFromMessage(tag.text) && { title }), ...tag });
   }
 
   removeSharedChat(id: string, ownerUid: string): void {
@@ -253,11 +249,11 @@ export class UserDirectory extends DurableObject<Env> {
    * Bump a chat to the top. A chat still unnamed is named after the prompt, so the first prompt names it (`named`), until
    * a model gives it a better title (nameChat). `byOther`: someone other than this user wrote it. Returns its title.
    */
-  touchChat(id: string, prompt: string, byOther: boolean): { title: string; named: boolean } {
+  touchChat(id: string, prompt: string, byOther: boolean, tag?: Tag): { title: string; named: boolean } {
     const before = this.chatTitle(id);
     const named = before === UNNAMED_CHAT;
     const title = named || before === null ? titleFromMessage(prompt) : before;
-    this.#touch(id, this.ctx.id.name!, title, byOther);
+    this.#touch(id, this.ctx.id.name!, title, byOther, tag);
     return { title, named };
   }
 
