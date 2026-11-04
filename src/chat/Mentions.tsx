@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObjec
 import { baseName } from "../../shared/attachments.ts";
 import {
   activeQuery,
-  AGENT_HANDLE,
   AGENT_NAME,
   AGENT_TOKEN,
   splitAgent,
@@ -44,7 +43,7 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
   // came from; edit the text, or type on past it, and the list reopens.
   const done =
     typed !== null &&
-    [...picked.map(mentionLabel), ...(shared ? [AGENT_HANDLE] : [])].some(
+    [...picked.map(mentionLabel), ...(shared ? [AGENT_NAME] : [])].some(
       (label) => draft.startsWith(`@${label}`, typed.start) && typed.query.trimEnd().length <= label.length,
     );
   const query = typed && !done && typed.start !== dismissedAt ? typed : null;
@@ -82,7 +81,7 @@ export function useMentions(chatId: string, draft: string, setDraft: (text: stri
   );
   const choices = useMemo<Choice[]>(() => {
     if (!query) return [];
-    const callsAgent = shared && AGENT_HANDLE.startsWith(query.query.trim().toLowerCase());
+    const callsAgent = shared && AGENT_NAME.startsWith(query.query.trim().toLowerCase());
     return [...(callsAgent ? [AGENT_CHOICE] : []), ...matchMentions(all, query.query)];
   }, [all, query?.query, shared]);
   // An "@" in running text ("@ the team") matches nothing once a space follows: then it was not a mention.
@@ -194,6 +193,7 @@ function choiceKey(choice: Choice): string {
  * and the agent where it was called.
  */
 export function MentionText({ text, mentions }: { text: string; mentions?: Mention[] }) {
+  if (!text.includes("@")) return <>{text}</>;
   return (
     <>
       {splitMentions(text, mentions ?? []).map((part, i) =>

@@ -45,7 +45,7 @@ import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../s
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
-import { replyLine, replyQuote } from "./agent/replies.ts";
+import { replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
@@ -56,10 +56,10 @@ import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget,
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
 import type { ChatAnswer } from "./artifacts/page-calls.ts";
-import { chatOutFolder, chatTraces } from "./chat-traces.ts";
+import { chatOutFolder, chatTraces, type ChatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
 import { literalPath } from "./storage/paths.ts";
-import type { FileEntry } from "./storage/user-files.ts";
+import { newestFirst, type FileEntry } from "./storage/user-files.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
@@ -102,8 +102,6 @@ function callFailure(error: unknown, server: string): McpError {
 }
 const MEMBERS_TOUCH_MS = 60_000;
 
-/** How long one read of a chat's files serves at most (ChatAgent.chatFiles): a sidebar's list and the previews it opens. */
-const CHAT_FILES_MS = 5_000;
 /**
  * How long a chat must stay idle before the sidebars hear its run ended: the next queued message starts its run right
  * after, and the spinner should not blink between them.
@@ -225,8 +223,8 @@ export class ChatAgent extends DurableObject<Env> {
   #statusWrites: Promise<unknown> = Promise.resolve();
   /** The last read of the queue, by the inbox ids it was for: every socket asks after the same commit. */
   #queuedRead: { key: string; read: Promise<QueuedMessage[]> } | undefined;
-  /** The last read of the chat's files (see chatFiles). */
-  #chatFiles: { at: number; newest: number; files: Promise<FileEntry[]> } | undefined;
+  /** What the transcript names, as far as it was read (see #transcriptTraces). */
+  #seen: { through: number; traces: ChatTraces } = { through: -1, traces: chatTraces([]) };
   /** Set once the owner starts deleting the chat, and kept as its only record after: from then on nobody is in it. */
   #gone = this.#deleted();
 
@@ -576,10 +574,13 @@ export class ChatAgent extends DurableObject<Env> {
     const byOwner = author.uid === this.uid;
     // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works.
     const own = byOwner ? [] : mentionInputs.filter((input) => input.kind === "file" && input.own);
-    const copied = own.length ? await this.#copyOwnFiles(author, own) : [];
-    const attaching = [...attachments, ...copied];
-    const [attached, { mentions, note, broughtIn }] = await Promise.all([
-      attaching.length ? this.scope.files().then((files) => attachmentContent(attaching, files, this.#toMarkdown)) : undefined,
+    const attaching = own.length ? this.#copyOwnFiles(author, own).then((copied) => [...attachments, ...copied]) : attachments;
+    const [[attached, title], { mentions, note, broughtIn }] = await Promise.all([
+      // Named after its text, or its files when it has none: for the sidebars.
+      Promise.resolve(attaching).then(async (inputs) => [
+        inputs.length ? await attachmentContent(inputs, await this.scope.files(), this.#toMarkdown) : undefined,
+        text || inputs.map((a) => baseName(a.path)).join(", "),
+      ] as const),
       resolveMentions(
         mentionInputs.filter((input) => !own.includes(input)),
         {
@@ -587,7 +588,7 @@ export class ChatAgent extends DurableObject<Env> {
           chatId: this.chatId,
           byOwner,
           readMeta: (id) => this.storage.artifacts.readMeta(id),
-          memberFile: async ({ path }) => ((await this.chatFiles()).some((file) => file.path === path) ? path : null),
+          mayName: (path) => this.#isChatFile(path),
         },
       ),
       // A message to the people in the chat starts no run: the agent needs its tools only when it is called.
@@ -613,7 +614,6 @@ export class ChatAgent extends DurableObject<Env> {
     if (summoned) await this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
     else await this.#aside(content, data);
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
-    const title = text || attaching.map((a) => baseName(a.path)).join(", ");
     void this.#touchIndexes(title, author.uid).catch((error) => console.error("chat index:", errorMessage(error)));
   }
 
@@ -658,52 +658,46 @@ export class ChatAgent extends DurableObject<Env> {
   async #copyOwnFiles(author: Person, inputs: readonly MentionInput[]): Promise<AttachmentInput[]> {
     const [theirs, owners] = await Promise.all([this.storage.userFiles(author.uid), this.scope.files()]);
     const taken = new Set((await owners.list(`${UPLOADS}/`)).map((file) => file.path));
-    const copied: AttachmentInput[] = [];
-    for (const input of inputs) {
-      const path = input.kind === "file" && literalPath(input.path);
-      const object = path && (await theirs.get(path));
-      if (!object) continue;
+    // Named first, so no two take one name; then copied at once.
+    const copies = inputs.flatMap((input) => {
+      const path = literalPath(input.kind === "file" ? input.path : "");
+      if (!path) return [];
       const target = freePath(uploadTargets([baseName(path)])[0], taken);
       taken.add(target);
-      copied.push({ path: await owners.put(target, object.body, object.httpMetadata?.contentType) });
-    }
-    return copied;
+      return [{ path, target }];
+    });
+    const copied = await Promise.all(
+      copies.map(async ({ path, target }) => {
+        const object = await theirs.get(path);
+        return object ? { path: await owners.put(target, object.body, object.httpMetadata?.contentType) } : null;
+      }),
+    );
+    return copied.filter((input) => input !== null);
   }
 
-  /**
-   * The owner's files that belong to this chat, as the people it is shared with may see and name them: attached to its
-   * messages, saved by its agent, or in its own out/ folder, and still there. Read for each request a sidebar or preview
-   * makes, so a burst of them shares one read, while the transcript stays as it was and for CHAT_FILES_MS at most.
-   */
+  /** Whether `path` of the owner's files belongs to this chat: attached to its messages, saved by its agent, or in its out/ folder. */
+  async #isChatFile(path: string): Promise<boolean> {
+    return path.startsWith(chatOutFolder(this.chatId)) || (await this.#transcriptTraces()).files.has(path);
+  }
+
+  /** The owner's files that belong to this chat (#isChatFile) and are still there, as the people it is shared with see them. */
   async chatFiles(): Promise<FileEntry[]> {
-    const newest = (await (await this.#root()).entries({}, 1, undefined, BACKGROUND_CONTEXT)).items[0]?.id ?? -1;
-    const now = Date.now();
-    const cached = this.#chatFiles;
-    if (cached && cached.newest === newest && now - cached.at <= CHAT_FILES_MS) return cached.files;
-    const files = (async () => {
-      const [traces, listed] = await Promise.all([this.#traces(), this.scope.files().then((files) => files.list())]);
-      const named = new Set(traces.files);
-      const out = chatOutFolder(this.chatId);
-      return listed.filter((file) => named.has(file.path) || file.path.startsWith(out));
-    })();
-    this.#chatFiles = { at: now, newest, files };
-    files.catch(() => {
-      if (this.#chatFiles?.files === files) this.#chatFiles = undefined;
-    });
-    return files;
+    const [traces, listed] = await Promise.all([this.#transcriptTraces(), this.scope.files().then((files) => files.list())]);
+    const out = chatOutFolder(this.chatId);
+    return listed.filter((file) => traces.files.has(file.path) || file.path.startsWith(out));
   }
 
   /** What the chat holds of the owner's, for someone in it: its files (chatFiles) and the artifacts published from it. */
   async contents(uid: string): Promise<ChatContents | null> {
     if (!this.isInChat(uid)) return null;
     const [files, artifacts] = await Promise.all([this.chatFiles(), this.#directory.listChatArtifacts(this.chatId)]);
-    return { files: files.sort((a, b) => +b.uploaded - +a.uploaded).map(({ path, size }) => ({ path, size })), artifacts };
+    return { files: newestFirst(files), artifacts };
   }
 
   /** Whether `uid` may open `path` of the owner's files through this chat: the owner any, someone else only a chat file. */
   async mayOpenFile(uid: string, path: string): Promise<boolean> {
     if (!this.isInChat(uid)) return false;
-    return uid === this.uid || (await this.chatFiles()).some((file) => file.path === path);
+    return uid === this.uid || this.#isChatFile(path);
   }
 
   /** A PDF or office document as Markdown, by Workers AI (no model is involved for these formats). */
@@ -992,17 +986,27 @@ export class ChatAgent extends DurableObject<Env> {
    * one the list missed goes too), and the files it attached or saved. Read a page of the history at a time.
    */
   async #traces(): Promise<{ artifacts: string[]; files: string[] }> {
+    const [traces, ids] = await Promise.all([this.#transcriptTraces(), this.#directory.chatArtifactIds(this.chatId)]);
+    return { artifacts: [...new Set([...traces.artifacts, ...ids])], files: [...traces.files] };
+  }
+
+  /**
+   * What the transcript names (chatTraces), read on from where the last read stopped: entries never change once
+   * written, so a chat's files are known without reading its whole history on every request.
+   */
+  readonly #transcriptTraces = singleFlight(async (): Promise<ChatTraces> => {
     const root = await this.#root();
-    const traces = chatTraces([]);
+    const seen = this.#seen;
     let cursor: Cursor | undefined;
     do {
-      const page = await root.entries({ order: "ascending" }, 500, cursor, BACKGROUND_CONTEXT);
-      chatTraces(page.items, traces);
+      const page = await root.entries({ order: "ascending", minEntryId: (seen.through + 1) as EntryId }, 500, cursor, BACKGROUND_CONTEXT);
+      chatTraces(page.items, seen.traces);
+      const last = page.items.at(-1);
+      if (last) seen.through = last.id as number;
       cursor = page.next;
     } while (cursor);
-    for (const id of await this.#directory.chatArtifactIds(this.chatId)) traces.artifacts.add(id);
-    return { artifacts: [...traces.artifacts], files: [...traces.files] };
-  }
+    return seen.traces;
+  });
 
   /**
    * Publish without the model, the way the agent does (write, check, publish), the browser check included: a page with

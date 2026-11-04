@@ -30,10 +30,9 @@ export interface MentionOptions {
 /** The agent's name, as the chat shows it. */
 export const AGENT_NAME = "pi";
 /** How a message in a shared chat calls the agent; any other message there is people talking among themselves. */
-export const AGENT_HANDLE = AGENT_NAME;
-export const AGENT_TOKEN = `@${AGENT_HANDLE}`;
+export const AGENT_TOKEN = `@${AGENT_NAME}`;
 /** "@pi" as a word: not inside an address ("x@pi.dev"), a longer name ("@pierre") or a path ("@pi/notes.md"). */
-const AGENT_PATTERN = `(^|[^\\w@.])@${AGENT_HANDLE}(?![\\w/@-]|\\.\\w)`;
+const AGENT_PATTERN = `(^|[^\\w@.])${AGENT_TOKEN}(?![\\w/@-]|\\.\\w)`;
 
 /** Whether a message calls the agent ("@pi"), outside the files and artifacts it names (a file "pi notes.md" is not it). */
 export function summonsAgent(text: string, mentions: readonly Mention[] = []): boolean {
@@ -159,10 +158,10 @@ export function parseMentions(raw: unknown): MentionInput[] {
   if (!Array.isArray(raw)) throw new Error("Mentions must be a list.");
   if (raw.length > MAX_MENTIONS) throw new Error(`A message takes at most ${MAX_MENTIONS} mentions.`);
   const parsed: MentionInput[] = [];
-  for (const item of raw as Partial<{ kind: string; path: unknown; id: unknown }>[]) {
+  for (const item of raw as Partial<{ kind: string; path: unknown; id: unknown; own: unknown }>[]) {
     const mention: MentionInput | null =
       item?.kind === "file" && typeof item.path === "string" && item.path.length > 0 && item.path.length <= MAX_PATH
-        ? { kind: "file", path: item.path, ...((item as { own?: unknown }).own === true && { own: true as const }) }
+        ? { kind: "file", path: item.path, ...(item.own === true && { own: true as const }) }
         : item?.kind === "artifact" && typeof item.id === "string" && ID_PATTERN.test(item.id)
           ? { kind: "artifact", id: item.id }
           : null;

@@ -9,8 +9,8 @@ const TINTS = 8;
  * Each person's colour in a shared chat, the same in every window: by their place in the chat (the owner first, then
  * members as they joined), so up to eight people never share one; someone no longer in it gets one from their uid.
  */
-export function tintOf(people: ChatPeople | null, uid: string): number {
-  const place = people ? [people.owner, ...people.members].findIndex((person) => person.uid === uid) : -1;
+export function tintOf(people: ChatPeople, uid: string): number {
+  const place = [people.owner, ...people.members].findIndex((person) => person.uid === uid);
   if (place >= 0) return place % TINTS;
   let hash = 0;
   for (const char of uid) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;

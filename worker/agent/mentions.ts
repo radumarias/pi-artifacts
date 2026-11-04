@@ -10,11 +10,8 @@ export interface MentionScope {
   /** Whether the message's author is the owner. Others may name only this chat's artifacts. */
   byOwner: boolean;
   readMeta(id: string): Promise<ArtifactMeta | null>;
-  /**
-   * For someone other than the owner: the path in the owner's files a file they named stands for, or null when they
-   * may not name it (see ChatAgent.#memberFile). The owner may name any of their files.
-   */
-  memberFile?(input: Extract<MentionInput, { kind: "file" }>): Promise<string | null>;
+  /** Whether someone other than the owner may name this file of the owner's: without it, they may name none. */
+  mayName?(path: string): Promise<boolean>;
 }
 
 /**
@@ -31,7 +28,7 @@ export function mentionable(artifact: Pick<ArtifactMeta, "chatId">, chatId: stri
  * the model gets after the text, with exact paths and artifact ids; and the
  * artifacts from the owner's other chats it names, which the agent may then
  * read here (ChatScope.broughtIn). A file is taken by its path, which the
- * agent's tools check when they open it (someone else's only as memberFile
+ * agent's tools check when they open it (someone else's only as mayName
  * allows); an artifact must be the owner's and mentionable. Anything else is
  * dropped.
  */
@@ -42,9 +39,9 @@ export async function resolveMentions(
   const resolved = await Promise.all(
     inputs.map(async (input): Promise<{ mention: Mention; said: string; elsewhere?: boolean } | null> => {
       if (input.kind === "file") {
-        const literal = literalPath(input.path);
-        const path = literal && (scope.byOwner || !scope.memberFile ? literal : await scope.memberFile({ ...input, path: literal }));
-        return path ? { mention: { kind: "file", path }, said: `the file ${path}` } : null;
+        const path = literalPath(input.path);
+        if (!path || !(scope.byOwner || (await scope.mayName?.(path)))) return null;
+        return { mention: { kind: "file", path }, said: `the file ${path}` };
       }
       // One artifact that cannot be read is dropped like a missing one, not a reason to refuse the whole message.
       const meta = await scope.readMeta(input.id).catch((error: unknown) => {

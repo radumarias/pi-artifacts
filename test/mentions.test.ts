@@ -12,7 +12,7 @@ import {
 } from "../shared/mentions.ts";
 import type { ArtifactMeta } from "../shared/protocol.ts";
 import { resolveMentions } from "../worker/agent/mentions.ts";
-import { replyLine, replyQuote } from "../worker/agent/replies.ts";
+import { replyLine, replyQuote } from "../shared/replies.ts";
 
 const file = (path: string): MentionChoice => ({ mention: { kind: "file", path }, detail: "" });
 const artifact = (id: string, title: string): MentionChoice => ({ mention: { kind: "artifact", id, title }, detail: "" });
@@ -190,22 +190,18 @@ describe("calling the agent", () => {
 describe("a member's file mentions", () => {
   const scope = { ownerUid: "ada", chatId: "chat1", byOwner: false, readMeta: async () => null };
 
-  it("keep only what memberFile allows, as the path it gives", async () => {
-    const { mentions } = await resolveMentions(
-      [
-        { kind: "file", path: "uploads/chat.csv" },
-        { kind: "file", path: "secret/plans.md" },
-      ],
-      {
-        ...scope,
-        memberFile: async ({ path }) => (path === "uploads/chat.csv" ? path : null),
-      },
-    );
+  it("keep only what mayName allows, and none without it", async () => {
+    const inputs = [
+      { kind: "file" as const, path: "uploads/chat.csv" },
+      { kind: "file" as const, path: "secret/plans.md" },
+    ];
+    const { mentions } = await resolveMentions(inputs, { ...scope, mayName: async (path) => path === "uploads/chat.csv" });
     expect(mentions).toEqual([{ kind: "file", path: "uploads/chat.csv" }]);
+    expect((await resolveMentions(inputs, scope)).mentions).toEqual([]);
   });
 
   it("leave the owner's own mentions alone", async () => {
-    const { mentions } = await resolveMentions([{ kind: "file", path: "secret/plans.md" }], { ...scope, byOwner: true, memberFile: async () => null });
+    const { mentions } = await resolveMentions([{ kind: "file", path: "secret/plans.md" }], { ...scope, byOwner: true, mayName: async () => false });
     expect(mentions).toEqual([{ kind: "file", path: "secret/plans.md" }]);
   });
 });

@@ -1,12 +1,11 @@
 import { exports } from "cloudflare:workers";
 import type { MentionOptions } from "../shared/mentions.ts";
-import { mentionable } from "./agent/mentions.ts";
-import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type ChatContents, type ChatDeletion, type CreatedInvite, type Person } from "../shared/protocol.ts";
+import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type ArtifactSummary, type ChatContents, type ChatDeletion, type CreatedInvite, type Person } from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
 import { serveChatFile, storeUpload } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
 import { parseInviteToken } from "./members.ts";
-import type { FileEntry, UserFiles } from "./storage/user-files.ts";
+import { newestFirst, type UserFiles } from "./storage/user-files.ts";
 import type { UserDirectory } from "./users.ts";
 
 /**
@@ -91,25 +90,21 @@ export async function chatRoute(
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
     return storeUpload(request, () => filesOf(ownerUid));
   }
-  // What "@" offers. The owner: all their files, and those of their artifacts they may name here (mentionable). Anyone
+  // What "@" offers. The owner: all their files and artifacts (see mentionable). Anyone
   // else: only what the chat holds of the owner's, and their own files, which the chat copies to the owner's when named.
   if (what === "mentions" && method === "GET" && !item) {
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
-    const byOwner = person.uid === ownerUid;
-    const newest = (files: FileEntry[]) => files.sort((a, b) => +b.uploaded - +a.uploaded).map(({ path, size }) => ({ path, size }));
-    if (!byOwner) {
+    const offered = (artifacts: ArtifactSummary[]) => artifacts.map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId }));
+    if (person.uid !== ownerUid) {
       const [contents, own] = await Promise.all([chat.contents(person.uid), filesOf(person.uid).then((f) => f.list())]);
       if (!contents) return json({ error: "You are not in this chat." }, 403);
       return json({
-        files: [...contents.files, ...newest(own).map((f) => ({ ...f, own: true as const }))],
-        artifacts: contents.artifacts.map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId })),
+        files: [...contents.files, ...newestFirst(own).map((f) => ({ ...f, own: true as const }))],
+        artifacts: offered(contents.artifacts),
       } satisfies MentionOptions);
     }
     const [files, artifacts] = await Promise.all([filesOf(ownerUid).then((f) => f.list()), exports.UserDirectory.getByName(ownerUid).listArtifacts()]);
-    return json({
-      files: newest(files),
-      artifacts: artifacts.filter((a) => mentionable(a, chatId, true)).map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId })),
-    } satisfies MentionOptions);
+    return json({ files: newestFirst(files), artifacts: offered(artifacts) } satisfies MentionOptions);
   }
   if (what === "contents" && method === "GET" && !item) {
     const contents = await chat.contents(person.uid);

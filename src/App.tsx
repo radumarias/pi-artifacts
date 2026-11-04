@@ -462,11 +462,13 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
       {preview &&
         ("file" in preview ? (
           <ErrorBoundary key={`file:${preview.base ?? ""}:${preview.file}`} what="the preview">
-            {preview.base ? (
-              <FilePreview path={preview.file} files={contents?.files ?? []} onOpen={openChatFile} onClose={closePreview} base={preview.base} />
-            ) : (
-              <FilePreview path={preview.file} files={files} onOpen={openFile} onClose={closePreview} />
-            )}
+            <FilePreview
+              path={preview.file}
+              files={preview.base ? (contents?.files ?? []) : files}
+              onOpen={preview.base ? openChatFile : openFile}
+              onClose={closePreview}
+              base={preview.base}
+            />
           </ErrorBoundary>
         ) : (
           <ErrorBoundary key={preview.artifactId} what="the preview">

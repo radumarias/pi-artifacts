@@ -10,6 +10,11 @@ export interface FileEntry {
   uploaded: Date;
 }
 
+/** Files as the app lists them: newest first, by path and size. */
+export function newestFirst(files: FileEntry[]): { path: string; size: number }[] {
+  return files.sort((a, b) => +b.uploaded - +a.uploaded).map(({ path, size }) => ({ path, size }));
+}
+
 /**
  * One user's files, and nothing else. Every key is built here from the uid
  * this object was created with, and every read and write carries that user's

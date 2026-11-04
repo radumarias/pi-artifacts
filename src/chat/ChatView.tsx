@@ -22,7 +22,9 @@ import {
   type QueuedMessage,
   type ReplyQuote,
 } from "../../shared/protocol.ts";
+import { textOf } from "../../shared/canonical.ts";
 import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
+import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
 import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
 import { ChatCost, PromptCost } from "./Cost.tsx";
@@ -183,7 +185,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   const mine = online.find((presence) => presence.uid === uid)?.windows ?? 0;
   // Where each reply of the agent's starts: after a person's message, its name goes over it in a shared chat.
   const bylines = useMemo(() => (shared ? agentTurns(state.entries) : new Set<number>()), [shared, state.entries]);
-  const agentLast = shared !== null && endsInAgentTurn(state.entries);
+  const agentLast = useMemo(() => shared !== null && endsInAgentTurn(state.entries), [shared, state.entries]);
   const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
   return (
     <SharedChat.Provider value={shared}>
@@ -362,11 +364,12 @@ const Entry = memo(function Entry({
 }) {
   const people = useSharedChat();
   const message = entry.model?.[0];
-  const id = entry.id as number;
+  // What a reply to it quotes: none for a message from before replies (pi.user).
+  const quote = replyQuote(entry);
+  const answer = quote ? () => onReply(quote) : undefined;
   if (entry.kind === "pi.user" && message?.role === "user") {
-    const text = userText(message);
     const author = ownerName === undefined ? undefined : { uid: people?.owner.uid ?? "", name: ownerName };
-    return <User text={text} author={author} uid={uid} onReply={() => onReply(quoteOf(id, text, author ?? { uid, name: "You" }))} />;
+    return <User text={userText(message)} author={author} uid={uid} />;
   }
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as unknown as ChatMessageData;
@@ -380,7 +383,7 @@ const Entry = memo(function Entry({
         replyTo={data.replyTo}
         // In the transcript, a message that called the agent was picked up: it was placed in its run.
         picked={data.summoned}
-        onReply={() => onReply(quoteOf(id, data.text, data))}
+        onReply={answer}
       />
     );
   }
@@ -390,7 +393,7 @@ const Entry = memo(function Entry({
     return <div className="chat-notice">{data.uid === uid ? `You ${you}` : `${data.name} ${them}`}</div>;
   }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") {
-    return <Assistant message={message} onReply={(text) => onReply({ id, name: AGENT_NAME, agent: true, text: excerpt(text) })} />;
+    return <Assistant message={message} onReply={answer} />;
   }
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
     const artifact = published(entry);
@@ -409,16 +412,6 @@ const Entry = memo(function Entry({
   }
   return null;
 });
-
-/** What the composer quotes of a person's message to reply to (the chat quotes it again from the transcript). */
-function quoteOf(id: number, text: string, author: Person): ReplyQuote {
-  return { id, name: author.name, uid: author.uid, text: excerpt(text) };
-}
-
-function excerpt(text: string): string {
-  const flat = text.trim().replace(/\s+/g, " ");
-  return flat.length > 160 ? `${flat.slice(0, 159)}…` : flat;
-}
 
 /** Entries the app shows nothing for: they do not end an agent's reply, or start one. */
 function shown(entry: EntryRecord): boolean {
@@ -510,11 +503,7 @@ function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {
 }
 
 function userText(message: UserMessage): string {
-  return typeof message.content === "string"
-    ? message.content
-    : blocks(message.content)
-        .map((b) => (b.type === "text" ? b.text : ""))
-        .join("");
+  return typeof message.content === "string" ? message.content : blocks(message.content).map((b) => (b.type === "text" ? b.text : "")).join("");
 }
 
 /**
@@ -702,15 +691,11 @@ function Assistant({
   message: AssistantMessage;
   streaming?: boolean;
   onGrow?: () => void;
-  /** Answer this reply, quoting `text`. */
-  onReply?: (text: string) => void;
+  onReply?: () => void;
 }) {
   const content = useRef<HTMLDivElement>(null);
-  const text = streaming
-    ? ""
-    : blocks(message.content)
-        .flatMap((block) => (block.type === "text" && block.text ? [block.text] : []))
-        .join("\n\n");
+  // What a copy pastes as plain text: its Markdown. Not while it streams, when it has no actions.
+  const text = streaming ? "" : textOf(blocks(message.content), "\n\n");
   return (
     <div className="assistant" ref={content}>
       {/* By the block's own index, which stays the same once the message lands, so an opened thought stays open. */}
@@ -729,7 +714,7 @@ function Assistant({
       })}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
-      {text && <MessageActions content={content} text={text} onReply={onReply && (() => onReply(text))} />}
+      {text && <MessageActions content={content} text={text} onReply={onReply} />}
     </div>
   );
 }
