@@ -32,6 +32,7 @@ import { ContextMeter } from "./Context.tsx";
 import { SharePanel } from "./SharePanel.tsx";
 import { promptSpend, totalTime } from "./spend.ts";
 import { useChat, waitingOnModel } from "./useChat.ts";
+import { ComposerMore } from "./ComposerMore.tsx";
 import { Dictation } from "./Dictation.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
@@ -324,26 +325,23 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
                 e.target.value = "";
               }}
             />
-            <button
-              type="button"
-              className="icon-button mention-button"
-              onClick={mentions.insertAt}
-              title={shared ? `Ask ${AGENT_NAME}, or name a file or artifact (@)` : "Name a file or artifact (@)"}
-              aria-label={shared ? `Ask ${AGENT_NAME}, or name a file or artifact` : "Name a file or artifact"}
-            >
-              @
-            </button>
             <Dictation disabled={!connected} onText={dictated} />
-            <ModelPicker
-              model={state.model}
-              thinkingLevel={state.thinkingLevel}
-              disabled={!connected}
-              attachingImages={attachments.pending.some((item) => item.preview)}
-              onChange={setModel}
+            <ComposerMore
+              mentionLabel={shared ? `Ask ${AGENT_NAME}, or name someone, a file or an artifact` : "Name a file or artifact"}
+              onMention={mentions.insertAt}
             />
-            <ContextMeter entries={state.entries} model={state.model} />
-            {/* Always laid out, so the pickers don't move when a run starts or ends. */}
-            <span className={state.busy || attachments.sending ? "spinner" : "spinner idle"} aria-hidden="true" />
+            {/* The model and the context ring at the right. Stop and the transcript show a run; only an upload needs the spinner. */}
+            <div className="composer-model">
+              {attachments.sending && <span className="spinner" aria-hidden="true" />}
+              <ModelPicker
+                model={state.model}
+                thinkingLevel={state.thinkingLevel}
+                disabled={!connected}
+                attachingImages={attachments.pending.some((item) => item.preview)}
+                onChange={setModel}
+              />
+              <ContextMeter entries={state.entries} model={state.model} />
+            </div>
           </div>
         </form>
       </section>

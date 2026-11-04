@@ -12,7 +12,7 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import { effortLabel, providerLabel, type ModelCatalog, type ModelInfo, type ProviderId } from "../../shared/models.ts";
+import { EFFORT_LABELS, effortLabel, providerLabel, type ModelCatalog, type ModelInfo, type ProviderId } from "../../shared/models.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -107,7 +107,10 @@ interface Props {
   onChange: (model: string, thinkingLevel?: ModelThinkingLevel) => void;
 }
 
-/** The chat's model and, for a model that reasons, its effort. Memoized: the chat re-renders on every streamed token. */
+/**
+ * The chat's model at the right of the row under the input, by name and, for a model that reasons, its effort ("High"),
+ * which its menu also sets. Memoized: the chat re-renders on every streamed token.
+ */
 export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, disabled, attachingImages, onChange }: Props) {
   const catalog = useCatalog();
   const [open, setOpen] = useState(false);
@@ -125,6 +128,11 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
     // Coming from a model that does not reason (or an unlisted one at "off"), ask for no effort: the chat picks the new model's usual one.
     if (id !== model) onChange(id, (current ? !current.efforts.length : thinkingLevel === "off") ? undefined : thinkingLevel);
   };
+  // The effort the menu offers, for a model that reasons: its levels, plus the chat's own when the model does not list it.
+  const efforts =
+    current?.efforts.length && thinkingLevel ? (current.efforts.includes(thinkingLevel) ? current.efforts : [thinkingLevel, ...current.efforts]) : [];
+  const label = current?.name ?? model;
+  const effort = efforts.length && thinkingLevel ? thinkingLevel : undefined;
   return (
     <div className="model-picker">
       <button
@@ -134,31 +142,25 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={current ? `${current.name} (${providerLabel(current.provider)})` : model}
+        aria-label={effort ? `Model: ${label}, ${effortLabel(effort).toLowerCase()}` : `Model: ${label}`}
+        title={`${current ? `${current.name} (${providerLabel(current.provider)})` : model}${effort ? ` · ${effortLabel(effort)}` : ""}`}
         onClick={() => setOpen(!open)}
       >
         {/* A deployment's default can be a model the picker does not list. */}
-        <span className="model-trigger-name">{current?.name ?? model}</span>
-        <Icon size={14} stroke={2}>
-          <path d="m6 9 6 6 6-6" />
-        </Icon>
+        <span className="model-trigger-name">{label}</span>
+        {effort && <span className="model-trigger-effort">{EFFORT_LABELS[effort]}</span>}
       </button>
-      {open && <ModelMenu catalog={catalog} current={model} onPick={pick} onClose={close} trigger={trigger} />}
-      {current && current.efforts.length > 0 && thinkingLevel && (
-        <select
-          className="effort"
-          aria-label="Effort"
-          value={thinkingLevel}
-          disabled={disabled}
-          onChange={(e) => onChange(model, e.target.value as ModelThinkingLevel)}
-        >
-          {!current.efforts.includes(thinkingLevel) && <option value={thinkingLevel}>{effortLabel(thinkingLevel)}</option>}
-          {current.efforts.map((level) => (
-            <option key={level} value={level}>
-              {effortLabel(level)}
-            </option>
-          ))}
-        </select>
+      {open && (
+        <ModelMenu
+          catalog={catalog}
+          current={model}
+          efforts={efforts}
+          thinkingLevel={thinkingLevel}
+          onPick={pick}
+          onEffort={(level) => level !== thinkingLevel && onChange(model, level)}
+          onClose={close}
+          trigger={trigger}
+        />
       )}
       {current && !current.images && attachingImages && (
         <span className="model-note">{current.name} cannot see images: it gets their names only. Pick a model that can to ask about them.</span>
@@ -196,18 +198,25 @@ function usePlacement(trigger: RefObject<HTMLElement | null>): CSSProperties {
 /**
  * The list to pick from: a search box over every model; then, until something is typed, the user's favorites and
  * recent picks, and each provider's models in a section that opens and closes (the current model's open at first).
- * Typing lists every match, by provider. Arrow keys move through the list, Enter picks, Escape closes.
+ * Typing lists every match, by provider. Arrow keys move through the list, Enter picks, Escape closes. Under the
+ * list, the current model's efforts, when it reasons: picking one keeps the menu open, so the change shows.
  */
 function ModelMenu({
   catalog,
   current,
+  efforts,
+  thinkingLevel,
   onPick,
+  onEffort,
   onClose,
   trigger,
 }: {
   catalog: ModelCatalog;
   current: string;
+  efforts: readonly ModelThinkingLevel[];
+  thinkingLevel?: ModelThinkingLevel;
   onPick: (id: string) => void;
+  onEffort: (level: ModelThinkingLevel) => void;
   onClose: () => void;
   trigger: RefObject<HTMLButtonElement | null>;
 }) {
@@ -444,6 +453,16 @@ function ModelMenu({
         ))}
         {query && !sections.length && <div className="model-empty">No model matches “{query}”.</div>}
       </div>
+      {efforts.length > 0 && (
+        <div className="model-effort" role="radiogroup" aria-label="Effort">
+          <span>Effort</span>
+          {efforts.map((level) => (
+            <button key={level} type="button" role="radio" aria-checked={level === thinkingLevel} onClick={() => onEffort(level)}>
+              {EFFORT_LABELS[level]}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="model-menu-foot">
         <small>
           {refreshError

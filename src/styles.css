@@ -459,7 +459,6 @@ body.resizing iframe { pointer-events: none; }
 .mention-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-choice small { flex: none; margin-left: auto; color: var(--muted); }
 .mention-empty { padding: 6px 8px; color: var(--muted); font-size: 14px; }
-.mention-button { font-size: 17px; color: var(--muted); }
 /* A mention in a sent message: set off from the text around it. */
 .mention-chip.agent { background: color-mix(in srgb, var(--accent) 22%, transparent); font-weight: 600; }
 .mention-chip, .bubble a.mention-chip { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); color: inherit; font-weight: 500; text-decoration: none; }
@@ -498,16 +497,23 @@ a.mention-chip:hover { text-decoration: underline; }
 }
 .composer textarea::placeholder { color: var(--muted); }
 /* Borderless controls that show a background only on hover: the composer's icon buttons and the model picker. */
-.icon-button, .model-picker select, .model-trigger { border: 0; background: transparent; }
-:is(.icon-button, .model-picker select, .model-trigger):not(:disabled):hover { background: var(--surface-2); }
+.icon-button, .model-trigger { border: 0; background: transparent; }
+:is(.icon-button, .model-trigger):not(:disabled):hover { background: var(--surface-2); }
 /* One size for every icon button, so Send and Stop swap without a shift. */
 .icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; }
 .icon-button:disabled { opacity: 0.35; }
 .icon-button.listening { color: var(--error); }
+/* Attach, dictation and the "more" chevron at the left; the model and the context ring at the right. */
 .composer-tools { display: flex; align-items: center; gap: 2px; padding: 0 4px; min-height: 32px; }
-/* At the right edge, after the model picker or (before the models load) in its place. */
-.composer-tools .spinner { flex: none; width: 16px; height: 16px; margin: 0 6px 0 auto; border-top-color: var(--text); }
-.composer-tools .model-picker + .spinner { margin-left: 10px; }
+.composer-more { position: relative; display: flex; }
+.composer-more-button { width: 24px; color: var(--muted); }
+.composer-more-menu { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5; min-width: 260px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); }
+.composer-more-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: none; font-size: 14px; text-align: left; }
+.composer-more-menu button:is(:hover, :focus-visible) { background: var(--surface-2); }
+.composer-more-glyph { flex: none; width: 18px; text-align: center; font-size: 16px; color: var(--muted); }
+.composer-more-menu kbd { margin-left: auto; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font: inherit; font-size: 12px; }
+.composer-model { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; margin-left: auto; }
+.composer-model .spinner { flex: none; width: 14px; height: 14px; margin-right: 6px; border-top-color: var(--text); }
 .dictation-error { min-width: 0; padding: 0 6px; font-size: 13px; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* How full the model's context is: a ring after the model picker, and its panel above it. */
 .context-meter { position: relative; display: flex; }
@@ -524,8 +530,6 @@ a.mention-chip:hover { text-decoration: underline; }
 .context-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .context-bar span { display: block; height: 100%; background: var(--level); }
 .context-panel > span { font-variant-numeric: tabular-nums; }
-/* Always laid out so the pickers keep their place; not animated while hidden. */
-.composer-tools .spinner.idle { visibility: hidden; animation: none; }
 /* Above the app's drop target while files are dragged: a drop here attaches them to the message. */
 .workspace.dragging .composer { position: relative; z-index: 11; outline: 2px dashed var(--accent); outline-offset: -6px; border-radius: var(--radius); background: var(--bg); }
 .pending-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -549,11 +553,11 @@ a.mention-chip:hover { text-decoration: underline; }
 .attachments.mine { align-self: flex-end; justify-content: flex-end; }
 .attachment-thumb { max-width: 160px; max-height: 160px; border-radius: var(--radius); border: 1px solid var(--border); }
 .attachment-chip { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 13px; overflow-wrap: anywhere; }
-/* The model and effort, as plain text at the right of the row under the input. */
-.model-picker { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; margin-left: auto; }
-.model-trigger { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 5px 8px; font-size: 14px; }
+/* The model and its effort, as plain text at the right of the row under the input. */
+.model-picker { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
+.model-trigger { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 5px 8px; font-size: 14px; }
 .model-trigger-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-trigger svg { flex: none; color: var(--muted); }
+.model-trigger-effort { flex: none; color: var(--muted); }
 /* The model list, over the transcript just above the picker: placed by ModelPicker.tsx (usePlacement). */
 .model-menu {
   position: fixed;
@@ -592,9 +596,12 @@ a.mention-chip:hover { text-decoration: underline; }
 .model-empty { padding: 12px 8px; color: var(--muted); font-size: 14px; }
 .model-menu-foot { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-top: 1px solid var(--border); color: var(--muted); }
 .model-menu-foot small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Each select as wide as its chosen option where the browser can size it so; elsewhere as its longest one. */
-.model-picker select { appearance: none; field-sizing: content; max-width: 100%; padding: 5px 8px; font-size: 14px; text-overflow: ellipsis; }
-.model-picker .effort { color: var(--muted); }
+/* The current model's efforts, under the list: the chosen one filled. */
+.model-effort { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 8px 12px; border-top: 1px solid var(--border); }
+.model-effort > span { margin-right: 4px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+.model-effort button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; font-size: 13px; }
+.model-effort button:hover { background: var(--surface-2); }
+.model-effort button[aria-checked="true"] { border-color: var(--text); background: var(--text); color: var(--bg); }
 .model-note { flex-basis: 100%; text-align: right; padding: 0 8px; font-size: 13px; color: var(--muted); }
 
 .artifact-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); min-width: 0; }
