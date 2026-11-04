@@ -32,8 +32,10 @@ export function useMentionNotices(chatId: string | undefined, navigate: (path: s
 
   const onMention = useCallback(
     (notice: MentionNotice) => {
-      const focused = document.visibilityState === "visible" && document.hasFocus();
-      if (focused && notice.chatId === chatId) return;
+      const inView = document.visibilityState === "visible";
+      const focused = inView && document.hasFocus();
+      // The chat on screen shows the message itself, focused or not.
+      if (inView && notice.chatId === chatId) return;
       setToasts((list) => [...list.filter((t) => !(t.chatId === notice.chatId && t.at === notice.at)), notice].slice(-MAX_TOASTS));
       if (focused || !supported || Notification.permission !== "granted") return;
       try {

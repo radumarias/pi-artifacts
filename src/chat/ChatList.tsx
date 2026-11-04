@@ -67,7 +67,7 @@ const CHOICES = Object.keys(FILTERS) as ChatFilter[];
 const TOP: readonly ChatFilter[] = ["all", "private", "shared"];
 const SHARED: readonly ChatFilter[] = ["shared", "shared-by-me", "shared-with-me"];
 
-const isChatFilter = (value: unknown): value is ChatFilter => typeof value === "string" && value in FILTERS;
+const isChatFilter = (value: unknown): value is ChatFilter => typeof value === "string" && Object.hasOwn(FILTERS, value);
 
 /**
  * The chat list's filter, remembered in this browser. Until a chat is shared there is nothing to filter: then `bar` is

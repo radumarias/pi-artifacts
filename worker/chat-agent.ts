@@ -769,7 +769,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (all) this.#membersTouched = { title, at: now };
     const members = this.members.list().filter((member) => all || member.uid === author.uid || tagged.has(member.uid));
     await Promise.allSettled(
-      members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== author.uid, tagOf(member.uid))),
+      members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== author.uid, tagOf(member.uid), named)),
     );
   }
 
@@ -941,10 +941,13 @@ export class ChatAgent extends DurableObject<Env> {
     const shared = this.members.hasAny();
     // Never told: the sidebar's default is not shared.
     if ((this.ctx.storage.kv.get<boolean>(SHARED_KEY) ?? false) === shared) return;
-    void this.#directory.setChatShared(this.chatId, shared).then(
-      () => this.ctx.storage.kv.put(SHARED_KEY, shared),
-      (error: unknown) => console.error("chat shared:", errorMessage(error)),
-    );
+    // Recorded before the call, so a join and a leave in quick succession each tell, in order; a failure forgets it,
+    // and the owner's next visit tells again.
+    this.ctx.storage.kv.put(SHARED_KEY, shared);
+    void this.#directory.setChatShared(this.chatId, shared).catch((error: unknown) => {
+      this.ctx.storage.kv.delete(SHARED_KEY);
+      console.error("chat shared:", errorMessage(error));
+    });
   }
 
   /** The owner removes a member, or a member leaves. Their open sockets close at once, and the chat leaves their sidebar. */

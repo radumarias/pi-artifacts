@@ -214,20 +214,23 @@ export class UserDirectory extends DurableObject<Env> {
     this.#changed("chats");
   }
 
-  /** Bump a shared chat to the top with its current title, as touchChat does for the owner. `byOther`: someone else wrote. */
-  touchSharedChat(id: string, ownerUid: string, title: string, byOther: boolean, tag?: Tag): void {
-    this.#touch(id, ownerUid, title, byOther, tag);
+  /**
+   * Bump a shared chat to the top with its current title, as touchChat does for the owner. `byOther`: someone else wrote.
+   * `named`: the title was just cut from this message.
+   */
+  touchSharedChat(id: string, ownerUid: string, title: string, byOther: boolean, tag?: Tag, named = false): void {
+    this.#touch(id, ownerUid, title, byOther, tag, named);
   }
 
   /**
    * Bump a chat. With `tag`, the message tagged this user: the chat is marked so until they look, and the open apps hear
-   * it (MentionNotice), with the chat's title unless the chat is named after this very message.
+   * it (MentionNotice), with the chat's title unless the chat is named after this very message (`named`).
    */
-  #touch(id: string, ownerUid: string, title: string, byOther: boolean, tag?: Tag): void {
+  #touch(id: string, ownerUid: string, title: string, byOther: boolean, tag?: Tag, named = false): void {
     const now = tag?.at ?? Date.now();
     const set = "title = ?, updated_at = ?, activity_at = CASE WHEN ? THEN ? ELSE activity_at END, mentioned_at = CASE WHEN ? THEN ? ELSE mentioned_at END";
     if (!this.#updateChat(id, ownerUid, set, title, now, byOther ? 1 : 0, now, tag ? 1 : 0, now) || !tag) return;
-    this.#changed({ type: "mention", chatId: id, ...(title !== titleFromMessage(tag.text) && { title }), ...tag });
+    this.#changed({ type: "mention", chatId: id, ...(!named && { title }), ...tag });
   }
 
   removeSharedChat(id: string, ownerUid: string): void {
@@ -253,7 +256,7 @@ export class UserDirectory extends DurableObject<Env> {
     const before = this.chatTitle(id);
     const named = before === UNNAMED_CHAT;
     const title = named || before === null ? titleFromMessage(prompt) : before;
-    this.#touch(id, this.ctx.id.name!, title, byOther, tag);
+    this.#touch(id, this.ctx.id.name!, title, byOther, tag, named);
     return { title, named };
   }
 
