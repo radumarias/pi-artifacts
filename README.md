@@ -58,7 +58,7 @@ CoinGecko needs no sign-in. A server can also require each user's own; see [MCP 
 - Pages call as their author, so every viewer gets the same answer, and by default they share one cached result per
   call (`cacheScope` in `worker/mcp/servers.ts`; `"viewer"` keeps each viewer's results apart).
 - The Worker keeps those shared results too (`worker/artifacts/page-calls.ts`), keyed by chat, server, tool and input,
-  so a read that is young enough for the page (its `staleMs`, at most 10 min) is answered without waking the chat's
+  so a read that is young enough for the page (its `staleMs`) is answered without waking the chat's
   Durable Object, and identical reads that miss share one call to it. It serves a result only to a page version the
   chat allowed that read in the last minute, never for `auth: "oauth"` servers (they load only for people in the
   chat, which only the chat can check), and never for writes or uncached `callTool`s. Each Worker isolate keeps its

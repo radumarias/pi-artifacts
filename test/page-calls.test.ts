@@ -68,6 +68,14 @@ describe("PageCallCache", () => {
     expect(t.asked).toHaveLength(6);
   });
 
+  it("never serves a refresh, even when the chat's clock runs ahead of the Worker's", async () => {
+    const t = setup((_, now) => shared(now + 50));
+    await t.call(read());
+    const refreshed = await t.call(read(undefined, 0));
+    expect(t.asked).toHaveLength(2);
+    expect(refreshed.ok && refreshed.result.cache).toBeFalsy();
+  });
+
   it("serves only page versions the chat allowed, and stops once it refuses", async () => {
     let refuse = false;
     const t = setup((_, now) => (refuse ? { response: { ok: false, error: { code: "not_in_manifest", message: "no" } } } : shared(now)));

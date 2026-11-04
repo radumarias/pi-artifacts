@@ -55,9 +55,12 @@ export interface ProxyRequest {
   staleMs?: number;
 }
 
-/** A request's `staleMs` as a number from 0 to `max`: it comes from the page. */
-export function clampStaleMs(staleMs: unknown, max: number): number {
-  return Math.min(Math.max(Number(staleMs) || 0, 0), max);
+/** The most staleness a page's read may accept. */
+export const MAX_STALE_MS = 24 * 60 * 60_000;
+
+/** A request's `staleMs` as a number from 0 to MAX_STALE_MS: it comes from the page. */
+export function clampStaleMs(staleMs: unknown): number {
+  return Math.min(Math.max(Number(staleMs) || 0, 0), MAX_STALE_MS);
 }
 
 export interface ToolInfo {

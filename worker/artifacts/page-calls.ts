@@ -14,8 +14,8 @@ export interface ChatAnswer {
 
 /** What an isolate keeps of pages' results. Workers have 128 MB; a chat object keeps 16 MB of its own. */
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
-/** The oldest result served from here, whatever staleness a page accepts; older ones go to the chat. */
-const MAX_AGE_MS = 10 * 60_000;
+/** When results start to go first to make room: older than any page usually accepts. */
+const LIFETIME_MS = 10 * 60_000;
 /**
  * How long the chat's yes to a version calling a tool holds without asking it again. Manifests never change, but a server
  * can drop a tool or stop marking it read-only, and an artifact can be deleted; every shareable answer from the chat
@@ -41,7 +41,7 @@ export class PageCallCache {
 
   constructor(now: () => number = Date.now) {
     this.#now = now;
-    this.#results = new ResultCache(MAX_CACHE_BYTES, MAX_AGE_MS, now);
+    this.#results = new ResultCache(MAX_CACHE_BYTES, LIFETIME_MS, now);
   }
 
   /** The answer to a page's call: from the cache when it may be, else from `ask` (the chat). */
@@ -49,9 +49,10 @@ export class PageCallCache {
     if (request.mode !== "read") return (await ask()).response;
     const resultKey = `${chat}\u0000${callIdentity(request.server, request.tool, request.input)}`;
     const grantKey = `${artifactId}\u0000${request.version}\u0000${request.server}\u0000${request.tool}`;
-    const staleMs = clampStaleMs(request.staleMs, MAX_AGE_MS);
+    const staleMs = clampStaleMs(request.staleMs);
 
-    if (this.#granted(grantKey)) {
+    // A refresh (staleMs 0) never takes a cached result, nor waits for another viewer's call to bring one in.
+    if (staleMs > 0 && this.#granted(grantKey)) {
       const hit = this.#fresh(resultKey, staleMs);
       if (hit) return hit;
       // The same read is on its way to the chat for another viewer: its result may be young enough for this one.

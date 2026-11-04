@@ -84,7 +84,6 @@ const SOCKET_TAG = "chat";
 const OWNER = "chat-sockets";
 /** Set by the Worker on a chat socket's upgrade request, from the verified identity; never taken from the browser. */
 export const PERSON_HEADER = "x-pi-person";
-const MAX_STALE_MS = 24 * 60 * 60_000;
 /** A page check reuses results this young, so checking a page again and again does not call the servers each time. */
 const CHECK_STALE_MS = 2 * 60_000;
 /** The live calls one page check may make. */
@@ -944,7 +943,7 @@ export class ChatAgent extends DurableObject<Env> {
       if ("code" in info) return fail(info);
 
       if (mode === "read") {
-        const staleMs = clampStaleMs(request.staleMs, MAX_STALE_MS);
+        const staleMs = clampStaleMs(request.staleMs);
         const read = await this.hub.read(server, tool, input, { staleMs, viewer });
         const config = this.hub.server(server);
         return {

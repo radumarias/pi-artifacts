@@ -33,10 +33,13 @@ export class ResultCache {
     return this.#entries.get(key);
   }
 
-  /** The result younger than `staleMs`, stamped as served from the cache, and when it goes stale. */
+  /**
+   * The result younger than `staleMs`, stamped as served from the cache, and when it goes stale. Never one for a
+   * `staleMs` of 0, even when `storedAt` is ahead of this clock (it may come from another machine's).
+   */
   fresh(key: string, staleMs: number): (CachedResult & { nextRefreshAt: number }) | undefined {
     const hit = this.#entries.get(key);
-    if (!hit || this.#now() - hit.storedAt >= staleMs) return undefined;
+    if (!hit || staleMs <= 0 || this.#now() - hit.storedAt >= staleMs) return undefined;
     return { result: withCache(hit.result, hit.storedAt, false), storedAt: hit.storedAt, nextRefreshAt: hit.storedAt + staleMs };
   }
 
