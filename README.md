@@ -327,7 +327,7 @@ people: many people share one conversation with one agent, and their messages qu
   shows a notice that opens the chat (none in the chat they are looking at). While the app is in the background, the
   browser shows a notification too, once they allowed it with the bell in a shared chat's header (the notification's
   tag keeps it to one across windows). A tag is no call of pi. The notice goes over the sidebar's socket
-  (`MentionNotice`, `UserDirectory.mentioned`); with the app closed nothing is pushed, there is no service worker.
+  (`MentionNotice`, sent with the chat's bump: a `Tag` on `UserDirectory.touchChat`/`touchSharedChat`); with the app closed nothing is pushed, there is no service worker.
 - **Filtering chats:** once a chat is shared, the sidebar's chat list can show all chats, private ones (the user's own,
   nobody else in them), or shared ones: both, those the user shared, or those shared with them. The owner's directory
   learns which of their chats have members from the chat (`setChatShared`), on joins and leaves and when they open it.
