@@ -1,8 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
-import { chatSpend, COMPACTION, contextUse, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
+import { chatSpend, contextUse, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
 /** A reply's usage: `tokens`, at `total` dollars. */
@@ -167,9 +166,5 @@ describe("context use", () => {
       compacted: true,
     });
     expect(contextUse([prompt()])).toBeUndefined();
-  });
-
-  it("knows when pi-durable compacts", () => {
-    expect(COMPACTION).toEqual({ reserveTokens: DEFAULT_COMPACTION_POLICY.reserveTokens, backgroundTokens: DEFAULT_COMPACTION_POLICY.backgroundTokens });
   });
 });

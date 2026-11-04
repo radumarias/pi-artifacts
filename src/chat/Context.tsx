@@ -2,9 +2,9 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
-import { COMPACT, COMPACTION, contextUse } from "./spend.ts";
+import { COMPACTION } from "../../shared/models.ts";
+import { COMPACT, contextUse, COUNT } from "./spend.ts";
 
-const COUNT = new Intl.NumberFormat("en-US");
 const RADIUS = 7;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
@@ -28,10 +28,10 @@ export const ContextMeter = memo(function ContextMeter({ entries, model }: { ent
   const compactAt = Math.max(0, size - COMPACTION.reserveTokens - COMPACTION.backgroundTokens);
   const level = use.tokens >= compactAt ? "full" : share >= 0.6 ? "high" : "";
   return (
-    <div className="context-meter" ref={box}>
+    <div className={`context-meter ${level}`} ref={box}>
       <button
         type="button"
-        className={`icon-button context-ring ${level}`}
+        className="icon-button context-ring"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         title={`Context: ${COMPACT.format(use.tokens)} of ${COMPACT.format(size)} tokens (${percent}%)`}
@@ -49,7 +49,7 @@ export const ContextMeter = memo(function ContextMeter({ entries, model }: { ent
             <span>{percent}%</span>
           </div>
           <div className="context-bar" aria-hidden="true">
-            <span className={level} style={{ width: `${share * 100}%` }} />
+            <span style={{ width: `${share * 100}%` }} />
           </div>
           <span>
             {COUNT.format(use.tokens)} of {COUNT.format(size)} tokens

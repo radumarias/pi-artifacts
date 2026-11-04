@@ -54,7 +54,7 @@ export function UnreadDot({ label }: { label: string }) {
 type ChatFilter = "all" | "private" | "shared" | "shared-by-me" | "shared-with-me";
 
 /** Whether other people are in the chat: the user shared it, or someone shared it with them. */
-const isShared = (chat: ChatSummary) => Boolean(chat.sharedBy || chat.shared);
+export const isShared = (chat: ChatSummary) => Boolean(chat.sharedBy || chat.shared);
 
 const FILTERS: Record<ChatFilter, { label: string; title: string; keep: (chat: ChatSummary) => boolean }> = {
   all: { label: "All", title: "All chats", keep: () => true },

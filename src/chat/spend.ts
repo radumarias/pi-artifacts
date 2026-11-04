@@ -177,7 +177,7 @@ export function formatCost(dollars: number): string {
   return dollars < 0.995 ? SMALL.format(dollars) : LARGE.format(dollars);
 }
 
-const COUNT = new Intl.NumberFormat("en-US");
+export const COUNT = new Intl.NumberFormat("en-US");
 export const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
 /** Tokens in and out, short: input counts what came from the cache and went into it too. */
@@ -193,13 +193,6 @@ export function describeTokens(spend: Spend): string {
   parts.push(`${COUNT.format(spend.output)} output tokens`);
   return parts.join(", ");
 }
-
-/**
- * How pi-durable compacts a conversation (its DEFAULT_COMPACTION_POLICY, which the chat keeps; a test holds the two
- * together): above `contextWindow - reserveTokens` a reply waits for older messages to be summarized, and a summary
- * starts in the background `backgroundTokens` before that.
- */
-export const COMPACTION = { reserveTokens: 16384, backgroundTokens: 32768 };
 
 /** How full the model's context is: what the newest reply read and wrote, which the next prompt starts from. */
 export interface ContextUse {

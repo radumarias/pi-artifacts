@@ -108,7 +108,7 @@ export function useMentionNotices(chatId: string | undefined, navigate: (path: s
 
 /**
  * The tags of the user, in a corner of the app: a click opens the chat. Above them, while the browser has not been
- * answered and the user is in a shared chat (`asking`), a card asks to show tags as the system's notifications, so one
+ * answered and the user has a shared chat (`asking`), a card asks to show tags as the system's notifications, so one
  * reaches them in another tab or app; "Not now" puts it off for a few days.
  */
 export function MentionToasts({ toasts, dismiss, open, asking }: ReturnType<typeof useMentionNotices> & { asking: boolean }) {

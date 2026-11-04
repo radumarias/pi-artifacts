@@ -6,7 +6,7 @@ import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
-import { ChatFilterBar, ChatList, UnreadDot, useChatFilter, useChatList } from "./chat/ChatList.tsx";
+import { ChatFilterBar, ChatList, isShared, UnreadDot, useChatFilter, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { MentionToasts, useMentionNotices } from "./chat/notify.tsx";
 import { DeleteChat } from "./chat/DeleteChat.tsx";
@@ -480,7 +480,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
             <ArtifactPanel artifactId={preview.artifactId} latestKnown={preview.version} uid={uid} onClose={closePreview} />
           </ErrorBoundary>
         ))}
-      <MentionToasts {...notices} asking={chatFilter.bar} />
+      <MentionToasts {...notices} asking={chats.some(isShared)} />
     </div>
   );
 }

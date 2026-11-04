@@ -41,7 +41,7 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
-import type { ModelChoice } from "../shared/models.ts";
+import { COMPACTION, type ModelChoice } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
@@ -172,8 +172,8 @@ export class ChatAgent extends DurableObject<Env> {
       await this.#catalog();
       const models = piModels(this.ai.provider, this.gemini);
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
-      // otherwise wait, shown as queued, until someone writes again.
-      const settings = { afterFailedRun: "continue" as const, progress: PROGRESS };
+      // otherwise wait, shown as queued, until someone writes again. Compaction is set here, where the app reads it too.
+      const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction: COMPACTION };
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
         // A new chat starts on the model its user last picked; PiHarness then finds the root and leaves it as it is.

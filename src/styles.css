@@ -1,4 +1,6 @@
+/* The chat header's least height (its buttons can make it a little taller): the mention notices sit under it. */
 :root {
+  --header-h: 40px;
   --bg: #f7f7f5;
   --surface: #ffffff;
   --surface-2: #f0efeb;
@@ -248,15 +250,15 @@ body.resizing iframe { pointer-events: none; }
 .empty-chat { margin: auto; max-width: 440px; text-align: center; color: var(--muted); }
 .empty-chat h2 { color: var(--text); }
 
-.bubble { padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 88%; }
+/* Width capped by what holds it (.message, .assistant), never a share of its own row: that would wrap its last word. */
+.bubble { padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; }
 .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
 .bubble.bot { background: var(--surface); border: 1px solid var(--border); }
 /* A person's message: yours on the right, someone else's on the left under their name. */
 .message { display: flex; flex-direction: column; gap: 3px; max-width: 88%; min-width: 0; }
 .message.mine { align-self: flex-end; align-items: flex-end; }
 .message.other { align-self: flex-start; align-items: flex-start; }
-/* Not a share of the row: the row is as wide as its bubble, so 88% of it would wrap the bubble's own last word. */
-.message > .bubble, .bubble-row > .bubble, .message > .attachments { max-width: 100%; }
+.message > .attachments { max-width: 100%; }
 .bubble.peer { background: var(--surface-2); }
 /* In a shared chat, each person's messages have their colour (--tint, set on the message). */
 .message.tinted .bubble.user { background: var(--tint); color: var(--on-tint); }
@@ -299,7 +301,7 @@ body.resizing iframe { pointer-events: none; }
 .replying .reply-quote { flex: 1; min-width: 0; margin: 0; background: none; }
 
 /* Relative: the cost panel hangs from its right edge, so it stays on screen however wide the header is. */
-.chat-header { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; min-height: 40px; }
+.chat-header { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; min-height: var(--header-h); }
 .chat-people { flex: 1; min-width: 0; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Everyone in a shared chat, in their colours, with a dot for who has it open now. */
 .people-bar { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; overflow: hidden; font-size: 14px; }
@@ -307,7 +309,7 @@ body.resizing iframe { pointer-events: none; }
 .people-bar .person-name { overflow: hidden; text-overflow: ellipsis; }
 .people-bar .person:not(.online) .person-name { color: var(--muted); }
 .people-bar .person small { color: var(--muted); }
-.share-panel, .cost-panel { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
+.share-panel, .cost-panel, .context-panel { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
 .share-panel ul, .cost-panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .share-panel { margin: 8px 20px 0; align-items: flex-start; }
 .share-panel ul { width: 100%; gap: 4px; }
@@ -337,6 +339,7 @@ body.resizing iframe { pointer-events: none; }
 .bubble.markdown th, .bubble.markdown td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
 .bubble.markdown th { background: var(--surface-2); }
 .assistant { display: flex; flex-direction: column; gap: 4px; }
+.assistant > .bubble { max-width: 88%; }
 .tool-call { color: var(--muted); font-size: 13px; }
 /* One step of the agent (Steps.tsx): a plain line with an icon, what it is, a hint and its status. An arrow after the
    hint opens what went in and came out, beside a thin guide line; a step with nothing more to show has no arrow. */
@@ -510,21 +513,17 @@ a.mention-chip:hover { text-decoration: underline; }
 .context-meter { position: relative; display: flex; }
 .context-ring { padding: 4px; }
 .context-ring .track { fill: none; stroke: var(--border); stroke-width: 2.5; }
-.context-ring .fill { fill: none; stroke: var(--muted); stroke-width: 2.5; stroke-linecap: round; }
-.context-ring.high .fill { stroke: var(--accent); }
-.context-ring.full .fill { stroke: var(--error); }
-.context-panel {
-  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; width: min(300px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 6px;
-  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); font-size: 14px;
-}
+.context-ring .fill { fill: none; stroke: var(--level); stroke-width: 2.5; stroke-linecap: round; }
+/* The level's colour, for the ring and the bar: filling up, then near where older messages get summarized. */
+.context-meter { --level: var(--muted); }
+.context-meter.high { --level: var(--accent); }
+.context-meter.full { --level: var(--error); }
+.context-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; width: min(300px, calc(100vw - 32px)); gap: 6px; box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); font-size: 14px; }
 .context-head { display: flex; justify-content: space-between; gap: 12px; }
 .context-head span { font-variant-numeric: tabular-nums; }
 .context-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
-.context-bar span { display: block; height: 100%; background: var(--muted); }
-.context-bar span.high { background: var(--accent); }
-.context-bar span.full { background: var(--error); }
+.context-bar span { display: block; height: 100%; background: var(--level); }
 .context-panel > span { font-variant-numeric: tabular-nums; }
-.context-panel small { color: var(--muted); font-size: 12px; }
 /* Always laid out so the pickers keep their place; not animated while hidden. */
 .composer-tools .spinner.idle { visibility: hidden; animation: none; }
 /* Above the app's drop target while files are dragged: a drop here attaches them to the message. */
@@ -692,6 +691,8 @@ a.mention-chip:hover { text-decoration: underline; }
   .sidebar:not(.rail) { overflow-y: auto; }
   .sidebar-scroll, .sidebar-pinned, .sidebar-pinned .artifact-list, .files-panel.open, .files-panel .files { flex: none; overflow: visible; max-height: none; }
   .workspace.with-preview .main { display: none; }
+  /* The sidebar is on top here, not the chat's header. */
+  .toasts { top: 12px; }
 }
 
 .skills { height: 100%; overflow-y: auto; padding: 24px 20px; max-width: 860px; }
@@ -736,7 +737,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .cost-panel li { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; }
 .cost-panel li small { grid-row: 2; color: var(--muted); }
 .cost-panel .cost-amount { grid-row: 1 / 3; grid-column: 2; align-self: center; font-variant-numeric: tabular-nums; }
-.cost-panel > small { color: var(--muted); font-size: 12px; }
+.cost-panel > small, .context-panel > small { color: var(--muted); font-size: 12px; }
 .cost-panel .cost-time { padding-top: 8px; border-top: 1px solid var(--border); }
 @media (max-width: 480px) { .chat-time { display: none; } }
 
@@ -747,7 +748,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .chat-files .file-name { padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 
 /* Someone mentioned the user: a short notice in a corner, under the chat header's buttons, which opens the chat. */
-.toasts { position: fixed; top: 64px; right: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px)); }
+.toasts { position: fixed; top: calc(var(--header-h) + 24px); right: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px)); }
 .toast {
   display: flex; align-items: flex-start; gap: 4px; padding: 4px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
   border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.14);

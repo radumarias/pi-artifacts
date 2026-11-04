@@ -78,6 +78,13 @@ export function modelKey(provider: string, id: string): string {
   return provider === CLOUDFLARE_PROVIDER ? id : `${provider}/${id}`;
 }
 
+/**
+ * When a chat's older messages are summarized (pi-durable's compaction, which the chat agent is opened with): above
+ * `contextWindow - reserveTokens` a reply waits for a summary, and one starts in the background `backgroundTokens`
+ * before that. The app's context meter shows the same point.
+ */
+export const COMPACTION = { reserveTokens: 16384, backgroundTokens: 32768 } as const;
+
 /** The picker's id for a pi ledger key (`provider/id`). */
 export function modelKeyOfLedger(key: string): string {
   const slash = key.indexOf("/");
