@@ -160,6 +160,16 @@ describe("model discovery", () => {
     ]);
   });
 
+  it("leaves out a provider whose list is public when AI Gateway holds no key for it", async () => {
+    const binding = gatewayBinding();
+    const fetch = binding.fetch.bind(binding);
+    // OpenRouter's list answers anyone; the key's own details answer only with a key.
+    binding.fetch = async (url, init) => (url.endsWith("/openrouter/v1/key") ? new Response('{"error":"no key"}', { status: 401 }) : fetch(url, init));
+    const discovery = await discoverModels({ ai: binding, gateway: "gw" });
+    expect(discovery.providers.openrouter).toEqual({ status: "no-key", models: [] });
+    expect(binding.calls.some((call) => call.url.endsWith("/openrouter/v1/models"))).toBe(true);
+  });
+
   it("keeps a provider's last models when its list cannot be read now", async () => {
     const previous: Discovery = { checkedAt: 1, providers: { mistral: { status: "ok", models: [{ id: "mistral-large-latest" }] } } };
     const discovery = await discoverModels({ ai: gatewayBinding(), gateway: "gw", previous });

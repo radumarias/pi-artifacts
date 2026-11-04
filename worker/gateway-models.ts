@@ -56,6 +56,11 @@ interface Wire {
 export interface GatewayProvider {
   /** The list's path under the provider's AI Gateway path: what follows the vendor's own host. */
   list: string;
+  /**
+   * For a provider whose list answers without a key (OpenRouter's is public): a path under the same place that needs
+   * one, so a gateway with no key for it does not list its models.
+   */
+  keyCheck?: string;
   headers?: Record<string, string>;
   /** The models in the list's body that can run a chat (stream text and call tools). */
   parse(body: unknown): ListedModel[];
@@ -213,6 +218,8 @@ export const GATEWAY_PROVIDERS: Record<GatewayProviderId, GatewayProvider> = {
   },
   openrouter: {
     list: "v1/models",
+    // The key's own details: 401 without one.
+    keyCheck: "v1/key",
     parse: listOf("data", (item) => {
       const parameters = strings(item.supported_parameters);
       if (!parameters.includes("tools")) return undefined;
@@ -275,16 +282,19 @@ async function listProvider(id: GatewayProviderId, options: DiscoverOptions): Pr
   const provider = GATEWAY_PROVIDERS[id];
   const headers: Record<string, string> = { ...provider.headers, "cf-aig-collect-log": "false" };
   if (options.byokAlias) headers["cf-aig-byok-alias"] = options.byokAlias;
-  try {
-    const response = await options.ai.fetch(`https://workers-binding.ai/ai-gateway/gateways/${encodeURIComponent(options.gateway)}/${id}/${provider.list}`, {
+  const get = (path: string) =>
+    options.ai.fetch(`https://workers-binding.ai/ai-gateway/gateways/${encodeURIComponent(options.gateway)}/${id}/${path}`, {
       method: "GET",
       headers,
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
     });
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      if (refused(response.status, body)) return { status: "no-key", models: [] };
-      return { status: "failed", models: [], error: `HTTP ${response.status}: ${body.slice(0, 200)}` };
+  try {
+    const [response, check] = await Promise.all([get(provider.list), provider.keyCheck && get(provider.keyCheck)]);
+    for (const answer of check ? [check, response] : [response]) {
+      if (answer.ok) continue;
+      const body = await answer.text().catch(() => "");
+      if (refused(answer.status, body)) return { status: "no-key", models: [] };
+      return { status: "failed", models: [], error: `HTTP ${answer.status}: ${body.slice(0, 200)}` };
     }
     return { status: "ok", models: provider.parse(await response.json()) };
   } catch (error) {
