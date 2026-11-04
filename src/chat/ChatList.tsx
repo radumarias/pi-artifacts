@@ -107,7 +107,7 @@ export function ChatFilterBar({ filter, setFilter, waiting }: ReturnType<typeof 
       onClick={() => setFilter(choice)}
     >
       {label}
-      {!active && waiting.has(choice) && <span className="chip-dot" aria-label="Has something new" />}
+      {!active && waiting.has(choice) && <UnreadDot label="Has something new" />}
     </button>
   );
   return (

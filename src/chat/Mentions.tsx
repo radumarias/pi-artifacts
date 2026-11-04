@@ -37,8 +37,8 @@ export function useMentions(
   draft: string,
   setDraft: (text: string) => void,
   input: RefObject<HTMLTextAreaElement | null>,
-  people: ChatPeople | null = null,
-  uid = "",
+  people: ChatPeople | null,
+  uid: string,
 ) {
   const shared = people !== null;
   const [options, setOptions] = useState<MentionOptions | null>(null);

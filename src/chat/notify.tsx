@@ -11,7 +11,7 @@ const MAX_TOASTS = 3;
 const supported = typeof window !== "undefined" && "Notification" in window;
 
 /** Whether the browser may show notifications: asked once, from a click (browsers require one). */
-export function useNotificationPermission(): [NotificationPermission | "unsupported", () => void] {
+function useNotificationPermission(): [NotificationPermission | "unsupported", () => void] {
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(supported ? Notification.permission : "unsupported");
   const ask = useCallback(() => {
     if (!supported) return;
@@ -29,13 +29,21 @@ export function useNotificationPermission(): [NotificationPermission | "unsuppor
 export function useMentionNotices(chatId: string | undefined, navigate: (path: string) => void) {
   const [toasts, setToasts] = useState<MentionNotice[]>([]);
   const visible = useVisible();
+  const dismiss = useCallback((notice: MentionNotice) => setToasts((list) => list.filter((t) => t.chatId !== notice.chatId || t.at !== notice.at)), []);
+  /** Go to the chat a notice is from. */
+  const open = useCallback(
+    (notice: MentionNotice) => {
+      dismiss(notice);
+      navigate(`/c/${notice.chatId}`);
+    },
+    [dismiss, navigate],
+  );
 
   const onMention = useCallback(
     (notice: MentionNotice) => {
-      const inView = document.visibilityState === "visible";
-      const focused = inView && document.hasFocus();
+      const focused = visible && document.hasFocus();
       // The chat on screen shows the message itself, focused or not.
-      if (inView && notice.chatId === chatId) return;
+      if (visible && notice.chatId === chatId) return;
       setToasts((list) => [...list.filter((t) => !(t.chatId === notice.chatId && t.at === notice.at)), notice].slice(-MAX_TOASTS));
       if (focused || !supported || Notification.permission !== "granted") return;
       try {
@@ -45,17 +53,15 @@ export function useMentionNotices(chatId: string | undefined, navigate: (path: s
         });
         shown.onclick = () => {
           window.focus();
-          navigate(`/c/${notice.chatId}`);
+          open(notice);
           shown.close();
         };
       } catch {
         // Some browsers (Android Chrome) show notifications only from a service worker: the app's own notice stays.
       }
     },
-    [chatId, navigate],
+    [chatId, visible, open],
   );
-
-  const dismiss = useCallback((notice: MentionNotice) => setToasts((list) => list.filter((t) => t !== notice)), []);
 
   // Opening the chat a tag is from is seeing it.
   useEffect(() => setToasts((list) => (list.some((t) => t.chatId === chatId) ? list.filter((t) => t.chatId !== chatId) : list)), [chatId]);
@@ -67,24 +73,17 @@ export function useMentionNotices(chatId: string | undefined, navigate: (path: s
     return () => clearTimeout(timer);
   }, [oldest, visible, dismiss]);
 
-  return { toasts, onMention, dismiss };
+  return { toasts, onMention, dismiss, open };
 }
 
 /** The tags of the user, in a corner of the app: a click opens the chat. */
-export function MentionToasts({ toasts, dismiss, navigate }: ReturnType<typeof useMentionNotices> & { navigate: (path: string) => void }) {
+export function MentionToasts({ toasts, dismiss, open }: ReturnType<typeof useMentionNotices>) {
   if (toasts.length === 0) return null;
   return (
     <div className="toasts" role="status" aria-live="polite">
       {toasts.map((notice) => (
         <div key={`${notice.chatId}:${notice.at}`} className="toast">
-          <button
-            type="button"
-            className="toast-body"
-            onClick={() => {
-              dismiss(notice);
-              navigate(`/c/${notice.chatId}`);
-            }}
-          >
+          <button type="button" className="toast-body" onClick={() => open(notice)}>
             <strong>
               <span className="toast-at" aria-hidden="true">
                 @

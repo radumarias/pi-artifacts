@@ -178,7 +178,9 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** Whether this user's own chat `id` has members now. */
   setChatShared(id: string, shared: boolean): void {
-    this.#updateChat(id, this.ctx.id.name!, "shared = ?", shared ? 1 : 0);
+    const flag = shared ? 1 : 0;
+    // Only a change: the chat tells again on every join and leave.
+    if (this.ctx.storage.sql.exec("UPDATE chats SET shared = ? WHERE id = ? AND shared != ?", flag, id, flag).rowsWritten) this.#changed("chats");
   }
 
   /** This user has seen everything in the chat so far. */
