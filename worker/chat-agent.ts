@@ -37,7 +37,7 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { parseMentions, type MentionInput } from "../shared/mentions.ts";
 import type { ModelChoice } from "../shared/models.ts";
-import { errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
+import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
@@ -1047,6 +1047,12 @@ interface ChatSession {
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
 }
 
+/** How long a socket's attach may take to send its snapshot (see ChatSockets.#attach). */
+const ATTACH_MS = 30_000;
+
+/** An attach that did not send its snapshot in time. */
+class AttachStalled extends Error {}
+
 /**
  * A chat socket's hibernation attachment: whose socket it is, and a digest of the last snapshot it was sent (see
  * ChatSockets.#attach).
@@ -1186,12 +1192,18 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
    * Follow the conversation for `ws`: a snapshot first, then each commit. Every wake (a page's call, an alarm) attaches
    * every open socket again, and each would get the whole conversation again; a socket already sent this same snapshot
    * has everything in it, as the commits since reached it while the object was awake, so it is sent only a changed one.
+   *
+   * An attach that has not sent its snapshot within ATTACH_MS is given up: the socket closes, and the app reconnects.
+   * Work an attach waits on keeps the request that opened the socket going, and with it the object awake for as long as
+   * the socket stays open (in production, hours, with nothing running). The log names the step it was stuck at.
    */
   #attach(ws: WebSocket): Promise<AgentEventStream> {
-    let stream = this.#streams.get(ws);
-    if (stream) return stream;
-    stream = (async () => {
+    const known = this.#streams.get(ws);
+    if (known) return known;
+    let step = "opening the conversation";
+    const opening = (async () => {
       const events = await this.#chat.events();
+      step = "reading its run and queue";
       const attachment = ws.deserializeAttachment() as SocketAttachment;
       send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
       const snapshot = await this.#events([events.snapshot]);
@@ -1203,12 +1215,22 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       });
       return events;
     })();
-    this.#streams.set(ws, stream);
-    stream.catch((error) => {
+    const attached = deadline(opening, ATTACH_MS, () => new AttachStalled(`no snapshot after ${ATTACH_MS / 1000} s, stuck ${step}`));
+    this.#streams.set(ws, attached);
+    attached.catch((error) => {
       this.#streams.delete(ws);
-      send(ws, { type: "error", message: `Could not open the conversation: ${errorMessage(error)}` });
+      if (error instanceof AttachStalled) {
+        console.error("chat socket:", error.message);
+        // Should the stream come after all, it goes unused.
+        void opening.then((events) => events.stop()).catch(() => {});
+        close(ws, 1011, "Reconnect");
+        // A close the chat makes itself may never come back as onWebSocketClose: the others hear of it now.
+        this.#broadcastPresence(new Set([ws]));
+      } else {
+        send(ws, { type: "error", message: `Could not open the conversation: ${errorMessage(error)}` });
+      }
     });
-    return stream;
+    return attached;
   }
 
   /**

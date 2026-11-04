@@ -5,12 +5,23 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import type { ToolInfo } from "../../shared/protocol.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { deadline, errorMessage } from "../../shared/util.ts";
 import { McpFailure, type McpConnection, type RawToolResult } from "./hub.ts";
 import { signInPath } from "./oauth.ts";
 import type { McpServerConfig } from "./servers.ts";
 
 const CALL_TIMEOUT_MS = 60_000;
+/**
+ * How long connecting may take, sign-in refresh and handshake included. Every call to the server waits on its
+ * connection, so one that never comes would hold them all.
+ */
+const CONNECT_TIMEOUT_MS = 30_000;
+/**
+ * How long any one request to the server may stay open, its answer's stream included: longer than a call may take.
+ * The SDK reads a call's stream until the server ends it, even after the answer came, and a sign-in refresh has no
+ * timeout of its own; a request left open keeps the chat object awake.
+ */
+const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
  * The failure a page or the agent sees when the user has not signed in to a
@@ -41,18 +52,70 @@ function callFailure(server: string, tool: string, error: unknown): unknown {
 }
 
 /**
- * `fetch`, except for the standalone stream the SDK opens after connecting (a GET to the server's URL with no
- * Last-Event-ID), which it answers itself as a server without one does: 405. That stream is an outgoing request that
- * stays open for as long as the server keeps it, and the SDK reopens it whenever it ends, so a chat object holding one
- * never hibernates: it stays awake, and billed, for hours after its last message. Nothing here listens for what a
- * server sends unasked (tool lists are listed again by age), and an answer still comes back on its own request. A GET
- * that resumes a request's interrupted answer carries Last-Event-ID and goes through.
+ * `fetch` for one server's transport, as a chat object can afford it.
+ *
+ * It answers the standalone stream the SDK opens after connecting (a GET to the server's URL with no Last-Event-ID)
+ * itself, as a server without one does: 405. That stream stays open for as long as the server keeps it, and the SDK
+ * reopens it whenever it ends, so a chat object holding one never hibernates. Nothing here listens for what a server
+ * sends unasked (tool lists are listed again by age), and an answer still comes back on its own request. A GET that
+ * resumes a request's interrupted answer carries Last-Event-ID and goes through.
+ *
+ * Every other request is aborted after `timeoutMs`, unless its answer was read to the end before then.
  */
-function withoutStandaloneStream(url: URL): FetchLike {
-  return (input, init) => {
-    const standalone = init?.method === "GET" && new URL(input).href === url.href && !new Headers(init.headers).has("last-event-id");
-    return standalone ? Promise.resolve(new Response(null, { status: 405 })) : fetch(input, init);
+function forChatObject(url: URL, timeoutMs: number): FetchLike {
+  return async (input, init) => {
+    if (init?.method === "GET" && new URL(input).href === url.href && !new Headers(init.headers).has("last-event-id")) {
+      return new Response(null, { status: 405 });
+    }
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(new Error(`no answer within ${timeoutMs / 1000} s`)), timeoutMs);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
+    // The SDK passes every request the transport's one signal: a listener left on it would keep each request's
+    // combined signal, and all this closure holds, for as long as the connection lasts.
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+    };
+    signal.addEventListener("abort", done, { once: true });
+    try {
+      const response = await fetch(input, { ...init, signal });
+      if (!response.body) {
+        done();
+        return response;
+      }
+      // Not a pending timer once the answer is read, or given up on: a timer, too, keeps the object awake.
+      return new Response(untilSettled(response.body, done), response);
+    } catch (error) {
+      done();
+      throw error;
+    }
   };
+}
+
+/**
+ * `body`, calling `settled` once it is read to the end, fails, or is cancelled (the SDK cancels the body of a 202, such
+ * as its initialized notification's, without reading it).
+ */
+function untilSettled(body: ReadableStream<Uint8Array>, settled: () => void): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          settled();
+          controller.close();
+        } else controller.enqueue(chunk.value);
+      } catch (error) {
+        settled();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      settled();
+      return reader.cancel(reason);
+    },
+  });
 }
 
 /**
@@ -60,7 +123,11 @@ function withoutStandaloneStream(url: URL): FetchLike {
  * validation uses @cfworker/json-schema. With `authProvider`, the SDK adds the
  * user's token to every request and refreshes it when it expires.
  */
-export async function connectStreamableHttp(server: McpServerConfig, authProvider?: OAuthClientProvider): Promise<McpConnection> {
+export async function connectStreamableHttp(
+  server: McpServerConfig,
+  authProvider?: OAuthClientProvider,
+  { connectTimeoutMs = CONNECT_TIMEOUT_MS, requestTimeoutMs = REQUEST_TIMEOUT_MS } = {},
+): Promise<McpConnection> {
   // The SDK reports a missing or rejected sign-in as UnauthorizedError; everything else passes through.
   const signedIn = async <T>(run: () => Promise<T>): Promise<T> => {
     try {
@@ -74,7 +141,26 @@ export async function connectStreamableHttp(server: McpServerConfig, authProvide
     { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
   );
   const url = new URL(server.url);
-  await signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: withoutStandaloneStream(url) })));
+  try {
+    const connecting = signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: forChatObject(url, requestTimeoutMs) })));
+    await deadline(
+      connecting,
+      connectTimeoutMs,
+      () =>
+        new McpFailure({
+          code: "server_unavailable",
+          server: server.name,
+          retryable: true,
+          message: `${server.name} did not connect within ${connectTimeoutMs / 1000} s.`,
+        }),
+    );
+  } catch (error) {
+    // Closing aborts the transport's requests still open (a connect can stall on one the SDK gives no timeout, such as
+    // its initialized notification). Left open, they would hold the chat object awake. A sign-in refresh is not the
+    // transport's: REQUEST_TIMEOUT_MS ends it.
+    void client.close().catch(() => {});
+    throw error;
+  }
 
   const connection: McpConnection = {
     instructions: client.getInstructions(),
