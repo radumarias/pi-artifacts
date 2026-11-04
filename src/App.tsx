@@ -218,7 +218,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false, isBoolean);
-  const chatFilter = useChatFilter(chats);
+  const chatFilter = useChatFilter(chats, chatId);
   const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", true, isBoolean);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.

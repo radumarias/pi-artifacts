@@ -39,7 +39,7 @@ import {
   everyone,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
-import { parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
+import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, UPLOADS, uploadTargets } from "../shared/uploads.ts";
 import type { ModelChoice } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
@@ -536,11 +536,12 @@ export class ChatAgent extends DurableObject<Env> {
     if (this.#gone) return false;
     if (person.uid === this.uid) {
       this.members.setOwnerName(person);
-      if (!this.ctx.storage.kv.get(SHARED_TOLD_KEY)) this.#tellShared();
+      this.#tellSharedOnce();
       return true;
     }
     if (this.members.has(person.uid)) {
       this.members.rename(person);
+      this.#tellSharedOnce();
       return true;
     }
     void this.#index(person.uid).removeSharedChat(this.chatId, this.uid);
@@ -582,8 +583,6 @@ export class ChatAgent extends DurableObject<Env> {
     const repliesToAgent = quote !== null && "agent" in quote;
     const calling = !shared || repliesToAgent || summonsAgent(text);
     const byOwner = author.uid === this.uid;
-    // Who may be tagged: everyone in the chat, read only for a message that tags someone.
-    let inChat: Map<string, Person> | undefined;
     // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works.
     const own = byOwner ? [] : mentionInputs.filter((input): input is OwnFile => input.kind === "file" && input.own === true);
     const attaching = Promise.all([
@@ -605,7 +604,8 @@ export class ChatAgent extends DurableObject<Env> {
           byOwner,
           readMeta: (id) => this.storage.artifacts.readMeta(id),
           mayName: (path) => this.#isChatFile(path),
-          person: (uid) => (inChat ??= new Map(everyone(this.people()).map((person) => [person.uid, person]))).get(uid) ?? null,
+          // Only someone in the chat can be tagged.
+          person: (uid) => everyone(this.people()).find((person) => person.uid === uid) ?? null,
         },
       ),
       // A message to the people in the chat starts no run: the agent needs its tools only when it is called.
@@ -634,7 +634,9 @@ export class ChatAgent extends DurableObject<Env> {
     if (summoned) await this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
     else await this.#aside(content, data);
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
-    void this.#touchIndexes(title, author, taggedPeople(mentions), text).catch((error) => console.error("chat index:", errorMessage(error)));
+    // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
+    const tags = taggedPeople(keptMentions(text, mentions));
+    void this.#touchIndexes(title, author, tags, text).catch((error) => console.error("chat index:", errorMessage(error)));
   }
 
   /** What a reply quotes of the message at transcript entry `id`; null for one it cannot quote. */
@@ -941,10 +943,18 @@ export class ChatAgent extends DurableObject<Env> {
    * members as it goes, so the last says how things stand. The directory writes only a change. Only a view.
    */
   #tellShared(): void {
-    this.ctx.storage.kv.put(SHARED_TOLD_KEY, true);
     this.#sharedWrites = this.#sharedWrites
-      .then(() => this.#directory.setChatShared(this.chatId, this.members.hasAny()))
+      .then(async () => {
+        await this.#directory.setChatShared(this.chatId, this.members.hasAny());
+        // Told only once it landed: a failed write is tried again on the next open.
+        if (!this.#gone) this.ctx.storage.kv.put(SHARED_TOLD_KEY, true);
+      })
       .catch((error: unknown) => console.error("chat shared:", errorMessage(error)));
+  }
+
+  /** For a chat shared before the owner's directory kept that: tell it once, whoever opens the chat first. */
+  #tellSharedOnce(): void {
+    if (!this.ctx.storage.kv.get(SHARED_TOLD_KEY)) this.#tellShared();
   }
 
   /** The owner removes a member, or a member leaves. Their open sockets close at once, and the chat leaves their sidebar. */

@@ -71,10 +71,10 @@ const isChatFilter = (value: unknown): value is ChatFilter => typeof value === "
 
 /**
  * The chat list's filter, remembered in this browser. Until a chat is shared there is nothing to filter: then `bar` is
- * false and every chat shows. `waiting` names the choices that would show a chat the current one hides where someone
+ * false and every chat shows. The open chat (`openId`) always shows, so the list says where the user is. `waiting` names the choices that would show a chat the current one hides where someone
  * tagged the user, or with something unread.
  */
-export function useChatFilter(chats: readonly ChatSummary[]) {
+export function useChatFilter(chats: readonly ChatSummary[], openId: string | undefined) {
   const [stored, setFilter] = useStoredState<ChatFilter>("layout.chatFilter", "all", isChatFilter);
   return {
     setFilter,
@@ -82,15 +82,15 @@ export function useChatFilter(chats: readonly ChatSummary[]) {
       const bar = chats.some(isShared);
       const filter = bar ? stored : "all";
       const { keep } = FILTERS[filter];
-      const hidden = chats.filter((chat) => (chat.mentioned || chat.unread) && !keep(chat));
+      const hidden = chats.filter((chat) => (chat.mentioned || chat.unread) && !keep(chat) && chat.id !== openId);
       return {
         bar,
         filter,
-        shown: chats.filter(keep),
+        shown: chats.filter((chat) => keep(chat) || chat.id === openId),
         empty: !bar ? undefined : filter === "private" ? "No private chats." : "No shared chats here.",
         waiting: new Set(CHOICES.filter((choice) => hidden.some(FILTERS[choice].keep))),
       };
-    }, [chats, stored]),
+    }, [chats, stored, openId]),
   };
 }
 

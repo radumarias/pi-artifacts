@@ -270,7 +270,7 @@ export interface ChatMessageData extends Person {
   text: string;
   /** Files attached to the message, as the model got them (see shared/attachments.ts). */
   attachments?: Attachment[];
-  /** Files and artifacts the message names with "@" (see shared/mentions.ts). */
+  /** Files, artifacts and people the message names with "@" (see shared/mentions.ts). */
   mentions?: Mention[];
   /**
    * Said in a shared chat without calling the agent ("@pi"): people talking among themselves. Shown at once, and
@@ -330,7 +330,7 @@ export interface Presence {
 /** Browser → ChatAgent over the chat WebSocket. */
 export type ChatClientMessage =
   // `attachments` were uploaded first, with POST /api/chats/:id/attachments; `text` may then be empty.
-  // `mentions` are the files and artifacts picked with "@" whose text is still in `text`.
+  // `mentions` are the files, artifacts and people picked with "@" whose text is still in `text`.
   // `replyTo` is the transcript entry of the message it answers: a person's message, or one of the agent's replies.
   | { type: "prompt"; text: string; attachments?: AttachmentInput[]; mentions?: MentionInput[]; replyTo?: number }
   | { type: "abort" }

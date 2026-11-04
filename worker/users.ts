@@ -229,7 +229,9 @@ export class UserDirectory extends DurableObject<Env> {
    * it (MentionNotice), with the chat's title unless the chat is named after this very message (`named`).
    */
   #touch(id: string, ownerUid: string, title: string, byOther: boolean, tag?: Tag, named = false): void {
-    const now = tag?.at ?? Date.now();
+    // This object's own clock for the row, as every other write to it uses: a tag's time comes from the chat, and could
+    // put activity_at back behind a later write. The notice keeps the tag's time, which windows share.
+    const now = Date.now();
     const set = "title = ?, updated_at = ?, activity_at = CASE WHEN ? THEN ? ELSE activity_at END, mentioned_at = CASE WHEN ? THEN ? ELSE mentioned_at END";
     if (!this.#updateChat(id, ownerUid, set, title, now, byOther ? 1 : 0, now, tag ? 1 : 0, now) || !tag) return;
     this.#changed({ type: "mention", chatId: id, ...(!named && { title }), ...tag });

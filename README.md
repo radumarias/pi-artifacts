@@ -329,8 +329,9 @@ people: many people share one conversation with one agent, and their messages qu
   tag keeps it to one across windows). A tag is no call of pi. The notice goes over the sidebar's socket
   (`MentionNotice`, sent with the chat's bump: a `Tag` on `UserDirectory.touchChat`/`touchSharedChat`); with the app closed nothing is pushed, there is no service worker.
 - **Filtering chats:** once a chat is shared, the sidebar's chat list can show all chats, private ones (the user's own,
-  nobody else in them), or shared ones: both, those the user shared, or those shared with them. The owner's directory
-  learns which of their chats have members from the chat (`setChatShared`), on joins and leaves and when they open it.
+  nobody else in them), or shared ones: both, those the user shared, or those shared with them. The chat open now
+  always shows. The owner's directory learns which of their chats have members from the chat (`setChatShared`), on
+  joins and leaves (a chat shared before that tells it once, when anyone in it next opens it).
 - **Replies and copying:** any message can be answered (the reply quotes it, and the model reads `[Replying to name:
   "…"]`) or copied, as rich text and as plain text (Markdown for pi's answers).
 - **Invite:** **Share** in the chat header makes a single-use link, `/join/<token>`, valid for 7 days. The token names
