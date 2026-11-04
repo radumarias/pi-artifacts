@@ -50,6 +50,22 @@ describe("Files search", () => {
     expect(fileMatcher("**/c/**")("a/b/test.md")).toBe(false);
   });
 
+  it("ignores a leading slash, reads a trailing one as the folder's contents, and keeps ** from ending on a file", () => {
+    expect(found("/notes/*.txt")).toEqual(["notes/text.txt", "notes/Test.TXT", "notes/tests.txt"]);
+    expect(found("/*.txt")).toEqual(["test.txt"]);
+    expect(found("a/*/")).toEqual(["a/b/test.md"]);
+    expect(found("*/")).toEqual(["notes/text.txt", "notes/Test.TXT", "notes/tests.txt", "a/b/test.md", "uploads/report 2026.csv"]);
+    expect(fileMatcher("a/**")("a")).toBe(false);
+    expect(fileMatcher("**/b/**")("x/b")).toBe(false);
+    expect(fileMatcher("**/b/**")("x/b/c")).toBe(true);
+  });
+
+  it("lets ? stand for one character outside the basic plane", () => {
+    expect(fileMatcher("?.txt")("😀.txt")).toBe(true);
+    expect(fileMatcher("??.txt")("😀.txt")).toBe(false);
+    expect(fileMatcher("notes/?.txt")("notes/😀.txt")).toBe(true);
+  });
+
   it("stays fast on patterns that make a regular expression backtrack", () => {
     const name = `${"a".repeat(5_000)}.txt`;
     const started = performance.now();
