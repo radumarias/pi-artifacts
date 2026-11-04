@@ -22,7 +22,7 @@ export function ComposerMore({ mentionLabel, onMention }: { mentionLabel: string
         aria-label="More"
       >
         <Icon size={14} stroke={2}>
-          <path d={open ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
+          <path d="m6 9 6 6 6-6" />
         </Icon>
       </button>
       {/* After the button, so Tab moves from it into the menu; CSS places the menu above it. */}
@@ -40,7 +40,6 @@ export function ComposerMore({ mentionLabel, onMention }: { mentionLabel: string
               @
             </span>
             <span>{mentionLabel}</span>
-            <kbd>@</kbd>
           </button>
         </div>
       )}

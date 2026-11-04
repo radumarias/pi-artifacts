@@ -132,7 +132,8 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
   const efforts =
     current?.efforts.length && thinkingLevel ? (current.efforts.includes(thinkingLevel) ? current.efforts : [thinkingLevel, ...current.efforts]) : [];
   const label = current?.name ?? model;
-  const effort = efforts.length && thinkingLevel ? thinkingLevel : undefined;
+  const effort = efforts.length ? thinkingLevel : undefined;
+  const full = current ? `${current.name} (${providerLabel(current.provider)})` : model;
   return (
     <div className="model-picker">
       <button
@@ -143,7 +144,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={effort ? `Model: ${label}, ${effortLabel(effort).toLowerCase()}` : `Model: ${label}`}
-        title={`${current ? `${current.name} (${providerLabel(current.provider)})` : model}${effort ? ` · ${effortLabel(effort)}` : ""}`}
+        title={effort ? `${full} · ${effortLabel(effort)}` : full}
         onClick={() => setOpen(!open)}
       >
         {/* A deployment's default can be a model the picker does not list. */}
@@ -457,7 +458,7 @@ function ModelMenu({
         <div className="model-effort" role="radiogroup" aria-label="Effort">
           <span>Effort</span>
           {efforts.map((level) => (
-            <button key={level} type="button" role="radio" aria-checked={level === thinkingLevel} onClick={() => onEffort(level)}>
+            <button key={level} type="button" className="chip" role="radio" aria-checked={level === thinkingLevel} onClick={() => onEffort(level)}>
               {EFFORT_LABELS[level]}
             </button>
           ))}
