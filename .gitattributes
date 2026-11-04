@@ -1,0 +1,2 @@
+# Screenshots, images and other media for docs and pull requests live in docs/media/, stored with Git LFS.
+docs/media/** filter=lfs diff=lfs merge=lfs -text

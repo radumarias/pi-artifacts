@@ -456,6 +456,7 @@ account has, are not taken off. Everyone in a shared chat sees them.
 | `runtime/` | The page runtime and its contract |
 | `src/` | React app: chats, the streamed transcript, the preview panel, `ArtifactBroker`; resizable columns (`layout.tsx`); uploads and the file tree (`files/`) |
 | `shared/` | Types and helpers used by all of the above |
+| `docs/media/` | Screenshots and other media for the docs and pull requests, one folder per feature, stored with Git LFS (`.gitattributes`): run `git lfs install` once before cloning to get the files rather than their pointers |
 
 ## Run it
 
