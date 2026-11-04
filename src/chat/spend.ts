@@ -1,4 +1,5 @@
 import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { modelKey, modelKeyOfLedger } from "../../shared/models.ts";
 import { CHAT_MESSAGE_KIND, type ChatMessageData } from "../../shared/protocol.ts";
@@ -212,8 +213,7 @@ export function contextUse(entries: readonly EntryRecord[]): ContextUse | undefi
     if (entry.kind === "pi.compaction") compacted = true;
     const message = entry.model?.[0];
     if (entry.kind !== "pi.assistant" || message?.role !== "assistant") continue;
-    const { usage } = message;
-    const tokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    const tokens = calculateContextTokens(message.usage);
     // A reply that failed or was stopped before the provider counted anything says nothing about the context.
     if (tokens > 0) return { tokens, model: modelKey(message.provider, message.model), compacted };
   }

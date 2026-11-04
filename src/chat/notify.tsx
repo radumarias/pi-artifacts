@@ -118,7 +118,7 @@ export function MentionToasts({ toasts, dismiss, open, asking }: ReturnType<type
   const askCard = asking && permission === "default" && now - askedAt > ASK_AGAIN_MS;
   if (toasts.length === 0 && !askCard) return null;
   return (
-    <div className="toasts" role="status" aria-live="polite">
+    <div className="toasts">
       {askCard && (
         <div className="toast notify-ask">
           <BellIcon />
@@ -136,23 +136,26 @@ export function MentionToasts({ toasts, dismiss, open, asking }: ReturnType<type
           </div>
         </div>
       )}
-      {toasts.map((notice) => (
-        <div key={`${notice.chatId}:${notice.at}`} className="toast">
-          <button type="button" className="toast-body" onClick={() => open(notice)}>
-            <strong>
-              <span className="toast-at" aria-hidden="true">
-                @
-              </span>
-              {notice.from} mentioned you
-            </strong>
-            {notice.title && <small>{notice.title}</small>}
-            {notice.text && <span className="toast-text">{notice.text}</span>}
-          </button>
-          <button type="button" className="icon-button" onClick={() => dismiss(notice)} title="Dismiss" aria-label="Dismiss">
-            ×
-          </button>
-        </div>
-      ))}
+      {/* Read out as they come; the card above, with its buttons, is not a status. */}
+      <div className="toast-list" role="status" aria-live="polite">
+        {toasts.map((notice) => (
+          <div key={`${notice.chatId}:${notice.at}`} className="toast">
+            <button type="button" className="toast-body" onClick={() => open(notice)}>
+              <strong>
+                <span className="toast-at" aria-hidden="true">
+                  @
+                </span>
+                {notice.from} mentioned you
+              </strong>
+              {notice.title && <small>{notice.title}</small>}
+              {notice.text && <span className="toast-text">{notice.text}</span>}
+            </button>
+            <button type="button" className="icon-button" onClick={() => dismiss(notice)} title="Dismiss" aria-label="Dismiss">
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
