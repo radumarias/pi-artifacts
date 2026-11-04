@@ -5,12 +5,17 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import type { ToolInfo } from "../../shared/protocol.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { deadline, errorMessage } from "../../shared/util.ts";
 import { McpFailure, type McpConnection, type RawToolResult } from "./hub.ts";
 import { signInPath } from "./oauth.ts";
 import type { McpServerConfig } from "./servers.ts";
 
 const CALL_TIMEOUT_MS = 60_000;
+/**
+ * How long connecting may take, sign-in refresh and handshake included. Every call to the server waits on its
+ * connection, so one that never comes would hold them all.
+ */
+const CONNECT_TIMEOUT_MS = 30_000;
 
 /**
  * The failure a page or the agent sees when the user has not signed in to a
@@ -60,7 +65,11 @@ function withoutStandaloneStream(url: URL): FetchLike {
  * validation uses @cfworker/json-schema. With `authProvider`, the SDK adds the
  * user's token to every request and refreshes it when it expires.
  */
-export async function connectStreamableHttp(server: McpServerConfig, authProvider?: OAuthClientProvider): Promise<McpConnection> {
+export async function connectStreamableHttp(
+  server: McpServerConfig,
+  authProvider?: OAuthClientProvider,
+  { connectTimeoutMs = CONNECT_TIMEOUT_MS } = {},
+): Promise<McpConnection> {
   // The SDK reports a missing or rejected sign-in as UnauthorizedError; everything else passes through.
   const signedIn = async <T>(run: () => Promise<T>): Promise<T> => {
     try {
@@ -74,7 +83,16 @@ export async function connectStreamableHttp(server: McpServerConfig, authProvide
     { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
   );
   const url = new URL(server.url);
-  await signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: withoutStandaloneStream(url) })));
+  try {
+    const connecting = signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: withoutStandaloneStream(url) })));
+    const timedOut = () => new McpFailure({ code: "server_unavailable", server: server.name, retryable: true, message: `${server.name} did not connect within ${connectTimeoutMs / 1000} s.` });
+    await deadline(connecting, connectTimeoutMs, timedOut);
+  } catch (error) {
+    // Closing aborts the requests still open (a connect can stall on a request that has no timeout, such as its
+    // initialized notification, or on a sign-in refresh). Left open, they would hold the chat object awake.
+    void client.close().catch(() => {});
+    throw error;
+  }
 
   const connection: McpConnection = {
     instructions: client.getInstructions(),
