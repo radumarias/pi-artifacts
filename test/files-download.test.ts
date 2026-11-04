@@ -6,7 +6,7 @@ import { crc32 } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { api } from "../src/api.ts";
 import { commonFolder, MAX_ZIP_FILES, previewKind, previewType, viewType, ZIP_ROUTE } from "../shared/uploads.ts";
-import { filesRoute } from "../worker/files-routes.ts";
+import { filesRoute, storeUpload } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { UserFiles } from "../worker/storage/user-files.ts";
 import { dosDateTime, zipStream } from "../worker/zip.ts";
@@ -336,5 +336,29 @@ describe("file and folder downloads", () => {
     expect(previewKind("out/a.constructor")).toBeUndefined();
     expect(viewType("out/a.sql")).toBe("text/plain; charset=utf-8");
     expect(viewType("out/a.zip")).toBeUndefined();
+  });
+});
+
+describe("uploads into someone else's files", () => {
+  const upload = (names: string[]) => {
+    const form = new FormData();
+    for (const name of names) form.append("file", new File([`new ${name}`], name));
+    return new Request("https://app.test/api/chats/c1/attachments", { method: "POST", body: form });
+  };
+
+  it("keep each file beside one of the same name, where the owner's own upload replaces it", async () => {
+    const bucket = new FakeBucket();
+    bucket.objects.set("users/ada/files/uploads/budget.xlsx", "ada's");
+    bucket.objects.set("users/ada/files/uploads/budget-2.xlsx", "ada's too");
+    const files = new UserFiles(bucket.r2, "ada", await deriveUserKey(MASTER, "ada"));
+
+    const beside = await storeUpload(upload(["budget.xlsx", "budget.xlsx", "notes.md"]), async () => files, true);
+    expect(await beside.json()).toEqual({ paths: ["uploads/budget-3.xlsx", "uploads/budget-4.xlsx", "uploads/notes.md"] });
+    expect(await (await files.get("uploads/budget.xlsx"))!.text()).toBe("ada's");
+
+    const own = await storeUpload(upload(["budget.xlsx"]), async () => files);
+    expect(await own.json()).toEqual({ paths: ["uploads/budget.xlsx"] });
+    // The fake keeps a streamed body as "": the owner's file was put over.
+    expect(await (await files.get("uploads/budget.xlsx"))!.text()).toBe("");
   });
 });

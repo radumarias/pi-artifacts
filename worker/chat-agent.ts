@@ -40,7 +40,7 @@ import {
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
-import { freePath, MAX_LISTED, UPLOADS, uploadTargets } from "../shared/uploads.ts";
+import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
 import type { ModelChoice } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -679,7 +679,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async #copyOwnFiles(author: Person, inputs: readonly OwnFile[]): Promise<AttachmentInput[]> {
     const [theirs, owners] = await Promise.all([this.storage.userFiles(author.uid), this.scope.files()]);
-    const taken = new Set((await owners.list(`${UPLOADS}/`)).map((file) => file.path));
+    const taken = await owners.uploadPaths();
     // Named first, so no two take one name; then copied at once.
     const copies = inputs.flatMap((input) => {
       const path = literalPath(input.path);

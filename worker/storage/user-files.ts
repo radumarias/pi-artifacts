@@ -1,4 +1,4 @@
-import { MAX_LISTED } from "../../shared/uploads.ts";
+import { MAX_LISTED, UPLOADS } from "../../shared/uploads.ts";
 import { normalisePath } from "./paths.ts";
 
 /** A part of a file, as R2 reads it: from an offset (for a length), or its last `suffix` bytes. */
@@ -45,6 +45,11 @@ export class UserFiles {
       cursor = page.truncated ? page.cursor : undefined;
     } while (cursor && entries.length < limit);
     return entries.slice(0, limit);
+  }
+
+  /** Every path under uploads/, however many: what a file put beside them rather than over one must not take (freePath). */
+  async uploadPaths(): Promise<Set<string>> {
+    return new Set((await this.list(`${UPLOADS}/`, Number.POSITIVE_INFINITY)).map((file) => file.path));
   }
 
   async get(path: string, range?: ByteRange): Promise<R2ObjectBody | null> {

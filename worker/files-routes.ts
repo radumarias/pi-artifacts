@@ -59,9 +59,10 @@ export async function serveChatFile(request: Request, encoded: string, files: ()
 /**
  * Store an upload's files under uploads/ in `userFiles`, and answer with the
  * paths they got: the files route's POST, and a chat's attachments, which go
- * to the chat owner's files.
+ * to the chat owner's files. `beside` (someone other than the owner uploading
+ * to the owner's files) keeps each file beside one of the same name, never over it.
  */
-export async function storeUpload(request: Request, userFiles: () => Promise<UserFiles>): Promise<Response> {
+export async function storeUpload(request: Request, userFiles: () => Promise<UserFiles>, beside = false): Promise<Response> {
   const declared = Number(request.headers.get("content-length"));
   if (declared > MAX_UPLOAD_BYTES + FORM_OVERHEAD) return json({ error: tooBig() }, 413);
   const form = await request.formData();
@@ -73,13 +74,14 @@ export async function storeUpload(request: Request, userFiles: () => Promise<Use
   if (large) return json({ error: `${large.name} is over ${formatBytes(MAX_FILE_BYTES)}; files are limited to that.` }, 413);
   if (files.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BYTES) return json({ error: tooBig() }, 413);
 
+  const store = await userFiles();
   const targets = uploadTargets(
     files.map((file, i) => {
       const given = paths[i];
       return typeof given === "string" && given ? given : file.name;
     }),
+    beside ? await store.uploadPaths() : [],
   );
-  const store = await userFiles();
   const stored = await Promise.all(files.map((file, i) => store.put(targets[i], file.stream(), file.type || undefined)));
   return json({ paths: stored });
 }

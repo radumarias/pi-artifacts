@@ -45,10 +45,10 @@ function cleanSegment(segment: string): string {
 /**
  * Where each of `names` is kept (see uploadPath), named over the whole list:
  * two names that clean up to one path ("a?.csv" and "a*.csv") get -2, -3…
- * rather than lose a file. A name with nothing left of it is "upload".
+ * rather than lose a file. A name with nothing left of it is "upload". With `existing`, none takes one of those either.
  */
-export function uploadTargets(names: readonly string[]): string[] {
-  const taken = new Set<string>();
+export function uploadTargets(names: readonly string[], existing: Iterable<string> = []): string[] {
+  const taken = new Set(existing);
   return names.map((name) => {
     const path = freePath(uploadPath(name) ?? `${UPLOADS}/upload`, taken);
     taken.add(path);
