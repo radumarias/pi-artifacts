@@ -159,7 +159,8 @@ describe("file and folder downloads", () => {
     expect(page.headers.get("content-disposition")).toBe('inline; filename="page.html"');
     // Sandboxed with the artifact policy: an opaque origin with no network of its own, even opened in a tab.
     const policy = page.headers.get("content-security-policy")!;
-    expect(policy).toMatch(/^sandbox allow-scripts /);
+    // Scripts only: no popups, which would escape the sandbox.
+    expect(policy).toMatch(/^sandbox allow-scripts; /);
     expect(policy).not.toContain("allow-same-origin");
     expect(policy).toContain("connect-src 'none'");
     expect(await page.text()).toBe("<p>hi</p>");

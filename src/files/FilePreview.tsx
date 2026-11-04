@@ -1,8 +1,7 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { baseName, extension } from "../../shared/attachments.ts";
-import { ARTIFACT_SANDBOX } from "../../shared/protocol.ts";
-import { previewKind, viewType, type PreviewKind } from "../../shared/uploads.ts";
+import { FILE_PAGE_SANDBOX, previewKind, viewType, type PreviewKind } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { ViewportPicker, ViewportStage, useViewport } from "../artifact/viewport.tsx";
@@ -211,7 +210,7 @@ export const FilePreview = memo(function FilePreview({ path, files, onOpen, onCl
   } else if (shown === "html") {
     body = (
       <ViewportStage id={viewport.id} rotated={viewport.rotated}>
-        <iframe key={viewUrl} className="artifact-frame" title={name} src={viewUrl} sandbox={ARTIFACT_SANDBOX} />
+        <iframe key={viewUrl} className="artifact-frame" title={name} src={viewUrl} sandbox={FILE_PAGE_SANDBOX} />
       </ViewportStage>
     );
   } else if (shown === "pdf") {

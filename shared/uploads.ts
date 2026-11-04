@@ -197,6 +197,13 @@ export function viewType(path: string): string | undefined {
   return kind ? "text/plain; charset=utf-8" : undefined;
 }
 
+/**
+ * How a web page from the user's files runs: scripts only, in an opaque origin. Unlike an artifact's (ARTIFACT_SANDBOX)
+ * it opens no popups: a file may come from anywhere (an upload, a page the agent built from a tool's output), and a
+ * popup escapes the sandbox and the page's policy, so it could carry what the page shows to another site.
+ */
+export const FILE_PAGE_SANDBOX = "allow-scripts";
+
 /** The query parameter that asks FILE_ROUTE to show a file in the browser (viewType) rather than download it. */
 export const VIEW_PARAM = "view";
 

@@ -1,6 +1,7 @@
 import { baseName } from "../shared/attachments.ts";
 import {
   commonFolder,
+  FILE_PAGE_SANDBOX,
   FILE_ROUTE,
   MAX_FILE_BYTES,
   MAX_FILES_PER_UPLOAD,
@@ -16,7 +17,7 @@ import {
   zipRefusal,
 } from "../shared/uploads.ts";
 import { formatBytes } from "../shared/util.ts";
-import { PAGE_HEADERS } from "./artifacts/serve.ts";
+import { PAGE_HEADERS, PAGE_POLICY } from "./artifacts/serve.ts";
 import { json } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
 import type { ByteRange, FileEntry, UserFiles } from "./storage/user-files.ts";
@@ -101,14 +102,19 @@ function urlPath(encoded: string): string {
 
 /**
  * How a file of each kind the app previews is served for viewing, past SERVED_HEADERS. A web page runs as an artifact
- * does (worker/artifacts/serve.ts): in an opaque origin whether framed by the preview or opened in a tab of its own,
- * with scripts only inline or from the usual CDNs, and no network of its own, so it can neither act as the user in
- * the app nor send their data anywhere. A PDF opens in the browser's own viewer, and sound and video in its player,
+ * does (worker/artifacts/serve.ts), but without popups (shared/uploads.ts FILE_PAGE_SANDBOX): in an opaque origin
+ * whether framed by the preview or opened in a tab of its own, with scripts only inline or from the usual CDNs, and no
+ * network of its own, so it can neither act as the user in the app nor send their data anywhere. A PDF opens in the browser's own viewer, and sound and video in its player,
  * which a sandbox (an opaque origin) would block; they run no script of the app's, and load nothing else.
  */
 const MEDIA_HEADERS = { ...SERVED_HEADERS, "content-security-policy": "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'" };
 const VIEW_HEADERS: Partial<Record<PreviewKind, Record<string, string>>> = {
-  html: { ...SERVED_HEADERS, ...PAGE_HEADERS, "cache-control": SERVED_HEADERS["cache-control"] },
+  html: {
+    ...SERVED_HEADERS,
+    ...PAGE_HEADERS,
+    "content-security-policy": `sandbox ${FILE_PAGE_SANDBOX}; ${PAGE_POLICY}`,
+    "cache-control": SERVED_HEADERS["cache-control"],
+  },
   pdf: { ...SERVED_HEADERS, "content-security-policy": "default-src 'none'; object-src 'self'; style-src 'unsafe-inline'" },
   audio: MEDIA_HEADERS,
   video: MEDIA_HEADERS,
