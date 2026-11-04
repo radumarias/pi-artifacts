@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Icon } from "../Icon.tsx";
 import { useDismiss } from "../layout.tsx";
 
@@ -10,6 +10,7 @@ import { useDismiss } from "../layout.tsx";
 export function ComposerMore({ mentionLabel, onMention }: { mentionLabel: string; onMention: () => void }) {
   const [open, setOpen] = useState(false);
   const box = useDismiss<HTMLDivElement>(open, setOpen);
+  const menu = useId();
   return (
     <div className="composer-more" ref={box}>
       <button
@@ -17,7 +18,7 @@ export function ComposerMore({ mentionLabel, onMention }: { mentionLabel: string
         className="icon-button composer-more-button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-controls={open ? menu : undefined}
         title="More"
         aria-label="More"
       >
@@ -27,10 +28,9 @@ export function ComposerMore({ mentionLabel, onMention }: { mentionLabel: string
       </button>
       {/* After the button, so Tab moves from it into the menu; CSS places the menu above it. */}
       {open && (
-        <div className="composer-more-menu" role="menu">
+        <div className="composer-more-menu" id={menu}>
           <button
             type="button"
-            role="menuitem"
             onClick={() => {
               setOpen(false);
               onMention();

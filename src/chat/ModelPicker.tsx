@@ -120,6 +120,10 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
     setOpen(false);
     trigger.current?.focus();
   }, []);
+  // A trigger turned off (the chat lost its socket) closes the menu: its picks would go nowhere.
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   if (!model) return null;
   const current = catalog.models.find((entry) => entry.id === model);
@@ -347,16 +351,19 @@ function ModelMenu({
       event.preventDefault();
       const option = options[activeIndex];
       if (option) choose(option.model);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
     }
+  };
+  // Escape closes the menu from anywhere in it: the search box, an effort or the refresh button.
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    onClose();
   };
 
   const total = catalog.models.length;
   const providerCount = byProvider.size;
   return (
-    <div className="model-menu" role="dialog" aria-label="Choose a model" ref={box} style={place}>
+    <div className="model-menu" role="dialog" aria-label="Choose a model" ref={box} style={place} onKeyDown={onMenuKeyDown}>
       <label className="model-search">
         <Icon size={16} stroke={2}>
           <circle cx="11" cy="11" r="7" />
@@ -455,10 +462,18 @@ function ModelMenu({
         {query && !sections.length && <div className="model-empty">No model matches “{query}”.</div>}
       </div>
       {efforts.length > 0 && (
-        <div className="model-effort" role="radiogroup" aria-label="Effort">
+        <div className="model-effort" role="group" aria-label="Effort">
           <span>Effort</span>
           {efforts.map((level) => (
-            <button key={level} type="button" className="chip" role="radio" aria-checked={level === thinkingLevel} onClick={() => onEffort(level)}>
+            <button
+              key={level}
+              type="button"
+              className="chip"
+              aria-pressed={level === thinkingLevel}
+              // A click keeps the focus in the search box, so the arrow keys and Enter still work on the list.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onEffort(level)}
+            >
               {EFFORT_LABELS[level]}
             </button>
           ))}
