@@ -54,6 +54,8 @@ describe("file preview", () => {
     expect(grammarFor("PY")).toBe("python");
     expect(grammarFor("tsx")).toBe("typescript");
     expect(grammarFor("Makefile")).toBe("makefile");
+    expect(grammarFor("htmlpart")).toBe("xml");
+    expect(grammarFor("jsblock")).toBe("javascript");
     expect(grammarFor("txt")).toBeUndefined();
     expect(grammarFor("constructor")).toBeUndefined();
     const html = await highlight('const a = "<img src=x onerror=alert(1)>";', "javascript");

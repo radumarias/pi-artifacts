@@ -294,6 +294,10 @@ describe("file and folder downloads", () => {
     expect(previewKind("out/sales.csv")).toBe("table");
     expect(previewKind("out/a.pdf")).toBe("pdf");
     expect(previewKind("out/a.svg")).toBe("image");
+    // Fragments and encoded data the agent writes read as text: a fragment of a page never runs.
+    expect(previewKind("out/page.htmlpart")).toBe("text");
+    expect(previewKind("out/script.jsblock")).toBe("text");
+    expect(previewKind("out/data.b64")).toBe("text");
     expect(previewKind("out/Makefile")).toBeUndefined();
     expect(previewKind("out/a.constructor")).toBeUndefined();
     expect(viewType("out/a.sql")).toBe("text/plain; charset=utf-8");
