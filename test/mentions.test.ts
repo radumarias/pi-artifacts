@@ -169,9 +169,10 @@ describe("calling the agent", () => {
   });
 
   it("splits the text around each call, for the transcript's chips", () => {
-    expect(splitAgent("hi @pi and @pi.")).toEqual(["hi ", "@pi", " and ", "@pi", "."]);
-    expect(splitAgent("@pi")).toEqual(["@pi"]);
-    expect(splitAgent("no call")).toEqual(["no call"]);
+    const parts = (text: string) => splitAgent(text).map((part) => (part.call ? `[${part.text}]` : part.text));
+    expect(parts("hi @pi and @PI.")).toEqual(["hi ", "[@pi]", " and ", "[@PI]", "."]);
+    expect(parts("@pi")).toEqual(["[@pi]"]);
+    expect(parts("no call")).toEqual(["no call"]);
   });
 
   it("parses a member's own file as such", () => {

@@ -218,12 +218,12 @@ function AgentRun({ text }: { text: string }) {
   return (
     <>
       {splitAgent(text).map((part, i) =>
-        part === AGENT_TOKEN ? (
+        part.call ? (
           <span key={i} className="mention-chip agent" title={`Asks ${AGENT_NAME} to answer`}>
-            {AGENT_TOKEN}
+            {part.text}
           </span>
         ) : (
-          part
+          part.text
         ),
       )}
     </>

@@ -349,7 +349,8 @@ people: many people share one conversation with one agent, and their messages qu
   its agent, or in its `out/<chatId>/` folder) and artifacts, and their own files; one of their own they name is
   copied into the owner's `uploads/` and attached to the message, as the agent works with the owner's files. The
   sidebar adds the chat's files and artifacts beside the member's own while the chat is open; the chat's files are
-  served through `GET /api/chats/:id/files/<path>`, which the chat object checks. The agent itself still reaches all
+  served through `GET /api/chats/:id/files/<path>`, which the chat object checks. A member's message attaches only what
+  they uploaded through the chat (which the chat object notes) or the chat's files. The agent itself still reaches all
   of the owner's files, as the Share panel says.
 - **Queued messages:** a message sent while the agent works waits in pi's inbox (`pi.inbox`). pi's event stream
   reports each change to the inbox by ids only, so the chat adds the waiting messages, read from the inbox, to that

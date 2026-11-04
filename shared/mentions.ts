@@ -40,17 +40,17 @@ export function summonsAgent(text: string, mentions: readonly Mention[] = []): b
   return splitMentions(text, mentions).some((part) => typeof part === "string" && call.test(part));
 }
 
-/** The text split into plain runs and the "@pi"s in it, for the transcript to show them as chips. */
-export function splitAgent(text: string): (string | typeof AGENT_TOKEN)[] {
-  const parts: (string | typeof AGENT_TOKEN)[] = [];
+/** The text split into plain runs and the "@pi"s in it (as typed: "@PI" stays so), for the transcript to show them as chips. */
+export function splitAgent(text: string): { text: string; call: boolean }[] {
+  const parts: { text: string; call: boolean }[] = [];
   let plain = 0;
   for (const match of text.matchAll(new RegExp(AGENT_PATTERN, "gi"))) {
     const at = match.index + match[1].length;
-    if (at > plain) parts.push(text.slice(plain, at));
-    parts.push(AGENT_TOKEN);
+    if (at > plain) parts.push({ text: text.slice(plain, at), call: false });
     plain = at + AGENT_TOKEN.length;
+    parts.push({ text: text.slice(at, plain), call: true });
   }
-  if (plain < text.length) parts.push(text.slice(plain));
+  if (plain < text.length) parts.push({ text: text.slice(plain), call: false });
   return parts;
 }
 

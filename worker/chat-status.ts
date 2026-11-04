@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, EntryRecord, SnapshotEvent } from "@earendil-works/pi-durable";
 import { textOf } from "../shared/canonical.ts";
-import type { ChatStatus } from "../shared/protocol.ts";
+import { CHAT_ASIDE_KIND, type ChatStatus } from "../shared/protocol.ts";
 
 /** A question mark at the end, give or take closing quotes, brackets, Markdown emphasis or an emoji. */
 const QUESTION_END = /[?？]["'”’)\]*_`\s\p{Extended_Pictographic}\uFE0F]*$/u;
@@ -26,9 +26,11 @@ export function asksUser(text: string): boolean {
 /**
  * What a transcript entry says about whether the agent waits on the user: the text of an assistant message that ended
  * its turn, "" for one that called tools, failed or was stopped, or for a person's message (the agent has their
- * answer), and undefined for anything else (tool results, notices).
+ * answer), and undefined for anything else (tool results, notices, and people talking among themselves in a shared
+ * chat, which answers nothing the agent asked).
  */
 function lastWord(entry: EntryRecord): string | undefined {
+  if (entry.kind === CHAT_ASIDE_KIND) return undefined;
   const message = entry.model?.[0];
   if (message?.role === "user") return "";
   if (message?.role !== "assistant") return undefined;

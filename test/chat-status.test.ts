@@ -38,6 +38,11 @@ describe("RunTracker", () => {
     expect(new RunTracker(snapshot([reply("Done.")])).status).toBe(null);
   });
 
+  it("keeps waiting while people talk among themselves: their asides answer nothing", () => {
+    const aside = { ...person("lunch?"), kind: "chat.aside" } as EntryRecord;
+    expect(new RunTracker(snapshot([reply("Which server?"), aside])).status).toBe("waiting");
+  });
+
   it("counts people's messages waiting for a run as working, notices not", () => {
     expect(new RunTracker(snapshot([], { inbox: [{ id: 1, mode: "followUp" }] })).status).toBe("running");
     expect(new RunTracker(snapshot([], { inbox: [{ id: 1, mode: "write" }] })).status).toBe(null);

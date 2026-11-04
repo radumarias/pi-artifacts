@@ -88,7 +88,10 @@ export async function chatRoute(
   // The agent acts as the owner and reads the owner's files, so a member's attachments go there too.
   if (what === "attachments" && method === "POST" && !item) {
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
-    return storeUpload(request, () => filesOf(ownerUid));
+    const stored = await storeUpload(request, () => filesOf(ownerUid));
+    // Someone else may attach only what they uploaded (and the chat's files): the chat keeps what that is.
+    if (stored.ok && person.uid !== ownerUid) await chat.noteUploads(person.uid, ((await stored.clone().json()) as { paths: string[] }).paths);
+    return stored;
   }
   // What "@" offers. The owner: all their files and artifacts (see mentionable). Anyone
   // else: only what the chat holds of the owner's, and their own files, which the chat copies to the owner's when named.

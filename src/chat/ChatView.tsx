@@ -413,7 +413,7 @@ const Entry = memo(function Entry({
   return null;
 });
 
-/** Entries the app shows nothing for: they do not end an agent's reply, or start one. */
+/** Entries the app shows something for; the others (such as asides for the model) do not end an agent's reply, or start one. */
 function shown(entry: EntryRecord): boolean {
   return entry.kind === CHAT_MESSAGE_KIND || entry.kind === CHAT_PEOPLE_KIND || entry.kind === "pi.user" || isAgent(entry);
 }

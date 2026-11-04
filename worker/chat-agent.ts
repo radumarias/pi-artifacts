@@ -39,7 +39,7 @@ import {
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { parseMentions, summonsAgent, type MentionInput } from "../shared/mentions.ts";
-import { freePath, UPLOADS, uploadTargets } from "../shared/uploads.ts";
+import { freePath, MAX_LISTED, UPLOADS, uploadTargets } from "../shared/uploads.ts";
 import type { ModelChoice } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -101,6 +101,10 @@ function callFailure(error: unknown, server: string): McpError {
   return error instanceof McpFailure ? error.error : { code: "upstream_error", server, message: errorMessage(error) };
 }
 const MEMBERS_TOUCH_MS = 60_000;
+/** Where the chat keeps, per person other than its owner, the paths they uploaded through it (see noteUploads). */
+const UPLOADS_KEY = "uploads:";
+/** A file someone the chat is shared with named from their own files. */
+type OwnFile = Extract<MentionInput, { kind: "file" }>;
 
 /**
  * How long a chat must stay idle before the sidebars hear its run ended: the next queued message starts its run right
@@ -573,16 +577,20 @@ export class ChatAgent extends DurableObject<Env> {
     const calling = !shared || repliesToAgent || summonsAgent(text);
     const byOwner = author.uid === this.uid;
     // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works.
-    const own = byOwner ? [] : mentionInputs.filter((input) => input.kind === "file" && input.own);
-    const attaching = own.length ? this.#copyOwnFiles(author, own).then((copied) => [...attachments, ...copied]) : attachments;
+    const own = byOwner ? [] : mentionInputs.filter((input): input is OwnFile => input.kind === "file" && input.own === true);
+    const attaching = Promise.all([
+      // Someone else attaches only what they uploaded here, or a file the chat already holds: no other of the owner's.
+      byOwner ? attachments : this.#attachable(author.uid, attachments),
+      own.length ? this.#copyOwnFiles(author, own) : [],
+    ]).then(([given, copied]) => [...given, ...copied]);
     const [[attached, title], { mentions, note, broughtIn }] = await Promise.all([
       // Named after its text, or its files when it has none: for the sidebars.
-      Promise.resolve(attaching).then(async (inputs) => [
+      attaching.then(async (inputs) => [
         inputs.length ? await attachmentContent(inputs, await this.scope.files(), this.#toMarkdown) : undefined,
         text || inputs.map((a) => baseName(a.path)).join(", "),
       ] as const),
       resolveMentions(
-        mentionInputs.filter((input) => !own.includes(input)),
+        mentionInputs.filter((input) => !(own as readonly MentionInput[]).includes(input)),
         {
           ownerUid: this.uid,
           chatId: this.chatId,
@@ -596,9 +604,12 @@ export class ChatAgent extends DurableObject<Env> {
       calling && this.refreshSkills(),
       calling && this.refreshFiles(),
     ]);
-    const summoned = !shared || repliesToAgent || summonsAgent(text, mentions);
+    // The files they named of their own are named too: "@pi notes.md" is not a call.
+    const summoned = !shared || repliesToAgent || summonsAgent(text, [...mentions, ...own]);
     // Again after the refreshes, which can take seconds: the author may have been removed meanwhile.
     this.#requireInChat(author);
+    // Nothing left to say: every attachment was one they may not attach.
+    if (!text && !attached) return;
     this.#bringIn(broughtIn);
     const written = [quote && replyLine(quote), text, note].filter(Boolean).join("\n\n");
     const said = shared ? `${author.name}: ${written}` : written;
@@ -655,12 +666,12 @@ export class ChatAgent extends DurableObject<Env> {
    * Copy files someone the chat is shared with named from their own files into the owner's uploads/, beside the
    * owner's files rather than over one, as attachments of their message. One that is gone is left out.
    */
-  async #copyOwnFiles(author: Person, inputs: readonly MentionInput[]): Promise<AttachmentInput[]> {
+  async #copyOwnFiles(author: Person, inputs: readonly OwnFile[]): Promise<AttachmentInput[]> {
     const [theirs, owners] = await Promise.all([this.storage.userFiles(author.uid), this.scope.files()]);
     const taken = new Set((await owners.list(`${UPLOADS}/`)).map((file) => file.path));
     // Named first, so no two take one name; then copied at once.
     const copies = inputs.flatMap((input) => {
-      const path = literalPath(input.kind === "file" ? input.path : "");
+      const path = literalPath(input.path);
       if (!path) return [];
       const target = freePath(uploadTargets([baseName(path)])[0], taken);
       taken.add(target);
@@ -677,21 +688,47 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** Whether `path` of the owner's files belongs to this chat: attached to its messages, saved by its agent, or in its out/ folder. */
   async #isChatFile(path: string): Promise<boolean> {
-    return path.startsWith(chatOutFolder(this.chatId)) || (await this.#transcriptTraces()).files.has(path);
+    return this.#inChat(path, await this.#transcriptTraces());
+  }
+
+  #inChat(path: string, traces: ChatTraces): boolean {
+    return path.startsWith(chatOutFolder(this.chatId)) || traces.files.has(path);
   }
 
   /** The owner's files that belong to this chat (#isChatFile) and are still there, as the people it is shared with see them. */
   async chatFiles(): Promise<FileEntry[]> {
     const [traces, listed] = await Promise.all([this.#transcriptTraces(), this.scope.files().then((files) => files.list())]);
-    const out = chatOutFolder(this.chatId);
-    return listed.filter((file) => traces.files.has(file.path) || file.path.startsWith(out));
+    return listed.filter((file) => this.#inChat(file.path, traces));
   }
 
-  /** What the chat holds of the owner's, for someone in it: its files (chatFiles) and the artifacts published from it. */
+  /**
+   * What the chat holds of the owner's, for someone in it: its files (chatFiles) and the artifacts published from it.
+   * Whether an artifact is unread is the owner's to know: someone else gets none of it.
+   */
   async contents(uid: string): Promise<ChatContents | null> {
     if (!this.isInChat(uid)) return null;
     const [files, artifacts] = await Promise.all([this.chatFiles(), this.#directory.listChatArtifacts(this.chatId)]);
-    return { files: newestFirst(files), artifacts };
+    return { files: newestFirst(files), artifacts: uid === this.uid ? artifacts : artifacts.map(({ unread: _, ...artifact }) => artifact) };
+  }
+
+  /** Paths someone other than the owner uploaded through this chat (noteUploads): the owner's files they may attach. */
+  #uploads(uid: string): string[] {
+    return this.ctx.storage.kv.get<string[]>(`${UPLOADS_KEY}${uid}`) ?? [];
+  }
+
+  /** Remember what someone other than the owner uploaded for their messages here (POST /api/chats/:id/attachments). */
+  noteUploads(uid: string, paths: readonly string[]): void {
+    if (uid === this.uid || !this.isInChat(uid)) return;
+    const kept = [...new Set([...this.#uploads(uid), ...paths])].slice(-MAX_LISTED);
+    this.ctx.storage.kv.put(`${UPLOADS_KEY}${uid}`, kept);
+  }
+
+  /** Of the attachments someone other than the owner sends, those they may attach: their uploads here, or the chat's files. */
+  async #attachable(uid: string, attachments: readonly AttachmentInput[]): Promise<AttachmentInput[]> {
+    if (attachments.length === 0) return [];
+    const uploaded = new Set(this.#uploads(uid));
+    const traces = await this.#transcriptTraces();
+    return attachments.filter((attachment) => uploaded.has(attachment.path) || this.#inChat(attachment.path, traces));
   }
 
   /** Whether `uid` may open `path` of the owner's files through this chat: the owner any, someone else only a chat file. */
