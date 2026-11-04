@@ -46,6 +46,17 @@ export async function filesRoute(request: Request, userFiles: () => Promise<User
 }
 
 /**
+ * One of a chat owner's files, for someone in the chat, served as the owner's own are: `encoded` is its path from the
+ * URL (after chatFileRoute), and `mayOpen` says whether this person may open it through the chat. A file they may not
+ * open answers as a missing one does.
+ */
+export async function serveChatFile(request: Request, encoded: string, files: () => Promise<UserFiles>, mayOpen: (path: string) => Promise<boolean>): Promise<Response> {
+  const path = urlPath(encoded);
+  if (!(await mayOpen(path))) return json({ error: "No such file" }, 404);
+  return serveFile(request, await files(), path, new URL(request.url).searchParams.has(VIEW_PARAM));
+}
+
+/**
  * Store an upload's files under uploads/ in `userFiles`, and answer with the
  * paths they got: the files route's POST, and a chat's attachments, which go
  * to the chat owner's files.

@@ -1,4 +1,5 @@
 import { defineExtension, section, type Extension } from "@earendil-works/pi-durable";
+import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
 import type { ChatPeople } from "../../shared/protocol.ts";
 import RUNTIME_CONTRACT from "../../runtime/runtime.d.ts?raw";
 import { MAX_FAILED_CHECKS } from "./publish.ts";
@@ -50,6 +51,8 @@ export function peopleExtension(people: () => ChatPeople): Extension {
         if (members.length === 0) return about;
         return (
           `${about} ${owner.name} owns this chat; ${members.map((m) => m.name).join(", ")} joined it by invite. ` +
+          `Here your name is ${AGENT_NAME}. The people also talk among themselves: you are called only by a message with ${AGENT_TOKEN} in it, and the others reach you only as context, ` +
+          "possibly while you work. Answer the message that called you, using the talk around it where it helps, and never reply to the talk itself. " +
           "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +
           "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner."
         );

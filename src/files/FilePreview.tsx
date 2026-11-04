@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { baseName, extension } from "../../shared/attachments.ts";
-import { FILE_PAGE_SANDBOX, previewKind, viewType, type PreviewKind } from "../../shared/uploads.ts";
+import { FILE_PAGE_SANDBOX, FILE_ROUTE, previewKind, viewType, type PreviewKind } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { ViewportPicker, ViewportStage, useViewport } from "../artifact/viewport.tsx";
@@ -16,6 +16,8 @@ interface Props {
   files: readonly FileInfo[];
   onOpen: (path: string) => void;
   onClose: () => void;
+  /** Where the files are served from: the user's own (the default), or a chat's for someone it is shared with. */
+  base?: string;
 }
 
 /** Code as highlight.js colours it once its grammar loads; plain until then, or for text too long to colour quickly. */
@@ -40,7 +42,7 @@ const Code = memo(function Code({ text, grammar }: { text: string; grammar: stri
  * The file's text, read when it opens and again on a reload (not again when the panel goes back to showing it);
  * null while reading or when it is not text. Only the first TEXT_LIMIT bytes (and one more, to tell there are more) are asked for.
  */
-function useFileText(path: string, reload: string, wanted: boolean): { text: FileText | null; binary: boolean; error: string | null } {
+function useFileText(path: string, reload: string, wanted: boolean, base: string): { text: FileText | null; binary: boolean; error: string | null } {
   const [state, setState] = useState<{ key: string; text: FileText | null; error: string | null }>({ key: "", text: null, error: null });
   const key = `${path}\n${reload}`;
   const loaded = state.key === key && !state.error;
@@ -48,14 +50,14 @@ function useFileText(path: string, reload: string, wanted: boolean): { text: Fil
     if (!wanted || loaded) return;
     const abort = new AbortController();
     api
-      .fileStart(path, TEXT_LIMIT + 1, abort.signal)
+      .fileStart(path, TEXT_LIMIT + 1, abort.signal, base)
       .then((body) => (body ? readText(body, TEXT_LIMIT, !!previewKind(path)) : { text: "", cut: false }))
       .then(
         (text) => !abort.signal.aborted && setState({ key, text, error: null }),
         (error) => !abort.signal.aborted && setState({ key, text: null, error: errorMessage(error) }),
       );
     return () => abort.abort();
-  }, [path, key, wanted, loaded]);
+  }, [path, key, wanted, loaded, base]);
   const current = state.key === key;
   return { text: current ? state.text : null, binary: current && !state.text && !state.error, error: current ? state.error : null };
 }
@@ -69,11 +71,13 @@ const MarkdownView = memo(function MarkdownView({
   text,
   known,
   onOpen,
+  base,
 }: {
   path: string;
   text: string;
   known: ReadonlySet<string>;
   onOpen: (path: string) => void;
+  base: string;
 }) {
   const components = useMemo<Components>(() => {
     /** Where a link in this file points among the user's files, if it is one of them. */
@@ -88,7 +92,7 @@ const MarkdownView = memo(function MarkdownView({
         if (target) {
           return (
             <a
-              href={api.fileViewUrl(target)}
+              href={api.fileViewUrl(target, base)}
               title={target}
               onClick={(event) => {
                 if (opensElsewhere(event)) return;
@@ -113,7 +117,7 @@ const MarkdownView = memo(function MarkdownView({
       // tell that site the file was opened, so its alt text shows instead.
       img: ({ src, alt }) => {
         const target = fileAt(src);
-        return target ? <img src={api.fileViewUrl(target)} alt={alt ?? ""} /> : <>{alt ?? ""}</>;
+        return target ? <img src={api.fileViewUrl(target, base)} alt={alt ?? ""} /> : <>{alt ?? ""}</>;
       },
       code: ({ className, children }) => {
         const language = /\blanguage-(\S+)/.exec(className ?? "")?.[1];
@@ -126,7 +130,7 @@ const MarkdownView = memo(function MarkdownView({
         );
       },
     };
-  }, [path, known, onOpen]);
+  }, [path, known, onOpen, base]);
   return (
     <article className="file-markdown">
       <ReactMarkdown remarkPlugins={markdownPlugins} components={components}>
@@ -172,7 +176,7 @@ const BY_URL: ReadonlySet<PreviewKind> = new Set(["image", "audio", "video", "ht
  * one, and any other text, code highlighted. A file that is not text offers its download. Keyed by its path, so
  * another file starts afresh.
  */
-export const FilePreview = memo(function FilePreview({ path, files, onOpen, onClose }: Props) {
+export const FilePreview = memo(function FilePreview({ path, files, onOpen, onClose, base = FILE_ROUTE }: Props) {
   const kind = previewKind(path);
   const size = files.find((file) => file.path === path)?.size;
   // The paths, as a set that changes only when they do: a listing comes after every agent run, mostly the same, and a
@@ -188,10 +192,10 @@ export const FilePreview = memo(function FilePreview({ path, files, onOpen, onCl
   // How it shows now: as its kind, or as text (its source, or a file of a kind the preview does not know).
   const shown: PreviewKind = (source && rendered) || !kind ? "text" : kind;
   // The browser shows these from their URL; the others are read as text here.
-  const { text, binary, error } = useFileText(path, reload, !BY_URL.has(shown));
+  const { text, binary, error } = useFileText(path, reload, !BY_URL.has(shown), base);
   const name = baseName(path);
   const folder = path.slice(0, -name.length);
-  const viewUrl = `${api.fileViewUrl(path)}&r=${encodeURIComponent(reload)}`;
+  const viewUrl = `${api.fileViewUrl(path, base)}&r=${encodeURIComponent(reload)}`;
 
   let body: ReactNode;
   if (shown === "image") {
@@ -227,7 +231,7 @@ export const FilePreview = memo(function FilePreview({ path, files, onOpen, onCl
       <div className="panel-empty">
         <p>
           No preview for {name}: it is not text.{" "}
-          <a className="button" href={api.fileUrl(path)} download={name}>
+          <a className="button" href={api.fileUrl(path, base)} download={name}>
             Download it
           </a>
         </p>
@@ -240,7 +244,7 @@ export const FilePreview = memo(function FilePreview({ path, files, onOpen, onCl
     body = (
       <div className="file-body">
         {shown === "markdown" ? (
-          <MarkdownView path={path} text={text.text} known={known} onOpen={onOpen} />
+          <MarkdownView path={path} text={text.text} known={known} onOpen={onOpen} base={base} />
         ) : shown === "table" ? (
           <TableView path={path} text={text.text} />
         ) : (
@@ -279,11 +283,11 @@ export const FilePreview = memo(function FilePreview({ path, files, onOpen, onCl
             ↻
           </button>
           {viewType(path) && (
-            <a className="button" href={api.fileViewUrl(path)} target="_blank" rel="noopener" title="Open in a new tab">
+            <a className="button" href={api.fileViewUrl(path, base)} target="_blank" rel="noopener" title="Open in a new tab">
               ↗
             </a>
           )}
-          <a className="button" href={api.fileUrl(path)} download={name} title={`Download ${name}`}>
+          <a className="button" href={api.fileUrl(path, base)} download={name} title={`Download ${name}`}>
             ↓
           </a>
           <button type="button" onClick={onClose} title="Close the preview">

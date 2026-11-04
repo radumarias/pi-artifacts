@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
-import { ID_PATTERN } from "../shared/protocol.ts";
+import { ID_PATTERN, type ChatContents } from "../shared/protocol.ts";
+import { chatFileRoute } from "../shared/uploads.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
@@ -9,6 +10,7 @@ import { ChatList, UnreadDot, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { DeleteChat } from "./chat/DeleteChat.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import { ChatFiles } from "./files/ChatFiles.tsx";
 import { FilePreview } from "./files/FilePreview.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
@@ -82,6 +84,18 @@ export function App() {
         navigate("/");
       }}
     />
+  );
+}
+
+/** An artifact in the sidebar: it opens on its own page. */
+function ArtifactLink({ artifact: a }: { artifact: ArtifactSummary }) {
+  return (
+    <a href={`/a/${a.id}`} target="_blank" rel="noreferrer" className={a.unread ? "nav-item unread" : "nav-item"}>
+      <span className="nav-title">
+        {a.title} <small>v{a.latest}</small>
+      </span>
+      {a.unread && <UnreadDot label="New version you have not opened" />}
+    </a>
   );
 }
 
@@ -178,8 +192,8 @@ interface ArtifactPreview {
   version?: number;
 }
 
-/** What shows beside the chat: an artifact, or one of the user's files. */
-type Preview = ArtifactPreview | { file: string };
+/** What shows beside the chat: an artifact, or a file: the user's own, or with `base` one of a chat shared with them. */
+type Preview = ArtifactPreview | { file: string; base?: string };
 
 const SIDEBAR_DEFAULT = 240;
 const SIDEBAR_MIN = 180;
@@ -195,6 +209,11 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [skills, loadSkills] = useLatest<SkillInfo[] | null>(api.skills, null, (e) => setSkillsError(e?.message ?? null));
   const [preview, setPreview] = useState<Preview | null>(null);
+  // In a chat someone shared with this user, what it holds of theirs: its files and artifacts, which the sidebar lists
+  // beside the user's own (the owner's other files and artifacts stay theirs).
+  const guestChat = chatId && chats.some((chat) => chat.id === chatId && chat.sharedBy) ? chatId : undefined;
+  const [contents, loadContents, setContents] = useLatest<ChatContents | null>(() => (guestChat ? api.chatContents(guestChat) : Promise.resolve(null)), null);
+  const [chatFilesOpen, setChatFilesOpen] = useStoredState("layout.chatFilesOpen", true, isBoolean);
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false, isBoolean);
@@ -209,6 +228,15 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
     loadFiles();
     loadSkills();
   }, [loadArtifacts, loadFiles, loadSkills]);
+  useEffect(() => {
+    setContents(() => null);
+    loadContents();
+  }, [guestChat, loadContents, setContents]);
+  // A finished run may have saved files (run_python) or published: read them again.
+  const onActivity = useCallback(() => {
+    loadFiles();
+    loadContents();
+  }, [loadFiles, loadContents]);
   // Chats, artifacts and skills live in the user's directory, which says when they change. Files are not in it: a run
   // may have saved some (run_python), so they are read again after each one.
   useSidebarSocket({ chats: loadChats, artifacts: loadArtifacts, skills: loadSkills });
@@ -230,6 +258,9 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   );
 
   const openFile = useCallback((file: string) => setPreview({ file }), []);
+  const chatFileBase = guestChat && chatFileRoute(guestChat);
+  const openChatFile = useCallback((file: string) => chatFileBase && setPreview({ file, base: chatFileBase }), [chatFileBase]);
+  const previewing = preview && "file" in preview ? preview : null;
   const closePreview = useCallback(() => setPreview(null), []);
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
@@ -277,6 +308,8 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
     },
   };
 
+  // The owner's artifacts are theirs: only this chat's show, and only while it is open.
+  const chatArtifacts = contents?.artifacts ?? [];
   return (
     <div
       className={["workspace", preview && "with-preview", dragging && "dragging"].filter(Boolean).join(" ")}
@@ -313,22 +346,30 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
           <ChatList chats={chats} openId={chatId} navigate={navigate} onDelete={setDeleting} />
           </div>
           <section className="sidebar-pinned">
-            <SectionHead name="Artifacts" count={artifacts.length} open={artifactsOpen} onToggle={setArtifactsOpen}>
+            <SectionHead name="Artifacts" count={artifacts.length + chatArtifacts.length} open={artifactsOpen} onToggle={setArtifactsOpen}>
               {/* Closed, the section still shows that an artifact has a version the user has not opened. */}
               {!artifactsOpen && artifacts.some((a) => a.unread) && <UnreadDot label="New versions you have not opened" />}
             </SectionHead>
             {/* A long list scrolls on its own, so skills and the files panel stay in view. */}
             {artifactsOpen && (
               <nav className="artifact-list">
+                {chatArtifacts.length > 0 && <h4 className="nav-group">In this chat</h4>}
+                {chatArtifacts.map((a) => (
+                  <ArtifactLink key={a.id} artifact={a} />
+                ))}
+                {chatArtifacts.length > 0 && artifacts.length > 0 && <h4 className="nav-group">Yours</h4>}
                 {artifacts.map((a) => (
-                  <a key={a.id} href={`/a/${a.id}`} target="_blank" rel="noreferrer" className={a.unread ? "nav-item unread" : "nav-item"}>
-                    <span className="nav-title">
-                      {a.title} <small>v{a.latest}</small>
-                    </span>
-                    {a.unread && <UnreadDot label="New version you have not opened" />}
-                  </a>
+                  <ArtifactLink key={a.id} artifact={a} />
                 ))}
               </nav>
+            )}
+            {contents && chatFileBase && (
+              <>
+                <SectionHead name="Files in this chat" count={contents.files.length} open={chatFilesOpen} onToggle={setChatFilesOpen} />
+                {chatFilesOpen && (
+                  <ChatFiles files={contents.files} base={chatFileBase} openFile={previewing?.base ? previewing.file : null} onOpenFile={openChatFile} />
+                )}
+              </>
             )}
             <h3>Skills</h3>
             <nav>
@@ -352,7 +393,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
             files={files}
             status={uploadStatus}
             upload={upload}
-            openFile={preview && "file" in preview ? preview.file : null}
+            openFile={previewing && !previewing.base ? previewing.file : null}
             onOpenFile={openFile}
           />
           <AccountMenu label={label} onSignOut={onSignOut} />
@@ -378,7 +419,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
               chatId={chatId}
               uid={uid}
               onArtifact={onArtifact}
-              onActivity={loadFiles}
+              onActivity={onActivity}
               onLeft={() => navigate("/")}
             />
           </ErrorBoundary>
@@ -420,8 +461,12 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
       )}
       {preview &&
         ("file" in preview ? (
-          <ErrorBoundary key={`file:${preview.file}`} what="the preview">
-            <FilePreview path={preview.file} files={files} onOpen={openFile} onClose={closePreview} />
+          <ErrorBoundary key={`file:${preview.base ?? ""}:${preview.file}`} what="the preview">
+            {preview.base ? (
+              <FilePreview path={preview.file} files={contents?.files ?? []} onOpen={openChatFile} onClose={closePreview} base={preview.base} />
+            ) : (
+              <FilePreview path={preview.file} files={files} onOpen={openFile} onClose={closePreview} />
+            )}
           </ErrorBoundary>
         ) : (
           <ErrorBoundary key={preview.artifactId} what="the preview">

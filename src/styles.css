@@ -9,6 +9,16 @@
   --accent-text: #ffffff;
   --live: #15803d;
   --error: #b91c1c;
+  /* Each person's colour in a shared chat (src/chat/people.tsx), and the text on it. The agent keeps --accent. */
+  --person-0: #2563eb;
+  --person-1: #7c3aed;
+  --person-2: #db2777;
+  --person-3: #0f766e;
+  --person-4: #a16207;
+  --person-5: #15803d;
+  --person-6: #0369a1;
+  --person-7: #be123c;
+  --on-tint: #ffffff;
   --radius: 10px;
   --radius-lg: 14px;
   color-scheme: light;
@@ -25,6 +35,15 @@
     --accent-text: #141413;
     --live: #4ade80;
     --error: #f87171;
+    --person-0: #60a5fa;
+    --person-1: #a78bfa;
+    --person-2: #f472b6;
+    --person-3: #2dd4bf;
+    --person-4: #fbbf24;
+    --person-5: #4ade80;
+    --person-6: #38bdf8;
+    --person-7: #fb7185;
+    --on-tint: #141413;
     color-scheme: dark;
   }
 }
@@ -232,14 +251,61 @@ body.resizing iframe { pointer-events: none; }
 .bubble { padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 88%; }
 .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
 .bubble.bot { background: var(--surface); border: 1px solid var(--border); }
-/* Someone else's message in a shared chat: on the left, under their name. */
-.other { align-self: flex-start; display: flex; flex-direction: column; gap: 2px; max-width: 88%; }
-.other small { color: var(--muted); padding-left: 4px; }
-.bubble.peer { background: var(--surface-2); max-width: none; }
+/* A person's message: yours on the right, someone else's on the left under their name. */
+.message { display: flex; flex-direction: column; gap: 3px; max-width: 88%; min-width: 0; }
+.message.mine { align-self: flex-end; align-items: flex-end; }
+.message.other { align-self: flex-start; align-items: flex-start; }
+.message > .bubble, .message > .attachments { max-width: 100%; }
+.bubble.peer { background: var(--surface-2); }
+/* In a shared chat, each person's messages have their colour (--tint, set on the message). */
+.message.tinted .bubble.user { background: var(--tint); color: var(--on-tint); }
+.message.tinted .bubble.peer { background: color-mix(in srgb, var(--tint) 13%, var(--surface)); border: 1px solid color-mix(in srgb, var(--tint) 28%, transparent); }
+.byline { display: flex; align-items: center; gap: 6px; padding-left: 2px; font-size: 13px; }
+.byline strong { font-weight: 600; }
+.message.tinted .byline strong { color: var(--tint); }
+.byline small { color: var(--muted); }
+.avatar { position: relative; flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--tint, var(--muted)); color: var(--on-tint); font-size: 11px; font-weight: 700; line-height: 1; }
+.avatar.agent { background: var(--accent); color: var(--accent-text); font-size: 13px; }
+/* Whether someone has the chat open: green while they do. */
+.presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--bg); border-radius: 50%; background: var(--border); }
+.presence.online { background: var(--live); }
+.message-foot { display: flex; align-items: center; gap: 6px; }
+.message-foot.mine { flex-direction: row-reverse; }
+/* Copy and reply: under the agent's replies, and beside a person's bubble (on the side away from the edge). */
+.bubble-row { position: relative; display: flex; max-width: 100%; }
+.message-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; }
+.message-actions .icon-button { padding: 3px; color: var(--muted); }
+.message-actions .icon-button:hover { color: var(--text); }
+.message-actions.floating { position: absolute; bottom: 2px; padding: 1px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.message.other .message-actions.floating { left: calc(100% + 6px); }
+.message.mine .message-actions.floating { right: calc(100% + 6px); }
+.message:hover .message-actions, .assistant:hover > .message-actions, .message-actions:focus-within { opacity: 1; }
+/* No hover on a touch screen: always there, in a row of their own. */
+@media (hover: none) {
+  .message-actions { opacity: 1; }
+  .bubble-row { flex-direction: column; }
+  .message.mine .bubble-row { align-items: flex-end; }
+  .message-actions.floating { position: static; border: 0; background: none; }
+}
+.assistant > .message-actions { align-self: flex-start; }
+/* What the agent did with a message that called it. */
+.reaction { display: inline-flex; align-items: center; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 13px; line-height: 20px; }
+/* The message a reply answers, at the top of the reply (and over the composer while writing one). */
+.reply-quote { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-bottom: 6px; padding: 2px 8px; border-left: 3px solid var(--tint, var(--muted)); border-radius: 4px; background: color-mix(in srgb, currentColor 7%, transparent); font-size: 13px; white-space: normal; }
+.reply-quote.agent { border-left-color: var(--accent); }
+.reply-quote strong { font-weight: 600; }
+.replying { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.replying .reply-quote { flex: 1; min-width: 0; margin: 0; background: none; }
 
 /* Relative: the cost panel hangs from its right edge, so it stays on screen however wide the header is. */
 .chat-header { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; min-height: 40px; }
 .chat-people { flex: 1; min-width: 0; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Everyone in a shared chat, in their colours, with a dot for who has it open now. */
+.people-bar { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; overflow: hidden; font-size: 14px; }
+.people-bar .person { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.people-bar .person-name { overflow: hidden; text-overflow: ellipsis; }
+.people-bar .person:not(.online) .person-name { color: var(--muted); }
+.people-bar .person small { color: var(--muted); }
 .share-panel, .cost-panel { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
 .share-panel ul, .cost-panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .share-panel { margin: 8px 20px 0; align-items: flex-start; }
@@ -391,6 +457,7 @@ body.resizing iframe { pointer-events: none; }
 .mention-empty { padding: 6px 8px; color: var(--muted); font-size: 14px; }
 .mention-button { font-size: 17px; color: var(--muted); }
 /* A mention in a sent message: set off from the text around it. */
+.mention-chip.agent { background: color-mix(in srgb, var(--accent) 22%, transparent); font-weight: 600; }
 .mention-chip, .bubble a.mention-chip { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); color: inherit; font-weight: 500; text-decoration: none; }
 a.mention-chip:hover { text-decoration: underline; }
 /* The input and Send/Stop sit in one rounded box; attach, dictation and the model under it. */
@@ -638,7 +705,6 @@ a.mention-chip:hover { text-decoration: underline; }
 .queued-label { color: var(--muted); font-size: 12px; padding: 0 4px; }
 .queued.mine .queued-label { align-self: flex-end; }
 /* Someone with the chat open right now: a dot before their name. */
-.person.online::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--live); }
 /* What the model calls cost: per prompt under the agent's last reply to it, and for the whole chat in the header. */
 .prompt-cost { align-self: flex-start; padding-left: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chat-cost > button { font-variant-numeric: tabular-nums; }
@@ -650,3 +716,9 @@ a.mention-chip:hover { text-decoration: underline; }
 .cost-panel > small { color: var(--muted); font-size: 12px; }
 .cost-panel .cost-time { padding-top: 8px; border-top: 1px solid var(--border); }
 @media (max-width: 480px) { .chat-time { display: none; } }
+
+/* Groups in a sidebar list (a shared chat's artifacts beside the user's own), and a list with nothing in it. */
+.sidebar .nav-group { margin: 6px 0 2px; padding: 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.sidebar .nav-empty { margin: 2px 0 6px; padding: 0 8px; color: var(--muted); font-size: 13px; }
+.chat-files { display: flex; flex-direction: column; max-height: 30vh; overflow-y: auto; }
+.chat-files .file-name { padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }

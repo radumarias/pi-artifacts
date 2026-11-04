@@ -9,16 +9,50 @@ import { MAX_PATH } from "./uploads.ts";
  * however the text reads. The text itself stays as the user wrote it.
  */
 
-/** What the browser sends: a file by its path in the chat owner's files, an artifact by its id. */
-export type MentionInput = { kind: "file"; path: string } | { kind: "artifact"; id: string };
+/**
+ * What the browser sends: a file by its path in the chat owner's files (or, with `own`, in the author's own files, for
+ * someone the chat is shared with: the chat copies it to the owner's), an artifact by its id.
+ */
+export type MentionInput = { kind: "file"; path: string; own?: true } | { kind: "artifact"; id: string };
 
 /** A mention as the message's transcript entry records it. A type, not an interface, so it is JSON pi can store. */
-export type Mention = { kind: "file"; path: string } | { kind: "artifact"; id: string; title: string };
+export type Mention = { kind: "file"; path: string; own?: true } | { kind: "artifact"; id: string; title: string };
 
-/** What the composer offers after "@", from GET /api/chats/:id/mentions. */
+/**
+ * What the composer offers after "@", from GET /api/chats/:id/mentions. `own` files are the author's, offered to
+ * someone the chat is shared with besides the chat's own files.
+ */
 export interface MentionOptions {
-  files: { path: string; size: number }[];
+  files: { path: string; size: number; own?: true }[];
   artifacts: { id: string; title: string; latest: number; chatId: string }[];
+}
+
+/** The agent's name, as the chat shows it. */
+export const AGENT_NAME = "pi";
+/** How a message in a shared chat calls the agent; any other message there is people talking among themselves. */
+export const AGENT_HANDLE = AGENT_NAME;
+export const AGENT_TOKEN = `@${AGENT_HANDLE}`;
+/** "@pi" as a word: not inside an address ("x@pi.dev"), a longer name ("@pierre") or a path ("@pi/notes.md"). */
+const AGENT_PATTERN = `(^|[^\\w@.])@${AGENT_HANDLE}(?![\\w/@-]|\\.\\w)`;
+
+/** Whether a message calls the agent ("@pi"), outside the files and artifacts it names (a file "pi notes.md" is not it). */
+export function summonsAgent(text: string, mentions: readonly Mention[] = []): boolean {
+  const call = new RegExp(AGENT_PATTERN, "i");
+  return splitMentions(text, mentions).some((part) => typeof part === "string" && call.test(part));
+}
+
+/** The text split into plain runs and the "@pi"s in it, for the transcript to show them as chips. */
+export function splitAgent(text: string): (string | typeof AGENT_TOKEN)[] {
+  const parts: (string | typeof AGENT_TOKEN)[] = [];
+  let plain = 0;
+  for (const match of text.matchAll(new RegExp(AGENT_PATTERN, "gi"))) {
+    const at = match.index + match[1].length;
+    if (at > plain) parts.push(text.slice(plain, at));
+    parts.push(AGENT_TOKEN);
+    plain = at + AGENT_TOKEN.length;
+  }
+  if (plain < text.length) parts.push(text.slice(plain));
+  return parts;
 }
 
 /** Mentions one message may carry. */
@@ -35,7 +69,7 @@ export function mentionToken(mention: Mention): string {
 
 /** The same file or artifact. */
 export function sameMention(a: MentionInput, b: MentionInput): boolean {
-  return a.kind === "file" ? b.kind === "file" && a.path === b.path : b.kind === "artifact" && a.id === b.id;
+  return a.kind === "file" ? b.kind === "file" && a.path === b.path && !a.own === !b.own : b.kind === "artifact" && a.id === b.id;
 }
 
 /** The longest "@query" the picker follows; longer, and it was not a mention. */
@@ -128,7 +162,7 @@ export function parseMentions(raw: unknown): MentionInput[] {
   for (const item of raw as Partial<{ kind: string; path: unknown; id: unknown }>[]) {
     const mention: MentionInput | null =
       item?.kind === "file" && typeof item.path === "string" && item.path.length > 0 && item.path.length <= MAX_PATH
-        ? { kind: "file", path: item.path }
+        ? { kind: "file", path: item.path, ...((item as { own?: unknown }).own === true && { own: true as const }) }
         : item?.kind === "artifact" && typeof item.id === "string" && ID_PATTERN.test(item.id)
           ? { kind: "artifact", id: item.id }
           : null;

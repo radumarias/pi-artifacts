@@ -9,7 +9,22 @@ import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
 import { carriesFiles } from "../files/pick.ts";
 import { attachmentInput, pastedName, type Pending } from "./attach.ts";
-import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, PUBLISH_TOOL, type ChatMessageData, type ChatPeopleData, type PublishedDetails, type QueuedMessage } from "../../shared/protocol.ts";
+import {
+  CHAT_MESSAGE_KIND,
+  CHAT_PEOPLE_KIND,
+  PUBLISH_TOOL,
+  type ChatMessageData,
+  type ChatPeople,
+  type ChatPeopleData,
+  type Person,
+  type Presence,
+  type PublishedDetails,
+  type QueuedMessage,
+  type ReplyQuote,
+} from "../../shared/protocol.ts";
+import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
+import { MessageActions } from "./MessageActions.tsx";
+import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
 import { ChatCost, PromptCost } from "./Cost.tsx";
 import { SharePanel } from "./SharePanel.tsx";
 import { promptSpend, totalTime } from "./spend.ts";
@@ -50,7 +65,14 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   const attachments = useAttachments(chatId);
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
-  const mentions = useMentions(chatId, draft, setDraft, input);
+  const shared = people && people.members.length > 0 ? people : null;
+  const mentions = useMentions(chatId, draft, setDraft, input, shared !== null);
+  // The message the next one answers, quoted above the composer until it is sent or let go.
+  const [replying, setReplying] = useState<ReplyQuote | null>(null);
+  const reply = useCallback((quote: ReplyQuote) => {
+    setReplying(quote);
+    input.current?.focus();
+  }, []);
   const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
   // Whether the conversation so far has arrived: publishes in it are not new.
@@ -94,11 +116,13 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     const text = draft.trim();
     if (attachments.sending || (!text && attachments.pending.length === 0)) return;
     const named = mentions.take(text);
+    const replyTo = replying?.id;
     if (attachments.pending.length === 0) {
-      if (!prompt(text, undefined, named)) return;
-    } else if (!(await attachments.send((inputs) => prompt(text, inputs, named)))) return;
+      if (!prompt(text, undefined, named, replyTo)) return;
+    } else if (!(await attachments.send((inputs) => prompt(text, inputs, named, replyTo)))) return;
     following.current = true;
     setDraft("");
+    setReplying(null);
     mentions.clear();
     // Clicking Send moves focus to the button; keep typing where you were.
     input.current?.focus();
@@ -123,9 +147,15 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     attachments.add(files.map((file) => pastedName(file)));
   };
 
-  // Enter sends, Shift+Enter adds a line. Not while an IME is composing (Enter then confirms the text).
+  // Enter sends, Shift+Enter adds a line. Not while an IME is composing (Enter then confirms the text). Escape lets go
+  // of the message being replied to.
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentions.onKeyDown(event)) return;
+    if (event.key === "Escape" && replying) {
+      event.preventDefault();
+      setReplying(null);
+      return;
+    }
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     void submit();
@@ -150,150 +180,168 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   const isOwner = people?.owner.uid === uid;
   const sendLabel = attachments.sending ? "Sending…" : "Send";
   const ownerName = people && !isOwner ? people.owner.name : undefined;
-  // Each open window is a socket; someone no longer in the chat may still show for a moment, so only people in it count.
-  const windows = new Map(online.map((presence) => [presence.uid, presence.windows]));
-  const others = people ? [people.owner, ...people.members].filter((person) => person.uid !== uid) : [];
-  const mine = windows.get(uid) ?? 0;
-  const othersTitle = others.map((person) => `${person.name}${windows.has(person.uid) ? " (here now)" : ""}`).join(", ");
+  const mine = online.find((presence) => presence.uid === uid)?.windows ?? 0;
+  // Where each reply of the agent's starts: after a person's message, its name goes over it in a shared chat.
+  const bylines = useMemo(() => (shared ? agentTurns(state.entries) : new Set<number>()), [shared, state.entries]);
+  const agentLast = shared !== null && endsInAgentTurn(state.entries);
+  const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
   return (
-    <section className="chat">
-      <header className="chat-header">
-        <span className="chat-people" title={othersTitle}>
-          {others.length > 0 && "With "}
-          {others.map((person, i) => (
-            <span key={person.uid}>
-              {i > 0 && ", "}
-              <span className={windows.has(person.uid) ? "person online" : "person"}>{person.name}</span>
-              {(windows.get(person.uid) ?? 0) > 1 && ` (${windows.get(person.uid)} windows)`}
-            </span>
-          ))}
-          {mine > 1 && `${others.length ? " · " : ""}Open in ${mine} of your windows`}
-        </span>
-        <ChatCost usage={state.usage} entries={state.entries} time={time} />
-        {people && (
-          <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
-            {isOwner ? "Share" : "People"}
-          </button>
-        )}
-      </header>
-      {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} />}
-      <StepsProvider entries={state.entries} tools={state.tools} busy={state.busy}>
-        <div className="messages" ref={list} onScroll={onScroll}>
-          {state.entries.length === 0 && !state.busy && (
-            <div className="empty-chat">
-              <h2>What should we build?</h2>
-              <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
-            </div>
+    <SharedChat.Provider value={shared}>
+      <section className="chat">
+        <header className="chat-header">
+          {shared ? (
+            <PeopleBar people={shared} online={online} uid={uid} />
+          ) : (
+            <span className="chat-people">{mine > 1 && `Open in ${mine} of your windows`}</span>
           )}
-          {state.entries.map((entry) => {
-            const spend = prompts.get(entry.id);
-            return (
-              <Fragment key={entry.id}>
-                <Entry entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} />
-                {spend && <PromptCost spend={spend} />}
-              </Fragment>
-            );
-          })}
-          {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
-          {state.runStartedAt !== undefined && waitingOnModel(state) && <Thinking since={state.runStartedAt} />}
-          {state.error && <div className="chat-error">{state.error}</div>}
-          <Queue queued={state.queued} uid={uid} />
-        </div>
-      </StepsProvider>
-      <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
-        {attachments.error && <div className="chat-error">{attachments.error}</div>}
-        <MentionList mentions={mentions} />
-        {/* A click anywhere in the box but a button puts the cursor in the input. */}
-        <div className="composer-box" onClick={(e) => (e.target as Element).closest("button") || input.current?.focus()}>
-          {attachments.pending.length > 0 && (
-            <div className="pending-attachments">
-              {attachments.pending.map((item) => (
-                <span key={item.id} className="pending-attachment" title={`${item.file.name} · ${formatBytes(item.file.size)}`}>
-                  {item.preview ? <img src={item.preview} alt="" /> : <span className="file-icon">▤</span>}
-                  <span className="pending-name">{item.file.name}</span>
-                  <button type="button" onClick={() => attachments.remove(item.id)} disabled={attachments.sending} aria-label={`Remove ${item.file.name}`}>
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
+          <ChatCost usage={state.usage} entries={state.entries} time={time} />
+          {people && (
+            <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
+              {isOwner && !shared ? "Share" : "People"}
+            </button>
           )}
-          <div className="composer-row">
-            <textarea
-              ref={input}
-              // Each chat mounts its own view, so a new or opened chat starts with the cursor here.
-              autoFocus
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                mentions.track();
-              }}
-              onSelect={mentions.track}
-              onKeyDown={onKey}
-              onPaste={onPaste}
-              placeholder={connected ? (others ? "Message everyone and the agent… (@ names a file or artifact)" : "Describe a dashboard, or type @ to name a file or artifact…") : "Connecting…"}
-              rows={1}
-            />
-            {state.busy ? (
-              <button type="button" className="icon-button" onClick={abort} title="Stop" aria-label="Stop">
-                <Icon>
-                  <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" stroke="none" />
-                </Icon>
-              </button>
-            ) : (
-              <button
-                type="submit"
-                className="icon-button"
-                disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
-                title={sendLabel}
-                aria-label={sendLabel}
-              >
-                <Icon>
-                  <path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4" />
-                </Icon>
-              </button>
+        </header>
+        {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} />}
+        <StepsProvider entries={state.entries} tools={state.tools} busy={state.busy}>
+          <div className="messages" ref={list} onScroll={onScroll}>
+            {state.entries.length === 0 && !state.busy && (
+              <div className="empty-chat">
+                <h2>What should we build?</h2>
+                <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
+              </div>
             )}
+            {state.entries.map((entry) => {
+              const spend = prompts.get(entry.id);
+              return (
+                <Fragment key={entry.id}>
+                  {bylines.has(entry.id) && <AgentByline />}
+                  <Entry entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
+                  {spend && <PromptCost spend={spend} />}
+                </Fragment>
+              );
+            })}
+            {shared && !agentLast && (state.partial || thinking) && <AgentByline />}
+            {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
+            {thinking && <Thinking since={state.runStartedAt!} />}
+            {state.error && <div className="chat-error">{state.error}</div>}
+            <Queue queued={state.queued} uid={uid} />
           </div>
-        </div>
-        <div className="composer-tools">
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => picker.current?.click()}
-            disabled={attachments.sending || attachments.pending.length >= MAX_ATTACHMENTS}
-            title="Attach images or files"
-            aria-label="Attach images or files"
-          >
-            <Icon>
-              <path d="M12 4v16M4 12h16" />
-            </Icon>
-          </button>
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              attachments.add([...(e.target.files ?? [])]);
-              e.target.value = "";
-            }}
-          />
-          <button type="button" className="icon-button mention-button" onClick={mentions.insertAt} title="Name a file or artifact (@)" aria-label="Name a file or artifact">
-            @
-          </button>
-          <Dictation disabled={!connected} onText={dictated} />
-          <ModelPicker
-            model={state.model}
-            thinkingLevel={state.thinkingLevel}
-            disabled={!connected}
-            attachingImages={attachments.pending.some((item) => item.preview)}
-            onChange={setModel}
-          />
-          {/* Always laid out, so the pickers don't move when a run starts or ends. */}
-          <span className={state.busy || attachments.sending ? "spinner" : "spinner idle"} aria-hidden="true" />
-        </div>
-      </form>
-    </section>
+        </StepsProvider>
+        <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
+          {attachments.error && <div className="chat-error">{attachments.error}</div>}
+          <MentionList mentions={mentions} />
+          {replying && (
+            <div className="replying">
+              <ReplyQuoteView quote={replying} />
+              <button type="button" className="icon-button" onClick={() => setReplying(null)} title="Do not reply to it" aria-label="Do not reply to it">
+                ×
+              </button>
+            </div>
+          )}
+          {/* A click anywhere in the box but a button puts the cursor in the input. */}
+          <div className="composer-box" onClick={(e) => (e.target as Element).closest("button") || input.current?.focus()}>
+            {attachments.pending.length > 0 && (
+              <div className="pending-attachments">
+                {attachments.pending.map((item) => (
+                  <span key={item.id} className="pending-attachment" title={`${item.file.name} · ${formatBytes(item.file.size)}`}>
+                    {item.preview ? <img src={item.preview} alt="" /> : <span className="file-icon">▤</span>}
+                    <span className="pending-name">{item.file.name}</span>
+                    <button type="button" onClick={() => attachments.remove(item.id)} disabled={attachments.sending} aria-label={`Remove ${item.file.name}`}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="composer-row">
+              <textarea
+                ref={input}
+                // Each chat mounts its own view, so a new or opened chat starts with the cursor here.
+                autoFocus
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  mentions.track();
+                }}
+                onSelect={mentions.track}
+                onKeyDown={onKey}
+                onPaste={onPaste}
+                placeholder={
+                  !connected
+                    ? "Connecting…"
+                    : shared
+                      ? `Message everyone; ${AGENT_TOKEN} asks ${AGENT_NAME}, and @ names a file or artifact…`
+                      : "Describe a dashboard, or type @ to name a file or artifact…"
+                }
+                rows={1}
+              />
+              {state.busy ? (
+                <button type="button" className="icon-button" onClick={abort} title="Stop" aria-label="Stop">
+                  <Icon>
+                    <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" stroke="none" />
+                  </Icon>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="icon-button"
+                  disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
+                  title={sendLabel}
+                  aria-label={sendLabel}
+                >
+                  <Icon>
+                    <path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4" />
+                  </Icon>
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="composer-tools">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => picker.current?.click()}
+              disabled={attachments.sending || attachments.pending.length >= MAX_ATTACHMENTS}
+              title="Attach images or files"
+              aria-label="Attach images or files"
+            >
+              <Icon>
+                <path d="M12 4v16M4 12h16" />
+              </Icon>
+            </button>
+            <input
+              ref={picker}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                attachments.add([...(e.target.files ?? [])]);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="icon-button mention-button"
+              onClick={mentions.insertAt}
+              title={shared ? `Ask ${AGENT_NAME}, or name a file or artifact (@)` : "Name a file or artifact (@)"}
+              aria-label={shared ? `Ask ${AGENT_NAME}, or name a file or artifact` : "Name a file or artifact"}
+            >
+              @
+            </button>
+            <Dictation disabled={!connected} onText={dictated} />
+            <ModelPicker
+              model={state.model}
+              thinkingLevel={state.thinkingLevel}
+              disabled={!connected}
+              attachingImages={attachments.pending.some((item) => item.preview)}
+              onChange={setModel}
+            />
+            {/* Always laid out, so the pickers don't move when a run starts or ends. */}
+            <span className={state.busy || attachments.sending ? "spinner" : "spinner idle"} aria-hidden="true" />
+          </div>
+        </form>
+      </section>
+    </SharedChat.Provider>
   );
 }
 
@@ -303,25 +351,47 @@ const Entry = memo(function Entry({
   uid,
   ownerName,
   onOpen,
+  onReply,
 }: {
   entry: EntryRecord;
   uid: string;
   /** Set when someone other than the owner is viewing: a plain `pi.user` entry, from before chats were shared, is the owner's. */
   ownerName?: string;
   onOpen: (artifact: PublishedDetails) => void;
+  onReply: (quote: ReplyQuote) => void;
 }) {
+  const people = useSharedChat();
   const message = entry.model?.[0];
-  if (entry.kind === "pi.user" && message?.role === "user") return <User text={userText(message)} author={ownerName} />;
+  const id = entry.id as number;
+  if (entry.kind === "pi.user" && message?.role === "user") {
+    const text = userText(message);
+    const author = ownerName === undefined ? undefined : { uid: people?.owner.uid ?? "", name: ownerName };
+    return <User text={text} author={author} uid={uid} onReply={() => onReply(quoteOf(id, text, author ?? { uid, name: "You" }))} />;
+  }
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as unknown as ChatMessageData;
-    return <User text={data.text} author={data.uid !== uid ? data.name : undefined} attachments={data.attachments} mentions={data.mentions} />;
+    return (
+      <User
+        text={data.text}
+        author={data.uid !== uid ? data : undefined}
+        uid={uid}
+        attachments={data.attachments}
+        mentions={data.mentions}
+        replyTo={data.replyTo}
+        // In the transcript, a message that called the agent was picked up: it was placed in its run.
+        picked={data.summoned}
+        onReply={() => onReply(quoteOf(id, data.text, data))}
+      />
+    );
   }
   if (entry.kind === CHAT_PEOPLE_KIND) {
     const data = entry.data as unknown as ChatPeopleData;
     const [them, you] = PEOPLE_EVENTS[data.event];
     return <div className="chat-notice">{data.uid === uid ? `You ${you}` : `${data.name} ${them}`}</div>;
   }
-  if (entry.kind === "pi.assistant" && message?.role === "assistant") return <Assistant message={message} />;
+  if (entry.kind === "pi.assistant" && message?.role === "assistant") {
+    return <Assistant message={message} onReply={(text) => onReply({ id, name: AGENT_NAME, agent: true, text: excerpt(text) })} />;
+  }
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
     const artifact = published(entry);
     if (artifact) {
@@ -340,12 +410,75 @@ const Entry = memo(function Entry({
   return null;
 });
 
+/** What the composer quotes of a person's message to reply to (the chat quotes it again from the transcript). */
+function quoteOf(id: number, text: string, author: Person): ReplyQuote {
+  return { id, name: author.name, uid: author.uid, text: excerpt(text) };
+}
+
+function excerpt(text: string): string {
+  const flat = text.trim().replace(/\s+/g, " ");
+  return flat.length > 160 ? `${flat.slice(0, 159)}…` : flat;
+}
+
+/** Entries the app shows nothing for: they do not end an agent's reply, or start one. */
+function shown(entry: EntryRecord): boolean {
+  return entry.kind === CHAT_MESSAGE_KIND || entry.kind === CHAT_PEOPLE_KIND || entry.kind === "pi.user" || isAgent(entry);
+}
+
+function isAgent(entry: EntryRecord): boolean {
+  return entry.kind === "pi.assistant" || entry.kind === "pi.tool-result";
+}
+
+/** The agent's entries that start one of its replies: the first of its own after anything else the chat shows. */
+function agentTurns(entries: readonly EntryRecord[]): Set<number> {
+  const starts = new Set<number>();
+  let inTurn = false;
+  for (const entry of entries) {
+    if (!shown(entry)) continue;
+    if (isAgent(entry) && !inTurn) starts.add(entry.id as number);
+    inTurn = isAgent(entry);
+  }
+  return starts;
+}
+
+function endsInAgentTurn(entries: readonly EntryRecord[]): boolean {
+  const last = entries.findLast(shown);
+  return last !== undefined && isAgent(last);
+}
+
+/** Who is in a shared chat, everyone with their colour, and a dot for those who have it open now. */
+function PeopleBar({ people, online, uid }: { people: ChatPeople; online: Presence[]; uid: string }) {
+  // Each open window is a socket; someone no longer in the chat may still show for a moment, so only people in it count.
+  const windows = new Map(online.map((presence) => [presence.uid, presence.windows]));
+  const everyone = [people.owner, ...people.members];
+  const here = everyone.filter((person) => windows.has(person.uid)).length;
+  return (
+    <div className="people-bar" aria-label={`${everyone.length} people, ${here} here now`}>
+      {everyone.map((person) => {
+        const count = windows.get(person.uid) ?? 0;
+        const you = person.uid === uid;
+        const state = count === 0 ? "away" : count > 1 ? `here now, in ${count} windows` : "here now";
+        return (
+          <span key={person.uid} className={count ? "person online" : "person"} title={`${person.name}${you ? " (you)" : ""}: ${state}`}>
+            <Avatar name={person.name} tint={tintOf(people, person.uid)} online={count > 0} />
+            <span className="person-name">
+              {you ? "You" : person.name}
+              {count > 1 && <small> ×{count}</small>}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Each notice as said of someone else, and of the viewer (who may have been removed and invited back). */
 const PEOPLE_EVENTS: Record<ChatPeopleData["event"], readonly [string, string]> = {
   joined: ["joined the chat", "joined the chat"],
   rejoined: ["joined again from another window or device", "joined again from another window or device"],
   left: ["left the chat", "left the chat"],
   removed: ["was removed from the chat", "were removed from the chat"],
+  stopped: [`stopped ${AGENT_NAME}`, `stopped ${AGENT_NAME}`],
 };
 
 /**
@@ -357,7 +490,14 @@ function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
     const mine = message.uid === uid;
     return (
       <div key={message.id} className={mine ? "queued mine" : "queued"}>
-        <User text={message.text} author={mine ? undefined : message.name} attachments={message.attachments} mentions={message.mentions} />
+        <User
+          text={message.text}
+          author={mine ? undefined : message}
+          uid={uid}
+          attachments={message.attachments}
+          mentions={message.mentions}
+          replyTo={message.replyTo}
+        />
         <small className="queued-label">{queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"}</small>
       </div>
     );
@@ -370,12 +510,42 @@ function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {
 }
 
 function userText(message: UserMessage): string {
-  return typeof message.content === "string" ? message.content : blocks(message.content).map((b) => (b.type === "text" ? b.text : "")).join("");
+  return typeof message.content === "string"
+    ? message.content
+    : blocks(message.content)
+        .map((b) => (b.type === "text" ? b.text : ""))
+        .join("");
 }
 
-/** A person's message: yours on the right; someone else's on the left, under their name. Attachments show above the text. */
-function User({ text, author, attachments = [], mentions }: { text: string; author?: string; attachments?: Attachment[]; mentions?: Mention[] }) {
+/**
+ * A person's message: yours on the right; someone else's on the left, under their name. Attachments show above the
+ * text, and the message it answers above that. In a shared chat each person's messages have their colour, and one
+ * that called the agent shows, once `picked`, that the agent took it.
+ */
+function User({
+  text,
+  author,
+  uid,
+  attachments = [],
+  mentions,
+  replyTo,
+  picked,
+  onReply,
+}: {
+  text: string;
+  /** Undefined for the viewer's own message. */
+  author?: Person;
+  uid: string;
+  attachments?: Attachment[];
+  mentions?: Mention[];
+  replyTo?: ReplyQuote;
+  picked?: boolean;
+  onReply?: () => void;
+}) {
+  const people = useSharedChat();
+  const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
+  const tint = people ? tintOf(people, author?.uid ?? uid) : undefined;
   const files = attachments.length > 0 && (
     <div className={mine ? "attachments mine" : "attachments"}>
       {attachments.map((attachment) => (
@@ -383,27 +553,51 @@ function User({ text, author, attachments = [], mentions }: { text: string; auth
       ))}
     </div>
   );
-  if (mine) {
-    return (
-      <>
-        {files}
-        {text && (
-          <div className="bubble user">
-            <MentionText text={text} mentions={mentions} />
-          </div>
-        )}
-      </>
-    );
-  }
+  const bubble = text && (
+    <div className={mine ? "bubble user" : "bubble peer"}>
+      {replyTo && <ReplyQuoteView quote={replyTo} />}
+      <MentionText text={text} mentions={mentions} />
+    </div>
+  );
+  const reaction = picked && (
+    <div className={mine ? "message-foot mine" : "message-foot"}>
+      <span className="reaction" title={`${AGENT_NAME} picked this up`}>
+        <span aria-hidden="true">👀</span>
+        <span className="sr-only">{AGENT_NAME} picked this up</span>
+      </span>
+    </div>
+  );
   return (
-    <div className="other">
-      <small>{author}</small>
-      {files}
-      {text && (
-        <div className="bubble peer">
-          <MentionText text={text} mentions={mentions} />
+    <div
+      ref={content}
+      className={[mine ? "message mine" : "message other", tint !== undefined && "tinted"].filter(Boolean).join(" ")}
+      style={tint === undefined ? undefined : tintStyle(tint)}
+    >
+      {!mine && (
+        <div className="byline">
+          {tint !== undefined && <Avatar name={author.name} tint={tint} />}
+          <strong>{author.name}</strong>
         </div>
       )}
+      {files}
+      {bubble && (
+        <div className="bubble-row">
+          {bubble}
+          {onReply && <MessageActions content={content} text={text} onReply={onReply} floating />}
+        </div>
+      )}
+      {reaction}
+    </div>
+  );
+}
+
+/** The message a reply answers: who wrote it, in their colour, and the start of it. */
+function ReplyQuoteView({ quote }: { quote: ReplyQuote }) {
+  const people = useSharedChat();
+  const style = "agent" in quote || !people ? undefined : tintStyle(tintOf(people, quote.uid));
+  return (
+    <div className={"agent" in quote ? "reply-quote agent" : "reply-quote"} style={style}>
+      <strong>{quote.name}</strong> <span>{quote.text}</span>
     </div>
   );
 }
@@ -465,7 +659,10 @@ function useAttachments(chatId: string) {
     setSending(true);
     setError(undefined);
     try {
-      const { paths } = await api.attach(chatId, items.map(({ file }) => ({ file, path: file.name })));
+      const { paths } = await api.attach(
+        chatId,
+        items.map(({ file }) => ({ file, path: file.name })),
+      );
       const budget = imageBudget(items.filter(({ file }) => file.type.startsWith("image/")).length);
       const inputs = await Promise.all(items.map(({ file }, i) => attachmentInput(file, paths[i], budget)));
       if (!prompt(inputs)) throw new Error("Not connected; try again in a moment.");
@@ -496,9 +693,26 @@ function RevealedMarkdown({ text, onGrow }: { text: string; onGrow?: () => void 
  * A reply: its text, and a collapsed panel for each thought and tool call in it. `streaming` while the model writes it,
  * with `onGrow` called as its text is revealed.
  */
-function Assistant({ message, streaming = false, onGrow }: { message: AssistantMessage; streaming?: boolean; onGrow?: () => void }) {
+function Assistant({
+  message,
+  streaming = false,
+  onGrow,
+  onReply,
+}: {
+  message: AssistantMessage;
+  streaming?: boolean;
+  onGrow?: () => void;
+  /** Answer this reply, quoting `text`. */
+  onReply?: (text: string) => void;
+}) {
+  const content = useRef<HTMLDivElement>(null);
+  const text = streaming
+    ? ""
+    : blocks(message.content)
+        .flatMap((block) => (block.type === "text" && block.text ? [block.text] : []))
+        .join("\n\n");
   return (
-    <div className="assistant">
+    <div className="assistant" ref={content}>
       {/* By the block's own index, which stays the same once the message lands, so an opened thought stays open. */}
       {message.content.map((block, i) => {
         if (!block) return null;
@@ -515,6 +729,7 @@ function Assistant({ message, streaming = false, onGrow }: { message: AssistantM
       })}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
+      {text && <MessageActions content={content} text={text} onReply={onReply && (() => onReply(text))} />}
     </div>
   );
 }

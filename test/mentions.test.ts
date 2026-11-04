@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { activeQuery, keptMentions, matchMentions, parseMentions, splitMentions, type Mention, type MentionChoice } from "../shared/mentions.ts";
+import {
+  activeQuery,
+  keptMentions,
+  matchMentions,
+  parseMentions,
+  splitAgent,
+  splitMentions,
+  summonsAgent,
+  type Mention,
+  type MentionChoice,
+} from "../shared/mentions.ts";
 import type { ArtifactMeta } from "../shared/protocol.ts";
 import { resolveMentions } from "../worker/agent/mentions.ts";
+import { replyLine, replyQuote } from "../worker/agent/replies.ts";
 
 const file = (path: string): MentionChoice => ({ mention: { kind: "file", path }, detail: "" });
 const artifact = (id: string, title: string): MentionChoice => ({ mention: { kind: "artifact", id, title }, detail: "" });
@@ -80,13 +91,11 @@ describe("mentions in text", () => {
 describe("parseMentions", () => {
   it("takes files by path and artifacts by id, without repeats", () => {
     expect(
-      parseMentions(
-        [
-          { kind: "file", path: "uploads/a.csv" },
-          { kind: "artifact", id: "abcdefgh" },
-          { kind: "file", path: "uploads/a.csv" },
-        ],
-      ),
+      parseMentions([
+        { kind: "file", path: "uploads/a.csv" },
+        { kind: "artifact", id: "abcdefgh" },
+        { kind: "file", path: "uploads/a.csv" },
+      ]),
     ).toEqual([
       { kind: "file", path: "uploads/a.csv" },
       { kind: "artifact", id: "abcdefgh" },
@@ -144,5 +153,92 @@ describe("resolveMentions", () => {
     expect(mentions).toEqual([{ kind: "artifact", id: "herechat", title: "Page herechat" }]);
     expect(broughtIn).toEqual([]);
     expect((await resolveMentions([], scope(true))).note).toBe("");
+  });
+});
+
+describe("calling the agent", () => {
+  it("is @pi as a word, in any case, anywhere in the message", () => {
+    for (const text of ["@pi build it", "hey @pi.", "ok @PI, go", "(@pi)", "ask\n@pi"]) expect(summonsAgent(text), text).toBe(true);
+  });
+
+  it("is not an address, a longer name, a path, or a file or artifact the message names", () => {
+    for (const text of ["mail x@pi.dev", "@pierre can you", "@pi/notes.md", "pi alone", "@@pi"]) expect(summonsAgent(text), text).toBe(false);
+    const named: Mention[] = [{ kind: "file", path: "pi notes.md" }];
+    expect(summonsAgent("look at @pi notes.md", named)).toBe(false);
+    expect(summonsAgent("@pi look at @pi notes.md", named)).toBe(true);
+  });
+
+  it("splits the text around each call, for the transcript's chips", () => {
+    expect(splitAgent("hi @pi and @pi.")).toEqual(["hi ", "@pi", " and ", "@pi", "."]);
+    expect(splitAgent("@pi")).toEqual(["@pi"]);
+    expect(splitAgent("no call")).toEqual(["no call"]);
+  });
+
+  it("parses a member's own file as such", () => {
+    expect(
+      parseMentions([
+        { kind: "file", path: "a.csv", own: true },
+        { kind: "file", path: "a.csv" },
+      ]),
+    ).toEqual([
+      { kind: "file", path: "a.csv", own: true },
+      { kind: "file", path: "a.csv" },
+    ]);
+  });
+});
+
+describe("a member's file mentions", () => {
+  const scope = { ownerUid: "ada", chatId: "chat1", byOwner: false, readMeta: async () => null };
+
+  it("keep only what memberFile allows, as the path it gives", async () => {
+    const { mentions } = await resolveMentions(
+      [
+        { kind: "file", path: "uploads/chat.csv" },
+        { kind: "file", path: "secret/plans.md" },
+      ],
+      {
+        ...scope,
+        memberFile: async ({ path }) => (path === "uploads/chat.csv" ? path : null),
+      },
+    );
+    expect(mentions).toEqual([{ kind: "file", path: "uploads/chat.csv" }]);
+  });
+
+  it("leave the owner's own mentions alone", async () => {
+    const { mentions } = await resolveMentions([{ kind: "file", path: "secret/plans.md" }], { ...scope, byOwner: true, memberFile: async () => null });
+    expect(mentions).toEqual([{ kind: "file", path: "secret/plans.md" }]);
+  });
+});
+
+describe("reply quotes", () => {
+  const entry = (kind: string, rest: object) => ({ id: 7, conversationId: 1, kind, ...rest }) as never;
+
+  it("quote a person's message, or the text of the agent's reply", () => {
+    expect(replyQuote(entry("chat.message", { data: { uid: "bob", name: "Bob", text: "  two\n lines " } }))).toEqual({
+      id: 7,
+      name: "Bob",
+      uid: "bob",
+      text: "two lines",
+    });
+    const reply = entry("pi.assistant", {
+      model: [
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "hm" }, { type: "text", text: "Done." }, { type: "toolCall" }, { type: "text", text: "See it." }],
+        },
+      ],
+    });
+    const quote = replyQuote(reply);
+    expect(quote).toEqual({ id: 7, name: "pi", agent: true, text: "Done. See it." });
+    expect(replyLine(quote!)).toBe('[Replying to pi: "Done. See it."]');
+  });
+
+  it("cut a long message, and quote nothing else", () => {
+    const long = replyQuote(entry("chat.message", { data: { uid: "bob", name: "Bob", text: "x".repeat(1000) } }));
+    expect(long!.text).toHaveLength(280);
+    expect(long!.text.endsWith("…")).toBe(true);
+    expect(replyQuote(entry("pi.tool-result", { model: [{ role: "toolResult" }] }))).toBeNull();
+    expect(replyQuote(entry("chat.message", { data: { uid: "bob", name: "Bob", text: "" } }))).toBeNull();
+    expect(replyQuote(undefined)).toBeNull();
   });
 });

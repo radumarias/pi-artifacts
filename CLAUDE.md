@@ -31,7 +31,10 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   A skill the agent proposes (`skill_propose`) is saved off until the user turns it on; keep it that way.
 - Shared chats (`worker/chat-routes.ts`, `worker/members.ts`): the owner invites people by single-use link; they share
   the one conversation and the one agent, which always acts as the owner (owner's MCP sign-ins, files, skills; artifacts
-  owned by the owner). The chat object checks membership on every socket and prompt; keep it that way.
+  owned by the owner). The chat object checks membership on every socket and prompt; keep it that way. Once a chat
+  has members, the agent (named `pi`) runs only for a message with `@pi` or a reply to it (`summonsAgent`); other
+  messages are asides the model reads as context (`chat.aside` writes). Members see and name only the chat's files
+  and artifacts of the owner's (`ChatAgent.chatFiles`, `contents`), plus their own files.
 - Before a page becomes a version it is checked in a headless browser (`BROWSER` binding, `worker/artifacts/check.ts`):
   the agent saves a page with `artifact_write` (then changes it only by edits), and `artifact_check` and `artifact_publish` take it by draft id and report console errors, failed calls, a screenshot and the agent's tests, and
   publish refuses a page with errors, or one no browser checked (except with `AUTH_MODE=demo`); keep it that way. Until

@@ -1,12 +1,12 @@
 import { exports } from "cloudflare:workers";
 import type { MentionOptions } from "../shared/mentions.ts";
 import { mentionable } from "./agent/mentions.ts";
-import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type ChatDeletion, type CreatedInvite, type Person } from "../shared/protocol.ts";
+import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type ChatContents, type ChatDeletion, type CreatedInvite, type Person } from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
-import { storeUpload } from "./files-routes.ts";
+import { serveChatFile, storeUpload } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
 import { parseInviteToken } from "./members.ts";
-import type { UserFiles } from "./storage/user-files.ts";
+import type { FileEntry, UserFiles } from "./storage/user-files.ts";
 import type { UserDirectory } from "./users.ts";
 
 /**
@@ -20,7 +20,10 @@ import type { UserDirectory } from "./users.ts";
  *   DELETE /api/chats/:id/members/:uid        (owner) remove a member, or (member) leave
  *   POST   /api/chats/:id/attachments         files for a message, as POST /api/files takes them, into the owner's files
  *   POST   /api/chats/:id/seen                this user has seen the chat: it is no longer unread in their sidebar
- *   GET    /api/chats/:id/mentions            what "@" offers in the composer: the owner's files and artifacts
+ *   GET    /api/chats/:id/mentions            what "@" offers in the composer: for the owner their files and artifacts,
+ *                                             for anyone else the chat's files and artifacts, and their own files
+ *   GET    /api/chats/:id/contents            the chat's files and artifacts (the owner's), for the people in it to open
+ *   GET    /api/chats/:id/files/<path>        one of the chat's files, served as GET /api/files/raw/ serves the user's own
  *   POST   /api/invites/accept                {token}: join the chat an invite link is for
  * Returns null for any other path.
  */
@@ -43,7 +46,20 @@ export async function chatRoute(
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|deletion|seen)(?:\/([a-z0-9-]+))?)?$/);
+  const file = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)\/files\/(.+)$/);
+  if (file && method === "GET" && ID_PATTERN.test(file[1])) {
+    const ownerUid = await directory.chatOwner(file[1]);
+    if (!ownerUid) return json({ error: "No such chat" }, 404);
+    const chat = exports.ChatAgent.getByName(chatAgentName(ownerUid, file[1]));
+    return serveChatFile(
+      request,
+      file[2],
+      () => filesOf(ownerUid),
+      (path) => chat.mayOpenFile(person.uid, path),
+    );
+  }
+
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen)(?:\/([a-z0-9-]+))?)?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
@@ -75,16 +91,29 @@ export async function chatRoute(
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
     return storeUpload(request, () => filesOf(ownerUid));
   }
-  // What the agent can open: the owner's files, and the owner's artifacts that this person may name (mentionable).
+  // What "@" offers. The owner: all their files, and those of their artifacts they may name here (mentionable). Anyone
+  // else: only what the chat holds of the owner's, and their own files, which the chat copies to the owner's when named.
   if (what === "mentions" && method === "GET" && !item) {
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
+    const byOwner = person.uid === ownerUid;
+    const newest = (files: FileEntry[]) => files.sort((a, b) => +b.uploaded - +a.uploaded).map(({ path, size }) => ({ path, size }));
+    if (!byOwner) {
+      const [contents, own] = await Promise.all([chat.contents(person.uid), filesOf(person.uid).then((f) => f.list())]);
+      if (!contents) return json({ error: "You are not in this chat." }, 403);
+      return json({
+        files: [...contents.files, ...newest(own).map((f) => ({ ...f, own: true as const }))],
+        artifacts: contents.artifacts.map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId })),
+      } satisfies MentionOptions);
+    }
     const [files, artifacts] = await Promise.all([filesOf(ownerUid).then((f) => f.list()), exports.UserDirectory.getByName(ownerUid).listArtifacts()]);
     return json({
-      files: files.sort((a, b) => +b.uploaded - +a.uploaded).map(({ path, size }) => ({ path, size })),
-      artifacts: artifacts
-        .filter((a) => mentionable(a, chatId, person.uid === ownerUid))
-        .map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId })),
+      files: newest(files),
+      artifacts: artifacts.filter((a) => mentionable(a, chatId, true)).map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId })),
     } satisfies MentionOptions);
+  }
+  if (what === "contents" && method === "GET" && !item) {
+    const contents = await chat.contents(person.uid);
+    return contents ? json(contents satisfies ChatContents) : json({ error: "You are not in this chat." }, 403);
   }
   if (!what && method === "DELETE") {
     const asked = (await readJson<{ files?: unknown }>(request))?.files;

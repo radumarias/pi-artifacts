@@ -96,7 +96,7 @@ function tree(files: readonly FileInfo[], matches: (path: string) => boolean): F
   return root;
 }
 
-const DownloadIcon = () => (
+export const DownloadIcon = () => (
   <Icon size={15} box={16} stroke={1.6}>
     <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" />
   </Icon>

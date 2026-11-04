@@ -1,7 +1,7 @@
 import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { modelKeyOfLedger } from "../../shared/models.ts";
-import { CHAT_MESSAGE_KIND } from "../../shared/protocol.ts";
+import { CHAT_MESSAGE_KIND, type ChatMessageData } from "../../shared/protocol.ts";
 
 /**
  * What model calls cost. pi-ai prices each model reply when it comes in, from its model's prices (worker/models.ts
@@ -69,6 +69,8 @@ export function promptSpend(entries: readonly EntryRecord[], running: boolean): 
   let at: number | undefined;
   for (const entry of entries) {
     const message = entry.model?.[0];
+    // People talking among themselves in a shared chat (an aside) start no prompt.
+    if (entry.kind === CHAT_MESSAGE_KIND && (entry.data as Partial<ChatMessageData> | undefined)?.aside) continue;
     // A person's message: a prompt starts. `pi.user` is one from before chats were shared.
     if (entry.kind === CHAT_MESSAGE_KIND || entry.kind === "pi.user") {
       total = NONE;

@@ -246,16 +246,48 @@ export interface ChatMessageData extends Person {
   attachments?: Attachment[];
   /** Files and artifacts the message names with "@" (see shared/mentions.ts). */
   mentions?: Mention[];
+  /**
+   * Said in a shared chat without calling the agent ("@pi"): people talking among themselves. Shown at once, and
+   * the model gets it only as context, from a `chat.aside` entry beside it; no run starts.
+   */
+  aside?: true;
+  /** Called the agent in a shared chat: the app shows it was picked up once it is in the transcript. */
+  summoned?: true;
+  /** The message this one answers, quoted as it was when it was sent. */
+  replyTo?: ReplyQuote;
+}
+
+/** A message a reply quotes: its transcript entry, who wrote it (the agent, or a person) and the start of its text. */
+export type ReplyQuote = { id: number; name: string; text: string } & ({ agent: true } | { uid: string });
+
+/** How much of the message a reply quotes. */
+export const REPLY_QUOTE_CHARS = 280;
+
+/**
+ * What the model reads of an aside (ChatMessageData.aside): the person's message as a user message, and no data, so
+ * the app shows only the `chat.message` entry. Written while the agent works, pi places it at its next step.
+ */
+export const CHAT_ASIDE_KIND = "chat.aside";
+
+/** GET /api/chats/:id/contents: what a chat holds of its owner's, for the people it is shared with to open. */
+export interface ChatContents {
+  /** The owner's files attached in the chat or saved by its agent, that are still there. */
+  files: { path: string; size: number }[];
+  /** The artifacts published from the chat. */
+  artifacts: ArtifactSummary[];
 }
 
 /**
- * A notice in the transcript that someone joined or left a shared chat. A passive entry: everyone sees it at once,
+ * A notice in the transcript that someone joined or left a shared chat, or stopped its agent. A passive entry: everyone sees it at once,
  * even mid-run, and the model never reads it (it learns who is in the chat from its prompt).
  */
 export const CHAT_PEOPLE_KIND = "chat.people";
 export interface ChatPeopleData extends Person {
-  /** `rejoined`: someone already in the chat opened an invite link to it, in another window or on another device. */
-  event: "joined" | "rejoined" | "left" | "removed";
+  /**
+   * `rejoined`: someone already in the chat opened an invite link to it, in another window or on another device.
+   * `stopped`: they stopped the agent mid-run.
+   */
+  event: "joined" | "rejoined" | "left" | "removed" | "stopped";
 }
 
 /** A message waiting for the agent: sent while it was busy, in the order it will be answered. `id` is pi's submission id. */
@@ -273,7 +305,8 @@ export interface Presence {
 export type ChatClientMessage =
   // `attachments` were uploaded first, with POST /api/chats/:id/attachments; `text` may then be empty.
   // `mentions` are the files and artifacts picked with "@" whose text is still in `text`.
-  | { type: "prompt"; text: string; attachments?: AttachmentInput[]; mentions?: MentionInput[] }
+  // `replyTo` is the transcript entry of the message it answers: a person's message, or one of the agent's replies.
+  | { type: "prompt"; text: string; attachments?: AttachmentInput[]; mentions?: MentionInput[]; replyTo?: number }
   | { type: "abort" }
   // Run the chat on another model or effort (shared/models.ts). The change reaches every socket as pi's agent_changed.
   | { type: "model"; model: string; thinkingLevel?: string };

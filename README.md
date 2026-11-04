@@ -314,6 +314,15 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
 A chat's owner can invite other people to build artifacts with them in the same chat. Pi Durable is multiplayer for
 people: many people share one conversation with one agent, and their messages queue in its inbox while it works.
 
+- **The agent answers when called:** the agent is named `pi`. In a chat with members, only a message with `@pi` in it
+  (typed, or picked first in the "@" list), or a reply to one of pi's answers, is a prompt; any other message is people
+  talking among themselves. Such an aside is two passive pi writes: the `chat.message` entry everyone sees, with
+  `aside: true` and no model message, lands at once even mid-run; a `chat.aside` entry carries it to the model as a
+  user message, which pi places at once when idle, or at its next step while it works. So the model reads the talk as
+  context when it is next called, and a run starts only for `@pi`. A message that called pi shows 👀 once its run
+  picked it up, and pi's answers carry its name. A chat nobody shares works as before: every message is a prompt.
+- **Replies and copying:** any message can be answered (the reply quotes it, and the model reads `[Replying to name:
+  "…"]`) or copied, as rich text and as plain text (Markdown for pi's answers).
 - **Invite:** **Share** in the chat header makes a single-use link, `/join/<token>`, valid for 7 days. The token names
   the chat and carries a random secret; the chat keeps only the secret's SHA-256 hash, so the link is shown once.
   Whoever opens it, signed in, clicks **Join** and finds the chat in their sidebar; someone already in the chat (the
@@ -332,15 +341,23 @@ people: many people share one conversation with one agent, and their messages qu
   owner trying their own, or a member in another window or on another device) shows as "joined again from another
   window or device"; a reload shows nothing. It is a passive pi write: placed at once, even mid-run, and the
   model never reads it.
-- **Who is here now:** the header lists the others in the chat, with a dot by whoever has it open right now and
-  "(2 windows)" when someone has it open more than once; "Open in 2 of your windows" counts your own. Each open
-  window is one chat socket, so the chat object counts them and tells every socket when one opens or closes.
+- **Who is here now:** the header lists everyone in the chat, the owner and the members alike, each with their colour
+  and a green dot while they have it open ("×2" when in two windows). Each open window is one chat socket, so the chat
+  object counts them and tells every socket when one opens or closes. Each person's messages have their colour, the
+  same in every window (by their place in the chat), and pi's have the accent colour.
+- **What members see of the owner's:** the "@" list offers a member only the chat's files (attached in it, saved by
+  its agent, or in its `out/<chatId>/` folder) and artifacts, and their own files; one of their own they name is
+  copied into the owner's `uploads/` and attached to the message, as the agent works with the owner's files. The
+  sidebar adds the chat's files and artifacts beside the member's own while the chat is open; the chat's files are
+  served through `GET /api/chats/:id/files/<path>`, which the chat object checks. The agent itself still reaches all
+  of the owner's files, as the Share panel says.
 - **Queued messages:** a message sent while the agent works waits in pi's inbox (`pi.inbox`). pi's event stream
   reports each change to the inbox by ids only, so the chat adds the waiting messages, read from the inbox, to that
   batch. Everyone sees them at once, faded and marked "Queued" (with "2 of 3" when more than one waits), below what
   the agent is doing. Each leaves the queue for the transcript
   when its turn comes. A failed run goes on to the messages behind it (`afterFailedRun: "continue"`), so one person's
-  failed request does not hold the others'. **Stop** withdraws the queued messages too, as pi's abort does.
+  failed request does not hold the others'. **Stop** withdraws the queued messages too, as pi's abort does, and the
+  others see who stopped pi.
 - **Access:** the Worker finds the chat through the user's index (their own chats and the ones shared with them), and
   the chat object checks membership again on every socket and prompt, and on page calls to servers that sign in each
   user. Removing someone tells their sockets so and closes them at once (close code 4403), and the app stops reconnecting;

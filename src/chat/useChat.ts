@@ -294,8 +294,14 @@ export function useChat(chatId: string) {
     people,
     /** Who has the chat open right now, and in how many windows. */
     online,
-    prompt: (text: string, attachments?: AttachmentInput[], mentions?: MentionInput[]) =>
-      send({ type: "prompt", text, ...(attachments?.length && { attachments }), ...(mentions?.length && { mentions }) }),
+    prompt: (text: string, attachments?: AttachmentInput[], mentions?: MentionInput[], replyTo?: number) =>
+      send({
+        type: "prompt",
+        text,
+        ...(attachments?.length && { attachments }),
+        ...(mentions?.length && { mentions }),
+        ...(replyTo !== undefined && { replyTo }),
+      }),
     abort: () => send({ type: "abort" }),
     setModel,
   };

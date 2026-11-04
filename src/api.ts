@@ -6,6 +6,7 @@ import {
   SOCKET_PING,
   type ArtifactSummary,
   type ArtifactView,
+  type ChatContents,
   type ChatDeletion,
   type ChatSummary,
   type CloneAccess,
@@ -120,16 +121,19 @@ export const api = {
   deleteSkill: (skill: SkillInfo) => request<object>(skillPath(skill), { method: "DELETE" }),
   skillMarkdownUrl: (skill: SkillInfo) => `${skillPath(skill)}/SKILL.md`,
   files: () => request<FileInfo[]>("/api/files"),
-  /** Where a user file is served: an image opens in the browser, anything else downloads. */
-  fileUrl: (path: string) => FILE_ROUTE + encodePath(path),
+  /**
+   * Where a user file is served: an image opens in the browser, anything else downloads. `base` is where the files are
+   * served from: the user's own (FILE_ROUTE), or a chat's for someone it is shared with (chatFileRoute).
+   */
+  fileUrl: (path: string, base = FILE_ROUTE) => base + encodePath(path),
   /** Where a user file shows in the browser, if it is of a kind the app previews (shared/uploads.ts viewType); otherwise it downloads. */
-  fileViewUrl: (path: string) => `${FILE_ROUTE}${encodePath(path)}?${VIEW_PARAM}`,
+  fileViewUrl: (path: string, base = FILE_ROUTE) => `${base}${encodePath(path)}?${VIEW_PARAM}`,
   /**
    * The first `bytes` of a user file (all of a shorter one), to read as they arrive; null for an empty file, which
    * has no first byte to give. Throws with the Worker's error when it cannot be read.
    */
-  fileStart: async (path: string, bytes: number, signal?: AbortSignal): Promise<ReadableStream<Uint8Array> | null> => {
-    const response = await fetch(api.fileUrl(path), { signal, headers: { range: `bytes=0-${bytes - 1}` } });
+  fileStart: async (path: string, bytes: number, signal?: AbortSignal, base = FILE_ROUTE): Promise<ReadableStream<Uint8Array> | null> => {
+    const response = await fetch(api.fileUrl(path, base), { signal, headers: { range: `bytes=0-${bytes - 1}` } });
     if (response.status === 416) return null;
     if (!response.ok || !response.body) throw responseError(response, await response.json().catch(() => null));
     return response.body;
@@ -141,6 +145,8 @@ export const api = {
   /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */
   attach: (chatId: string, files: readonly { file: File; path: string }[]) =>
     request<{ paths: string[] }>(`/api/chats/${chatId}/attachments`, { method: "POST", body: uploadForm(files) }),
+  /** For someone a chat is shared with: what it holds of its owner's, its files and artifacts. */
+  chatContents: (chatId: string) => request<ChatContents>(`/api/chats/${chatId}/contents`),
   /** What "@" offers in a chat's composer: the files and artifacts the chat's agent can open. */
   mentions: (chatId: string) => request<MentionOptions>(`/api/chats/${chatId}/mentions`),
   chatSocketUrl: (chatId: string) => socketUrl(`/api/chats/${chatId}/ws`),

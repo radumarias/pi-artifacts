@@ -40,6 +40,14 @@ describe("prompt spend", () => {
     expect(promptSpend([...first, ...second, ...unanswered], true).size).toBe(2);
   });
 
+  it("counts people talking among themselves in a shared chat as no prompt", () => {
+    const aside = entry(CHAT_MESSAGE_KIND);
+    (aside as { data?: unknown }).data = { uid: "bob", name: "Bob", text: "nice", aside: true };
+    const entries = [prompt(), reply(0.01), aside, result(0.02), reply(0.03)];
+    expect([...promptSpend(entries, false).keys()]).toEqual([entries[4].id]);
+    expect(promptSpend(entries, false).get(entries[4].id)!.cost).toBeCloseTo(0.06);
+  });
+
   it("leaves out the newest prompt while a run may still add to it", () => {
     const entries = [prompt(), reply(0.01), prompt(), reply(0.02), result()];
     expect([...promptSpend(entries, true).keys()]).toEqual([entries[1].id]);

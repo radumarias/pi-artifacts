@@ -215,6 +215,11 @@ export const FILE_ROUTE = "/api/files/raw/";
  */
 export const ZIP_ROUTE = "/api/files/zip/";
 
+/** Where a chat's files (its owner's, attached in it or saved by its agent) are served to the people in it, by path. */
+export function chatFileRoute(chatId: string): string {
+  return `/api/chats/${chatId}/files/`;
+}
+
 /** What one zip may hold, of a folder or a pick: past either, the Worker refuses and the user downloads less at a time. */
 export const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
 export const MAX_ZIP_FILES = MAX_LISTED;
