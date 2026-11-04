@@ -4,7 +4,7 @@ import { MAX_FILE_BYTES, MAX_LISTED, underUploads, uploadBatches, uploadTargets,
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
-import { isBoolean, SectionHead, useStoredState } from "../layout.tsx";
+import { isBoolean, opensElsewhere, SectionHead, useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
@@ -133,7 +133,7 @@ function FileName({ path, title }: { path: string; title: string }) {
       title={`${title} · preview`}
       aria-current={open === path ? "true" : undefined}
       onClick={(event) => {
-        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if (opensElsewhere(event)) return;
         event.preventDefault();
         onOpen(path);
       }}

@@ -12,6 +12,7 @@ import {
   type Attachment,
   type AttachmentInput,
 } from "../../shared/attachments.ts";
+import { isTextFile } from "../../shared/uploads.ts";
 import { formatBytes } from "../../shared/util.ts";
 
 /** What attachments are read from: the chat owner's files (UserFiles), or a stand-in in tests. */
@@ -24,12 +25,6 @@ export type ToMarkdown = (name: string, bytes: ArrayBuffer) => Promise<string>;
 
 export type MessageContent = (TextContent | ImageContent)[];
 
-/** Read as UTF-8 text. Other files whose type says text are too (see isText). */
-const TEXT_EXTENSIONS = new Set(
-  "txt md markdown csv tsv json jsonl ndjson yaml yml toml ini cfg conf env log xml html htm css scss svg js mjs cjs jsx ts tsx py rb rs go java kt swift c h cc cpp hpp cs php sh bash zsh sql r lua pl tex rst ipynb".split(
-    " ",
-  ),
-);
 /** What Workers AI's toMarkdown converts without a model (images it would describe with one, at a cost). */
 const DOCUMENT_EXTENSIONS = new Set(["pdf", "docx", "xlsx", "xlsm", "xlsb", "xls", "et", "ods", "odt", "numbers"]);
 
@@ -116,7 +111,7 @@ async function fetchAttachment(input: AttachmentInput, files: AttachmentFiles, t
   const ext = extension(input.path);
   const isDocument = DOCUMENT_EXTENSIONS.has(ext);
   // A text file is read only as far as FILE_TEXT_CHARS can reach (4 bytes a character at most), a document whole, and anything else not at all.
-  const range = isDocument ? undefined : { offset: 0, length: TEXT_EXTENSIONS.has(ext) && !input.image ? FILE_TEXT_CHARS * 4 : 1 };
+  const range = isDocument ? undefined : { offset: 0, length: isTextFile(input.path) && !input.image ? FILE_TEXT_CHARS * 4 : 1 };
   const object = await files.get(input.path, range).catch(() => null);
   if (!object) return null;
   const size = object.size;
@@ -126,7 +121,8 @@ async function fetchAttachment(input: AttachmentInput, files: AttachmentFiles, t
     if (!IMAGE_TYPES.has(mimeType) || !isBase64(data)) return { kind: "path", size, why: "Not shown: the image the app sent could not be read." };
     return { kind: "image", size, image: { data, mimeType } };
   }
-  if (TEXT_EXTENSIONS.has(ext)) {
+  // Text and code (shared/uploads.ts isTextFile) go in as text, unless it turns out not to be.
+  if (isTextFile(input.path)) {
     const bytes = await object.arrayBuffer();
     const text = new TextDecoder().decode(bytes);
     if (text.includes("\u0000")) return { kind: "path", size, why: "Not shown: it is not text." };

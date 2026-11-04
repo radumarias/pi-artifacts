@@ -19,22 +19,26 @@ export interface FileText {
 export async function readText(body: ReadableStream<Uint8Array>, limit = TEXT_LIMIT): Promise<FileText | null> {
   const reader = body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
+  // Null for bytes that are not UTF-8. Streaming, a character cut off at a chunk's end waits for the next chunk.
+  const decode = (bytes?: Uint8Array) => {
+    try {
+      return bytes ? decoder.decode(bytes, { stream: true }) : decoder.decode();
+    } catch {
+      return null;
+    }
+  };
   let text = "";
   let read = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (read === limit) return { text, cut: !done && value.length > 0 };
       const chunk = done ? undefined : value.subarray(0, limit - read);
-      if (chunk?.includes(0)) return null;
-      try {
-        // Streaming, a character cut off at the chunk's end waits for the next chunk; at the limit it is left out.
-        text += chunk ? decoder.decode(chunk, { stream: true }) : decoder.decode();
-      } catch {
-        return null;
-      }
+      const part = chunk?.includes(0) ? null : decode(chunk);
+      if (part === null) return null;
+      text += part;
       if (!chunk) return { text, cut: false };
       read += chunk.length;
+      // At the limit, a character cut off at its end is left out.
       if (chunk.length < value!.length) return { text, cut: true };
     }
   } finally {

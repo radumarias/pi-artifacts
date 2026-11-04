@@ -1,12 +1,13 @@
-import { memo, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { baseName, extension } from "../../shared/attachments.ts";
 import { ARTIFACT_SANDBOX } from "../../shared/protocol.ts";
 import { previewKind, viewType, type PreviewKind } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { ViewportPicker, ViewportStage, useViewport } from "../artifact/viewport.tsx";
+import { isSafeLink, markdownComponents, markdownPlugins } from "../chat/Markdown.tsx";
+import { opensElsewhere } from "../layout.tsx";
 import { grammarFor, highlight } from "./highlight.ts";
 import { HIGHLIGHT_LIMIT, parseTable, readText, resolveLink, TABLE_ROWS, TEXT_LIMIT, type FileText } from "./preview.ts";
 
@@ -18,11 +19,8 @@ interface Props {
   onClose: () => void;
 }
 
-/** A click that should open a link the browser's way (a new tab or window), not in the preview. */
-const opensElsewhere = (event: MouseEvent) => event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
-
 /** Code as highlight.js colours it once its grammar loads; plain until then, or for text too long to colour quickly. */
-export const Code = memo(function Code({ text, grammar }: { text: string; grammar: string | undefined }) {
+const Code = memo(function Code({ text, grammar }: { text: string; grammar: string | undefined }) {
   const [html, setHtml] = useState<{ text: string; html: string } | null>(null);
   useEffect(() => {
     if (!grammar || text.length > HIGHLIGHT_LIMIT) return;
@@ -39,38 +37,60 @@ export const Code = memo(function Code({ text, grammar }: { text: string; gramma
   return html?.text === text ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html.html }} /> : <code>{text}</code>;
 });
 
-/** The file's text, read when it opens and again on a reload; null while reading or when it is not text. */
+/**
+ * The file's text, read when it opens and again on a reload (not again when the panel goes back to showing it);
+ * null while reading or when it is not text. Only the first TEXT_LIMIT bytes (and one more, to tell there are more) are asked for.
+ */
 function useFileText(path: string, reload: string, wanted: boolean): { text: FileText | null; binary: boolean; error: string | null } {
   const [state, setState] = useState<{ key: string; text: FileText | null; error: string | null }>({ key: "", text: null, error: null });
   const key = `${path}\n${reload}`;
+  const loaded = state.key === key && !state.error;
   useEffect(() => {
-    if (!wanted) return;
+    if (!wanted || loaded) return;
     const abort = new AbortController();
-    (async () => {
-      const response = await fetch(api.fileUrl(path), { signal: abort.signal });
-      if (!response.ok || !response.body) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(body?.error ?? response.statusText);
-      }
-      return readText(response.body);
-    })().then(
-      (text) => !abort.signal.aborted && setState({ key, text, error: null }),
-      (error) => !abort.signal.aborted && setState({ key, text: null, error: errorMessage(error) }),
-    );
+    api
+      .fileStart(path, TEXT_LIMIT + 1, abort.signal)
+      .then((body) => (body ? readText(body) : { text: "", cut: false }))
+      .then(
+        (text) => !abort.signal.aborted && setState({ key, text, error: null }),
+        (error) => !abort.signal.aborted && setState({ key, text: null, error: errorMessage(error) }),
+      );
     return () => abort.abort();
-  }, [path, key, wanted]);
+  }, [path, key, wanted, loaded]);
   const current = state.key === key;
   return { text: current ? state.text : null, binary: current && !state.text && !state.error, error: current ? state.error : null };
 }
 
-/** A Markdown file rendered: its links to other files open them here, its images show from the user's files. */
-function MarkdownView({ path, text, files, onOpen }: { path: string; text: string; files: readonly FileInfo[]; onOpen: (path: string) => void }) {
+/**
+ * A Markdown file rendered as the chat renders the agent's messages, except that its links to other files open them
+ * here and its images show from the user's files. The renderers read the files through a ref: a new listing (after
+ * every agent run) would otherwise make new components, and React would build the whole page again.
+ */
+const MarkdownView = memo(function MarkdownView({
+  path,
+  text,
+  files,
+  onOpen,
+}: {
+  path: string;
+  text: string;
+  files: readonly FileInfo[];
+  onOpen: (path: string) => void;
+}) {
   const known = useMemo(() => new Set(files.map((file) => file.path)), [files]);
-  const components = useMemo<Components>(
-    () => ({
+  const latest = useRef({ known, onOpen });
+  latest.current = { known, onOpen };
+  const components = useMemo<Components>(() => {
+    /** Where a link in this file points among the user's files, if it is one of them. */
+    const fileAt = (href: unknown) => {
+      const target = typeof href === "string" ? resolveLink(path, href) : null;
+      return target && latest.current.known.has(target) ? target : null;
+    };
+    return {
+      ...markdownComponents,
       a: ({ href, children }) => {
-        const target = href ? resolveLink(path, href) : null;
-        if (target && known.has(target)) {
+        const target = fileAt(href);
+        if (target) {
           return (
             <a
               href={api.fileViewUrl(target)}
@@ -78,15 +98,15 @@ function MarkdownView({ path, text, files, onOpen }: { path: string; text: strin
               onClick={(event) => {
                 if (opensElsewhere(event)) return;
                 event.preventDefault();
-                onOpen(target);
+                latest.current.onOpen(target);
               }}
             >
               {children}
             </a>
           );
         }
-        // Elsewhere, only a web or mail link (not a script, nor a path in the app) opens, in a new tab.
-        return href && /^(https?|mailto):/i.test(href) ? (
+        // Elsewhere, only a full link to another site opens (in a new tab), as in the chat; not a path in the app.
+        return href && /^[a-z][a-z0-9+.-]*:/i.test(href) && isSafeLink(href) ? (
           <a href={href} target="_blank" rel="noreferrer noopener">
             {children}
           </a>
@@ -97,8 +117,8 @@ function MarkdownView({ path, text, files, onOpen }: { path: string; text: strin
       // Only the user's own images load, from the app (served so nothing in them runs); an image from elsewhere would
       // tell that site the file was opened, so its alt text shows instead.
       img: ({ src, alt }) => {
-        const target = typeof src === "string" ? resolveLink(path, src) : null;
-        return target && known.has(target) ? <img src={api.fileViewUrl(target)} alt={alt ?? ""} /> : <>{alt ?? ""}</>;
+        const target = fileAt(src);
+        return target ? <img src={api.fileViewUrl(target)} alt={alt ?? ""} /> : <>{alt ?? ""}</>;
       },
       code: ({ className, children }) => {
         const language = /\blanguage-(\S+)/.exec(className ?? "")?.[1];
@@ -110,25 +130,19 @@ function MarkdownView({ path, text, files, onOpen }: { path: string; text: strin
           <code>{children}</code>
         );
       },
-      table: ({ children }) => (
-        <div className="md-table">
-          <table>{children}</table>
-        </div>
-      ),
-    }),
-    [path, known, onOpen],
-  );
+    };
+  }, [path]);
   return (
     <article className="file-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={markdownPlugins} components={components}>
         {text}
       </ReactMarkdown>
     </article>
   );
-}
+});
 
 /** A CSV or TSV as a table, its first row as the heading. */
-function TableView({ path, text }: { path: string; text: string }) {
+const TableView = memo(function TableView({ path, text }: { path: string; text: string }) {
   const { rows, cut } = useMemo(() => parseTable(text, extension(path) === "tsv" ? "\t" : ","), [path, text]);
   if (rows.length === 0) return <p className="file-note">This table is empty.</p>;
   const [head, ...body] = rows;
@@ -149,10 +163,13 @@ function TableView({ path, text }: { path: string; text: string }) {
       {cut && <p className="file-note">Showing the first {TABLE_ROWS.toLocaleString("en")} rows; download the file for the rest.</p>}
     </div>
   );
-}
+});
 
 /** The two ways a Markdown file, a table or a web page shows: as it renders, or as its source. */
 const RENDERED: Partial<Record<PreviewKind, string>> = { markdown: "Preview", table: "Table", html: "Preview" };
+
+/** The kinds the browser shows from the file's URL. */
+const BY_URL: ReadonlySet<PreviewKind> = new Set(["image", "audio", "video", "html", "pdf"]);
 
 /**
  * A user file beside the chat, where an artifact shows: an image as itself, sound and video in the browser's player, a web page running in a sandboxed frame
@@ -160,7 +177,7 @@ const RENDERED: Partial<Record<PreviewKind, string>> = { markdown: "Preview", ta
  * one, and any other text, code highlighted. A file that is not text offers its download. Keyed by its path, so
  * another file starts afresh.
  */
-export function FilePreview({ path, files, onOpen, onClose }: Props) {
+export const FilePreview = memo(function FilePreview({ path, files, onOpen, onClose }: Props) {
   const kind = previewKind(path);
   const size = files.find((file) => file.path === path)?.size;
   const [source, setSource] = useState(false);
@@ -169,35 +186,35 @@ export function FilePreview({ path, files, onOpen, onClose }: Props) {
   // A file the agent wrote again is read again: the listing that tells of it has its new size.
   const reload = `${reloads}:${size ?? ""}`;
   const rendered = kind ? RENDERED[kind] : undefined;
-  const showsSource = source && !!rendered;
-  // Shown by the browser from its URL, not read as text here.
-  const framed = (kind === "html" && !showsSource) || kind === "image" || kind === "audio" || kind === "video" || kind === "pdf";
-  const { text, binary, error } = useFileText(path, reload, !framed);
+  // How it shows now: as its kind, or as text (its source, or a file of a kind the preview does not know).
+  const shown: PreviewKind = (source && rendered) || !kind ? "text" : kind;
+  // The browser shows these from their URL; the others are read as text here.
+  const { text, binary, error } = useFileText(path, reload, !BY_URL.has(shown));
   const name = baseName(path);
   const folder = path.slice(0, -name.length);
   const viewUrl = `${api.fileViewUrl(path)}&r=${encodeURIComponent(reload)}`;
 
   let body: ReactNode;
-  if (kind === "image") {
+  if (shown === "image") {
     body = (
       <div className="file-image">
         <img src={viewUrl} alt={name} />
       </div>
     );
-  } else if (kind === "audio" || kind === "video") {
+  } else if (shown === "audio" || shown === "video") {
     // The Worker answers range requests, so the player can seek (and Safari plays video at all).
     body = (
       <div className="file-image">
-        {kind === "audio" ? <audio key={viewUrl} src={viewUrl} controls /> : <video key={viewUrl} src={viewUrl} controls />}
+        {shown === "audio" ? <audio key={viewUrl} src={viewUrl} controls /> : <video key={viewUrl} src={viewUrl} controls />}
       </div>
     );
-  } else if (kind === "html" && !showsSource) {
+  } else if (shown === "html") {
     body = (
       <ViewportStage id={viewport.id} rotated={viewport.rotated}>
         <iframe key={viewUrl} className="artifact-frame" title={name} src={viewUrl} sandbox={ARTIFACT_SANDBOX} />
       </ViewportStage>
     );
-  } else if (kind === "pdf") {
+  } else if (shown === "pdf") {
     // No sandbox: browsers refuse to show a PDF in one. The Worker serves it under a policy that loads nothing.
     body = <iframe key={viewUrl} className="artifact-frame file-pdf" title={name} src={viewUrl} />;
   } else if (error) {
@@ -223,9 +240,9 @@ export function FilePreview({ path, files, onOpen, onClose }: Props) {
     const cut = text.cut && <p className="file-note">Showing the first {formatBytes(TEXT_LIMIT)}; download the file for the rest.</p>;
     body = (
       <div className="file-body">
-        {kind === "markdown" && !showsSource ? (
+        {shown === "markdown" ? (
           <MarkdownView path={path} text={text.text} files={files} onOpen={onOpen} />
-        ) : kind === "table" && !showsSource ? (
+        ) : shown === "table" ? (
           <TableView path={path} text={text.text} />
         ) : (
           <pre className="file-code">
@@ -248,7 +265,7 @@ export function FilePreview({ path, files, onOpen, onClose }: Props) {
           {size !== undefined && <small className="file-size">{formatBytes(size)}</small>}
         </div>
         <div className="artifact-actions">
-          {kind === "html" && !showsSource && <ViewportPicker viewport={viewport} />}
+          {shown === "html" && <ViewportPicker viewport={viewport} />}
           {rendered && (
             <div className="viewport-picker" role="group" aria-label="Show as">
               <button type="button" aria-pressed={!source} onClick={() => setSource(false)}>
@@ -278,4 +295,4 @@ export function FilePreview({ path, files, onOpen, onClose }: Props) {
       {body}
     </section>
   );
-}
+});

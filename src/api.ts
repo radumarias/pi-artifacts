@@ -34,10 +34,14 @@ async function fetchJson(path: string, init?: RequestInit): Promise<{ response: 
   return { response, body: await response.json().catch(() => null) };
 }
 
+/** The error a failed response stands for: the Worker's message from its JSON body, else the status. */
+const responseError = (response: Response, body: unknown) =>
+  Object.assign(new Error((body as { error?: string } | null)?.error ?? response.statusText), { status: response.status });
+
 /** The JSON body of a successful response; otherwise throws with the Worker's error message. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { response, body } = await fetchJson(path, init);
-  if (!response.ok) throw Object.assign(new Error((body as { error?: string } | null)?.error ?? response.statusText), { status: response.status });
+  if (!response.ok) throw responseError(response, body);
   return body as T;
 }
 
@@ -120,6 +124,16 @@ export const api = {
   fileUrl: (path: string) => FILE_ROUTE + encodePath(path),
   /** Where a user file shows in the browser, if it is of a kind the app previews (shared/uploads.ts viewType); otherwise it downloads. */
   fileViewUrl: (path: string) => `${FILE_ROUTE}${encodePath(path)}?${VIEW_PARAM}`,
+  /**
+   * The first `bytes` of a user file (all of a shorter one), to read as they arrive; null for an empty file, which
+   * has no first byte to give. Throws with the Worker's error when it cannot be read.
+   */
+  fileStart: async (path: string, bytes: number, signal?: AbortSignal): Promise<ReadableStream<Uint8Array> | null> => {
+    const response = await fetch(api.fileUrl(path), { signal, headers: { range: `bytes=0-${bytes - 1}` } });
+    if (response.status === 416) return null;
+    if (!response.ok || !response.body) throw responseError(response, await response.json().catch(() => null));
+    return response.body;
+  },
   /** Where a user folder downloads as a zip named after it, with the folder itself at its root. */
   folderZipUrl: (path: string) => ZIP_ROUTE + encodePath(path),
   /** One request's worth of files (see uploadBatches), each with its name or its path inside a picked folder. */

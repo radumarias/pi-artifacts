@@ -25,13 +25,13 @@ describe("file preview", () => {
   });
 
   it("resolves a file's links among the user's files", () => {
-    expect(resolveLink("llmwiki/wiki/a.md", "b.md")).toBe("llmwiki/wiki/b.md");
-    expect(resolveLink("llmwiki/wiki/a.md", "../raw/c%20d.png")).toBe("llmwiki/raw/c d.png");
-    expect(resolveLink("llmwiki/wiki/a.md", "./b.md#part")).toBe("llmwiki/wiki/b.md");
-    expect(resolveLink("llmwiki/wiki/a.md", "/out/x.html")).toBe("out/x.html");
+    expect(resolveLink("notes/wiki/a.md", "b.md")).toBe("notes/wiki/b.md");
+    expect(resolveLink("notes/wiki/a.md", "../raw/c%20d.png")).toBe("notes/raw/c d.png");
+    expect(resolveLink("notes/wiki/a.md", "./b.md#part")).toBe("notes/wiki/b.md");
+    expect(resolveLink("notes/wiki/a.md", "/out/x.html")).toBe("out/x.html");
     expect(resolveLink("a.md", "../../etc/passwd")).toBeNull();
     for (const href of ["https://x.test/a.md", "mailto:a@b.test", "javascript:alert(1)", "//x.test/a", "#top", "?q", "%E0%A4%A"]) {
-      expect(resolveLink("llmwiki/a.md", href)).toBeNull();
+      expect(resolveLink("notes/a.md", href)).toBeNull();
     }
   });
 

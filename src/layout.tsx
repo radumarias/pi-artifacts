@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { Icon } from "./Icon.tsx";
 
 /**
@@ -58,6 +67,9 @@ export function useDismiss<T extends HTMLElement>(open: boolean, setOpen: (open:
   }, [open, setOpen]);
   return box;
 }
+
+/** A click that should open a link the browser's way (a new tab or window), not in the app. */
+export const opensElsewhere = (event: ReactMouseEvent) => event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
 
 /** The check for a stored open/closed (or on/off) setting. */
 export const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";

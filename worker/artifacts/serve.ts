@@ -68,7 +68,8 @@ export function artifactETag(id: string, version: number): string {
   return `"${id}-v${version}-${BUILD}"`;
 }
 
-const PAGE_HEADERS = {
+/** What a served page carries: its policy, and nothing that would let a browser read it as another type or leak where it is. */
+export const PAGE_HEADERS = {
   "content-security-policy": ARTIFACT_CSP,
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",

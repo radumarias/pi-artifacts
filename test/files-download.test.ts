@@ -316,7 +316,7 @@ describe("file and folder downloads", () => {
 
   it("knows how to preview a file by its extension", () => {
     expect(previewKind("out/a.HTML")).toBe("html");
-    expect(previewKind("llmwiki/index.md")).toBe("markdown");
+    expect(previewKind("notes/index.md")).toBe("markdown");
     expect(previewKind("out/budget.sql")).toBe("text");
     expect(previewKind("out/all.js")).toBe("text");
     expect(previewKind("out/sales.csv")).toBe("table");

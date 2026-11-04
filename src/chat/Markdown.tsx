@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 // that resolve to http(s) or mailto, since the text comes from the model and
 // from MCP servers. Paths in this app (such as a sign-in link) resolve to http(s).
 const SAFE_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
-function isSafeLink(href: string): boolean {
+export function isSafeLink(href: string): boolean {
   try {
     return SAFE_PROTOCOLS.has(new URL(href, "https://app.invalid/").protocol);
   } catch {
@@ -15,7 +15,8 @@ function isSafeLink(href: string): boolean {
   }
 }
 
-const components: Components = {
+/** How the chat renders Markdown; a file's preview (src/files/FilePreview.tsx) starts from the same. */
+export const markdownComponents: Components = {
   a: ({ href, children }) =>
     href && isSafeLink(href) ? (
       <a href={href} target="_blank" rel="noreferrer noopener">
@@ -33,12 +34,12 @@ const components: Components = {
   ),
 };
 
-const plugins = [remarkGfm];
+export const markdownPlugins = [remarkGfm];
 
 /** An assistant message as Markdown (GitHub flavour: tables, task lists, strikethrough, autolinked URLs). */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={plugins} components={components}>
+    <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>
       {text}
     </ReactMarkdown>
   );

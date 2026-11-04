@@ -154,7 +154,7 @@ const MEDIA_TYPES: ReadonlyMap<string, string> = new Map([
 export type PreviewKind = "image" | "audio" | "video" | "html" | "pdf" | "markdown" | "table" | "text";
 
 const TEXT_EXTENSIONS =
-  "txt text log out err json jsonl ndjson geojson yaml yml toml ini cfg conf properties xml rss plist " +
+  "txt text log out err json jsonl ndjson geojson yaml yml toml ini cfg conf env properties xml rss plist " +
   "sql js mjs cjs jsx ts mts cts tsx py pyi ipynb r rb go rs java kt kts scala swift c h cc cpp cxx hpp hh cs fs php pl lua dart zig " +
   "ex exs erl hs ml clj sh bash zsh fish ps1 bat cmd css scss sass less vue svelte astro graphql gql proto tf hcl " +
   "mk cmake gradle diff patch tex bib rst adoc org htmlpart jsblock b64 z64";
@@ -175,6 +175,12 @@ const KINDS: ReadonlyMap<string, PreviewKind> = new Map([
 /** How the app previews `path`, by its extension; undefined for one it does not know, which may still be text. */
 export function previewKind(path: string): PreviewKind | undefined {
   return KINDS.get(extension(path));
+}
+
+/** Whether `path` holds UTF-8 text, by its extension: text and code, Markdown, a table, a web page or an SVG. */
+export function isTextFile(path: string): boolean {
+  const kind = previewKind(path);
+  return kind === "text" || kind === "markdown" || kind === "table" || kind === "html" || extension(path) === "svg";
 }
 
 /**
