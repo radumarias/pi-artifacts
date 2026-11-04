@@ -14,11 +14,12 @@ export interface FileText {
 /**
  * The text of a response's body, reading at most `limit` bytes; null when the body is not UTF-8 text (it holds a NUL
  * byte, or bytes UTF-8 cannot decode), which the preview cannot show. Stops reading at the limit, or at the first
- * sign of binary, so a large file is never read whole.
+ * sign of binary, so a large file is never read whole. `lenient`, for a file whose type says text, shows bytes that
+ * are not UTF-8 (a CSV saved in Latin-1) as "\uFFFD" rather than give up on the file.
  */
-export async function readText(body: ReadableStream<Uint8Array>, limit = TEXT_LIMIT): Promise<FileText | null> {
+export async function readText(body: ReadableStream<Uint8Array>, limit = TEXT_LIMIT, lenient = false): Promise<FileText | null> {
   const reader = body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const decoder = new TextDecoder("utf-8", { fatal: !lenient });
   // Null for bytes that are not UTF-8. Streaming, a character cut off at a chunk's end waits for the next chunk.
   const decode = (bytes?: Uint8Array) => {
     try {
@@ -104,7 +105,12 @@ export function parseTable(text: string, delimiter: string, maxRows = TABLE_ROWS
     } else if (char === "\n" || char === "\r") {
       endRow();
       if (char === "\r" && text[i + 1] === "\n") i++;
-      if (rows.length === maxRows) return { rows, cut: i + 1 < text.length };
+      if (rows.length === maxRows) {
+        // Cut only when a row follows, not just the file's closing line breaks.
+        const more = /[^\r\n]/g;
+        more.lastIndex = i + 1;
+        return { rows, cut: more.test(text) };
+      }
     } else field += char;
     i++;
   }

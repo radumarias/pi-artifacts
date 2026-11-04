@@ -104,7 +104,11 @@ const registered = new Map<string, Promise<void>>();
  * which highlight.js escapes, so the HTML holds no markup of the file's.
  */
 export async function highlight(code: string, grammar: string): Promise<string> {
-  core ??= import("highlight.js/lib/core").then((module) => module.default);
+  if (!core) {
+    core = import("highlight.js/lib/core").then((module) => module.default);
+    // As with a grammar, a failed load may be tried again next time.
+    core.catch(() => (core = undefined));
+  }
   const hljs = await core;
   let ready = registered.get(grammar);
   if (!ready) {

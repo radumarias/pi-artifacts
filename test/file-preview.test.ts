@@ -20,6 +20,8 @@ describe("file preview", () => {
     expect(await readText(stream(e.subarray(0, 1), e.subarray(1)))).toEqual({ text: "é", cut: false });
     expect(await readText(stream(new Uint8Array([0x50, 0x4b, 0x00, 0x03])))).toBeNull();
     expect(await readText(stream(new Uint8Array([0xff, 0xfe, 0x41])))).toBeNull();
+    // A file whose type says text shows, its stray bytes replaced.
+    expect(await readText(stream(new Uint8Array([0x43, 0x61, 0x66, 0xe9])), 100, true)).toEqual({ text: "Caf\uFFFD", cut: false });
     // A file ending in half a character is not UTF-8 text.
     expect(await readText(stream(e.subarray(0, 1)))).toBeNull();
   });
@@ -47,6 +49,7 @@ describe("file preview", () => {
     ]);
     expect(parseTable("h\n1\n2\n3\n", ",", 2)).toEqual({ rows: [["h"], ["1"]], cut: true });
     expect(parseTable("h\n1\n", ",", 2)).toEqual({ rows: [["h"], ["1"]], cut: false });
+    expect(parseTable("h\n1\r\n\n", ",", 2)).toEqual({ rows: [["h"], ["1"]], cut: false });
   });
 
   it("highlights code by extension or a code block's language, escaping the code's own markup", async () => {

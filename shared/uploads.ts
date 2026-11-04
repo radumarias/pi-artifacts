@@ -157,7 +157,7 @@ const TEXT_EXTENSIONS =
   "txt text log out err json jsonl ndjson geojson yaml yml toml ini cfg conf env properties xml rss plist " +
   "sql js mjs cjs jsx ts mts cts tsx py pyi ipynb r rb go rs java kt kts scala swift c h cc cpp cxx hpp hh cs fs php pl lua dart zig " +
   "ex exs erl hs ml clj sh bash zsh fish ps1 bat cmd css scss sass less vue svelte astro graphql gql proto tf hcl " +
-  "mk cmake gradle diff patch tex bib rst adoc org htmlpart jsblock b64 z64";
+  "mk cmake gradle diff patch tex bib rst adoc org htmlpart jsblock";
 const KINDS: ReadonlyMap<string, PreviewKind> = new Map([
   ...[...IMAGE_TYPES.keys()].map((ext) => [ext, "image"] as const),
   ...[...MEDIA_TYPES].map(([ext, type]) => [ext, type.startsWith("audio/") ? "audio" : "video"] as const),

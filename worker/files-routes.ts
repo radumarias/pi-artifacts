@@ -128,9 +128,11 @@ function byteRange(header: string | null): ByteRange | undefined {
   return last >= offset ? { offset, length: last - offset + 1 } : undefined;
 }
 
+/** Where `range` starts in a file of `size` bytes. */
+const rangeStart = (range: ByteRange, size: number) => ("suffix" in range ? Math.max(0, size - range.suffix) : range.offset);
+
 /** A range that starts past the file's end. */
-const unsatisfiable = (size?: number) =>
-  new Response(null, { status: 416, headers: size === undefined ? SERVED_HEADERS : { ...SERVED_HEADERS, "content-range": `bytes */${size}` } });
+const unsatisfiable = (size: number) => new Response(null, { status: 416, headers: { ...SERVED_HEADERS, "content-range": `bytes */${size}` } });
 
 /**
  * One user file: an image shows in the browser (shared/uploads.ts previewType), anything else downloads. With
@@ -143,9 +145,14 @@ async function serveFile(request: Request, files: UserFiles, path: string, view:
   try {
     object = await files.get(path, range);
   } catch (error) {
-    // R2 refuses a range that starts past the end.
-    if (range) return unsatisfiable();
-    throw error;
+    // R2 refuses a range that starts past the end. Any other failure stays one: answered 416, the preview (api.fileStart)
+    // would show the file as empty.
+    if (!range) throw error;
+    const whole = await files.get(path);
+    if (!whole) return json({ error: "No such file" }, 404);
+    void whole.body.cancel();
+    if (rangeStart(range, whole.size) < whole.size) throw error;
+    return unsatisfiable(whole.size);
   }
   if (!object) return json({ error: "No such file" }, 404);
   const kind = previewKind(path);
@@ -158,7 +165,7 @@ async function serveFile(request: Request, files: UserFiles, path: string, view:
   };
   const size = object.size;
   if (!range) return new Response(object.body, { headers: { ...headers, "content-length": String(size) } });
-  const start = "suffix" in range ? Math.max(0, size - range.suffix) : range.offset;
+  const start = rangeStart(range, size);
   if (start >= size) {
     void object.body.cancel();
     return unsatisfiable(size);

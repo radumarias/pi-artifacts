@@ -206,7 +206,8 @@ describe("file and folder downloads", () => {
     expect([tail.headers.get("content-range"), await tail.text()]).toEqual(["bytes 7-9/10", "789"]);
     const past = await get("bytes=8-50");
     expect([past.headers.get("content-range"), await past.text()]).toEqual(["bytes 8-9/10", "89"]);
-    expect((await get("bytes=10-")).status).toBe(416);
+    const beyond = await get("bytes=10-");
+    expect([beyond.status, beyond.headers.get("content-range")]).toEqual([416, "bytes */10"]);
     // Several ranges, or none that parses, get the whole file.
     const whole = await get("bytes=0-1,4-5");
     expect([whole.status, await whole.text()]).toEqual([200, "0123456789"]);
@@ -325,10 +326,11 @@ describe("file and folder downloads", () => {
     expect(previewKind("out/a.mp3")).toBe("audio");
     expect(previewKind("out/a.webm")).toBe("video");
     expect(viewType("out/a.mov")).toBe("video/quicktime");
-    // Fragments and encoded data the agent writes read as text: a fragment of a page never runs.
+    // Page and script fragments read as text: a fragment of a page never runs. Encoded data is no known kind (the
+    // preview still shows it when it is text), so it stays out of the model's attachments.
     expect(previewKind("out/page.htmlpart")).toBe("text");
     expect(previewKind("out/script.jsblock")).toBe("text");
-    expect(previewKind("out/data.b64")).toBe("text");
+    expect(previewKind("out/data.b64")).toBeUndefined();
     expect(previewKind("out/Makefile")).toBeUndefined();
     expect(previewKind("out/a.constructor")).toBeUndefined();
     expect(viewType("out/a.sql")).toBe("text/plain; charset=utf-8");

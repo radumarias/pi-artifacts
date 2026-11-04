@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { baseName, extension } from "../../shared/attachments.ts";
 import { ARTIFACT_SANDBOX } from "../../shared/protocol.ts";
@@ -50,7 +50,7 @@ function useFileText(path: string, reload: string, wanted: boolean): { text: Fil
     const abort = new AbortController();
     api
       .fileStart(path, TEXT_LIMIT + 1, abort.signal)
-      .then((body) => (body ? readText(body) : { text: "", cut: false }))
+      .then((body) => (body ? readText(body, TEXT_LIMIT, !!previewKind(path)) : { text: "", cut: false }))
       .then(
         (text) => !abort.signal.aborted && setState({ key, text, error: null }),
         (error) => !abort.signal.aborted && setState({ key, text: null, error: errorMessage(error) }),
@@ -62,29 +62,25 @@ function useFileText(path: string, reload: string, wanted: boolean): { text: Fil
 }
 
 /**
- * A Markdown file rendered as the chat renders the agent's messages, except that its links to other files open them
- * here and its images show from the user's files. The renderers read the files through a ref: a new listing (after
- * every agent run) would otherwise make new components, and React would build the whole page again.
+ * A Markdown file rendered as the chat renders the agent's messages, except that its links to `known` files open
+ * them here and its images show from the user's files.
  */
 const MarkdownView = memo(function MarkdownView({
   path,
   text,
-  files,
+  known,
   onOpen,
 }: {
   path: string;
   text: string;
-  files: readonly FileInfo[];
+  known: ReadonlySet<string>;
   onOpen: (path: string) => void;
 }) {
-  const known = useMemo(() => new Set(files.map((file) => file.path)), [files]);
-  const latest = useRef({ known, onOpen });
-  latest.current = { known, onOpen };
   const components = useMemo<Components>(() => {
     /** Where a link in this file points among the user's files, if it is one of them. */
     const fileAt = (href: unknown) => {
       const target = typeof href === "string" ? resolveLink(path, href) : null;
-      return target && latest.current.known.has(target) ? target : null;
+      return target && known.has(target) ? target : null;
     };
     return {
       ...markdownComponents,
@@ -98,7 +94,7 @@ const MarkdownView = memo(function MarkdownView({
               onClick={(event) => {
                 if (opensElsewhere(event)) return;
                 event.preventDefault();
-                latest.current.onOpen(target);
+                onOpen(target);
               }}
             >
               {children}
@@ -131,7 +127,7 @@ const MarkdownView = memo(function MarkdownView({
         );
       },
     };
-  }, [path]);
+  }, [path, known, onOpen]);
   return (
     <article className="file-markdown">
       <ReactMarkdown remarkPlugins={markdownPlugins} components={components}>
@@ -180,6 +176,10 @@ const BY_URL: ReadonlySet<PreviewKind> = new Set(["image", "audio", "video", "ht
 export const FilePreview = memo(function FilePreview({ path, files, onOpen, onClose }: Props) {
   const kind = previewKind(path);
   const size = files.find((file) => file.path === path)?.size;
+  // The paths, as a set that changes only when they do: a listing comes after every agent run, mostly the same, and a
+  // new set would render a Markdown file whole again.
+  const listing = files.map((file) => file.path).join("\n");
+  const known = useMemo(() => new Set(listing.split("\n")), [listing]);
   const [source, setSource] = useState(false);
   const [reloads, setReloads] = useState(0);
   const viewport = useViewport();
@@ -241,7 +241,7 @@ export const FilePreview = memo(function FilePreview({ path, files, onOpen, onCl
     body = (
       <div className="file-body">
         {shown === "markdown" ? (
-          <MarkdownView path={path} text={text.text} files={files} onOpen={onOpen} />
+          <MarkdownView path={path} text={text.text} known={known} onOpen={onOpen} />
         ) : shown === "table" ? (
           <TableView path={path} text={text.text} />
         ) : (
