@@ -575,13 +575,12 @@ function User({
           <strong>{author.name}</strong>
         </div>
       )}
-      {files}
-      {bubble && (
-        <div className="bubble-row">
-          {bubble}
-          <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} floating />
-        </div>
-      )}
+      {bubble && files}
+      {/* Beside the bubble, or the files when there is no text. */}
+      <div className="bubble-row">
+        {bubble || files}
+        <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} floating />
+      </div>
       <ReactionChips reactions={reactions} picked={picked} mine={mine} />
     </div>
   );

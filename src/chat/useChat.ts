@@ -258,7 +258,7 @@ export function useChat(chatId: string) {
           attempt = 0;
           dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
         } else if (message.type === "people") setPeople(message.people);
-        else if (message.type === "reactions") setReactions(message.reactions);
+        else if (message.type === "reactions") setReactions((known) => keepSame(known, message.reactions));
         else if (message.type === "reacted") setReactions((known) => withEntry(known, message.entry, message.reactions));
         else if (message.type === "presence") setOnline(message.online);
         else if (message.type === "removed" || message.type === "deleted") {
@@ -314,6 +314,19 @@ export function useChat(chatId: string) {
     reactions,
     react,
   };
+}
+
+/**
+ * `next`, keeping `known`'s object for each entry whose reactions are the same: a socket is sent all of them again on
+ * every wake of the chat, and only a changed entry should draw its message again.
+ */
+function keepSame(known: Reactions, next: Reactions): Reactions {
+  const kept: Reactions = {};
+  for (const [entry, reactions] of Object.entries(next) as unknown as [number, EntryReactions][]) {
+    const before = known[entry];
+    kept[entry] = before && JSON.stringify(before) === JSON.stringify(reactions) ? before : reactions;
+  }
+  return kept;
 }
 
 /** `known` with one entry's reactions replaced (dropped once it has none); every other entry keeps its object. */

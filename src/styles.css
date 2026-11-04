@@ -256,11 +256,11 @@ body.resizing iframe { pointer-events: none; }
 .bubble { padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; }
 .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
 .bubble.bot { background: var(--surface); border: 1px solid var(--border); }
-/* A person's message: yours on the right, someone else's on the left under their name. */
-.message { display: flex; flex-direction: column; gap: 3px; max-width: 88%; min-width: 0; }
+/* A person's message: yours on the right, someone else's on the left under their name, with room beside it for its hover bar. */
+.message { display: flex; flex-direction: column; gap: 3px; max-width: min(88%, 100% - 148px); min-width: 0; }
 .message.mine { align-self: flex-end; align-items: flex-end; }
 .message.other { align-self: flex-start; align-items: flex-start; }
-.message > .attachments { max-width: 100%; }
+:is(.message, .bubble-row) > .attachments { max-width: 100%; }
 .bubble.peer { background: var(--surface-2); }
 /* In a shared chat, each person's messages have their colour (--tint, set on the message). */
 .message.tinted .bubble.user { background: var(--tint); color: var(--on-tint); }
@@ -307,6 +307,8 @@ button.reaction:hover { border-color: var(--muted); }
 .message-menu.up { top: auto; bottom: calc(100% + 4px); }
 .message.mine .message-menu { right: 0; }
 .message.other .message-menu, .assistant .message-menu { left: 0; }
+.message-actions > .message-menu.end { right: 0; left: auto; }
+.message-actions > .message-menu.start { right: auto; left: 0; }
 .message-menu > button { padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); text-align: left; font-size: 14px; }
 .message-menu > button:hover, .message-menu > button:focus-visible { background: var(--surface-2); }
 .message-menu .emoji-row + button { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }

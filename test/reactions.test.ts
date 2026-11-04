@@ -13,6 +13,8 @@ describe("chat reactions", () => {
     expect(reactions.all()).toEqual({ 7: { "👍": ["ann", "bob"], "🚀": [AGENT_REACTOR] }, 9: { "🎉": ["bob"] } });
     expect(reactions.of(7)).toEqual({ "👍": ["ann", "bob"], "🚀": [AGENT_REACTOR] });
     expect(reactions.of(8)).toEqual({});
+    expect(reactions.has(7)).toBe(true);
+    expect(reactions.has(8)).toBe(false);
   });
 
   it("counts a reaction once, and takes it back", () => {

@@ -64,18 +64,24 @@ export function MessageActions({
   /** Beside a person's bubble, on hover, taking no room; otherwise a row of its own (under the agent's replies). */
   floating?: boolean;
 }) {
-  const [open, setOpen] = useState<"react" | "more" | null>(null);
-  const close = useCallback(() => setOpen(null), []);
+  const [open, setOpenAs] = useState<"react" | "more" | null>(null);
+  // Where the menu goes past the conversation's edges, which moves it: "up" above the bar, "end" or "start" to the
+  // bar's other side. Measured afresh each time it opens, before it is painted.
+  const [place, setPlace] = useState<string | null>(null);
+  const setOpen = useCallback((next: "react" | "more" | null) => {
+    setPlace(null);
+    setOpenAs(next);
+  }, []);
+  const close = useCallback(() => setOpen(null), [setOpen]);
   const box = useDismiss<HTMLDivElement>(open !== null, close);
   const menu = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  // Low in the conversation, the menu opens above the bar rather than past its bottom edge.
-  const [up, setUp] = useState(false);
   useLayoutEffect(() => {
-    if (!open || !box.current || !menu.current) return;
-    const bottom = box.current.closest(".messages")?.getBoundingClientRect().bottom ?? window.innerHeight;
-    setUp(box.current.getBoundingClientRect().bottom + menu.current.offsetHeight > bottom);
-  }, [open, box]);
+    if (!open || place !== null || !box.current || !menu.current) return;
+    const area = box.current.closest(".messages")?.getBoundingClientRect() ?? new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+    const rect = menu.current.getBoundingClientRect();
+    setPlace([rect.bottom > area.bottom && "up", rect.right > area.right ? "end" : rect.left < area.left && "start"].filter(Boolean).join(" "));
+  }, [open, place, box]);
   const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -111,10 +117,10 @@ export function MessageActions({
     <div ref={box} className={["message-actions", floating && "floating", open && "open"].filter(Boolean).join(" ")}>
       {reactions && button("Add a reaction", "react", toggle("react"), "react")}
       {onReply && button("Reply", "reply", onReply)}
-      {button(copyLabel, copied === "yes" ? "copied" : "copy", () => copy())}
+      {text && button(copyLabel, copied === "yes" ? "copied" : "copy", () => copy())}
       {button("More", "more", toggle("more"), "more")}
       {open && (
-        <div ref={menu} id={menuId} className={up ? "message-menu up" : "message-menu"} role={open === "more" ? "menu" : undefined}>
+        <div ref={menu} id={menuId} className={place ? `message-menu ${place}` : "message-menu"} role={open === "more" ? "menu" : undefined}>
           {reactions && <EmojiRow onPick={pick} isMine={reactions.mine} />}
           {open === "more" && (
             <>
@@ -130,12 +136,16 @@ export function MessageActions({
                   Reply
                 </button>
               )}
-              <button type="button" role="menuitem" onClick={() => copy()}>
-                Copy message
-              </button>
-              <button type="button" role="menuitem" onClick={() => copy(true)}>
-                Copy message as Markdown
-              </button>
+              {text && (
+                <>
+                  <button type="button" role="menuitem" onClick={() => copy()}>
+                    Copy message
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => copy(true)}>
+                    Copy message as Markdown
+                  </button>
+                </>
+              )}
             </>
           )}
         </div>

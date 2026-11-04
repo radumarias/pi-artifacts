@@ -23,6 +23,11 @@ export class ChatReactions {
     return result.rowsWritten > 0;
   }
 
+  /** Whether anyone reacted to `entry`. */
+  has(entry: number): boolean {
+    return this.#sql.exec("SELECT 1 FROM chat_reactions WHERE entry = ? LIMIT 1", entry).toArray().length > 0;
+  }
+
   /** Every entry's reactions (see `of`). */
   all(): Reactions {
     return this.#group(this.#sql.exec("SELECT entry, emoji, uid FROM chat_reactions ORDER BY entry, at, uid").toArray());

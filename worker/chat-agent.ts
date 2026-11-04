@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Provider, UserMessage } from "@earendil-works/pi-ai";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type Cursor, type EntryId, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -648,9 +648,14 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** What a reply quotes of the message at transcript entry `id`; null for one it cannot quote. */
   async #quote(id: number): Promise<ReplyQuote | null> {
-    if (!Number.isSafeInteger(id) || id < 0) return null;
+    return replyQuote(await this.#entryAt(id));
+  }
+
+  /** The transcript entry `id`; undefined for none, or for an id that cannot be one. */
+  async #entryAt(id: unknown): Promise<EntryRecord | undefined> {
+    if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 0) return undefined;
     const page = await (await this.#root()).entries({ minEntryId: id as EntryId, maxEntryId: id as EntryId }, 1, undefined, BACKGROUND_CONTEXT);
-    return replyQuote(page.items[0]);
+    return page.items[0];
   }
 
   /** A message for the agent: pi's input, which starts a run, or waits in the inbox for the one going. */
@@ -1113,10 +1118,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (!isReaction(emoji)) throw new Error("Not a reaction this chat takes.");
     if (typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0) throw new Error("No such message.");
     // Taking one back needs no message: one that is not there changes nothing. An entry with reactions was checked.
-    if (on && !Object.keys(this.reactions.of(entry)).length) {
-      const page = await (await this.#root()).entries({ minEntryId: entry as EntryId, maxEntryId: entry as EntryId }, 1, undefined, BACKGROUND_CONTEXT);
-      if (!isReactable(page.items[0])) throw new Error("That message cannot be reacted to.");
-    }
+    if (on && !this.reactions.has(entry) && !isReactable(await this.#entryAt(entry))) throw new Error("That message cannot be reacted to.");
     this.#setReaction(entry, emoji, by.uid, on);
   }
 
