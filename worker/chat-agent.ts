@@ -1185,8 +1185,8 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
    * the socket stays open (in production, hours, with nothing running). The log names the step it was stuck at.
    */
   #attach(ws: WebSocket): Promise<AgentEventStream> {
-    let stream = this.#streams.get(ws);
-    if (stream) return stream;
+    const known = this.#streams.get(ws);
+    if (known) return known;
     let step = "opening the conversation";
     const opening = (async () => {
       const events = await this.#chat.events();
@@ -1194,7 +1194,6 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       const attachment = ws.deserializeAttachment() as SocketAttachment;
       send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
       const snapshot = await this.#events([events.snapshot]);
-      step = "sending the snapshot";
       // Not by runElapsedMs, which changes with the time it is sent at.
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
       if (sent !== attachment.sent && send(ws, snapshot)) ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
@@ -1207,14 +1206,14 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     this.#streams.set(ws, attached);
     attached.catch((error) => {
       this.#streams.delete(ws);
-      if (!(error instanceof AttachStalled)) {
+      if (error instanceof AttachStalled) {
+        console.error("chat socket:", error.message);
+        // Should the stream come after all, it goes unused.
+        void opening.then((events) => events.stop()).catch(() => {});
+        close(ws, 1011, "Reconnect");
+      } else {
         send(ws, { type: "error", message: `Could not open the conversation: ${errorMessage(error)}` });
-        return;
       }
-      console.error("chat socket:", error.message);
-      // Should the stream come after all, it goes unused.
-      void opening.then((events) => events.stop()).catch(() => {});
-      close(ws, 1011, "Reconnect");
     });
     return attached;
   }

@@ -75,4 +75,19 @@ describe("connectStreamableHttp", () => {
       stallInitialized = false;
     }
   });
+
+  it("closes a request that stays open too long, whatever it is", async () => {
+    stallInitialized = true;
+    const before = abandoned;
+    try {
+      const connecting = connectStreamableHttp({ name: "Streaming", url, cacheScope: "shared" }, undefined, {
+        connectTimeoutMs: 10_000,
+        requestTimeoutMs: 200,
+      });
+      await expect(connecting).rejects.toThrow();
+      await expect.poll(() => abandoned).toBe(before + 1);
+    } finally {
+      stallInitialized = false;
+    }
+  });
 });

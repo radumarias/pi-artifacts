@@ -16,6 +16,12 @@ const CALL_TIMEOUT_MS = 60_000;
  * connection, so one that never comes would hold them all.
  */
 const CONNECT_TIMEOUT_MS = 30_000;
+/**
+ * How long any one request to the server may stay open, its answer's stream included: longer than a call may take.
+ * The SDK reads a call's stream until the server ends it, even after the answer came, and a sign-in refresh has no
+ * timeout of its own; a request left open keeps the chat object awake.
+ */
+const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
  * The failure a page or the agent sees when the user has not signed in to a
@@ -46,17 +52,39 @@ function callFailure(server: string, tool: string, error: unknown): unknown {
 }
 
 /**
- * `fetch`, except for the standalone stream the SDK opens after connecting (a GET to the server's URL with no
- * Last-Event-ID), which it answers itself as a server without one does: 405. That stream is an outgoing request that
- * stays open for as long as the server keeps it, and the SDK reopens it whenever it ends, so a chat object holding one
- * never hibernates: it stays awake, and billed, for hours after its last message. Nothing here listens for what a
- * server sends unasked (tool lists are listed again by age), and an answer still comes back on its own request. A GET
- * that resumes a request's interrupted answer carries Last-Event-ID and goes through.
+ * `fetch` for one server's transport, as a chat object can afford it.
+ *
+ * It answers the standalone stream the SDK opens after connecting (a GET to the server's URL with no Last-Event-ID)
+ * itself, as a server without one does: 405. That stream stays open for as long as the server keeps it, and the SDK
+ * reopens it whenever it ends, so a chat object holding one never hibernates. Nothing here listens for what a server
+ * sends unasked (tool lists are listed again by age), and an answer still comes back on its own request. A GET that
+ * resumes a request's interrupted answer carries Last-Event-ID and goes through.
+ *
+ * Every other request is aborted after `timeoutMs`, unless its answer was read to the end before then.
  */
-function withoutStandaloneStream(url: URL): FetchLike {
-  return (input, init) => {
-    const standalone = init?.method === "GET" && new URL(input).href === url.href && !new Headers(init.headers).has("last-event-id");
-    return standalone ? Promise.resolve(new Response(null, { status: 405 })) : fetch(input, init);
+function forChatObject(url: URL, timeoutMs: number): FetchLike {
+  return async (input, init) => {
+    if (init?.method === "GET" && new URL(input).href === url.href && !new Headers(init.headers).has("last-event-id")) {
+      return new Response(null, { status: 405 });
+    }
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(new Error(`no answer within ${timeoutMs / 1000} s`)), timeoutMs);
+    const done = () => clearTimeout(timer);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
+    signal.addEventListener("abort", done, { once: true });
+    try {
+      const response = await fetch(input, { ...init, signal });
+      if (!response.body) {
+        done();
+        return response;
+      }
+      // Not a pending timer once the answer is read: a timer, too, keeps the object awake.
+      const body = response.body.pipeThrough(new TransformStream({ flush: done }));
+      return new Response(body, response);
+    } catch (error) {
+      done();
+      throw error;
+    }
   };
 }
 
@@ -68,7 +96,7 @@ function withoutStandaloneStream(url: URL): FetchLike {
 export async function connectStreamableHttp(
   server: McpServerConfig,
   authProvider?: OAuthClientProvider,
-  { connectTimeoutMs = CONNECT_TIMEOUT_MS } = {},
+  { connectTimeoutMs = CONNECT_TIMEOUT_MS, requestTimeoutMs = REQUEST_TIMEOUT_MS } = {},
 ): Promise<McpConnection> {
   // The SDK reports a missing or rejected sign-in as UnauthorizedError; everything else passes through.
   const signedIn = async <T>(run: () => Promise<T>): Promise<T> => {
@@ -84,9 +112,18 @@ export async function connectStreamableHttp(
   );
   const url = new URL(server.url);
   try {
-    const connecting = signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: withoutStandaloneStream(url) })));
-    const timedOut = () => new McpFailure({ code: "server_unavailable", server: server.name, retryable: true, message: `${server.name} did not connect within ${connectTimeoutMs / 1000} s.` });
-    await deadline(connecting, connectTimeoutMs, timedOut);
+    const connecting = signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: forChatObject(url, requestTimeoutMs) })));
+    await deadline(
+      connecting,
+      connectTimeoutMs,
+      () =>
+        new McpFailure({
+          code: "server_unavailable",
+          server: server.name,
+          retryable: true,
+          message: `${server.name} did not connect within ${connectTimeoutMs / 1000} s.`,
+        }),
+    );
   } catch (error) {
     // Closing aborts the requests still open (a connect can stall on a request that has no timeout, such as its
     // initialized notification, or on a sign-in refresh). Left open, they would hold the chat object awake.
