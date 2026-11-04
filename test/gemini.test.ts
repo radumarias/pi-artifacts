@@ -3,7 +3,7 @@ import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createAI } from "agents/models/pi-ai";
 import { catalogFrom, listedProviders, withEffortRecorded } from "../worker/models.ts";
-import { sign, ThoughtSignatures, UNSIGNED } from "../worker/thought-signatures.ts";
+import { GeminiCompat, sign, UNSIGNED } from "../worker/gemini.ts";
 
 const GEMINI = "google-ai-studio/gemini-test";
 const catalog = catalogFrom({ checkedAt: 1, providers: { "google-ai-studio": { status: "ok", models: [{ id: "gemini-test", reasoning: true }] } } });
@@ -21,13 +21,11 @@ function callingAnswer(id: string, signature: string | undefined): Response {
     { id: "r", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [call] } }] },
     { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
   ];
-  // Split mid-event, as the network may.
-  const text = chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
-  const bytes = new TextEncoder().encode(text);
+  // In small pieces, splitting lines and characters, as the network may.
+  const bytes = new TextEncoder().encode(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join("") + "data: [DONE]\r\n\r\n");
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(bytes.slice(0, 40));
-      controller.enqueue(bytes.slice(40));
+      for (let at = 0; at < bytes.length; at += 7) controller.enqueue(bytes.slice(at, at + 7));
       controller.close();
     },
   });
@@ -43,11 +41,11 @@ function chat(...answers: (() => Response)[]) {
       return answers.shift()!();
     },
   };
-  const signatures = new ThoughtSignatures();
-  const ai = createAI({ binding: signatures.binding(binding) as never, gateway: "gw" });
+  const gemini = new GeminiCompat();
+  const ai = createAI({ binding: gemini.binding(binding) as never, gateway: "gw" });
   const models = createModels();
   for (const provider of listedProviders(ai.provider, () => catalog)) models.setProvider(provider);
-  return { models: signatures.models(withEffortRecorded(models)), model: catalog.model(GEMINI)!, requests };
+  return { models: gemini.models(withEffortRecorded(models)), model: catalog.model(GEMINI)!, requests };
 }
 
 const user: Message = { role: "user", content: "look it up", timestamp: 1 };
@@ -108,9 +106,9 @@ describe("Gemini's thought signatures", () => {
   });
 
   it("leaves other models' requests and answers alone", async () => {
-    const signatures = new ThoughtSignatures();
+    const gemini = new GeminiCompat();
     const calls: string[] = [];
-    const binding = signatures.binding({ fetch: async (url: string) => (calls.push(url), callingAnswer("call-1", "SIG-A")), run: () => "ran" });
+    const binding = gemini.binding({ fetch: async (url: string) => (calls.push(url), callingAnswer("call-1", "SIG-A")), run: () => "ran" });
     const response = await binding.fetch("https://workers-binding.ai/ai-gateway/gateways/gw/openai/v1/chat/completions");
     expect(await response.text()).toContain("SIG-A");
     expect(binding.run()).toBe("ran");

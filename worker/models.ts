@@ -1,10 +1,11 @@
-import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type AssistantMessage, type AssistantMessageEvent, type AssistantMessageEventStream, type Model, type Models, type ModelThinkingLevel, type Provider, type ThinkingLevelMap } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type Models, type ModelThinkingLevel, type Provider, type ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { createAI } from "agents/models/pi-ai";
 import { EFFORT_LABELS, modelKey, PROVIDERS, providerLabel, type ModelCatalog, type ModelChoice, type ModelInfo, type ProviderId } from "../shared/models.ts";
 import { errorMessage } from "../shared/util.ts";
 import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discovery, type GatewayFetcher, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
 import prices from "./prices.json";
+import { tapStream } from "./streams.ts";
 import type { ModelCache } from "./storage/model-cache.ts";
 
 /**
@@ -86,28 +87,6 @@ export function withEffortRecorded(models: Models): Models {
     );
   };
   return models;
-}
-
-/** `stream`, calling `onEvent` with each event as it is read and `onResult` with the reply its `result()` gives. */
-export function tapStream(
-  stream: AssistantMessageEventStream,
-  onEvent: (event: AssistantMessageEvent) => void,
-  onResult: (message: AssistantMessage) => void,
-): AssistantMessageEventStream {
-  const result = stream.result.bind(stream);
-  const events = { [Symbol.asyncIterator]: stream[Symbol.asyncIterator].bind(stream) };
-  stream[Symbol.asyncIterator] = async function* () {
-    for await (const event of events) {
-      onEvent(event);
-      yield event;
-    }
-  };
-  stream.result = async () => {
-    const message = await result();
-    onResult(message);
-    return message;
-  };
-  return stream;
 }
 
 /** A listed model: what the picker shows, the model a chat runs, and the pi-ai metadata its efforts come from. */

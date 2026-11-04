@@ -1,3 +1,16 @@
+/** A JSON object, read leniently: every field may be missing. */
+export type Json = Record<string, unknown>;
+
+/** Whether `value` is a JSON object (not null, not an array). */
+export function isObject(value: unknown): value is Json {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** `value` when it is a non-empty string. */
+export function text(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
 /** The message of anything thrown. */
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

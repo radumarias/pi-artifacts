@@ -1,29 +1,30 @@
 import type { Api, AssistantMessage, Context, Model, Models, ToolCall } from "@earendil-works/pi-ai";
+import type { ProviderId } from "../shared/models.ts";
+import { isObject, text, type Json } from "../shared/util.ts";
 import type { GatewayFetcher } from "./gateway-models.ts";
-import { tapStream } from "./models.ts";
+import { tapStream } from "./streams.ts";
 
 /**
- * Gemini's thought signatures. A Gemini model that reasons signs each step that calls tools, and refuses with HTTP 400
- * a request whose earlier tool calls come back without their signatures: so every chat with it failed right after its
- * first tool call. Through Gemini's OpenAI-compatible API (the one the app reaches it by) the signature rides on the tool
- * call as `extra_content.google.thought_signature`, which pi-ai's chat-completions wire neither keeps nor sends back.
+ * What Gemini needs on the OpenAI-compatible API the app reaches it by (see GATEWAY_PROVIDERS["google-ai-studio"]),
+ * which the chat-completions wire of agents/models/pi-ai (0.31) and pi-ai (1.4) do not do. Remove it once that wire
+ * keeps and sends back `extra_content.google.thought_signature`.
  *
- * ThoughtSignatures does both. Around the AI binding, it reads the signatures off Gemini's streamed answers; around the
+ * Thought signatures: a Gemini model that reasons signs each step that calls tools, and refuses with HTTP 400 a request
+ * whose earlier tool calls come back without their signatures, so every chat with it failed right after its first tool
+ * call. The signature rides on the tool call as `extra_content.google.thought_signature`, which the wire neither keeps
+ * nor sends back. Around the AI binding, GeminiCompat reads the signatures off Gemini's streamed answers; around the
  * models, it puts each on its tool call in the reply (pi-ai's `thoughtSignature`, kept with the transcript), and puts
- * them back on the tool calls of every later request to the same model. A step with none (made by another model, or
- * cut off) gets the placeholder Google documents for tool calls no Gemini model signed.
+ * them back on the tool calls of every later request to the same model. A step with none (made by another model, or cut
+ * off) gets the placeholder Google documents for tool calls no Gemini model signed.
  *
- * It also makes Gemini's errors readable: Google sends them as a one-item array, `[{ error: { message } }]`, which the
- * wire does not read, so a refusal showed only as "HTTP 400".
+ * Errors: Google sends them as a one-item array, `[{ error: { message } }]`, which the wire does not read, so a refusal
+ * showed only as "HTTP 400". GeminiCompat hands the wire the `{ error }` inside.
  */
-export class ThoughtSignatures {
+export class GeminiCompat {
   /** Signatures read off answers, by tool call id, until the reply takes them. */
   readonly #read = new Map<string, string>();
 
-  /**
-   * `ai` (the AI binding, whose `fetch` reaches AI Gateway's provider paths), reading the signatures off Gemini's
-   * answers and lifting its errors to where they are read.
-   */
+  /** `ai` (the AI binding, whose `fetch` reaches AI Gateway's provider paths), with Gemini's chat answers read. */
   binding<T extends object>(ai: T): T {
     const fetcher = ai as unknown as GatewayFetcher;
     const fetch = async (url: string, init?: RequestInit): Promise<Response> => {
@@ -84,15 +85,18 @@ export class ThoughtSignatures {
     for (const block of message.content) if (block.type === "toolCall") this.#take(block);
   }
 
-  /** A pass-through for an answer's bytes that holds each tool call's signature as its event goes by. */
+  /**
+   * A pass-through for an answer's bytes that holds each tool call's signature as its event goes by. Only events that
+   * carry tool calls are parsed (the wire parses every event anyway); the rest, nearly all of an answer, are skipped.
+   */
   #reader(): TransformStream<Uint8Array, Uint8Array> {
     const decoder = new TextDecoder();
-    let rest = "";
-    // A tool call's id and signature, by its index in the answer: a chunk may carry either without the other.
-    const ids = new Map<number, string>();
-    const signatures = new Map<number, string>();
+    // The start of a line the network split.
+    let partial = "";
+    // Each tool call's id and signature, by its index in the answer: a chunk may carry either without the other.
+    const calls = new Map<number, { id?: string; signature?: string }>();
     const read = (line: string) => {
-      if (!line.startsWith("data:")) return;
+      if (!line.startsWith("data:") || !line.includes('"tool_calls"')) return;
       let chunk: unknown;
       try {
         chunk = JSON.parse(line.slice("data:".length));
@@ -100,34 +104,41 @@ export class ThoughtSignatures {
         return;
       }
       const choice = isObject(chunk) && Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-      const calls = isObject(choice) && isObject(choice.delta) ? choice.delta.tool_calls : undefined;
-      if (!Array.isArray(calls)) return;
-      calls.forEach((call: unknown, position) => {
-        if (!isObject(call)) return;
-        const index = typeof call.index === "number" ? call.index : position;
-        if (typeof call.id === "string" && call.id) ids.set(index, call.id);
-        const signature = signatureOf(call);
-        if (signature) signatures.set(index, signature);
-        const [id, held] = [ids.get(index), signatures.get(index)];
-        if (id && held) this.#hold(id, held);
+      const deltas = isObject(choice) && isObject(choice.delta) ? choice.delta.tool_calls : undefined;
+      if (!Array.isArray(deltas)) return;
+      deltas.forEach((delta: unknown, position) => {
+        if (!isObject(delta)) return;
+        const index = typeof delta.index === "number" ? delta.index : position;
+        const call = calls.get(index) ?? {};
+        const [id, signature] = [text(delta.id), signatureOf(delta)];
+        // Held once, when the half that was missing arrives.
+        if ((id && !call.id) || (signature && !call.signature)) {
+          calls.set(index, { id: call.id ?? id, signature: call.signature ?? signature });
+          const { id: heldId, signature: held } = calls.get(index)!;
+          if (heldId && held) this.#hold(heldId, held);
+        }
       });
     };
     return new TransformStream({
       transform(bytes, controller) {
-        const lines = (rest + decoder.decode(bytes, { stream: true })).split("\n");
-        rest = lines.pop()!;
-        for (const line of lines) read(line.trim());
+        const lines = decoder.decode(bytes, { stream: true }).split("\n");
+        if (lines.length > 1) {
+          read(partial + lines[0]);
+          for (const line of lines.slice(1, -1)) read(line);
+          partial = "";
+        }
+        partial += lines.at(-1)!;
         controller.enqueue(bytes);
       },
       flush() {
-        read((rest + decoder.decode()).trim());
+        read(partial + decoder.decode());
       },
     });
   }
 }
 
 /** AI Gateway's name for Google AI Studio, and the provider of the Gemini models it lists. */
-const GEMINI = "google-ai-studio";
+const GEMINI: ProviderId = "google-ai-studio";
 /** The path of a chat request to Gemini through AI Gateway (`…/<gateway>/google-ai-studio/v1beta/openai/chat/completions`). */
 const GEMINI_CHAT = new RegExp(`/${GEMINI}/.*chat/completions$`);
 /** The signature Google accepts on a tool call no Gemini model signed, from its thought-signature docs. */
@@ -135,25 +146,15 @@ export const UNSIGNED = "skip_thought_signature_validator";
 /** How many unclaimed signatures a chat keeps (an answer whose reply never came, say a cut-off one). */
 const MAX_READ = 256;
 
-type Json = Record<string, unknown>;
-const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
-
 /** A wire tool call's signature. */
 function signatureOf(call: Json): string | undefined {
   const google = isObject(call.extra_content) ? call.extra_content.google : undefined;
-  const signature = isObject(google) ? google.thought_signature : undefined;
-  return typeof signature === "string" && signature ? signature : undefined;
-}
-
-/** Put `signature` on a wire tool call. */
-function setSignature(call: Json, signature: string): void {
-  const extra = isObject(call.extra_content) ? call.extra_content : {};
-  call.extra_content = { ...extra, google: { ...(isObject(extra.google) ? extra.google : {}), thought_signature: signature } };
+  return isObject(google) ? text(google.thought_signature) : undefined;
 }
 
 /**
- * The signatures `model` gave the tool calls in `context`, by tool call id. Only its own: pi-ai drops another model's
- * reasoning, and Gemini rejects another model's signature.
+ * The signatures `model` gave the tool calls in `context`, by tool call id. Only its own, by pi-ai's rule for whose
+ * reasoning a model may see (transformMessages' `isSameModel`): Gemini rejects another model's signature.
  */
 function signaturesOf(context: Context, model: Model<Api>): Map<string, string> {
   const signatures = new Map<string, string>();
@@ -167,30 +168,33 @@ function signaturesOf(context: Context, model: Model<Api>): Map<string, string> 
 /**
  * Sign the tool calls of a chat-completions request: each with its own signature where `signatures` has it. Gemini
  * signs only the first call of a step that calls several at once, so a step with no signature at all gets UNSIGNED on
- * its first call.
+ * its first call. (The wire sends no `extra_content` of its own to keep.)
  */
 export function sign(payload: unknown, signatures: ReadonlyMap<string, string>): void {
   const messages = isObject(payload) && Array.isArray(payload.messages) ? payload.messages : [];
   for (const message of messages) {
     if (!isObject(message) || message.role !== "assistant" || !Array.isArray(message.tool_calls)) continue;
     const calls = message.tool_calls.filter(isObject);
+    let signed = false;
     for (const call of calls) {
-      const signature = typeof call.id === "string" ? signatures.get(call.id) : undefined;
-      if (signature) setSignature(call, signature);
+      const signature = signatures.get(String(call.id));
+      if (!signature) continue;
+      call.extra_content = { google: { thought_signature: signature } };
+      signed = true;
     }
-    if (calls.length && !calls.some((call) => signatureOf(call))) setSignature(calls[0], UNSIGNED);
+    if (calls.length && !signed) calls[0].extra_content = { google: { thought_signature: UNSIGNED } };
   }
 }
 
 /** A failed answer, with Google's one-item error array (`[{ error }]`) turned into the `{ error }` the wire reads. */
 async function readableError(response: Response): Promise<Response> {
-  const text = await response.text();
-  let body: unknown;
+  const body = await response.text();
+  let first: unknown;
   try {
-    body = JSON.parse(text);
+    const parsed: unknown = JSON.parse(body);
+    first = Array.isArray(parsed) ? parsed[0] : undefined;
   } catch {
-    return new Response(text, response);
+    // Not JSON: the wire shows it as it is.
   }
-  const first: unknown = Array.isArray(body) ? body[0] : undefined;
-  return new Response(isObject(first) && isObject(first.error) ? JSON.stringify(first) : text, response);
+  return new Response(isObject(first) && isObject(first.error) ? JSON.stringify(first) : body, response);
 }

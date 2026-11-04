@@ -10,7 +10,7 @@ import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { OPENROUTER_MODELS } from "@earendil-works/pi-ai/providers/openrouter.models";
 import { XAI_MODELS } from "@earendil-works/pi-ai/providers/xai.models";
 import type { ProviderId } from "../shared/models.ts";
-import { errorMessage } from "../shared/util.ts";
+import { errorMessage, isObject, text, type Json } from "../shared/util.ts";
 
 type ModelCost = Model<Api>["cost"];
 
@@ -66,9 +66,7 @@ export interface GatewayProvider {
 }
 
 // A lenient view of the JSON the lists send: every field may be missing.
-type Json = Record<string, unknown>;
-const array = (value: unknown): Json[] => (Array.isArray(value) ? value.filter((item): item is Json => typeof item === "object" && item !== null) : []);
-const text = (value: unknown): string | undefined => (typeof value === "string" && value ? value : undefined);
+const array = (value: unknown): Json[] => (Array.isArray(value) ? value.filter(isObject) : []);
 const count = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined);
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
 
@@ -159,7 +157,8 @@ export const GATEWAY_PROVIDERS: Record<GatewayProviderId, GatewayProvider> = {
       (item) => text(item.name)?.replace(/^models\//, ""),
     ),
     known: GOOGLE_MODELS as Record<string, Model<Api>>,
-    // pi-ai speaks Gemini's own API, which AI Gateway does not route for pi: Gemini's OpenAI-compatible one instead.
+    // pi-ai speaks Gemini's own API, which AI Gateway does not route for pi: Gemini's OpenAI-compatible one instead
+    // (whose thought signatures and errors worker/gemini.ts carries over).
     wire: { api: "openai-completions", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
   },
   grok: {

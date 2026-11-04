@@ -355,7 +355,7 @@ Each chat picks its model and effort above the message box. The picker (`src/cha
   gateway, as `<provider>/<id>` (`groq/llama-3.3-70b-versatile`), with pi-ai's metadata where pi-ai knows the model
   and the list's (or safe defaults) where not. Google and Mistral models go through their OpenAI-compatible APIs.
   Gemini refuses a request whose earlier tool calls come back without the thought signatures it gave them, and pi-ai's
-  wire for that API drops them, so `worker/thought-signatures.ts` reads them off Gemini's answers, keeps each on its
+  wire for that API drops them, so `worker/gemini.ts` reads them off Gemini's answers, keeps each on its
   tool call in the transcript and puts them back on later requests (with Google's placeholder on a tool call another
   model made); it also shows Gemini's own error text instead of a bare "HTTP 400".
   Until their lists are read, and when they cannot be, Anthropic and OpenAI show pi-ai's AI Gateway catalog (they may

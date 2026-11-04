@@ -56,10 +56,10 @@ import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, type McpServerConfig } from "./mcp/servers.ts";
+import { GeminiCompat } from "./gemini.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
 import { catalogSource, currentCatalog, defaultModelChoice, listedProviders, loadCatalog, withCurrentPrices, withEffortRecorded, type Catalog } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
-import { ThoughtSignatures } from "./thought-signatures.ts";
 import { mcpAuthStore } from "./users.ts";
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
@@ -109,11 +109,11 @@ const STATUS_KEY = "status";
  * Gemini's tool calls signed: AI Gateway's catalog and Workers AI's through `provider`, and the models the providers list
  * (as this isolate's catalog has them now) through one pi provider each.
  */
-function piModels(provider: Provider, signatures: ThoughtSignatures) {
+function piModels(provider: Provider, gemini: GeminiCompat) {
   const models = createModels();
   models.setProvider(withCurrentPrices(provider));
   for (const listed of listedProviders(provider, currentCatalog)) models.setProvider(listed);
-  return signatures.models(withEffortRecorded(models));
+  return gemini.models(withEffortRecorded(models));
 }
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
@@ -148,14 +148,14 @@ export class ChatAgent extends DurableObject<Env> {
   readonly hub = new McpHub(mcpServers(this.env), (server) => this.#connect(server));
   readonly storage = new Storage(this.env);
   /** Gemini's thought signatures, read off its answers by the AI binding below and put back on its next requests. */
-  readonly signatures = new ThoughtSignatures();
-  readonly ai = createAI({ binding: this.signatures.binding(this.env.AI), gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
+  readonly gemini = new GeminiCompat();
+  readonly ai = createAI({ binding: this.gemini.binding(this.env.AI), gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
   readonly registry = createRegistry();
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
       // The chat's model may be one a provider listed: have the list before pi looks the model up.
       await this.#catalog();
-      const models = piModels(this.ai.provider, this.signatures);
+      const models = piModels(this.ai.provider, this.gemini);
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again.
       const settings = { afterFailedRun: "continue" as const, progress: PROGRESS };
@@ -620,7 +620,7 @@ export class ChatAgent extends DurableObject<Env> {
    * message cut to fit), in everyone's sidebar. A chat renamed meanwhile keeps its name.
    */
   async #nameChat(message: string, placeholder: string): Promise<void> {
-    const title = await titleFor(piModels(this.ai.provider, this.signatures), this.ai(this.env.TITLE_MODEL), message);
+    const title = await titleFor(piModels(this.ai.provider, this.gemini), this.ai(this.env.TITLE_MODEL), message);
     if (!title || title === placeholder) return;
     const indexes = this.#everyonesIndexes();
     await Promise.allSettled(indexes.map((index) => index.nameChat(this.chatId, this.uid, title, placeholder)));
