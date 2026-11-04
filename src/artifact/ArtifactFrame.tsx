@@ -10,6 +10,8 @@ interface Props {
   /** The signed-in viewer; keys the browser cache, so accounts on one browser never share results. */
   uid: string;
   title: string;
+  /** Covered (by the source): it holds its read-only calls as in a hidden tab, and takes no focus. */
+  covered?: boolean;
 }
 
 function browserStorage(): Storage | null {
@@ -24,8 +26,11 @@ function browserStorage(): Storage | null {
  * The artifact in a sandboxed iframe (opaque origin, no network of its own)
  * plus the broker that answers its runtime over a MessagePort.
  */
-export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Props) {
+export function ArtifactFrame({ artifactId, version, manifest, uid, title, covered = false }: Props) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const coveredRef = useRef(covered);
+  // Tells the broker whether anyone can see the page: the tab is showing and nothing covers the frame.
+  const showing = useRef<() => void>(() => {});
 
   useEffect(() => {
     const iframe = ref.current!;
@@ -51,23 +56,30 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title }: Pro
       broker.connect(channel.port1);
       (event.source as Window).postMessage({ type: "pi:connect", manifest }, "*", [channel.port2]);
     };
-    const onVisibility = () => broker.setHidden(document.visibilityState === "hidden");
+    const onVisibility = () => broker.setHidden(document.visibilityState === "hidden" || coveredRef.current);
+    showing.current = onVisibility;
 
     window.addEventListener("message", onMessage);
     document.addEventListener("visibilitychange", onVisibility);
     onVisibility();
     // Each version gets its own frame (see ArtifactPanel's key), so this only skips the
     // second run of a development-mode double effect.
-    const url = `/u/${artifactId}/v${version}`;
+    const url = api.artifactPageUrl(artifactId, version);
     if (iframe.getAttribute("src") !== url) iframe.src = url;
     return () => {
       window.removeEventListener("message", onMessage);
       document.removeEventListener("visibilitychange", onVisibility);
+      showing.current = () => {};
       broker.close();
     };
     // The manifest is fixed per version, so the version stands for it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artifactId, version, uid]);
 
-  return <iframe ref={ref} className="artifact-frame" title={title} sandbox={ARTIFACT_SANDBOX} />;
+  useEffect(() => {
+    coveredRef.current = covered;
+    showing.current();
+  }, [covered]);
+
+  return <iframe ref={ref} className="artifact-frame" title={title} sandbox={ARTIFACT_SANDBOX} inert={covered} />;
 }

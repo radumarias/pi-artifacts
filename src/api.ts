@@ -35,9 +35,11 @@ async function fetchJson(path: string, init?: RequestInit): Promise<{ response: 
   return { response, body: await response.json().catch(() => null) };
 }
 
-/** The error a failed response stands for: the Worker's message from its JSON body, else the status. */
+/** The error a failed response stands for: the Worker's message from its JSON body, else the status (HTTP/2 has no status text). */
 const responseError = (response: Response, body: unknown) =>
-  Object.assign(new Error((body as { error?: string } | null)?.error ?? response.statusText), { status: response.status });
+  Object.assign(new Error((body as { error?: string } | null)?.error ?? (response.statusText || `HTTP ${response.status}`)), {
+    status: response.status,
+  });
 
 /** The JSON body of a successful response; otherwise throws with the Worker's error message. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -105,12 +107,14 @@ export const api = {
   markArtifactSeen: (id: string, version: number) => request<object>(`/api/artifacts/${id}/seen`, post({ version })),
   artifactTools: (id: string, version: number) => request<DeclaredTool[]>(`/api/artifacts/${id}/tools?version=${version}`),
   cloneAccess: (id: string) => request<CloneAccess>(`/api/artifacts/${id}/clone`, post({})),
+  /** Where `version` of an artifact's page is served, for the viewer to frame. */
+  artifactPageUrl: (id: string, version: number) => `/u/${id}/v${version}`,
   /** Where `version` of an artifact is served as plain text, as the agent wrote it: without the runtime its page gets, nothing in it runs. */
-  artifactSourceUrl: (id: string, version: number) => `/u/${id}/v${version}/source`,
+  artifactSourceUrl: (id: string, version: number) => `${api.artifactPageUrl(id, version)}/source`,
   /** That source's text. Throws with the status when it cannot be read. */
   artifactSource: async (id: string, version: number, signal?: AbortSignal): Promise<string> => {
     const response = await fetch(api.artifactSourceUrl(id, version), { signal });
-    if (!response.ok) throw responseError(response, null);
+    if (!response.ok) throw responseError(response, await response.json().catch(() => null));
     return response.text();
   },
   /** Resolves with the Worker's ProxyResponse, errors included; rejects only when the request itself fails. */

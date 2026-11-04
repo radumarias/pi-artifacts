@@ -126,6 +126,7 @@ export async function highlight(code: string, grammar: string): Promise<string> 
   }
   const hljs = await core;
   const embedded = /<(script|style)\b/i.test(code) ? (EMBEDDED[grammar] ?? []) : [];
-  await Promise.all([grammar, ...embedded].map((name) => register(hljs, name)));
+  // Without an embedded grammar (its load failed) the page is still coloured as markup, its scripts and styles plain.
+  await Promise.all([register(hljs, grammar), ...embedded.map((name) => register(hljs, name).catch(() => {}))]);
   return hljs.highlight(code, { language: grammar, ignoreIllegals: true }).value;
 }

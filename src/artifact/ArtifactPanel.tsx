@@ -152,6 +152,7 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
             manifest={entry.manifest}
             uid={uid}
             title={meta.title}
+            covered={source}
           />
         </ViewportStage>
         {sourceOf === entry.version && <ArtifactSource key={sourceOf} artifactId={meta.id} version={sourceOf} hidden={!source} />}
