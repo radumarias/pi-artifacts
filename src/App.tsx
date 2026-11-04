@@ -480,7 +480,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
             <ArtifactPanel artifactId={preview.artifactId} latestKnown={preview.version} uid={uid} onClose={closePreview} />
           </ErrorBoundary>
         ))}
-      <MentionToasts {...notices} />
+      <MentionToasts {...notices} asking={chatFilter.bar} />
     </div>
   );
 }

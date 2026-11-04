@@ -255,7 +255,8 @@ body.resizing iframe { pointer-events: none; }
 .message { display: flex; flex-direction: column; gap: 3px; max-width: 88%; min-width: 0; }
 .message.mine { align-self: flex-end; align-items: flex-end; }
 .message.other { align-self: flex-start; align-items: flex-start; }
-.message > .bubble, .message > .attachments { max-width: 100%; }
+/* Not a share of the row: the row is as wide as its bubble, so 88% of it would wrap the bubble's own last word. */
+.message > .bubble, .bubble-row > .bubble, .message > .attachments { max-width: 100%; }
 .bubble.peer { background: var(--surface-2); }
 /* In a shared chat, each person's messages have their colour (--tint, set on the message). */
 .message.tinted .bubble.user { background: var(--tint); color: var(--on-tint); }
@@ -505,6 +506,25 @@ a.mention-chip:hover { text-decoration: underline; }
 .composer-tools .spinner { flex: none; width: 16px; height: 16px; margin: 0 6px 0 auto; border-top-color: var(--text); }
 .composer-tools .model-picker + .spinner { margin-left: 10px; }
 .dictation-error { min-width: 0; padding: 0 6px; font-size: 13px; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* How full the model's context is: a ring after the model picker, and its panel above it. */
+.context-meter { position: relative; display: flex; }
+.context-ring { padding: 4px; }
+.context-ring .track { fill: none; stroke: var(--border); stroke-width: 2.5; }
+.context-ring .fill { fill: none; stroke: var(--muted); stroke-width: 2.5; stroke-linecap: round; }
+.context-ring.high .fill { stroke: var(--accent); }
+.context-ring.full .fill { stroke: var(--error); }
+.context-panel {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; width: min(300px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); font-size: 14px;
+}
+.context-head { display: flex; justify-content: space-between; gap: 12px; }
+.context-head span { font-variant-numeric: tabular-nums; }
+.context-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.context-bar span { display: block; height: 100%; background: var(--muted); }
+.context-bar span.high { background: var(--accent); }
+.context-bar span.full { background: var(--error); }
+.context-panel > span { font-variant-numeric: tabular-nums; }
+.context-panel small { color: var(--muted); font-size: 12px; }
 /* Always laid out so the pickers keep their place; not animated while hidden. */
 .composer-tools .spinner.idle { visibility: hidden; animation: none; }
 /* Above the app's drop target while files are dragged: a drop here attaches them to the message. */
@@ -726,8 +746,8 @@ a.mention-chip:hover { text-decoration: underline; }
 .chat-files { display: flex; flex-direction: column; max-height: 30vh; overflow-y: auto; }
 .chat-files .file-name { padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 
-/* Someone mentioned the user: a short notice in a corner, which opens the chat. */
-.toasts { position: fixed; top: 12px; right: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px)); }
+/* Someone mentioned the user: a short notice in a corner, under the chat header's buttons, which opens the chat. */
+.toasts { position: fixed; top: 64px; right: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px)); }
 .toast {
   display: flex; align-items: flex-start; gap: 4px; padding: 4px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
   border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.14);
@@ -738,6 +758,16 @@ a.mention-chip:hover { text-decoration: underline; }
 .toast-text { font-size: 13px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .toast-at { margin-right: 4px; color: var(--accent); }
 .notify-button { color: var(--muted); }
+/* Not yet answered: the bell stands out, with a dot, until the user says yes or no. */
+.notify-button.ask { position: relative; color: var(--accent); }
+.notify-button.ask::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: notify-pulse 1.6s ease-in-out infinite; }
+@keyframes notify-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .notify-button.ask::after { animation: none; } }
+.notify-button.off { display: inline-grid; place-items: center; padding: 6px; opacity: 0.6; cursor: help; }
+.notify-ask { align-items: flex-start; padding: 10px 8px 10px 12px; }
+.notify-ask > svg { flex: none; margin-top: 8px; color: var(--accent); }
+.notify-ask .toast-body { cursor: default; }
+.notify-ask-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 /* Above the chat list: which chats it shows. */
 .chat-filter { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 6px; }

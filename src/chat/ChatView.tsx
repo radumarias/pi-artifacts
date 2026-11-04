@@ -28,6 +28,7 @@ import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
 import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
 import { ChatCost, PromptCost } from "./Cost.tsx";
+import { ContextMeter } from "./Context.tsx";
 import { SharePanel } from "./SharePanel.tsx";
 import { promptSpend, totalTime } from "./spend.ts";
 import { useChat, waitingOnModel } from "./useChat.ts";
@@ -340,6 +341,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
               attachingImages={attachments.pending.some((item) => item.preview)}
               onChange={setModel}
             />
+            <ContextMeter entries={state.entries} model={state.model} />
             {/* Always laid out, so the pickers don't move when a run starts or ends. */}
             <span className={state.busy || attachments.sending ? "spinner" : "spinner idle"} aria-hidden="true" />
           </div>

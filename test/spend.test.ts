@@ -1,7 +1,8 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { chatSpend, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
+import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
+import { chatSpend, COMPACTION, contextUse, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
 /** A reply's usage: `tokens`, at `total` dollars. */
@@ -145,5 +146,30 @@ describe("chat spend", () => {
 
   it("formats small costs to two significant digits and larger ones to the cent", () => {
     expect([0, 0.00004, 0.0042, 0.37, 0.5, 0.999, 12.4].map(formatCost)).toEqual(["$0.00", "<$0.0001", "$0.0042", "$0.37", "$0.50", "$1.00", "$12.40"]);
+  });
+});
+
+describe("context use", () => {
+  const answered = (tokens: Partial<Usage>, provider = "anthropic", model = "claude-opus-5-5") =>
+    entry("pi.assistant", { role: "assistant", content: [], provider, model, usage: usage(tokens) });
+
+  it("is what the newest reply read and wrote, of the model that gave it", () => {
+    const entries = [prompt(), answered({ input: 900, output: 50 }), prompt(), answered({ input: 10, cacheRead: 1000, cacheWrite: 200, output: 40 }), result()];
+    expect(contextUse(entries)).toEqual({ tokens: 1250, model: "anthropic/claude-opus-5-5", compacted: false });
+    // A provider's own total wins over the sum.
+    expect(contextUse([answered({ input: 10, totalTokens: 5000 })])?.tokens).toBe(5000);
+  });
+
+  it("skips a reply that counted nothing, says when older messages were summarized since, and is nothing before a reply", () => {
+    expect(contextUse([prompt(), answered({ input: 700 }), entry("pi.compaction"), prompt(), answered({})])).toEqual({
+      tokens: 700,
+      model: "anthropic/claude-opus-5-5",
+      compacted: true,
+    });
+    expect(contextUse([prompt()])).toBeUndefined();
+  });
+
+  it("knows when pi-durable compacts", () => {
+    expect(COMPACTION).toEqual({ reserveTokens: DEFAULT_COMPACTION_POLICY.reserveTokens, backgroundTokens: DEFAULT_COMPACTION_POLICY.backgroundTokens });
   });
 });
