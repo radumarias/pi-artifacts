@@ -37,10 +37,24 @@ describe("Files search", () => {
     expect(found("notes/*.txt")).toEqual(["notes/text.txt", "notes/Test.TXT", "notes/tests.txt"]);
     expect(found("*/test.*")).toEqual(["notes/Test.TXT"]);
     expect(found("a/*.md")).toEqual([]);
-    expect(found("a/**.md")).toEqual(["a/b/test.md"]);
+    // A ** inside a folder name is just a *.
+    expect(found("a/**.md")).toEqual([]);
+    expect(found("a/*/**.md")).toEqual(["a/b/test.md"]);
     expect(found("**/test.*")).toEqual(["test.txt", "notes/Test.TXT", "a/b/test.md"]);
     expect(found("a/**/test.md")).toEqual(["a/b/test.md"]);
     expect(fileMatcher("a/**/test.md")("a/test.md")).toBe(true);
     expect(fileMatcher("?/test.md")("a/b/test.md")).toBe(false);
+    expect(fileMatcher("**")("a/b/test.md")).toBe(true);
+    expect(fileMatcher("a/**")("a/b/test.md")).toBe(true);
+    expect(fileMatcher("**/b/**")("a/b/test.md")).toBe(true);
+    expect(fileMatcher("**/c/**")("a/b/test.md")).toBe(false);
+  });
+
+  it("stays fast on patterns that make a regular expression backtrack", () => {
+    const name = `${"a".repeat(5_000)}.txt`;
+    const started = performance.now();
+    expect(fileMatcher("*a*a*a*a*a*a*a*a*z")(name)).toBe(false);
+    expect(fileMatcher("**/*a*a*a*a*a*a*a*z/**")(`x/${name}/y`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

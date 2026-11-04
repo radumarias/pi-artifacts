@@ -6,7 +6,7 @@ import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
 import { isBoolean, opensElsewhere, SectionHead, useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
-import { fileMatcher } from "./search.ts";
+import { fileMatcher, SEARCH_HELP } from "./search.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
 export interface UploadStatus {
@@ -366,7 +366,7 @@ export const FilesNav = memo(function FilesNav({
               type="search"
               placeholder="Search files"
               aria-label="Search files"
-              title="Text in a path, or a name pattern: * for any run, ? for one character (*.txt, te?t.txt)"
+              title={SEARCH_HELP}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
