@@ -636,7 +636,9 @@ a.mention-chip:hover { text-decoration: underline; }
 .pill.live { color: var(--live); }
 .artifact-frame { flex: 1; width: 100%; border: 0; background: #fff; }
 .artifact-stage { flex: 1; min-height: 0; display: flex; overflow: hidden; }
-.artifact-stage[hidden] { display: none; }
+/* The page's source, laid over it: the page keeps its size and state behind it. */
+.artifact-view { flex: 1; min-height: 0; display: flex; position: relative; }
+.artifact-source { position: absolute; inset: 0; overflow: auto; background: var(--surface); }
 .artifact-device { flex: 1; display: flex; min-width: 0; }
 /* At a device size the frame keeps that viewport and is scaled down to the box around it. */
 .artifact-stage.device { flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: var(--surface-2); }

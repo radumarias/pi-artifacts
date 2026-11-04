@@ -186,12 +186,11 @@ async function route(request: Request, env: Env): Promise<Response> {
  */
 async function artifactPage(request: Request, storage: Storage, id: string, version: number, source: boolean): Promise<Response> {
   if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
-  const etag = source ? sourceETag(id, version) : artifactETag(id, version);
+  const [etag, respond] = source ? [sourceETag(id, version), sourceResponse] : [artifactETag(id, version), artifactResponse];
   const cached = notModified(request, etag);
   if (cached) return cached;
   const html = await storage.artifacts.readHtml(id, version);
-  if (html === null) return new Response("Not found", { status: 404 });
-  return source ? sourceResponse(html, etag) : artifactResponse(html, etag);
+  return html === null ? new Response("Not found", { status: 404 }) : respond(html, etag);
 }
 
 function demoCookie(url: URL, value: string, maxAge: number): string {

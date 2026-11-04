@@ -5,7 +5,7 @@ import { api } from "../api.ts";
 import { useVisible } from "../sidebar.ts";
 import { ArtifactFrame } from "./ArtifactFrame.tsx";
 import { ArtifactSource } from "./ArtifactSource.tsx";
-import { ViewportPicker, ViewportStage, useViewport } from "./viewport.tsx";
+import { ShowAs, ViewportPicker, ViewportStage, useViewport } from "./viewport.tsx";
 
 interface Props {
   artifactId: string;
@@ -21,8 +21,10 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
   const [version, setVersion] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
-  // Showing the page's source instead of the page. The page stays loaded behind it, so going back does not reload it.
+  // Showing the page's source over the page, which stays loaded behind it, so going back does not reload it.
   const [source, setSource] = useState(false);
+  // The version whose source was last shown: it stays read and coloured while the page shows, for going back to it.
+  const [sourceOf, setSourceOf] = useState<number>();
   const [clone, setClone] = useState<{ command: string; expiresAt: string } | { error: string } | null>(null);
   const viewport = useViewport();
 
@@ -68,6 +70,7 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
   if (!meta || version === undefined) return <div className="panel-empty">Loading…</div>;
   const entry = meta.versions.find((v) => v.version === version) ?? meta.versions[meta.versions.length - 1];
   const servers = entry.manifest.mcp?.servers ?? [];
+  if (source && sourceOf !== entry.version) setSourceOf(entry.version);
 
   return (
     <section className={fullPage ? "artifact-panel full" : "artifact-panel"}>
@@ -77,14 +80,7 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
           {servers.length > 0 && <span className="pill live">live · {servers.map((s) => s.server).join(", ")}</span>}
         </div>
         <div className="artifact-actions">
-          <div className="viewport-picker" role="group" aria-label="Show as">
-            <button type="button" aria-pressed={!source} onClick={() => setSource(false)}>
-              Preview
-            </button>
-            <button type="button" aria-pressed={source} onClick={() => setSource(true)} title="Read the page's code">
-              Source
-            </button>
-          </div>
+          <ShowAs rendered="Preview" source={source} onSource={setSource} />
           {!source && <ViewportPicker viewport={viewport} />}
           <select value={entry.version} onChange={(e) => setVersion(Number(e.target.value))} aria-label="Version">
             {[...meta.versions].reverse().map((v) => (
@@ -147,10 +143,19 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
           )}
         </div>
       )}
-      {source && <ArtifactSource key={entry.version} artifactId={meta.id} version={entry.version} />}
-      <ViewportStage id={viewport.id} rotated={viewport.rotated} hidden={source}>
-        <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid} title={meta.title} />
-      </ViewportStage>
+      <div className="artifact-view">
+        <ViewportStage id={viewport.id} rotated={viewport.rotated}>
+          <ArtifactFrame
+            key={`${entry.version}:${reloads}`}
+            artifactId={meta.id}
+            version={entry.version}
+            manifest={entry.manifest}
+            uid={uid}
+            title={meta.title}
+          />
+        </ViewportStage>
+        {sourceOf === entry.version && <ArtifactSource key={sourceOf} artifactId={meta.id} version={sourceOf} hidden={!source} />}
+      </div>
     </section>
   );
 }

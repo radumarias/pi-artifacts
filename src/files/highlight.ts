@@ -99,7 +99,7 @@ export function grammarFor(name: string): string | undefined {
 let core: Promise<HLJSApi> | undefined;
 const registered = new Map<string, Promise<void>>();
 
-/** Grammars that colour code of others inside theirs, when those are loaded too: a web page's scripts and styles. */
+/** Grammars that colour others' code inside theirs once those are loaded: a web page's scripts and styles. */
 const EMBEDDED: Record<string, readonly string[]> = { xml: ["javascript", "css"] };
 
 /** Loads and registers `grammar` once. */
@@ -125,6 +125,7 @@ export async function highlight(code: string, grammar: string): Promise<string> 
     core.catch(() => (core = undefined));
   }
   const hljs = await core;
-  await Promise.all([grammar, ...(EMBEDDED[grammar] ?? [])].map((name) => register(hljs, name)));
+  const embedded = /<(script|style)\b/i.test(code) ? (EMBEDDED[grammar] ?? []) : [];
+  await Promise.all([grammar, ...embedded].map((name) => register(hljs, name)));
   return hljs.highlight(code, { language: grammar, ignoreIllegals: true }).value;
 }

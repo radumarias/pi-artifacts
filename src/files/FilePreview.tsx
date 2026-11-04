@@ -4,7 +4,7 @@ import { baseName, extension } from "../../shared/attachments.ts";
 import { FILE_PAGE_SANDBOX, FILE_ROUTE, previewKind, viewType, type PreviewKind } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
-import { ViewportPicker, ViewportStage, useViewport } from "../artifact/viewport.tsx";
+import { ShowAs, ViewportPicker, ViewportStage, useViewport } from "../artifact/viewport.tsx";
 import { isSafeLink, markdownComponents, markdownPlugins } from "../chat/Markdown.tsx";
 import { opensElsewhere } from "../layout.tsx";
 import { Code } from "./Code.tsx";
@@ -252,16 +252,7 @@ export const FilePreview = memo(function FilePreview({ path, files, onOpen, onCl
         </div>
         <div className="artifact-actions">
           {shown === "html" && <ViewportPicker viewport={viewport} />}
-          {rendered && (
-            <div className="viewport-picker" role="group" aria-label="Show as">
-              <button type="button" aria-pressed={!source} onClick={() => setSource(false)}>
-                {rendered}
-              </button>
-              <button type="button" aria-pressed={source} onClick={() => setSource(true)}>
-                Source
-              </button>
-            </div>
-          )}
+          {rendered && <ShowAs rendered={rendered} source={source} onSource={setSource} />}
           <button type="button" onClick={() => setReloads((n) => n + 1)} title="Read the file again">
             ↻
           </button>
