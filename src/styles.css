@@ -274,8 +274,6 @@ body.resizing iframe { pointer-events: none; }
 /* Whether someone has the chat open: green while they do. */
 .presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--bg); border-radius: 50%; background: var(--border); }
 .presence.online { background: var(--live); }
-.message-foot { display: flex; align-items: center; gap: 6px; }
-.message-foot.mine { flex-direction: row-reverse; }
 /* Copy and reply: under the agent's replies, and beside a person's bubble (on the side away from the edge). */
 .bubble-row { position: relative; display: flex; max-width: 100%; }
 .message-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; }
@@ -284,17 +282,39 @@ body.resizing iframe { pointer-events: none; }
 .message-actions.floating { position: absolute; bottom: 2px; padding: 1px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .message.other .message-actions.floating { left: calc(100% + 6px); }
 .message.mine .message-actions.floating { right: calc(100% + 6px); }
-.message:hover .message-actions, .assistant:hover > .message-actions, .message-actions:focus-within { opacity: 1; }
+.message:hover .message-actions, .assistant:hover > .message-actions, .message-actions:focus-within, .message-actions.open { opacity: 1; }
 /* No hover on a touch screen: always there, in a row of their own. */
 @media (hover: none) {
   .message-actions { opacity: 1; }
   .bubble-row { flex-direction: column; }
   .message.mine .bubble-row { align-items: flex-end; }
-  .message-actions.floating { position: static; border: 0; background: none; }
+  .message-actions.floating { position: relative; border: 0; background: none; }
 }
 .assistant > .message-actions { align-self: flex-start; }
-/* What the agent did with a message that called it. */
-.reaction { display: inline-flex; align-items: center; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 13px; line-height: 20px; }
+/* Reactions under a message: each emoji, how many, the viewer's own marked; a click adds or takes back theirs. */
+.reactions { display: flex; flex-wrap: wrap; gap: 4px; }
+.reactions.mine { justify-content: flex-end; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 22px; }
+button.reaction { cursor: pointer; }
+button.reaction:hover { border-color: var(--muted); }
+.reaction.mine { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.reaction-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* A message's hover bar opens these: the emoji to react with, and the "…" menu with the same and its actions. */
+.message-actions { position: relative; }
+.message-menu {
+  position: absolute; top: calc(100% + 4px); z-index: 6; display: flex; flex-direction: column; min-width: max-content; padding: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12);
+}
+.message-menu.up { top: auto; bottom: calc(100% + 4px); }
+.message.mine .message-menu { right: 0; }
+.message.other .message-menu, .assistant .message-menu { left: 0; }
+.message-menu > button { padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); text-align: left; font-size: 14px; }
+.message-menu > button:hover, .message-menu > button:focus-visible { background: var(--surface-2); }
+.message-menu .emoji-row + button { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
+.emoji-row { display: flex; gap: 2px; }
+.emoji-row button { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 8px; background: none; font-size: 18px; line-height: 1; cursor: pointer; }
+.emoji-row button:hover, .emoji-row button:focus-visible { background: var(--surface-2); }
+.emoji-row button.mine { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 /* The message a reply answers, at the top of the reply (and over the composer while writing one). */
 .reply-quote { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-bottom: 6px; padding: 2px 8px; border-left: 3px solid var(--tint, var(--muted)); border-radius: 4px; background: color-mix(in srgb, currentColor 7%, transparent); font-size: 13px; white-space: normal; }
 .reply-quote.agent { border-left-color: var(--accent); }

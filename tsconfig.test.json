@@ -59,6 +59,7 @@
     "worker/artifacts/manifest.ts",
     "worker/auth/access.ts",
     "worker/members.ts",
+    "worker/reactions.ts",
     "worker/queue.ts",
     "worker/chat-status.ts",
     "worker/agent/title.ts",

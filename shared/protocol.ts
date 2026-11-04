@@ -2,6 +2,7 @@
 // The MCP shapes mirror the contract Claude's artifacts use, so pages written
 // for one read naturally against the other.
 
+import type { Reactions } from "./reactions.ts";
 import type { Attachment, AttachmentInput } from "./attachments.ts";
 import type { Mention, MentionInput } from "./mentions.ts";
 
@@ -334,6 +335,8 @@ export type ChatClientMessage =
   // `replyTo` is the transcript entry of the message it answers: a person's message, or one of the agent's replies.
   | { type: "prompt"; text: string; attachments?: AttachmentInput[]; mentions?: MentionInput[]; replyTo?: number }
   | { type: "abort" }
+  // Add (`on`) or take back a reaction (shared/reactions.ts) to a transcript entry: a person's message or the agent's reply.
+  | { type: "react"; entry: number; emoji: string; on: boolean }
   // Run the chat on another model or effort (shared/models.ts). The change reaches every socket as pi's agent_changed.
   | { type: "model"; model: string; thinkingLevel?: string };
 
@@ -346,6 +349,8 @@ export type ChatServerMessage =
   /** `queued`, with a snapshot or a batch that changes pi's inbox: the people's messages waiting in it, oldest first. */
   | { type: "events"; events: unknown[]; runElapsedMs?: number; queued?: QueuedMessage[] }
   | { type: "people"; people: ChatPeopleView }
+  /** Everyone's reactions: on connect, and whenever one changes. */
+  | { type: "reactions"; reactions: Reactions }
   /** Who has the chat open: whenever a window opens or closes. */
   | { type: "presence"; online: Presence[] }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */

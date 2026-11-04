@@ -14,6 +14,7 @@ import {
   type PublishedDetails,
   type SavedFilesDetails,
 } from "../../shared/protocol.ts";
+import { REACTIONS, type Reaction } from "../../shared/reactions.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome, plural } from "../../shared/util.ts";
 import { describeReport, type CheckReport } from "../artifacts/check.ts";
@@ -34,6 +35,8 @@ export interface ChatScope extends PublishScope {
   proposeSkill(skill: SkillInput): Promise<SkillResult>;
   /** The checks that found errors in a row; the chat resets it when someone writes. */
   failedChecks: FailedChecks;
+  /** React with `emoji` to the newest message a person sent; who it was from, or null when there is none. */
+  react(emoji: Reaction): Promise<string | null>;
 }
 
 /**
@@ -467,6 +470,28 @@ export function skillsExtension(scope: ChatScope): Extension {
           const saved = await scope.proposeSkill({ name: args.name, description: args.description, instructions: args.instructions, tools: args.tools ?? [] });
           if ("error" in saved) throw new Error(`Not saved: ${saved.error}`);
           return { output: text(`Saved the skill "${saved.name}", turned off. Tell the user to review it and turn it on under Skills in the sidebar.`) };
+        },
+      }),
+    ],
+  });
+}
+
+/** A reaction to the message the agent is answering, as people react to each other's: an emoji under it. */
+export function reactionsExtension(scope: ChatScope): Extension {
+  return defineExtension({
+    name: "reactions",
+    tools: [
+      defineTool({
+        name: "react",
+        description:
+          "React with an emoji to the newest message a person sent, the way people do in a chat: 🚀 when asked to deploy or ship, 👍 or ✅ when " +
+          "something is done, 🎉 for good news, ❤️ or 🙏 for thanks, 😂 for a joke. Use it only when an emoji says something, at most once a message, " +
+          "and never instead of answering. Everyone in the chat sees it at once.",
+        parameters: Type.Object({ emoji: Type.Union(REACTIONS.map((emoji) => Type.Literal(emoji))) }),
+        execute: async ({ emoji }) => {
+          const to = await scope.react(emoji);
+          if (to === null) throw new Error("There is no message from a person to react to.");
+          return { output: text(`Reacted with ${emoji} to ${to}'s message.`) };
         },
       }),
     ],

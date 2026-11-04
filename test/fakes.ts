@@ -1,5 +1,7 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { DatabaseSync } from "node:sqlite";
+import type { Sql } from "../worker/members.ts";
 
 /** A FILES_MASTER_KEY for tests. */
 export const MASTER_KEY = Buffer.from(new Uint8Array(32).fill(7)).toString("base64");
@@ -62,4 +64,25 @@ export class FakeBucket {
 export async function listen(server: Server): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+/** A Durable Object's SQL API over an in-memory node:sqlite database. */
+export function memorySql(): Sql & { db: DatabaseSync } {
+  const db = new DatabaseSync(":memory:");
+  return {
+    db,
+    exec(query, ...bindings) {
+      if (bindings.length === 0 && query.trim().split(";").filter((part) => part.trim()).length > 1) {
+        db.exec(query);
+        return { toArray: () => [], rowsWritten: 0 };
+      }
+      const statement = db.prepare(query);
+      if (/^\s*SELECT|\bRETURNING\b/i.test(query)) {
+        const rows = statement.all(...bindings) as Record<string, unknown>[];
+        return { toArray: () => rows, rowsWritten: 0 };
+      }
+      const { changes } = statement.run(...bindings);
+      return { toArray: () => [], rowsWritten: Number(changes) };
+    },
+  };
 }

@@ -1,27 +1,6 @@
-import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { ChatMembers, formatInviteToken, INVITE_TTL_MS, MAX_OPEN_INVITES, parseInviteToken, type Sql } from "../worker/members.ts";
-
-/** A Durable Object's SQL API over an in-memory node:sqlite database. */
-function memorySql(): Sql & { db: DatabaseSync } {
-  const db = new DatabaseSync(":memory:");
-  return {
-    db,
-    exec(query, ...bindings) {
-      if (bindings.length === 0 && query.trim().split(";").filter((part) => part.trim()).length > 1) {
-        db.exec(query);
-        return { toArray: () => [], rowsWritten: 0 };
-      }
-      const statement = db.prepare(query);
-      if (/^\s*SELECT|\bRETURNING\b/i.test(query)) {
-        const rows = statement.all(...bindings) as Record<string, unknown>[];
-        return { toArray: () => rows, rowsWritten: 0 };
-      }
-      const { changes } = statement.run(...bindings);
-      return { toArray: () => [], rowsWritten: Number(changes) };
-    },
-  };
-}
+import { ChatMembers, formatInviteToken, INVITE_TTL_MS, MAX_OPEN_INVITES, parseInviteToken } from "../worker/members.ts";
+import { memorySql } from "./fakes.ts";
 
 const ann = { uid: "ann", name: "ann@example.com" };
 const bob = { uid: "bob", name: "bob@example.com" };

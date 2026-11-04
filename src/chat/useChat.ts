@@ -5,6 +5,7 @@ import type { AttachmentInput } from "../../shared/attachments.ts";
 import type { MentionInput } from "../../shared/mentions.ts";
 import { modelKey } from "../../shared/models.ts";
 import { SOCKET_NOT_A_MEMBER, SOCKET_PING, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type Presence, type QueuedMessage } from "../../shared/protocol.ts";
+import type { Reaction, Reactions } from "../../shared/reactions.ts";
 import { api, keepAlive } from "../api.ts";
 
 /** A call of the current round: waiting its turn, running, or ended without a result (it faulted, or was orphaned). */
@@ -222,11 +223,13 @@ export function useChat(chatId: string) {
   const [connected, setConnected] = useState(false);
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
   const [online, setOnline] = useState<Presence[]>([]);
+  const [reactions, setReactions] = useState<Reactions>({});
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     dispatch({ type: "reset" });
     setPeople(null);
+    setReactions({});
     setOnline([]);
     let closed = false;
     let attempt = 0;
@@ -255,6 +258,7 @@ export function useChat(chatId: string) {
           attempt = 0;
           dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
         } else if (message.type === "people") setPeople(message.people);
+        else if (message.type === "reactions") setReactions((known) => keepUnchanged(known, message.reactions));
         else if (message.type === "presence") setOnline(message.online);
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
@@ -287,6 +291,7 @@ export function useChat(chatId: string) {
   }, []);
   // Stable, so the memoized model picker skips the re-render on every streamed token.
   const setModel = useCallback((model: string, thinkingLevel?: ModelThinkingLevel) => send({ type: "model", model, thinkingLevel }), [send]);
+  const react = useCallback((entry: number, emoji: Reaction, on: boolean) => send({ type: "react", entry, emoji, on }), [send]);
 
   return {
     state,
@@ -304,5 +309,18 @@ export function useChat(chatId: string) {
       }),
     abort: () => send({ type: "abort" }),
     setModel,
+    /** Everyone's reactions, by transcript entry; each entry's object stays the same until its reactions change. */
+    reactions,
+    react,
   };
+}
+
+/** `next`, keeping `known`'s object for each entry whose reactions did not change, so only those messages draw again. */
+function keepUnchanged(known: Reactions, next: Reactions): Reactions {
+  const kept: Reactions = {};
+  for (const [entry, byEmoji] of Object.entries(next)) {
+    const before = known[Number(entry)];
+    kept[Number(entry)] = before && JSON.stringify(before) === JSON.stringify(byEmoji) ? before : byEmoji;
+  }
+  return kept;
 }
