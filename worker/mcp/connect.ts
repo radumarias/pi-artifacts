@@ -69,8 +69,13 @@ function forChatObject(url: URL, timeoutMs: number): FetchLike {
     }
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(new Error(`no answer within ${timeoutMs / 1000} s`)), timeoutMs);
-    const done = () => clearTimeout(timer);
     const signal = init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
+    // The SDK passes every request the transport's one signal: a listener left on it would keep each request's
+    // combined signal, and all this closure holds, for as long as the connection lasts.
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+    };
     signal.addEventListener("abort", done, { once: true });
     try {
       const response = await fetch(input, { ...init, signal });
@@ -78,14 +83,39 @@ function forChatObject(url: URL, timeoutMs: number): FetchLike {
         done();
         return response;
       }
-      // Not a pending timer once the answer is read: a timer, too, keeps the object awake.
-      const body = response.body.pipeThrough(new TransformStream({ flush: done }));
-      return new Response(body, response);
+      // Not a pending timer once the answer is read, or given up on: a timer, too, keeps the object awake.
+      return new Response(untilSettled(response.body, done), response);
     } catch (error) {
       done();
       throw error;
     }
   };
+}
+
+/**
+ * `body`, calling `settled` once it is read to the end, fails, or is cancelled (the SDK cancels the body of a 202, such
+ * as its initialized notification's, without reading it).
+ */
+function untilSettled(body: ReadableStream<Uint8Array>, settled: () => void): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          settled();
+          controller.close();
+        } else controller.enqueue(chunk.value);
+      } catch (error) {
+        settled();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      settled();
+      return reader.cancel(reason);
+    },
+  });
 }
 
 /**
@@ -125,8 +155,9 @@ export async function connectStreamableHttp(
         }),
     );
   } catch (error) {
-    // Closing aborts the requests still open (a connect can stall on a request that has no timeout, such as its
-    // initialized notification, or on a sign-in refresh). Left open, they would hold the chat object awake.
+    // Closing aborts the transport's requests still open (a connect can stall on one the SDK gives no timeout, such as
+    // its initialized notification). Left open, they would hold the chat object awake. A sign-in refresh is not the
+    // transport's: REQUEST_TIMEOUT_MS ends it.
     void client.close().catch(() => {});
     throw error;
   }

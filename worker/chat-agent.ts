@@ -1211,6 +1211,8 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
         // Should the stream come after all, it goes unused.
         void opening.then((events) => events.stop()).catch(() => {});
         close(ws, 1011, "Reconnect");
+        // A close the chat makes itself may never come back as onWebSocketClose: the others hear of it now.
+        this.#broadcastPresence(new Set([ws]));
       } else {
         send(ws, { type: "error", message: `Could not open the conversation: ${errorMessage(error)}` });
       }

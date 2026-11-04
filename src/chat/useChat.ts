@@ -242,7 +242,6 @@ export function useChat(chatId: string) {
       const ws = new WebSocket(api.chatSocketUrl(chatId));
       socket.current = ws;
       ws.onopen = () => {
-        attempt = 0;
         setConnected(true);
         // A reconnect would also send the whole conversation again.
         keepAlive(ws);
@@ -250,8 +249,12 @@ export function useChat(chatId: string) {
       ws.onmessage = (event) => {
         if (event.data === SOCKET_PING.response) return;
         const message = JSON.parse(event.data) as ChatServerMessage;
-        if (message.type === "events") dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
-        else if (message.type === "people") setPeople(message.people);
+        // Backoff resets only once the conversation came: a chat that closes every socket before its snapshot (an attach
+        // that stalls) is retried ever more slowly, not every few seconds.
+        if (message.type === "events") {
+          attempt = 0;
+          dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
+        } else if (message.type === "people") setPeople(message.people);
         else if (message.type === "presence") setOnline(message.online);
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
