@@ -2,7 +2,7 @@
 // The MCP shapes mirror the contract Claude's artifacts use, so pages written
 // for one read naturally against the other.
 
-import type { Reactions } from "./reactions.ts";
+import type { EntryReactions, Reactions } from "./reactions.ts";
 import type { Attachment, AttachmentInput } from "./attachments.ts";
 import type { Mention, MentionInput } from "./mentions.ts";
 
@@ -349,8 +349,9 @@ export type ChatServerMessage =
   /** `queued`, with a snapshot or a batch that changes pi's inbox: the people's messages waiting in it, oldest first. */
   | { type: "events"; events: unknown[]; runElapsedMs?: number; queued?: QueuedMessage[] }
   | { type: "people"; people: ChatPeopleView }
-  /** Everyone's reactions: on connect, and whenever one changes. */
+  /** Everyone's reactions on connect; then, whenever one changes, its entry's (`entry`, `reactions` all of that entry's). */
   | { type: "reactions"; reactions: Reactions }
+  | { type: "reacted"; entry: number; reactions: EntryReactions }
   /** Who has the chat open: whenever a window opens or closes. */
   | { type: "presence"; online: Presence[] }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */

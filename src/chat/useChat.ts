@@ -5,7 +5,7 @@ import type { AttachmentInput } from "../../shared/attachments.ts";
 import type { MentionInput } from "../../shared/mentions.ts";
 import { modelKey } from "../../shared/models.ts";
 import { SOCKET_NOT_A_MEMBER, SOCKET_PING, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type Presence, type QueuedMessage } from "../../shared/protocol.ts";
-import type { Reaction, Reactions } from "../../shared/reactions.ts";
+import type { EntryReactions, Reaction, Reactions } from "../../shared/reactions.ts";
 import { api, keepAlive } from "../api.ts";
 
 /** A call of the current round: waiting its turn, running, or ended without a result (it faulted, or was orphaned). */
@@ -258,7 +258,8 @@ export function useChat(chatId: string) {
           attempt = 0;
           dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
         } else if (message.type === "people") setPeople(message.people);
-        else if (message.type === "reactions") setReactions((known) => keepUnchanged(known, message.reactions));
+        else if (message.type === "reactions") setReactions(message.reactions);
+        else if (message.type === "reacted") setReactions((known) => withEntry(known, message.entry, message.reactions));
         else if (message.type === "presence") setOnline(message.online);
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
@@ -315,12 +316,8 @@ export function useChat(chatId: string) {
   };
 }
 
-/** `next`, keeping `known`'s object for each entry whose reactions did not change, so only those messages draw again. */
-function keepUnchanged(known: Reactions, next: Reactions): Reactions {
-  const kept: Reactions = {};
-  for (const [entry, byEmoji] of Object.entries(next)) {
-    const before = known[Number(entry)];
-    kept[Number(entry)] = before && JSON.stringify(before) === JSON.stringify(byEmoji) ? before : byEmoji;
-  }
-  return kept;
+/** `known` with one entry's reactions replaced (dropped once it has none); every other entry keeps its object. */
+function withEntry(known: Reactions, entry: number, reactions: EntryReactions): Reactions {
+  const { [entry]: _before, ...rest } = known;
+  return Object.keys(reactions).length ? { ...rest, [entry]: reactions } : rest;
 }

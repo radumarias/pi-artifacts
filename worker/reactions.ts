@@ -1,4 +1,4 @@
-import { isReaction, REACTIONS, type Reaction, type Reactions } from "../shared/reactions.ts";
+import type { EntryReactions, Reaction, Reactions } from "../shared/reactions.ts";
 import type { Sql } from "./members.ts";
 
 /**
@@ -23,19 +23,19 @@ export class ChatReactions {
     return result.rowsWritten > 0;
   }
 
-  /** Every reaction, each emoji's people in the order they reacted and the emoji in the set's order. */
+  /** Every entry's reactions (see `of`). */
   all(): Reactions {
+    return this.#group(this.#sql.exec("SELECT entry, emoji, uid FROM chat_reactions ORDER BY entry, at, uid").toArray());
+  }
+
+  /** One entry's reactions: each emoji's people in the order they reacted. */
+  of(entry: number): EntryReactions {
+    return this.#group(this.#sql.exec("SELECT entry, emoji, uid FROM chat_reactions WHERE entry = ? ORDER BY at, uid", entry).toArray())[entry] ?? {};
+  }
+
+  #group(rows: Record<string, unknown>[]): Reactions {
     const reactions: Reactions = {};
-    const rows = this.#sql.exec("SELECT entry, emoji, uid FROM chat_reactions ORDER BY entry, at, uid").toArray();
-    for (const { entry, emoji, uid } of rows) {
-      if (!isReaction(emoji)) continue;
-      const byEmoji = (reactions[entry as number] ??= {});
-      (byEmoji[emoji] ??= []).push(uid as string);
-    }
-    const order = (emoji: string) => REACTIONS.indexOf(emoji as Reaction);
-    for (const [entry, byEmoji] of Object.entries(reactions)) {
-      reactions[Number(entry)] = Object.fromEntries(Object.entries(byEmoji).sort(([a], [b]) => order(a) - order(b)));
-    }
+    for (const { entry, emoji, uid } of rows) ((reactions[entry as number] ??= {})[emoji as Reaction] ??= []).push(uid as string);
     return reactions;
   }
 }

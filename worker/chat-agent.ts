@@ -46,7 +46,7 @@ import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../s
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
-import { AGENT_REACTOR, isReaction, type Reaction, type Reactions } from "../shared/reactions.ts";
+import { AGENT_REACTOR, isReactable, isReaction, type EntryReactions, type Reaction, type Reactions } from "../shared/reactions.ts";
 import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
@@ -1108,23 +1108,38 @@ export class ChatAgent extends DurableObject<Env> {
    * Add (`on`) or take back `by`'s reaction to transcript entry `entry`: one of the set (shared/reactions.ts), on a
    * person's message or one of the agent's replies. Everyone's sockets hear of a change.
    */
-  async react(by: Person, entry: number, emoji: unknown, on: boolean): Promise<void> {
+  async react(by: Person, entry: unknown, emoji: unknown, on: boolean): Promise<void> {
     this.#requireInChat(by);
     if (!isReaction(emoji)) throw new Error("Not a reaction this chat takes.");
-    // Taking one back needs no message: one that is not there changes nothing.
-    if (on && !(await this.#quote(entry))) throw new Error("That message cannot be reacted to.");
-    if (this.reactions.set(entry, emoji, by.uid, on)) this.sockets.broadcastReactions();
+    if (typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0) throw new Error("No such message.");
+    // Taking one back needs no message: one that is not there changes nothing. An entry with reactions was checked.
+    if (on && !Object.keys(this.reactions.of(entry)).length) {
+      const page = await (await this.#root()).entries({ minEntryId: entry as EntryId, maxEntryId: entry as EntryId }, 1, undefined, BACKGROUND_CONTEXT);
+      if (!isReactable(page.items[0])) throw new Error("That message cannot be reacted to.");
+    }
+    this.#setReaction(entry, emoji, by.uid, on);
   }
 
   /** The agent's reaction (the react tool): to the newest message a person sent, which is the one it is answering. */
   async #agentReact(emoji: Reaction): Promise<string | null> {
-    const page = await (await this.#root()).entries({ order: "descending" }, 50, undefined, BACKGROUND_CONTEXT);
-    // Not an aside: one written while the agent works is newer than the message that called it.
-    const target = page.items.find((entry) => entry.kind === CHAT_MESSAGE_KIND && !(entry.data as Partial<ChatMessageData> | undefined)?.aside);
-    const quote = replyQuote(target);
-    if (!quote || "agent" in quote) return null;
-    if (this.reactions.set(quote.id, emoji, AGENT_REACTOR, true)) this.sockets.broadcastReactions();
-    return quote.name;
+    const root = await this.#root();
+    let cursor: Cursor | undefined;
+    // Newest first, past the run's own tool calls and results; not an aside, which can be written while the agent works.
+    for (let pages = 0; pages < 10; pages++) {
+      const page = await root.entries({ order: "descending" }, 50, cursor, BACKGROUND_CONTEXT);
+      const found = page.items.find((entry) => entry.kind === CHAT_MESSAGE_KIND && !(entry.data as Partial<ChatMessageData> | undefined)?.aside);
+      if (found) {
+        this.#setReaction(found.id as number, emoji, AGENT_REACTOR, true);
+        return (found.data as Partial<ChatMessageData> | undefined)?.name ?? "someone";
+      }
+      if (!(cursor = page.next)) break;
+    }
+    return null;
+  }
+
+  /** Set a reaction, and tell every socket the entry's reactions when that changed them. */
+  #setReaction(entry: number, emoji: Reaction, who: string, on: boolean): void {
+    if (this.reactions.set(entry, emoji, who, on)) this.sockets.broadcastReactions(entry, this.reactions.of(entry));
   }
 
   /** Stop the agent's run, and the messages queued for it. In a shared chat the others see who stopped it. */
@@ -1273,7 +1288,7 @@ interface ChatSession {
   abort(by: Person): Promise<void>;
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
   reactions(): Reactions;
-  react(by: Person, entry: number, emoji: unknown, on: boolean): Promise<void>;
+  react(by: Person, entry: unknown, emoji: unknown, on: boolean): Promise<void>;
 }
 
 /** How long a socket's attach may take to send its snapshot (see ChatSockets.#attach). */
@@ -1346,9 +1361,9 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     }
   }
 
-  /** Tell every open socket everyone's reactions: one changed. */
-  broadcastReactions(): void {
-    const message: ChatServerMessage = { type: "reactions", reactions: this.#chat.reactions() };
+  /** Tell every open socket an entry's reactions: one of them changed. */
+  broadcastReactions(entry: number, reactions: EntryReactions): void {
+    const message: ChatServerMessage = { type: "reacted", entry, reactions };
     for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) if (this.#person(ws)) send(ws, message);
   }
 
@@ -1407,7 +1422,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       }
       else if (message.type === "abort") await this.#chat.abort(person);
       else if (message.type === "model") await this.#chat.setModel(message, person);
-      else if (message.type === "react" && Number.isSafeInteger(message.entry)) await this.#chat.react(person, message.entry, message.emoji, message.on === true);
+      else if (message.type === "react") await this.#chat.react(person, message.entry, message.emoji, message.on === true);
     } catch (error) {
       send(ws, { type: "error", message: errorMessage(error) });
     }

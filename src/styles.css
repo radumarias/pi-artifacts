@@ -274,9 +274,9 @@ body.resizing iframe { pointer-events: none; }
 /* Whether someone has the chat open: green while they do. */
 .presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--bg); border-radius: 50%; background: var(--border); }
 .presence.online { background: var(--live); }
-/* Copy and reply: under the agent's replies, and beside a person's bubble (on the side away from the edge). */
+/* React, reply, copy and "…": under the agent's replies, and beside a person's bubble (on the side away from the edge). */
 .bubble-row { position: relative; display: flex; max-width: 100%; }
-.message-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; }
+.message-actions { position: relative; display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; }
 .message-actions .icon-button { padding: 3px; color: var(--muted); }
 .message-actions .icon-button:hover { color: var(--text); }
 .message-actions.floating { position: absolute; bottom: 2px; padding: 1px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
@@ -299,8 +299,7 @@ button.reaction { cursor: pointer; }
 button.reaction:hover { border-color: var(--muted); }
 .reaction.mine { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 .reaction-count { color: var(--muted); font-variant-numeric: tabular-nums; }
-/* A message's hover bar opens these: the emoji to react with, and the "…" menu with the same and its actions. */
-.message-actions { position: relative; }
+/* What the hover bar opens: the emoji to react with, and under "…" the same with its actions; above the bar low down. */
 .message-menu {
   position: absolute; top: calc(100% + 4px); z-index: 6; display: flex; flex-direction: column; min-width: max-content; padding: 6px;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12);

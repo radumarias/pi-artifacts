@@ -51,7 +51,7 @@ export function useDismiss<T extends HTMLElement>(open: boolean, setOpen: (open:
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // Focus inside the popup would fall to the page as it closes: hand it back to the button that opened it.
-      if (box.current?.contains(document.activeElement)) box.current.querySelector<HTMLElement>("[aria-expanded]")?.focus();
+      if (box.current?.contains(document.activeElement)) box.current.querySelector<HTMLElement>('[aria-expanded="true"]')?.focus();
       setOpen(false);
     };
     // A click into an iframe (the artifact preview) reaches no document listener here, but blurs the window.

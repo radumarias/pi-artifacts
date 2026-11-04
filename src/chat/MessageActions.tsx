@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { Reaction } from "../../shared/reactions.ts";
 import { Icon } from "../Icon.tsx";
 import { useDismiss } from "../layout.tsx";
-import { EmojiRow, useMessageReactions } from "./Reactions.tsx";
+import { EmojiRow, type MessageReactions } from "./Reactions.tsx";
 
 /**
  * Put a message on the clipboard as rich text, as it shows (`html`), and as plain text (`text`, Markdown for the agent's
@@ -48,31 +48,34 @@ function ActionIcon({ name }: { name: keyof typeof ICONS }) {
 /**
  * The bar a message shows on hover (always on touch screens): react, answer, copy, and "…" with the same plus a copy
  * as Markdown. `content` is where its bubbles are, `text` what it says as plain text (Markdown for the agent's
- * replies), `entry` its transcript entry, which reactions and replies need.
+ * replies), `reactions` its reactions, for a message that takes them.
  */
 export function MessageActions({
   content,
   text,
-  entry,
+  reactions,
   onReply,
   floating = false,
 }: {
   content: RefObject<HTMLElement | null>;
   text: string;
-  entry?: number;
+  reactions: MessageReactions | null;
   onReply?: () => void;
   /** Beside a person's bubble, on hover, taking no room; otherwise a row of its own (under the agent's replies). */
   floating?: boolean;
 }) {
-  const reactions = useMessageReactions(entry);
-  const [open, setOpenAs] = useState<"react" | "more" | null>(null);
-  // Low on the screen, a menu opens above the bar rather than past the bottom of the conversation.
+  const [open, setOpen] = useState<"react" | "more" | null>(null);
+  const close = useCallback(() => setOpen(null), []);
+  const box = useDismiss<HTMLDivElement>(open !== null, close);
+  const menu = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  // Low in the conversation, the menu opens above the bar rather than past its bottom edge.
   const [up, setUp] = useState(false);
-  const setOpen = (next: "react" | "more" | null) => {
-    if (next) setUp((box.current?.getBoundingClientRect().bottom ?? 0) > window.innerHeight - 280);
-    setOpenAs(next);
-  };
-  const box = useDismiss<HTMLDivElement>(open !== null, () => setOpen(null));
+  useLayoutEffect(() => {
+    if (!open || !box.current || !menu.current) return;
+    const bottom = box.current.closest(".messages")?.getBoundingClientRect().bottom ?? window.innerHeight;
+    setUp(box.current.getBoundingClientRect().bottom + menu.current.offsetHeight > bottom);
+  }, [open, box]);
   const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -89,41 +92,52 @@ export function MessageActions({
     setOpen(null);
     reactions?.toggle(emoji);
   };
-  const run = (action: () => void) => () => {
-    setOpen(null);
-    action();
-  };
   const copyLabel = copied === "yes" ? "Copied" : copied === "failed" ? "Could not copy" : "Copy";
-  const button = (label: string, icon: keyof typeof ICONS, onClick: () => void, expanded?: boolean): ReactNode => (
-    <button type="button" className="icon-button" onClick={onClick} title={label} aria-label={label} aria-expanded={expanded}>
+  const button = (label: string, icon: keyof typeof ICONS, onClick: () => void, opens?: "react" | "more"): ReactNode => (
+    <button
+      type="button"
+      className="icon-button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-expanded={opens && open === opens}
+      aria-controls={opens && open === opens ? menuId : undefined}
+    >
       <ActionIcon name={icon} />
     </button>
   );
+  const toggle = (which: "react" | "more") => () => setOpen(open === which ? null : which);
   return (
     <div ref={box} className={["message-actions", floating && "floating", open && "open"].filter(Boolean).join(" ")}>
-      {reactions && button("Add a reaction", "react", () => setOpen(open === "react" ? null : "react"), open === "react")}
+      {reactions && button("Add a reaction", "react", toggle("react"), "react")}
       {onReply && button("Reply", "reply", onReply)}
       {button(copyLabel, copied === "yes" ? "copied" : "copy", () => copy())}
-      {button("More", "more", () => setOpen(open === "more" ? null : "more"), open === "more")}
-      {open === "react" && reactions && (
-        <div className={up ? "message-menu up" : "message-menu"}>
-          <EmojiRow onPick={pick} isMine={reactions.mine} />
-        </div>
-      )}
-      {open === "more" && (
-        <div className={up ? "message-menu up" : "message-menu"} role="menu">
+      {button("More", "more", toggle("more"), "more")}
+      {open && (
+        <div ref={menu} id={menuId} className={up ? "message-menu up" : "message-menu"} role={open === "more" ? "menu" : undefined}>
           {reactions && <EmojiRow onPick={pick} isMine={reactions.mine} />}
-          {onReply && (
-            <button type="button" role="menuitem" onClick={run(onReply)}>
-              Reply
-            </button>
+          {open === "more" && (
+            <>
+              {onReply && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(null);
+                    onReply();
+                  }}
+                >
+                  Reply
+                </button>
+              )}
+              <button type="button" role="menuitem" onClick={() => copy()}>
+                Copy message
+              </button>
+              <button type="button" role="menuitem" onClick={() => copy(true)}>
+                Copy message as Markdown
+              </button>
+            </>
           )}
-          <button type="button" role="menuitem" onClick={() => copy()}>
-            Copy message
-          </button>
-          <button type="button" role="menuitem" onClick={() => copy(true)}>
-            Copy message as Markdown
-          </button>
         </div>
       )}
       {copied && (

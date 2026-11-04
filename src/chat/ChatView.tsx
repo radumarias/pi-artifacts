@@ -26,7 +26,8 @@ import { textOf } from "../../shared/canonical.ts";
 import { AGENT_NAME, AGENT_TOKEN, type Mention } from "../../shared/mentions.ts";
 import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
-import { ReactionChips, ReactionsContext } from "./Reactions.tsx";
+import { ReactionChips, ReactionsContext, useMessageReactions, type MessageReactions } from "./Reactions.tsx";
+import { isReactable, type EntryReactions } from "../../shared/reactions.ts";
 import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
 import { ChatCost, PromptCost } from "./Cost.tsx";
 import { ContextMeter } from "./Context.tsx";
@@ -66,7 +67,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 
 export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
   const { state, connected, people, online, prompt, abort, setModel, reactions, react } = useChat(chatId);
-  const chatReactions = useMemo(() => ({ reactions, uid, react }), [reactions, uid, react]);
+  const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
   const attachments = useAttachments(chatId);
@@ -224,7 +225,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
                 return (
                   <Fragment key={entry.id}>
                     {bylines.has(entry.id) && <AgentByline />}
-                    <Entry entry={entry} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
+                    <Entry entry={entry} reactions={reactions[entry.id]} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
                     {spend && <PromptCost spend={spend} />}
                   </Fragment>
                 );
@@ -356,12 +357,15 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
 // Entries never change once committed, so streaming a new reply re-renders only the reply, not the whole history.
 const Entry = memo(function Entry({
   entry,
+  reactions: byEmoji,
   uid,
   ownerName,
   onOpen,
   onReply,
 }: {
   entry: EntryRecord;
+  /** Its reactions; the same object until they change, so a reaction draws only its message again. */
+  reactions?: EntryReactions;
   uid: string;
   /** Set when someone other than the owner is viewing: a plain `pi.user` entry, from before chats were shared, is the owner's. */
   ownerName?: string;
@@ -369,6 +373,7 @@ const Entry = memo(function Entry({
   onReply: (quote: ReplyQuote) => void;
 }) {
   const people = useSharedChat();
+  const reactions = useMessageReactions(isReactable(entry) ? entry.id : undefined, byEmoji);
   const message = entry.model?.[0];
   // What a reply to it quotes: none for a message from before replies (pi.user).
   const quote = replyQuote(entry);
@@ -389,7 +394,7 @@ const Entry = memo(function Entry({
         replyTo={data.replyTo}
         // In the transcript, a message that called the agent was picked up: it was placed in its run.
         picked={data.summoned}
-        entry={quote ? quote.id : undefined}
+        reactions={reactions}
         onReply={answer}
       />
     );
@@ -400,7 +405,7 @@ const Entry = memo(function Entry({
     return <div className="chat-notice">{data.uid === uid ? `You ${you}` : `${data.name} ${them}`}</div>;
   }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") {
-    return <Assistant message={message} entry={quote ? quote.id : undefined} onReply={answer} />;
+    return <Assistant message={message} reactions={reactions} onReply={answer} />;
   }
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
     const artifact = published(entry);
@@ -526,7 +531,7 @@ function User({
   mentions,
   replyTo,
   picked,
-  entry,
+  reactions = null,
   onReply,
 }: {
   text: string;
@@ -537,8 +542,7 @@ function User({
   mentions?: Mention[];
   replyTo?: ReplyQuote;
   picked?: boolean;
-  /** Its transcript entry: what reactions are on. */
-  entry?: number;
+  reactions?: MessageReactions | null;
   onReply?: () => void;
 }) {
   const people = useSharedChat();
@@ -575,10 +579,10 @@ function User({
       {bubble && (
         <div className="bubble-row">
           {bubble}
-          <MessageActions content={content} text={text} entry={entry} onReply={onReply} floating />
+          <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} floating />
         </div>
       )}
-      <ReactionChips entry={entry} picked={picked} mine={mine} />
+      <ReactionChips reactions={reactions} picked={picked} mine={mine} />
     </div>
   );
 }
@@ -689,13 +693,13 @@ function Assistant({
   message,
   streaming = false,
   onGrow,
-  entry,
+  reactions = null,
   onReply,
 }: {
   message: AssistantMessage;
   streaming?: boolean;
   onGrow?: () => void;
-  entry?: number;
+  reactions?: MessageReactions | null;
   onReply?: () => void;
 }) {
   const content = useRef<HTMLDivElement>(null);
@@ -719,8 +723,8 @@ function Assistant({
       })}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
-      {text && <ReactionChips entry={entry} />}
-      {text && <MessageActions content={content} text={text} entry={entry} onReply={onReply} />}
+      {text && <ReactionChips reactions={reactions} />}
+      {text && <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} />}
     </div>
   );
 }

@@ -14,7 +14,7 @@ import {
   type PublishedDetails,
   type SavedFilesDetails,
 } from "../../shared/protocol.ts";
-import { REACTIONS, type Reaction } from "../../shared/reactions.ts";
+import { AGENT_REACTIONS, type Reaction } from "../../shared/reactions.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome, plural } from "../../shared/util.ts";
 import { describeReport, type CheckReport } from "../artifacts/check.ts";
@@ -487,7 +487,7 @@ export function reactionsExtension(scope: ChatScope): Extension {
           "React with an emoji to the newest message a person sent, the way people do in a chat: 🚀 when asked to deploy or ship, 👍 or ✅ when " +
           "something is done, 🎉 for good news, ❤️ or 🙏 for thanks, 😂 for a joke. Use it only when an emoji says something, at most once a message, " +
           "and never instead of answering. Everyone in the chat sees it at once.",
-        parameters: Type.Object({ emoji: Type.Union(REACTIONS.map((emoji) => Type.Literal(emoji))) }),
+        parameters: Type.Object({ emoji: Type.Union(AGENT_REACTIONS.map((emoji) => Type.Literal(emoji))) }),
         execute: async ({ emoji }) => {
           const to = await scope.react(emoji);
           if (to === null) throw new Error("There is no message from a person to react to.");

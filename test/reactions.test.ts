@@ -4,14 +4,15 @@ import { ChatReactions } from "../worker/reactions.ts";
 import { memorySql } from "./fakes.ts";
 
 describe("chat reactions", () => {
-  it("keeps who reacted with what on which message, first first and emoji in the set's order", () => {
+  it("keeps who reacted with what on which message, first first", () => {
     const reactions = new ChatReactions(memorySql());
     expect(reactions.set(7, "🚀", AGENT_REACTOR, true)).toBe(true);
     expect(reactions.set(7, "👍", "ann", true)).toBe(true);
     expect(reactions.set(7, "👍", "bob", true)).toBe(true);
     expect(reactions.set(9, "🎉", "bob", true)).toBe(true);
     expect(reactions.all()).toEqual({ 7: { "👍": ["ann", "bob"], "🚀": [AGENT_REACTOR] }, 9: { "🎉": ["bob"] } });
-    expect(Object.keys(reactions.all()[7])).toEqual(["👍", "🚀"]);
+    expect(reactions.of(7)).toEqual({ "👍": ["ann", "bob"], "🚀": [AGENT_REACTOR] });
+    expect(reactions.of(8)).toEqual({});
   });
 
   it("counts a reaction once, and takes it back", () => {

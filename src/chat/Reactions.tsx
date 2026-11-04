@@ -1,30 +1,32 @@
 import { createContext, useContext } from "react";
 import { AGENT_NAME } from "../../shared/mentions.ts";
 import { everyone } from "../../shared/protocol.ts";
-import { AGENT_REACTOR, REACTIONS, type Reaction, type Reactions } from "../../shared/reactions.ts";
+import { AGENT_REACTOR, REACTIONS, type EntryReactions, type Reaction } from "../../shared/reactions.ts";
 import { listSome } from "../../shared/util.ts";
 import { useSharedChat } from "./people.tsx";
 
-/** The chat's reactions, who is looking (`uid`), and how to add or take back theirs. */
+/** Who is looking (`uid`), and how they add or take back a reaction. Stable, so it draws no message again. */
 export interface ChatReactions {
-  reactions: Reactions;
   uid: string;
   react: (entry: number, emoji: Reaction, on: boolean) => void;
 }
 
 export const ReactionsContext = createContext<ChatReactions | null>(null);
 
-/** One message's reactions, and how to toggle the viewer's: nothing for a message that has no entry (one streaming). */
-export function useMessageReactions(entry: number | undefined) {
+/** One message's reactions and how to toggle the viewer's. */
+export interface MessageReactions {
+  byEmoji: EntryReactions;
+  uid: string;
+  mine: (emoji: Reaction) => boolean;
+  toggle: (emoji: Reaction) => void;
+}
+
+/** `entry`'s reactions (`byEmoji`), and how to toggle the viewer's: nothing for a message that takes none. */
+export function useMessageReactions(entry: number | undefined, byEmoji: EntryReactions = {}): MessageReactions | null {
   const chat = useContext(ReactionsContext);
   if (!chat || entry === undefined) return null;
-  const mine = (emoji: Reaction) => chat.reactions[entry]?.[emoji]?.includes(chat.uid) ?? false;
-  return {
-    byEmoji: chat.reactions[entry] ?? {},
-    uid: chat.uid,
-    mine,
-    toggle: (emoji: Reaction) => chat.react(entry, emoji, !mine(emoji)),
-  };
+  const mine = (emoji: Reaction) => byEmoji[emoji]?.includes(chat.uid) ?? false;
+  return { byEmoji, uid: chat.uid, mine, toggle: (emoji) => chat.react(entry, emoji, !mine(emoji)) };
 }
 
 /** The emoji to react with, in a row: in the hover bar's picker and at the top of the "…" menu. */
@@ -51,8 +53,7 @@ export function EmojiRow({ onPick, isMine }: { onPick: (emoji: Reaction) => void
  * Under a message: each emoji it got, how many people reacted with it and who (on hover), the viewer's own marked; a
  * click adds or takes back theirs. `picked` is the agent having picked the message up, shown as its 👀.
  */
-export function ReactionChips({ entry, picked = false, mine = false }: { entry?: number; picked?: boolean; mine?: boolean }) {
-  const reactions = useMessageReactions(entry);
+export function ReactionChips({ reactions, picked = false, mine = false }: { reactions: MessageReactions | null; picked?: boolean; mine?: boolean }) {
   const people = useSharedChat();
   const byEmoji = { ...reactions?.byEmoji };
   if (picked && !byEmoji["👀"]?.includes(AGENT_REACTOR)) byEmoji["👀"] = [AGENT_REACTOR, ...(byEmoji["👀"] ?? [])];
