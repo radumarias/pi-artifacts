@@ -34,6 +34,10 @@ describe("canonicalJson", () => {
   it("ignores property order at every depth", () => {
     expect(canonicalJson({ b: 1, a: { d: [1, { y: 2, x: 1 }], c: null } })).toBe(canonicalJson({ a: { c: null, d: [1, { x: 1, y: 2 }] }, b: 1 }));
   });
+
+  it("keeps a __proto__ key from parsed JSON", () => {
+    expect(canonicalJson(JSON.parse('{"f":{"__proto__":{"x":1}}}'))).toBe('{"f":{"__proto__":{"x":1}}}');
+  });
 });
 
 describe("McpHub.read", () => {
