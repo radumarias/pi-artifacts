@@ -7,8 +7,9 @@ import { api, type FileInfo } from "../api.ts";
 import { ViewportPicker, ViewportStage, useViewport } from "../artifact/viewport.tsx";
 import { isSafeLink, markdownComponents, markdownPlugins } from "../chat/Markdown.tsx";
 import { opensElsewhere } from "../layout.tsx";
-import { grammarFor, highlight } from "./highlight.ts";
-import { HIGHLIGHT_LIMIT, parseTable, readText, resolveLink, TABLE_ROWS, TEXT_LIMIT, type FileText } from "./preview.ts";
+import { Code } from "./Code.tsx";
+import { grammarFor } from "./highlight.ts";
+import { parseTable, readText, resolveLink, TABLE_ROWS, TEXT_LIMIT, type FileText } from "./preview.ts";
 
 interface Props {
   path: string;
@@ -19,24 +20,6 @@ interface Props {
   /** Where the files are served from: the user's own (the default), or a chat's for someone it is shared with. */
   base?: string;
 }
-
-/** Code as highlight.js colours it once its grammar loads; plain until then, or for text too long to colour quickly. */
-const Code = memo(function Code({ text, grammar }: { text: string; grammar: string | undefined }) {
-  const [html, setHtml] = useState<{ text: string; html: string } | null>(null);
-  useEffect(() => {
-    if (!grammar || text.length > HIGHLIGHT_LIMIT) return;
-    let live = true;
-    highlight(text, grammar).then(
-      (html) => live && setHtml({ text, html }),
-      () => {},
-    );
-    return () => {
-      live = false;
-    };
-  }, [text, grammar]);
-  // highlight.js escapes the code's text: the HTML is only its spans around it.
-  return html?.text === text ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html.html }} /> : <code>{text}</code>;
-});
 
 /**
  * The file's text, read when it opens and again on a reload (not again when the panel goes back to showing it);

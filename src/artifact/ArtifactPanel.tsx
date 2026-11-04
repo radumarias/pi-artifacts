@@ -4,6 +4,7 @@ import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { useVisible } from "../sidebar.ts";
 import { ArtifactFrame } from "./ArtifactFrame.tsx";
+import { ArtifactSource } from "./ArtifactSource.tsx";
 import { ViewportPicker, ViewportStage, useViewport } from "./viewport.tsx";
 
 interface Props {
@@ -20,6 +21,8 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
   const [version, setVersion] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
+  // Showing the page's source instead of the page. The page stays loaded behind it, so going back does not reload it.
+  const [source, setSource] = useState(false);
   const [clone, setClone] = useState<{ command: string; expiresAt: string } | { error: string } | null>(null);
   const viewport = useViewport();
 
@@ -74,7 +77,15 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
           {servers.length > 0 && <span className="pill live">live · {servers.map((s) => s.server).join(", ")}</span>}
         </div>
         <div className="artifact-actions">
-          <ViewportPicker viewport={viewport} />
+          <div className="viewport-picker" role="group" aria-label="Show as">
+            <button type="button" aria-pressed={!source} onClick={() => setSource(false)}>
+              Preview
+            </button>
+            <button type="button" aria-pressed={source} onClick={() => setSource(true)} title="Read the page's code">
+              Source
+            </button>
+          </div>
+          {!source && <ViewportPicker viewport={viewport} />}
           <select value={entry.version} onChange={(e) => setVersion(Number(e.target.value))} aria-label="Version">
             {[...meta.versions].reverse().map((v) => (
               <option key={v.version} value={v.version} title={v.message}>
@@ -84,9 +95,20 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
               </option>
             ))}
           </select>
-          <button type="button" onClick={() => setReloads((n) => n + 1)} title="Reload the page">
-            ↻
-          </button>
+          {source ? (
+            <a
+              className="button"
+              href={api.artifactSourceUrl(meta.id, entry.version)}
+              download={`${meta.title} v${entry.version}.html`}
+              title="Download this version's code"
+            >
+              ↓
+            </a>
+          ) : (
+            <button type="button" onClick={() => setReloads((n) => n + 1)} title="Reload the page">
+              ↻
+            </button>
+          )}
           {meta.isOwner && (
             <button type="button" onClick={() => (clone ? setClone(null) : void showClone())} title="Clone this artifact's Git repository">
               git
@@ -125,7 +147,8 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
           )}
         </div>
       )}
-      <ViewportStage id={viewport.id} rotated={viewport.rotated}>
+      {source && <ArtifactSource key={entry.version} artifactId={meta.id} version={entry.version} />}
+      <ViewportStage id={viewport.id} rotated={viewport.rotated} hidden={source}>
         <ArtifactFrame key={`${entry.version}:${reloads}`} artifactId={meta.id} version={entry.version} manifest={entry.manifest} uid={uid} title={meta.title} />
       </ViewportStage>
     </section>

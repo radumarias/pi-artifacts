@@ -2,7 +2,7 @@ import { exports, waitUntil } from "cloudflare:workers";
 import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { PageCallCache } from "./artifacts/page-calls.ts";
-import { artifactETag, artifactResponse, notModified } from "./artifacts/serve.ts";
+import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { filesRoute } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
@@ -86,9 +86,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (!identity) return json({ error: "Not signed in" }, 401);
   const { uid } = identity;
 
-  // The artifact page itself, framed by the viewer.
-  const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)$/);
-  if (page && method === "GET") return artifactPage(request, storage, page[1], Number(page[2]));
+  // The artifact page itself, framed by the viewer, or (/source) the page as written, to read. Whoever may view the page may read it.
+  const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)(\/source)?$/);
+  if (page && method === "GET") return artifactPage(request, storage, page[1], Number(page[2]), !!page[3]);
 
   // Artifact metadata and the MCP proxy.
   const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone|\/seen)?$/);
@@ -180,14 +180,18 @@ async function route(request: Request, env: Env): Promise<Response> {
   return json({ error: "Not found" }, 404);
 }
 
-/** One version of a published page. Versions never change, so a repeat view is a 304 without reading R2. */
-async function artifactPage(request: Request, storage: Storage, id: string, version: number): Promise<Response> {
+/**
+ * One version of a published page, or with `source` its HTML as plain text. Versions never change, so a repeat view
+ * is a 304 without reading R2.
+ */
+async function artifactPage(request: Request, storage: Storage, id: string, version: number, source: boolean): Promise<Response> {
   if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
-  const etag = artifactETag(id, version);
+  const etag = source ? sourceETag(id, version) : artifactETag(id, version);
   const cached = notModified(request, etag);
   if (cached) return cached;
   const html = await storage.artifacts.readHtml(id, version);
-  return html === null ? new Response("Not found", { status: 404 }) : artifactResponse(html, etag);
+  if (html === null) return new Response("Not found", { status: 404 });
+  return source ? sourceResponse(html, etag) : artifactResponse(html, etag);
 }
 
 function demoCookie(url: URL, value: string, maxAge: number): string {

@@ -86,3 +86,13 @@ export function notModified(request: Request, etag: string): Response | undefine
 export function artifactResponse(html: string, etag: string): Response {
   return new Response(renderArtifact(html), { headers: { ...PAGE_HEADERS, "content-type": "text/html; charset=utf-8", etag } });
 }
+
+/** A version's source never changes either, and has no runtime in it: a deploy leaves it as it is. */
+export function sourceETag(id: string, version: number): string {
+  return `"${id}-v${version}-source"`;
+}
+
+/** The page as the agent wrote it, without the runtime, as plain text: a browser shows it and runs none of it. */
+export function sourceResponse(html: string, etag: string): Response {
+  return new Response(html, { headers: { ...PAGE_HEADERS, "content-type": "text/plain; charset=utf-8", etag } });
+}

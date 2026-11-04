@@ -133,7 +133,7 @@ export function ViewportPicker({ viewport }: { viewport: ReturnType<typeof useVi
  * react as on the device, and is scaled down when the pane is smaller. The tree is the
  * same in every mode, so switching resizes the frame without reloading the page.
  */
-export function ViewportStage({ id, rotated, children }: { id: ViewportId; rotated: boolean; children: ReactNode }) {
+export function ViewportStage({ id, rotated, hidden, children }: { id: ViewportId; rotated: boolean; hidden?: boolean; children: ReactNode }) {
   const stage = useRef<HTMLDivElement>(null);
   const [pane, setPane] = useState({ width: 0, height: 0 });
   const fit = sizeOf(id) === undefined;
@@ -154,7 +154,7 @@ export function ViewportStage({ id, rotated, children }: { id: ViewportId; rotat
 
   const layout = layoutViewport(id, rotated, pane);
   return (
-    <div ref={stage} className={layout ? "artifact-stage device" : "artifact-stage"}>
+    <div ref={stage} className={layout ? "artifact-stage device" : "artifact-stage"} hidden={hidden}>
       <div
         className="artifact-device"
         style={

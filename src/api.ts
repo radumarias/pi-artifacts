@@ -105,6 +105,14 @@ export const api = {
   markArtifactSeen: (id: string, version: number) => request<object>(`/api/artifacts/${id}/seen`, post({ version })),
   artifactTools: (id: string, version: number) => request<DeclaredTool[]>(`/api/artifacts/${id}/tools?version=${version}`),
   cloneAccess: (id: string) => request<CloneAccess>(`/api/artifacts/${id}/clone`, post({})),
+  /** Where `version` of an artifact is served as plain text, as the agent wrote it: without the runtime its page gets, nothing in it runs. */
+  artifactSourceUrl: (id: string, version: number) => `/u/${id}/v${version}/source`,
+  /** That source's text. Throws with the status when it cannot be read. */
+  artifactSource: async (id: string, version: number, signal?: AbortSignal): Promise<string> => {
+    const response = await fetch(api.artifactSourceUrl(id, version), { signal });
+    if (!response.ok) throw responseError(response, null);
+    return response.text();
+  },
   /** Resolves with the Worker's ProxyResponse, errors included; rejects only when the request itself fails. */
   proxy: async (id: string, call: ProxyRequest): Promise<ProxyResponse> => {
     const { response, body } = await fetchJson(`/api/artifacts/${id}/mcp`, post(call));

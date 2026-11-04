@@ -66,4 +66,10 @@ describe("file preview", () => {
     expect(html).toContain("&lt;img");
     expect(html).not.toContain("<img");
   });
+
+  it("colours a web page's scripts and styles inside its HTML", async () => {
+    const html = await highlight("<style>body { color: red }</style><script>const n = 1;</script>", "xml");
+    expect(html).toContain('<span class="hljs-keyword">const</span>');
+    expect(html).toContain('<span class="hljs-attribute">color</span>');
+  });
 });
