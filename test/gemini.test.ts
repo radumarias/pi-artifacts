@@ -81,6 +81,28 @@ describe("Gemini's thought signatures", () => {
     expect(done?.type === "done" && done.message.content).toMatchObject([{ id: "call-2", thoughtSignature: "SIG-B" }]);
   });
 
+  it("keeps a signature sent in a later chunk than its call's id", async () => {
+    const chunks = [
+      {
+        id: "r",
+        choices: [
+          { index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "lookup", arguments: "" } }] } },
+        ],
+      },
+      {
+        id: "r",
+        choices: [
+          { index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"q":"x"}' }, extra_content: { google: { thought_signature: "SIG-A" } } }] } },
+        ],
+      },
+      { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+    ];
+    const body = chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
+    const { models, model } = chat(() => new Response(body, { headers: { "content-type": "text/event-stream" } }));
+    const reply = await models.streamSimple(model, { messages: [user] }).result();
+    expect(reply.content).toMatchObject([{ type: "toolCall", id: "call-1", thoughtSignature: "SIG-A" }]);
+  });
+
   it("gives a tool call another model made Google's placeholder", async () => {
     const { models, model, requests } = chat(() => callingAnswer("call-2", "SIG-B"));
     const other: AssistantMessage = {

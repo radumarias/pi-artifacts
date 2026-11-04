@@ -61,6 +61,8 @@ export class GeminiCompat {
         signed,
         (event) => {
           if (event.type === "toolcall_end") this.#take(event.toolCall);
+          // A signature that came after its call closed: taken here for a reader of events that never asks for result().
+          else if (event.type === "done") this.#takeAll(event.message);
         },
         (message) => this.#takeAll(message),
       );
@@ -110,13 +112,14 @@ export class GeminiCompat {
         if (!isObject(delta)) return;
         const index = typeof delta.index === "number" ? delta.index : position;
         const call = calls.get(index) ?? {};
-        const [id, signature] = [text(delta.id), signatureOf(delta)];
-        // Held once, when the half that was missing arrives.
-        if ((id && !call.id) || (signature && !call.signature)) {
-          calls.set(index, { id: call.id ?? id, signature: call.signature ?? signature });
-          const { id: heldId, signature: held } = calls.get(index)!;
-          if (heldId && held) this.#hold(heldId, held);
-        }
+        // The newest id, as the wire names the call by the last one it was sent; the first signature.
+        const next = { id: text(delta.id) ?? call.id, signature: call.signature ?? signatureOf(delta) };
+        if (next.id === call.id && next.signature === call.signature) return;
+        calls.set(index, next);
+        if (!next.id || !next.signature) return;
+        // Held once both halves are in, and again under a new id (the old one then names no call).
+        if (call.id && call.id !== next.id) this.#read.delete(call.id);
+        this.#hold(next.id, next.signature);
       });
     };
     return new TransformStream({
