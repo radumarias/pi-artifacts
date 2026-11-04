@@ -1,7 +1,7 @@
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
-import { FILE_ROUTE, ZIP_ROUTE } from "../shared/uploads.ts";
+import { FILE_ROUTE, VIEW_PARAM, ZIP_ROUTE } from "../shared/uploads.ts";
 import {
   SOCKET_PING,
   type ArtifactSummary,
@@ -118,6 +118,8 @@ export const api = {
   files: () => request<FileInfo[]>("/api/files"),
   /** Where a user file is served: an image opens in the browser, anything else downloads. */
   fileUrl: (path: string) => FILE_ROUTE + encodePath(path),
+  /** Where a user file shows in the browser, if it is of a kind the app previews (shared/uploads.ts viewType); otherwise it downloads. */
+  fileViewUrl: (path: string) => `${FILE_ROUTE}${encodePath(path)}?${VIEW_PARAM}`,
   /** Where a user folder downloads as a zip named after it, with the folder itself at its root. */
   folderZipUrl: (path: string) => ZIP_ROUTE + encodePath(path),
   /** One request's worth of files (see uploadBatches), each with its name or its path inside a picked folder. */

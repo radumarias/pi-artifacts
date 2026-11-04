@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { crc32 } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { api } from "../src/api.ts";
-import { commonFolder, MAX_ZIP_FILES, previewType, ZIP_ROUTE } from "../shared/uploads.ts";
+import { commonFolder, MAX_ZIP_FILES, previewKind, previewType, viewType, ZIP_ROUTE } from "../shared/uploads.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { UserFiles } from "../worker/storage/user-files.ts";
@@ -127,6 +127,10 @@ describe("file and folder downloads", () => {
     b.objects.set("users/ada/files/uploads/q3/sales.csv", "a,b\n");
     b.objects.set("users/ada/files/uploads/q3/2024/old sales.csv", "c,d\n");
     b.objects.set("users/ada/files/uploads/q3/chart.png", "png");
+    b.objects.set("users/ada/files/out/page.html", "<p>hi</p>");
+    b.objects.set("users/ada/files/out/report.pdf", "%PDF");
+    b.objects.set("users/ada/files/out/notes.md", "# Notes");
+    b.objects.set("users/ada/files/out/blob.bin", "bytes");
     b.objects.set("users/ada/files/uploads/q30/other.csv", "no");
     b.objects.set("users/bob/files/uploads/q3/secret.csv", "bob's");
     return b;
@@ -147,6 +151,38 @@ describe("file and folder downloads", () => {
     expect(csv.headers.get("content-type")).toBe("application/octet-stream");
     expect(csv.headers.get("content-disposition")).toBe('attachment; filename="old sales.csv"');
     expect(await csv.text()).toBe("c,d\n");
+  });
+
+  it("shows a file of a kind the preview knows when asked to view it, and downloads the rest", async () => {
+    const page = await route(api.fileViewUrl("out/page.html"), bucket());
+    expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(page.headers.get("content-disposition")).toBe('inline; filename="page.html"');
+    // Sandboxed with the artifact policy: an opaque origin with no network of its own, even opened in a tab.
+    const policy = page.headers.get("content-security-policy")!;
+    expect(policy).toMatch(/^sandbox allow-scripts /);
+    expect(policy).not.toContain("allow-same-origin");
+    expect(policy).toContain("connect-src 'none'");
+    expect(await page.text()).toBe("<p>hi</p>");
+
+    const pdf = await route(api.fileViewUrl("out/report.pdf"), bucket());
+    expect(pdf.headers.get("content-type")).toBe("application/pdf");
+    expect(pdf.headers.get("content-security-policy")).toContain("default-src 'none'");
+
+    const notes = await route(api.fileViewUrl("out/notes.md"), bucket());
+    expect(notes.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(notes.headers.get("content-security-policy")).toContain("sandbox");
+
+    const image = await route(api.fileViewUrl("uploads/q3/chart.png"), bucket());
+    expect(image.headers.get("content-type")).toBe("image/png");
+
+    const other = await route(api.fileViewUrl("out/blob.bin"), bucket());
+    expect(other.headers.get("content-type")).toBe("application/octet-stream");
+    expect(other.headers.get("content-disposition")).toBe('attachment; filename="blob.bin"');
+
+    // Without asking to view it, a page downloads as before.
+    const download = await route(api.fileUrl("out/page.html"), bucket());
+    expect(download.headers.get("content-type")).toBe("application/octet-stream");
+    expect(download.headers.get("content-disposition")).toBe('attachment; filename="page.html"');
   });
 
   it("zips a folder under its own name, with only what is inside it, and only the user's", async () => {
@@ -248,5 +284,19 @@ describe("file and folder downloads", () => {
     expect(previewType("uploads/x.png/readme")).toBeUndefined();
     expect(previewType("uploads/.png")).toBeUndefined();
     expect(previewType("uploads/a.constructor")).toBeUndefined();
+  });
+
+  it("knows how to preview a file by its extension", () => {
+    expect(previewKind("out/a.HTML")).toBe("html");
+    expect(previewKind("llmwiki/index.md")).toBe("markdown");
+    expect(previewKind("out/budget.sql")).toBe("text");
+    expect(previewKind("out/all.js")).toBe("text");
+    expect(previewKind("out/sales.csv")).toBe("table");
+    expect(previewKind("out/a.pdf")).toBe("pdf");
+    expect(previewKind("out/a.svg")).toBe("image");
+    expect(previewKind("out/Makefile")).toBeUndefined();
+    expect(previewKind("out/a.constructor")).toBeUndefined();
+    expect(viewType("out/a.sql")).toBe("text/plain; charset=utf-8");
+    expect(viewType("out/a.zip")).toBeUndefined();
   });
 });

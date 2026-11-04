@@ -1,6 +1,6 @@
 import { createContext, memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { baseName } from "../../shared/attachments.ts";
-import { MAX_FILE_BYTES, MAX_LISTED, previewType, underUploads, uploadBatches, uploadTargets, ZIP_ROUTE, zipRefusal } from "../../shared/uploads.ts";
+import { MAX_FILE_BYTES, MAX_LISTED, underUploads, uploadBatches, uploadTargets, ZIP_ROUTE, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -112,6 +112,37 @@ interface Selection {
 /** Null outside select mode: the tree then shows no checkboxes. */
 const SelectionContext = createContext<Selection | null>(null);
 
+/** The file open in the preview, and how a click on a name opens one. */
+interface Opening {
+  open: string | null;
+  onOpen: (path: string) => void;
+}
+
+const OpeningContext = createContext<Opening>({ open: null, onOpen: () => {} });
+
+/**
+ * A file's name, which opens it in the preview beside the chat; with a modifier key, or from the context menu,
+ * it opens in a tab of its own, as the browser shows it (a file the preview reads as text then downloads).
+ */
+function FileName({ path, title }: { path: string; title: string }) {
+  const { open, onOpen } = useContext(OpeningContext);
+  return (
+    <a
+      className={open === path ? "file-name active" : "file-name"}
+      href={api.fileViewUrl(path)}
+      title={`${title} · preview`}
+      aria-current={open === path ? "true" : undefined}
+      onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        onOpen(path);
+      }}
+    >
+      {baseName(path)}
+    </a>
+  );
+}
+
 /** Whether a folder above `path` is picked, which picks `path` too. */
 function inPickedFolder(picked: ReadonlyMap<string, Kind>, path: string): boolean {
   for (let slash = path.indexOf("/"); slash !== -1; slash = path.indexOf("/", slash + 1)) {
@@ -176,16 +207,7 @@ const FolderView = memo(function FolderView({ folder, depth, expand }: { folder:
         return (
           <div key={file.path} className="file-row">
             <Pick path={file.path} kind="file" />
-            {previewType(file.path) ? (
-              // An image opens in a new tab to look at; the Worker serves it so nothing in it can run.
-              <a className="file-name" href={api.fileUrl(file.path)} target="_blank" rel="noopener" title={`${title} · open in a new tab`}>
-                {name}
-              </a>
-            ) : (
-              <span className="file-name" title={title}>
-                {name}
-              </span>
-            )}
+            <FileName path={file.path} title={title} />
             <a className="file-action" href={api.fileUrl(file.path)} download={name} title={`Download ${name}`}>
               <DownloadIcon />
             </a>
@@ -281,7 +303,20 @@ function ensureDownloadFrame(): void {
  * The sidebar's files, in a panel at its bottom that opens and closes (remembered in this browser): a folder tree,
  * the two pickers, and how the last upload went. Re-renders only when one of those changes, not on every drag over the app.
  */
-export const FilesNav = memo(function FilesNav({ files, status, upload }: { files: readonly FileInfo[]; status: UploadStatus | null; upload: (picked: Picked[]) => Promise<void> }) {
+export const FilesNav = memo(function FilesNav({
+  files,
+  status,
+  upload,
+  openFile,
+  onOpenFile,
+}: {
+  files: readonly FileInfo[];
+  status: UploadStatus | null;
+  upload: (picked: Picked[]) => Promise<void>;
+  /** The file showing in the preview, marked in the tree. */
+  openFile: string | null;
+  onOpenFile: (path: string) => void;
+}) {
   const [open, setOpen] = useStoredState("layout.filesOpen", true, isBoolean);
   const [query, setQuery] = useState("");
   // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
@@ -310,6 +345,7 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
       },
     [picked],
   );
+  const opening = useMemo<Opening>(() => ({ open: openFile, onOpen: onOpenFile }), [openFile, onOpenFile]);
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
     // Cleared, so picking the same files again (after changing them) uploads them again.
@@ -352,9 +388,11 @@ export const FilesNav = memo(function FilesNav({ files, status, upload }: { file
             />
           )}
           <nav className="files">
-            <SelectionContext.Provider value={selection}>
-              <FolderView folder={root} depth={0} expand={!!search} />
-            </SelectionContext.Provider>
+            <OpeningContext.Provider value={opening}>
+              <SelectionContext.Provider value={selection}>
+                <FolderView folder={root} depth={0} expand={!!search} />
+              </SelectionContext.Provider>
+            </OpeningContext.Provider>
             {search && !root.matches && <small className="files-empty">No files match.</small>}
           </nav>
           <div className="upload-actions">

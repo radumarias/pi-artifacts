@@ -7,12 +7,16 @@ import {
   MAX_UPLOAD_BYTES,
   MAX_ZIP_BYTES,
   MAX_ZIP_FILES,
+  previewKind,
   previewType,
   uploadTargets,
+  VIEW_PARAM,
+  viewType,
   ZIP_ROUTE,
   zipRefusal,
 } from "../shared/uploads.ts";
 import { formatBytes } from "../shared/util.ts";
+import { ARTIFACT_CSP } from "./artifacts/serve.ts";
 import { json } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
 import type { FileEntry, UserFiles } from "./storage/user-files.ts";
@@ -28,8 +32,10 @@ const FORM_OVERHEAD = 1024 * 1024;
  * folder's layout is kept under uploads/. `userFiles` are the signed-in user's.
  */
 export async function filesRoute(request: Request, userFiles: () => Promise<UserFiles>): Promise<Response | undefined> {
-  const { pathname } = new URL(request.url);
-  if (request.method === "GET" && pathname.startsWith(FILE_ROUTE)) return serveFile(await userFiles(), urlPath(pathname.slice(FILE_ROUTE.length)));
+  const { pathname, searchParams } = new URL(request.url);
+  if (request.method === "GET" && pathname.startsWith(FILE_ROUTE)) {
+    return serveFile(await userFiles(), urlPath(pathname.slice(FILE_ROUTE.length)), searchParams.has(VIEW_PARAM));
+  }
   if (request.method === "GET" && pathname.startsWith(ZIP_ROUTE)) return serveZip(await userFiles(), urlPath(pathname.slice(ZIP_ROUTE.length)));
   if (request.method === "POST" && pathname === ZIP_ROUTE) return serveSelection(request, await userFiles());
   if (pathname !== "/api/files") return undefined;
@@ -93,14 +99,35 @@ function urlPath(encoded: string): string {
   return normalisePath(path.replace(/\/+$/, ""));
 }
 
-/** One user file: shown in the browser when it is an image (shared/uploads.ts previewType), saved otherwise. */
-async function serveFile(files: UserFiles, path: string): Promise<Response> {
+/**
+ * A web page viewed from the user's files runs as an artifact does (worker/artifacts/serve.ts): in an opaque origin
+ * whether framed by the preview or opened in a tab of its own, with scripts only inline or from the usual CDNs, and
+ * no network of its own, so it can neither act as the user in the app nor send their data anywhere.
+ */
+const PAGE_HEADERS = {
+  ...SERVED_HEADERS,
+  "content-security-policy": ARTIFACT_CSP,
+  "referrer-policy": "no-referrer",
+};
+
+/**
+ * A PDF opens in the browser's own viewer, which a sandbox (header or frame) would block. It runs no script of
+ * the app's: the viewer is the browser's, and the policy still keeps the document from loading anything.
+ */
+const PDF_HEADERS = { ...SERVED_HEADERS, "content-security-policy": "default-src 'none'; object-src 'self'; style-src 'unsafe-inline'" };
+
+/**
+ * One user file: an image shows in the browser (shared/uploads.ts previewType), anything else downloads. With
+ * `view` (the app's preview, or opening it in a tab) a file of a kind the app previews shows too, as viewType says.
+ */
+async function serveFile(files: UserFiles, path: string, view: boolean): Promise<Response> {
   const object = await files.get(path);
   if (!object) return json({ error: "No such file" }, 404);
-  const inline = previewType(path);
+  const inline = view ? viewType(path) : previewType(path);
+  const kind = inline && previewKind(path);
   return new Response(object.body, {
     headers: {
-      ...SERVED_HEADERS,
+      ...(kind === "html" ? PAGE_HEADERS : kind === "pdf" ? PDF_HEADERS : SERVED_HEADERS),
       "content-type": inline ?? "application/octet-stream",
       "content-length": String(object.size),
       "content-disposition": `${inline ? "inline" : "attachment"}; filename="${baseName(path)}"`,

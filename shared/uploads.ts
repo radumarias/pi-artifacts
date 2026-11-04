@@ -109,11 +109,10 @@ export function uploadBatches<T>(files: readonly T[], size: (file: T) => number)
 }
 
 /**
- * The image types a user file opens as in the browser, by extension; every
- * other file only downloads. Raster formats and SVG, which the Worker serves
- * with a sandboxing CSP so its scripts cannot run.
+ * The image types a user file opens as in the browser, by extension. Raster
+ * formats and SVG, which the Worker serves with a sandboxing CSP so its scripts cannot run.
  */
-const PREVIEW_TYPES: ReadonlyMap<string, string> = new Map([
+const IMAGE_TYPES: ReadonlyMap<string, string> = new Map([
   ["png", "image/png"],
   ["jpg", "image/jpeg"],
   ["jpeg", "image/jpeg"],
@@ -125,12 +124,58 @@ const PREVIEW_TYPES: ReadonlyMap<string, string> = new Map([
   ["svg", "image/svg+xml"],
 ]);
 
-/** The content type `path` opens as in the browser, or undefined when it only downloads. */
+/** The content type an image `path` opens as in the browser, or undefined when it is no image (and only downloads from a plain link). */
 export function previewType(path: string): string | undefined {
-  return PREVIEW_TYPES.get(extension(path));
+  return IMAGE_TYPES.get(extension(path));
 }
 
-/** Where a user file is served from (`<prefix><path>`): an image opens in the browser, anything else downloads. */
+/**
+ * How the app previews a user file: an image as itself, a web page in a sandboxed frame, a PDF in the browser's
+ * viewer, Markdown rendered, a CSV or TSV as a table, and plain text and code as text (highlighted where the app
+ * knows the language). A file of another kind is read as text when it is text.
+ */
+export type PreviewKind = "image" | "html" | "pdf" | "markdown" | "table" | "text";
+
+const TEXT_EXTENSIONS =
+  "txt text log out err json jsonl ndjson geojson yaml yml toml ini cfg conf properties xml rss plist " +
+  "sql js mjs cjs jsx ts mts cts tsx py pyi ipynb r rb go rs java kt kts scala swift c h cc cpp cxx hpp hh cs fs php pl lua dart zig " +
+  "ex exs erl hs ml clj sh bash zsh fish ps1 bat cmd css scss sass less vue svelte astro graphql gql proto tf hcl " +
+  "mk cmake gradle diff patch tex bib rst adoc org";
+const KINDS: ReadonlyMap<string, PreviewKind> = new Map([
+  ...[...IMAGE_TYPES.keys()].map((ext) => [ext, "image"] as const),
+  ...TEXT_EXTENSIONS.split(" ").map((ext) => [ext, "text"] as const),
+  ["html", "html"],
+  ["htm", "html"],
+  ["pdf", "pdf"],
+  ["md", "markdown"],
+  ["markdown", "markdown"],
+  ["mdx", "markdown"],
+  ["csv", "table"],
+  ["tsv", "table"],
+]);
+
+/** How the app previews `path`, by its extension; undefined for one it does not know, which may still be text. */
+export function previewKind(path: string): PreviewKind | undefined {
+  return KINDS.get(extension(path));
+}
+
+/**
+ * The content type `path` is served as for viewing (FILE_ROUTE with VIEW_PARAM): an image as itself, a web page as
+ * HTML (under a sandboxing policy, see worker/files-routes.ts), a PDF as a PDF, and a text file as plain text.
+ * Undefined for a file of another kind, which downloads.
+ */
+export function viewType(path: string): string | undefined {
+  const kind = previewKind(path);
+  if (kind === "image") return previewType(path);
+  if (kind === "html") return "text/html; charset=utf-8";
+  if (kind === "pdf") return "application/pdf";
+  return kind ? "text/plain; charset=utf-8" : undefined;
+}
+
+/** The query parameter that asks FILE_ROUTE to show a file in the browser (viewType) rather than download it. */
+export const VIEW_PARAM = "view";
+
+/** Where a user file is served from (`<prefix><path>`): an image opens in the browser, anything else downloads unless VIEW_PARAM asks to view it. */
 export const FILE_ROUTE = "/api/files/raw/";
 /**
  * Where a user folder downloads from (GET `<prefix><path>`), as a zip named after it with the folder itself at its

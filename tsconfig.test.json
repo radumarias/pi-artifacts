@@ -34,6 +34,8 @@
     "src/chat/Thinking.tsx",
     "src/chat/Steps.tsx",
     "src/chat/Linkified.tsx",
+    "src/files/highlight.ts",
+    "src/files/preview.ts",
     "src/artifact/viewport.tsx",
     "src/Icon.tsx",
     "src/layout.tsx",

@@ -9,6 +9,7 @@ import { ChatList, UnreadDot, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
 import { DeleteChat } from "./chat/DeleteChat.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import { FilePreview } from "./files/FilePreview.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
 import { isBoolean, ResizeHandle, SectionHead, useStoredState } from "./layout.tsx";
@@ -172,10 +173,13 @@ interface WorkspaceProps {
 }
 
 /** The artifact beside the chat, and the newest version the chat knows of, once it does. */
-interface Preview {
+interface ArtifactPreview {
   artifactId: string;
   version?: number;
 }
+
+/** What shows beside the chat: an artifact, or one of the user's files. */
+type Preview = ArtifactPreview | { file: string };
 
 const SIDEBAR_DEFAULT = 240;
 const SIDEBAR_MIN = 180;
@@ -219,11 +223,14 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   }, [chatId, opening]);
   // A new publish always shows; the chat's newest artifact on load only when none was asked for.
   const onArtifact = useCallback(
-    (artifact: Preview, loading?: boolean) => {
+    (artifact: ArtifactPreview, loading?: boolean) => {
       if (!loading || !opening) setPreview(artifact);
     },
     [opening],
   );
+
+  const openFile = useCallback((file: string) => setPreview({ file }), []);
+  const closePreview = useCallback(() => setPreview(null), []);
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
   const proposed = (skills ?? []).filter((s) => s.origin === "agent" && !s.enabled).length;
@@ -341,7 +348,13 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
               </a>
             </nav>
           </section>
-          <FilesNav files={files} status={uploadStatus} upload={upload} />
+          <FilesNav
+            files={files}
+            status={uploadStatus}
+            upload={upload}
+            openFile={preview && "file" in preview ? preview.file : null}
+            onOpenFile={openFile}
+          />
           <AccountMenu label={label} onSignOut={onSignOut} />
         </aside>
       )}
@@ -405,11 +418,16 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
           Drop files or folders to upload them, or on the message box to send them with your message
         </div>
       )}
-      {preview && (
-        <ErrorBoundary key={preview.artifactId} what="the preview">
-          <ArtifactPanel artifactId={preview.artifactId} latestKnown={preview.version} uid={uid} onClose={() => setPreview(null)} />
-        </ErrorBoundary>
-      )}
+      {preview &&
+        ("file" in preview ? (
+          <ErrorBoundary key={`file:${preview.file}`} what="the preview">
+            <FilePreview path={preview.file} files={files} onOpen={openFile} onClose={closePreview} />
+          </ErrorBoundary>
+        ) : (
+          <ErrorBoundary key={preview.artifactId} what="the preview">
+            <ArtifactPanel artifactId={preview.artifactId} latestKnown={preview.version} uid={uid} onClose={closePreview} />
+          </ErrorBoundary>
+        ))}
     </div>
   );
 }
