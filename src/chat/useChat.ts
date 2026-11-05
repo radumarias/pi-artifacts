@@ -44,14 +44,7 @@ type Action =
    * its running calls, by call id. `queued`: the messages waiting after the batch, when it changed them; in the same
    * action, so one moves from queued to placed at once.
    */
-  | {
-      type: "events";
-      events: AgentEvent[];
-      at: number;
-      runElapsedMs?: number;
-      toolsElapsedMs?: Readonly<Record<string, number>>;
-      queued?: QueuedMessage[];
-    }
+  | (Omit<Extract<ChatServerMessage, { type: "events" }>, "events"> & { events: AgentEvent[]; at: number })
   | { type: "error"; message?: string }
   | { type: "reset" };
 
@@ -76,7 +69,9 @@ export function reduce(state: ChatState, action: Action): ChatState {
         const busy = event.run !== undefined;
         // A duration from the server, applied to this clock: the two clocks need not agree. Without one (the server
         // could not tell), a snapshot after an overflow keeps the start already known.
-        const started = action.runElapsedMs === undefined ? next.runStartedAt : action.at - Math.max(0, action.runElapsedMs);
+        const started = startFrom(action.at, action.runElapsedMs, next.runStartedAt);
+        const known = next.tools;
+        const runningSince = (id: string) => known.find((t) => t.toolCallId === id && t.status === "running")?.startedAt;
         next = withAgent(
           {
             entries: [...event.entries],
@@ -85,13 +80,14 @@ export function reduce(state: ChatState, action: Action): ChatState {
             // A slot done without a result entry faulted or was orphaned: it stays in the round as stopped.
             tools: event.tools
               .filter((t) => t.status !== "done" || t.entry === undefined)
-              .map((t) => {
-                const status = t.status === "done" ? "stopped" : t.status;
-                const tool: RunningTool = { toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status };
-                return status === "running"
-                  ? { ...tool, startedAt: toolStart(next.tools, t.callId, action.at, action.toolsElapsedMs?.[t.callId]) }
-                  : tool;
-              }),
+              .map((t) => ({
+                toolCallId: t.callId,
+                toolName: t.name,
+                output: t.output ?? "",
+                status: t.status === "done" ? "stopped" : t.status,
+                // A call still running from before the socket (re)connected counts on from where it was, else from now.
+                startedAt: t.status === "running" ? (startFrom(action.at, action.toolsElapsedMs?.[t.callId], runningSince(t.callId)) ?? action.at) : undefined,
+              })),
             busy,
             runStartedAt: busy ? (started ?? action.at) : undefined,
             queued: next.queued,
@@ -187,12 +183,11 @@ export function reduce(state: ChatState, action: Action): ChatState {
 }
 
 /**
- * When a running call of a snapshot started: by the server's duration, applied to this clock; else when this browser saw
- * it start; else (it started before the socket connected) now.
+ * When something a snapshot reports started: by the server's duration, applied to this clock (the two clocks need not
+ * agree), else the start already `known`.
  */
-function toolStart(known: readonly RunningTool[], callId: string, at: number, elapsedMs: number | undefined): number {
-  if (elapsedMs !== undefined) return at - Math.max(0, elapsedMs);
-  return known.find((t) => t.toolCallId === callId && t.status === "running")?.startedAt ?? at;
+function startFrom(at: number, elapsedMs: number | undefined, known: number | undefined): number | undefined {
+  return elapsedMs === undefined ? known : at - Math.max(0, elapsedMs);
 }
 
 /** `value` with `delta` appended to the string at `path`, copying only what is on the way there. */
@@ -283,14 +278,7 @@ export function useChat(chatId: string) {
         // that stalls) is retried ever more slowly, not every few seconds.
         if (message.type === "events") {
           attempt = 0;
-          dispatch({
-            type: "events",
-            events: message.events as AgentEvent[],
-            at: Date.now(),
-            runElapsedMs: message.runElapsedMs,
-            toolsElapsedMs: message.toolsElapsedMs,
-            queued: message.queued,
-          });
+          dispatch({ ...message, events: message.events as AgentEvent[], at: Date.now() });
         } else if (message.type === "people") setPeople(message.people);
         else if (message.type === "reactions") setReactions((known) => keepSame(known, message.reactions));
         else if (message.type === "reacted") setReactions((known) => withEntry(known, message.entry, message.reactions));

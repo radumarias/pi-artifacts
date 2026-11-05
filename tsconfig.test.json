@@ -33,6 +33,7 @@
     "src/api.ts",
     "src/chat/Markdown.tsx",
     "src/chat/Thinking.tsx",
+    "src/chat/elapsed.ts",
     "src/chat/SentTime.tsx",
     "src/chat/gestures.ts",
     "src/chat/Steps.tsx",

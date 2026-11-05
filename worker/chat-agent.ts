@@ -1688,14 +1688,12 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
     const now = Date.now();
-    const runElapsedMs = started === undefined ? undefined : Math.max(0, now - started);
-    const tools = Object.entries(toolsStarted ?? {});
-    const toolsElapsedMs = tools.length ? Object.fromEntries(tools.map(([id, at]) => [id, Math.max(0, now - at)])) : undefined;
+    const since = (at: number) => Math.max(0, now - at);
     return {
       type: "events",
       events: batch.map(withoutImageData),
-      runElapsedMs,
-      ...(toolsElapsedMs && { toolsElapsedMs }),
+      runElapsedMs: started === undefined ? undefined : since(started),
+      toolsElapsedMs: toolsStarted && Object.fromEntries(Object.entries(toolsStarted).map(([id, at]) => [id, since(at)])),
       ...(queued && { queued }),
     };
   }

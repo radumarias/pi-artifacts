@@ -4,7 +4,7 @@ import { createContext, use, useMemo, useState, type ReactNode } from "react";
 import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
 import { clip, formatBytes, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
-import { formatElapsed, useElapsed } from "./Thinking.tsx";
+import { formatElapsed, useElapsed } from "./elapsed.ts";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
 /** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
@@ -175,8 +175,11 @@ function resultText(result: ToolResultMessage): string {
   return result.content.map((block) => (block.type === "text" ? block.text : "[image]")).join("\n");
 }
 
-function seconds(ms: number): string {
-  return ms < 1_000 ? `${Math.round(ms)} ms` : `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+/** How long a finished step took: like the count it showed while running ("47s", "2m 5s"), finer under 10 s ("1.2s", "40ms"). */
+export function tookFor(ms: number): string {
+  // From where a tenth would round up to 10.0.
+  if (ms >= 9_950) return formatElapsed(Math.max(ms, 10_000));
+  return ms < 1_000 ? `${Math.round(ms)}ms` : `${(ms / 1_000).toFixed(1)}s`;
 }
 
 /** Panels the reader opened, by key: one stays open when its streaming message becomes an entry and remounts. */
@@ -295,7 +298,7 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
   const { text, icon, tone } = STATUS[status];
   const startedAt = status === "running" ? live!.tools.get(call.id)?.startedAt : undefined;
-  const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
+  const time = result?.durationMs !== undefined ? ` · ${tookFor(result.durationMs)}` : "";
   const shown = startedAt === undefined ? text + time : <RunningFor text={text} since={startedAt} />;
   const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label: stepLabel(call.name), status: shown };
   const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { THINKING_WORDS, Thinking, formatElapsed, nextWord } from "../src/chat/Thinking.tsx";
+import { formatElapsed } from "../src/chat/elapsed.ts";
+import { THINKING_WORDS, Thinking, nextWord } from "../src/chat/Thinking.tsx";
 import { reduce, unansweredCalls, waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
 
 const idle: ChatState = { entries: [], tools: [], busy: false, queued: [] };
