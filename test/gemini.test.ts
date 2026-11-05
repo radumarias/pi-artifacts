@@ -3,7 +3,7 @@ import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createAI } from "agents/models/pi-ai";
 import { catalogFrom, listedProviders, withEffortRecorded } from "../worker/models.ts";
-import { GeminiCompat, sign, UNSIGNED } from "../worker/gemini.ts";
+import { GeminiCompat, showThoughts, sign, UNSIGNED } from "../worker/gemini.ts";
 
 const GEMINI = "google-ai-studio/gemini-test";
 const catalog = catalogFrom({ checkedAt: 1, providers: { "google-ai-studio": { status: "ok", models: [{ id: "gemini-test", reasoning: true }] } } });
@@ -22,6 +22,22 @@ function callingAnswer(id: string, signature: string | undefined): Response {
     { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
   ];
   // In small pieces, splitting lines and characters, as the network may.
+  const bytes = new TextEncoder().encode(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join("") + "data: [DONE]\r\n\r\n");
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let at = 0; at < bytes.length; at += 7) controller.enqueue(bytes.slice(at, at + 7));
+      controller.close();
+    },
+  });
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
+/** A streamed answer of `chunks`, each a `choices[0].delta`, sent in small pieces that split lines and characters. */
+function answerOf(...deltas: object[]): Response {
+  const chunks = [
+    ...deltas.map((delta) => ({ id: "r", choices: [{ index: 0, delta }] })),
+    { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+  ];
   const bytes = new TextEncoder().encode(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join("") + "data: [DONE]\r\n\r\n");
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -149,5 +165,69 @@ describe("Gemini's thought signatures", () => {
       [UNSIGNED, undefined],
       ["SIG-C", undefined],
     ]);
+  });
+});
+
+describe("Gemini's thought summaries", () => {
+  const thought = (content: string) => ({ content, extra_content: { google: { thought: true } } });
+
+  it("asks for them, with the effort as a thinking level instead of reasoning_effort", async () => {
+    const { models, model, requests } = chat(() => answerOf({ content: "hi" }));
+    await models.streamSimple(model, { messages: [user] }, { reasoning: "high" }).result();
+    expect(requests[0].body.reasoning_effort).toBeUndefined();
+    expect(requests[0].body.extra_body).toEqual({ google: { thinking_config: { thinking_level: "high", include_thoughts: true } } });
+  });
+
+  it("gives Gemini 2.5 a thinking budget, and leaves a request without an effort it maps alone", () => {
+    const flash = { model: "gemini-2.5-flash", reasoning_effort: "medium", messages: [] };
+    showThoughts(flash, "gemini-2.5-flash");
+    expect(flash).toEqual({
+      model: "gemini-2.5-flash",
+      messages: [],
+      extra_body: { google: { thinking_config: { thinking_budget: 8_192, include_thoughts: true } } },
+    });
+    const off = { reasoning_effort: "none" };
+    showThoughts(off, "gemini-2.5-flash");
+    expect(off).toEqual({ reasoning_effort: "none" });
+    const plain = { messages: [] };
+    showThoughts(plain, "gemini-2.0-flash");
+    expect(plain).toEqual({ messages: [] });
+  });
+
+  it("shows flagged summaries as thinking, not as the reply's text", async () => {
+    const { models, model } = chat(() => answerOf(thought("**Planning**\n\nI will "), thought("look it up."), { content: "Here it is." }));
+    const reply = await models.streamSimple(model, { messages: [user] }, { reasoning: "high" }).result();
+    expect(reply.stopReason).toBe("stop");
+    expect(reply.content).toMatchObject([
+      { type: "thinking", thinking: "**Planning**\n\nI will look it up." },
+      { type: "text", text: "Here it is." },
+    ]);
+  });
+
+  it("reads summaries in <thought> tags that close in a later chunk", async () => {
+    const { models, model } = chat(() =>
+      answerOf({ content: "<thought>Weighing " }, { content: "it" }, { content: " up.</thought>Done." }, { content: " <thought> stays text" }),
+    );
+    const reply = await models.streamSimple(model, { messages: [user] }, { reasoning: "low" }).result();
+    expect(reply.content).toMatchObject([
+      { type: "thinking", thinking: "Weighing it up." },
+      { type: "text", text: "Done. <thought> stays text" },
+    ]);
+    const later = chat(() => answerOf({ content: "Hi. " }, { content: "<thought>x</thought>" }));
+    const said = await later.models.streamSimple(later.model, { messages: [user] }, { reasoning: "low" }).result();
+    expect(said.content).toMatchObject([{ type: "text", text: "Hi. <thought>x</thought>" }]);
+  });
+
+  it("does not send them back to Gemini", async () => {
+    const { models, model, requests } = chat(
+      () => answerOf(thought("Thinking."), { content: "Hello." }),
+      () => answerOf({ content: "Again." }),
+    );
+    const reply = await models.streamSimple(model, { messages: [user] }, { reasoning: "high" }).result();
+    const context: Context = { messages: [user, reply, { role: "user", content: "and?", timestamp: 4 }] };
+    await models.streamSimple(model, context, { reasoning: "high" }).result();
+    const assistant = requests[1].body.messages.find((message: any) => message.role === "assistant");
+    expect(assistant).toMatchObject({ content: "Hello." });
+    expect(assistant.reasoning_content).toBeUndefined();
   });
 });
