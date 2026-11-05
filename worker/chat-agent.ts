@@ -637,6 +637,7 @@ export class ChatAgent extends DurableObject<Env> {
       ...(attached && { attachments: attached.attachments }),
       ...(mentions.length && { mentions }),
       ...(quote && { replyTo: quote }),
+      sentAt: Date.now(),
     } satisfies ChatMessageData;
     if (summoned) await this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
     else await this.#aside(content, data);

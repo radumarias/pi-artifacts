@@ -46,7 +46,7 @@ function ActionIcon({ name }: { name: keyof typeof ICONS }) {
 }
 
 /**
- * The bar a message shows on hover (always on touch screens): react, answer, copy, and "…" with the same plus a copy
+ * The bar a message shows on hover (always on touch screens): react, copy, answer, and "…" with the same plus a copy
  * as Markdown. `content` is where its bubbles are, `text` what it says as plain text (Markdown for the agent's
  * replies), `reactions` its reactions, for a message that takes them.
  */
@@ -61,7 +61,7 @@ export function MessageActions({
   text: string;
   reactions: MessageReactions | null;
   onReply?: () => void;
-  /** Beside a person's bubble, on hover, taking no room; otherwise a row of its own (under the agent's replies). */
+  /** Over the top corner of a person's bubble, on hover, taking no room; otherwise a row of its own (under the agent's replies). */
   floating?: boolean;
 }) {
   const [open, setOpenAs] = useState<"react" | "more" | null>(null);
@@ -115,10 +115,12 @@ export function MessageActions({
   const toggle = (which: "react" | "more") => () => setOpen(open === which ? null : which);
   return (
     <div ref={box} className={["message-actions", floating && "floating", open && "open"].filter(Boolean).join(" ")}>
-      {reactions && button("Add a reaction", "react", toggle("react"), "react")}
-      {onReply && button("Reply", "reply", onReply)}
-      {text && button(copyLabel, copied === "yes" ? "copied" : "copy", () => copy())}
-      {button("More", "more", toggle("more"), "more")}
+      <div className="message-tools">
+        {reactions && button("Add a reaction", "react", toggle("react"), "react")}
+        {text && button(copyLabel, copied === "yes" ? "copied" : "copy", () => copy())}
+        {onReply && button("Reply", "reply", onReply)}
+        {button("More", "more", toggle("more"), "more")}
+      </div>
       {open && (
         <div ref={menu} id={menuId} className={place ? `message-menu ${place}` : "message-menu"} role={open === "more" ? "menu" : undefined}>
           {reactions && <EmojiRow onPick={pick} isMine={reactions.mine} />}

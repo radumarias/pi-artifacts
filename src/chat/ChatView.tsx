@@ -26,6 +26,7 @@ import { textOf } from "../../shared/canonical.ts";
 import { AGENT_NAME, AGENT_TOKEN, type Mention } from "../../shared/mentions.ts";
 import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
+import { SentTime } from "./SentTime.tsx";
 import { ReactionChips, ReactionsContext, useMessageReactions, type MessageReactions } from "./Reactions.tsx";
 import { isReactable, type EntryReactions } from "../../shared/reactions.ts";
 import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
@@ -380,7 +381,7 @@ const Entry = memo(function Entry({
   const answer = quote ? () => onReply(quote) : undefined;
   if (entry.kind === "pi.user" && message?.role === "user") {
     const author = ownerName === undefined ? undefined : { uid: people?.owner.uid ?? "", name: ownerName };
-    return <User text={userText(message)} author={author} uid={uid} />;
+    return <User text={userText(message)} author={author} uid={uid} sentAt={message.timestamp} />;
   }
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as unknown as ChatMessageData;
@@ -392,6 +393,8 @@ const Entry = memo(function Entry({
         attachments={data.attachments}
         mentions={data.mentions}
         replyTo={data.replyTo}
+        // Messages from before it was kept have only the time pi wrote them, and asides not even that.
+        sentAt={data.sentAt ?? message?.timestamp}
         // In the transcript, a message that called the agent was picked up: it was placed in its run.
         picked={data.summoned}
         reactions={reactions}
@@ -531,6 +534,7 @@ function User({
   mentions,
   replyTo,
   picked,
+  sentAt,
   reactions = null,
   onReply,
 }: {
@@ -542,6 +546,8 @@ function User({
   mentions?: Mention[];
   replyTo?: ReplyQuote;
   picked?: boolean;
+  /** When it was sent, shown under it on hover; none in the queue, which says so instead. */
+  sentAt?: number;
   reactions?: MessageReactions | null;
   onReply?: () => void;
 }) {
@@ -576,12 +582,13 @@ function User({
         </div>
       )}
       {bubble && files}
-      {/* Beside the bubble, or the files when there is no text. */}
+      {/* Over the top corner of the bubble, or of the files when there is no text. */}
       <div className="bubble-row">
         {bubble || files}
         <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} floating />
       </div>
       <ReactionChips reactions={reactions} picked={picked} mine={mine} />
+      {sentAt !== undefined && <SentTime at={sentAt} />}
     </div>
   );
 }
@@ -723,7 +730,12 @@ function Assistant({
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
       {text && <ReactionChips reactions={reactions} />}
-      {text && <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} />}
+      {text && (
+        <div className="message-foot">
+          <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} />
+          <SentTime at={message.timestamp} />
+        </div>
+      )}
     </div>
   );
 }

@@ -282,6 +282,8 @@ export interface ChatMessageData extends Person {
   summoned?: true;
   /** The message this one answers, quoted as it was when it was sent. */
   replyTo?: ReplyQuote;
+  /** When it was sent (ms since the epoch), which for a message that waited in the queue is before it was written. */
+  sentAt?: number;
 }
 
 /** A message a reply quotes: its transcript entry, who wrote it (the agent, or a person) and the start of its text. */
