@@ -84,7 +84,7 @@ import {
   type Catalog,
 } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
-import { mcpAuthStore, saveSystemPrompt, SYSTEM_PROMPT_KEY, type Tag } from "./users.ts";
+import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, type Tag } from "./users.ts";
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
@@ -562,13 +562,13 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** What the agent's prompt adds from the owner (see systemPromptExtension): read for every model request. */
   async #systemPrompts(): Promise<UserPrompts> {
-    return { user: await (this.#userPrompt ?? this.refreshUserPrompt()), chat: this.ctx.storage.kv.get<string>(SYSTEM_PROMPT_KEY) ?? "" };
+    return { user: await (this.#userPrompt ?? this.refreshUserPrompt()), chat: readSystemPrompt(this.ctx.storage.kv) };
   }
 
   /** The chat's system prompt, for someone in it: everyone may read it, only the owner change it. */
   chatSystemPrompt(uid: string): ChatSystemPrompt | ChatRefusal {
     if (!this.isInChat(uid)) return refuse(403, "You are not in this chat.");
-    return { text: this.ctx.storage.kv.get<string>(SYSTEM_PROMPT_KEY) ?? "", editable: uid === this.uid };
+    return { text: readSystemPrompt(this.ctx.storage.kv), editable: uid === this.uid };
   }
 
   /**

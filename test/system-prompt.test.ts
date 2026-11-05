@@ -20,24 +20,24 @@ describe("checkSystemPrompt", () => {
 });
 
 describe("userSystemPrompt", () => {
-  it("is left out when the owner wrote neither", () => {
-    expect(userSystemPrompt({ user: "", chat: "" })).toBeUndefined();
+  it("stays in its place when the owner wrote neither, so writing one later patches only it", () => {
+    expect(userSystemPrompt({ user: "", chat: "" })).toBe("The chat's owner wrote no instructions of their own.");
   });
 
   it("has the owner's own prompt alone", () => {
-    const text = userSystemPrompt({ user: "Answer in French.", chat: "" })!;
+    const text = userSystemPrompt({ user: "Answer in French.", chat: "" });
     expect(text).toContain("For all their chats:\nAnswer in French.");
     expect(text).not.toContain("For this chat");
   });
 
   it("has the chat's alone, without pointing to one above", () => {
-    const text = userSystemPrompt({ user: "", chat: "Prices in EUR." })!;
+    const text = userSystemPrompt({ user: "", chat: "Prices in EUR." });
     expect(text).toContain("For this chat:\nPrices in EUR.");
     expect(text).not.toContain("For all their chats");
   });
 
   it("puts the chat's after the owner's, and lets it win", () => {
-    const text = userSystemPrompt({ user: "Prices in USD.", chat: "Prices in EUR." })!;
+    const text = userSystemPrompt({ user: "Prices in USD.", chat: "Prices in EUR." });
     expect(text.indexOf("Prices in USD.")).toBeLessThan(text.indexOf("Prices in EUR."));
     expect(text).toContain("these win");
   });
@@ -53,7 +53,7 @@ describe("systemPromptExtension", () => {
     const [section] = systemPromptExtension(async () => prompts).sections!;
     const render = () => section.render(undefined as never, undefined as never);
     expect(section.tag).not.toBe(false);
-    expect(await render()).toBeUndefined();
+    expect(await render()).toContain("no instructions");
     prompts = { user: "Be brief.", chat: "" };
     expect(await render()).toContain("Be brief.");
   });

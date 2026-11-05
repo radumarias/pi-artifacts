@@ -48,7 +48,8 @@ export interface UserPrompts {
 
 /**
  * The owner's own system prompts, after the built-in sections, which they add to and never replace. Rendered for every
- * model request, so a change shows from the next one; none written, no section.
+ * model request, so a change shows from the next one. Always there, also with none written: pi patches a changed
+ * section in place, but a section that comes or goes among the ones installed after it rewrites the whole prompt.
  */
 export function systemPromptExtension(prompts: () => Promise<UserPrompts>): Extension {
   return defineExtension({
@@ -57,9 +58,9 @@ export function systemPromptExtension(prompts: () => Promise<UserPrompts>): Exte
   });
 }
 
-/** The section's text: undefined, which leaves it out, when the owner wrote neither prompt. */
-export function userSystemPrompt({ user, chat }: UserPrompts): string | undefined {
-  if (!user && !chat) return undefined;
+/** The section's text. */
+export function userSystemPrompt({ user, chat }: UserPrompts): string {
+  if (!user && !chat) return "The chat's owner wrote no instructions of their own.";
   const parts = [
     "The chat's owner wrote these instructions for you. Follow them in every reply, as you would their own words; " +
       "where they disagree with the rules above for pages, those rules win, since the page's check and sandbox enforce them.",

@@ -15,7 +15,12 @@ export function mcpAuthStore(uid: string, server: string): McpAuthStore {
 }
 
 /** Where a user's, or a chat's, own system prompt is kept, in its object's KV storage. */
-export const SYSTEM_PROMPT_KEY = "systemPrompt";
+const SYSTEM_PROMPT_KEY = "systemPrompt";
+
+/** The system prompt kept under SYSTEM_PROMPT_KEY in `kv`; "" for none. */
+export function readSystemPrompt(kv: SyncKvStorage): string {
+  return kv.get<string>(SYSTEM_PROMPT_KEY) ?? "";
+}
 
 /** Check `value` as a system prompt and keep it under SYSTEM_PROMPT_KEY in `kv`; empty clears it. */
 export function saveSystemPrompt(kv: SyncKvStorage, value: unknown): { text: string } | { error: string } {
@@ -458,7 +463,7 @@ export class UserDirectory extends DurableObject<Env> {
 
   /** The user's own system prompt, added to the built-in one in all their chats; "" for none. Always theirs to change. */
   systemPrompt(): ChatSystemPrompt {
-    return { text: this.ctx.storage.kv.get<string>(SYSTEM_PROMPT_KEY) ?? "", editable: true };
+    return { text: readSystemPrompt(this.ctx.storage.kv), editable: true };
   }
 
   /** Save the user's system prompt; their chats use it from their next message on. */
