@@ -290,10 +290,13 @@ body.resizing iframe { pointer-events: none; }
   .message-actions.floating { position: absolute; left: 0; right: 0; bottom: calc(100% - 4px); z-index: 5; display: flex; justify-content: flex-end; pointer-events: none; }
   .message.other .message-actions.floating { justify-content: safe flex-end; }
   .floating > .message-tools {
-    gap: 4px; padding: 3px; pointer-events: auto;
+    gap: 4px; padding: 3px;
     border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / 0.1);
   }
-  .floating > .message-menu { pointer-events: auto; }
+  /* Clickable only while shown: hidden, it would take the clicks meant for the message above, which it covers. */
+  .message:is(:hover, :focus-within) .floating > .message-tools, .floating.open > .message-tools, .floating > .message-menu { pointer-events: auto; }
+  /* An open menu over the next message stays above that message's pill. */
+  .message-actions.floating.open { z-index: 6; }
   .floating .icon-button { padding: 4px; border-radius: 8px; }
   .floating .icon-button:hover, .floating .icon-button[aria-expanded="true"] { background: var(--surface-2); }
   .floating svg { width: 16px; height: 16px; }

@@ -35,6 +35,17 @@ describe("when a message was sent", () => {
     expect(sentLabel(at, now, { locale: "en-GB", timeZone: "Europe/Bucharest" })).toBe("1:00");
   });
 
+  it("says yesterday by the calendar, across a day the clocks went forward", () => {
+    // Europe/Bucharest went to summer time on 2026-03-29, a 23-hour day: 00:30 on the 30th is 24.5 hours after
+    // 23:00 on the 28th, and only 23.5 hours after 23:00 on the 29th (yesterday).
+    const opts = { locale: "en-GB", timeZone: "Europe/Bucharest" };
+    const at = (iso: string) => Date.parse(iso);
+    const after = at("2026-03-29T21:30:00Z"); // 00:30 on the 30th, summer time
+    expect(sentLabel(at("2026-03-29T20:00:00Z"), after, opts)).toBe("Yesterday, 23:00");
+    expect(sentLabel(at("2026-03-28T21:00:00Z"), after, opts)).toBe("28 Mar, 23:00");
+    expect(sentLabel(at("2026-03-29T08:00:00Z"), after, opts)).toBe("Yesterday, 11:00");
+  });
+
   it("renders a time element with the full date for machines", () => {
     const html = renderToStaticMarkup(<SentTime at={Date.UTC(2026, 10, 3, 8, 0)} />);
     expect(html).toContain('class="sent-time"');

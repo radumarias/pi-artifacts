@@ -583,6 +583,8 @@ export class ChatAgent extends DurableObject<Env> {
     mentionInputs: readonly MentionInput[] = [],
     replyTo?: number,
   ): Promise<void> {
+    // When it came in: the refreshes and copies below can take seconds.
+    const sentAt = Date.now();
     this.#requireInChat(author);
     const shared = this.members.hasAny();
     const quote = replyTo === undefined ? null : await this.#quote(replyTo);
@@ -637,7 +639,7 @@ export class ChatAgent extends DurableObject<Env> {
       ...(attached && { attachments: attached.attachments }),
       ...(mentions.length && { mentions }),
       ...(quote && { replyTo: quote }),
-      sentAt: Date.now(),
+      sentAt,
     } satisfies ChatMessageData;
     if (summoned) await this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
     else await this.#aside(content, data);
