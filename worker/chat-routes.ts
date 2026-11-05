@@ -49,13 +49,12 @@ export async function chatRoute(
   const method = request.method;
   const answer = (refusal: ChatRefusal | null) => (refusal ? json({ error: refusal.error }, refusal.status) : json({}));
 
-  let person = signedIn;
   if (url.pathname === "/api/invites/accept" && method === "POST") {
     const token = parseInviteToken((await readJson<{ token?: unknown }>(request))?.token);
     // Checked against the owner's index first, so a made-up token never wakes a chat object.
     const title = token && (await exports.UserDirectory.getByName(token.ownerUid).chatTitle(token.chatId));
     if (!token || !title) return json({ error: "This invite link is not valid." }, 404);
-    const refused = await exports.ChatAgent.getByName(chatAgentName(token.ownerUid, token.chatId)).acceptInvite(token.secret, person, title);
+    const refused = await exports.ChatAgent.getByName(chatAgentName(token.ownerUid, token.chatId)).acceptInvite(token.secret, signedIn, title);
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 
@@ -68,7 +67,7 @@ export async function chatRoute(
       request,
       file[2],
       () => filesOf(ownerUid),
-      (path) => chat.mayOpenFile(person.uid, path),
+      (path) => chat.mayOpenFile(signedIn.uid, path),
     );
   }
 
@@ -83,14 +82,13 @@ export async function chatRoute(
     return json({});
   }
   // Own chats and chats shared with this user.
+  const deny = (error: string, status: number) => (isSocket ? closedSocket(SOCKET_NOT_A_MEMBER, error) : json({ error }, status));
   const ownerUid = await directory.chatOwner(chatId);
-  if (!ownerUid) return isSocket ? closedSocket(SOCKET_NOT_A_MEMBER, "No such chat") : json({ error: "No such chat" }, 404);
+  if (!ownerUid) return deny("No such chat", 404);
   const chat = exports.ChatAgent.getByName(chatAgentName(ownerUid, chatId));
-  if (url.searchParams.get(SEAT_PARAM) === SECOND_SEAT) {
-    const refusal = "Only the chat's owner can sit in it a second time.";
-    if (ownerUid !== person.uid) return isSocket ? closedSocket(SOCKET_NOT_A_MEMBER, refusal) : json({ error: refusal }, 403);
-    person = secondSeat(person);
-  }
+  const seated = url.searchParams.get(SEAT_PARAM) === SECOND_SEAT;
+  if (seated && ownerUid !== signedIn.uid) return deny("Only the chat's owner can sit in it a second time.", 403);
+  const person = seated ? secondSeat(signedIn) : signedIn;
 
   if (isSocket) {
     // Set here, from the verified identity, replacing anything the browser sent under that name.
@@ -120,7 +118,7 @@ export async function chatRoute(
     const offered = (artifacts: ArtifactSummary[]) => artifacts.map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId }));
     if (person.uid !== ownerUid) {
       // The owner's second seat is their account: it has no files of its own.
-      const own = person === signedIn ? filesOf(person.uid).then((f) => f.list()) : [];
+      const own = seated ? [] : filesOf(person.uid).then((f) => f.list());
       const [contents, ownFiles] = await Promise.all([chat.contents(person.uid), own]);
       if (!contents) return json({ error: "You are not in this chat." }, 403);
       return json({

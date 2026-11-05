@@ -428,7 +428,6 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
             <ChatView
               chatId={chatId}
               uid={secondSeat ? secondSeatUid(uid) : uid}
-              secondSeat={secondSeat}
               onArtifact={onArtifact}
               onActivity={onActivity}
               onLeft={() => navigate("/")}

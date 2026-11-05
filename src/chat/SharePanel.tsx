@@ -7,8 +7,6 @@ interface Props {
   chatId: string;
   uid: string;
   isOwner: boolean;
-  /** This window is the owner's second seat in the chat (secondSeat). */
-  secondSeat: boolean;
   /** Who is in the chat and, for its owner, the open invites: live from the chat's socket. */
   people: ChatPeopleView;
   onLeft: () => void;
@@ -19,7 +17,7 @@ interface Props {
  * The chat's people. Its owner invites by link, removes members, and can join a second time as a member (secondSeat)
  * to try the chat as they see it; a member can leave.
  */
-export function SharePanel({ chatId, uid, isOwner, secondSeat, people, onLeft, onClose }: Props) {
+export function SharePanel({ chatId, uid, isOwner, people, onLeft, onClose }: Props) {
   const [created, setCreated] = useState<CreatedInvite | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Once the link is used or revoked, its invite leaves the open list: stop offering a dead link. Only once the list
@@ -48,7 +46,8 @@ export function SharePanel({ chatId, uid, isOwner, secondSeat, people, onLeft, o
       setCreated(invite);
     });
 
-  const seat = people.members.find((member) => member.uid === secondSeatUid(people.owner.uid));
+  const seatUid = secondSeatUid(people.owner.uid);
+  const seat = people.members.find((member) => member.uid === seatUid);
   // The tab opens at the click, as a browser allows, and goes to the chat once the seat is there.
   const joinSecondSeat = () =>
     void act(async () => {
@@ -63,9 +62,10 @@ export function SharePanel({ chatId, uid, isOwner, secondSeat, people, onLeft, o
     });
 
   const leave = () => {
-    const question = secondSeat
-      ? "Leave this chat as your second seat? You can join again from Share in your own window."
-      : "Leave this chat? You need a new invite to come back.";
+    const question =
+      uid === seatUid
+        ? "Leave this chat as your second seat? You can join again from Share in your own window."
+        : "Leave this chat? You need a new invite to come back.";
     if (!confirm(question)) return;
     void act(async () => {
       await api.removeMember(chatId, uid);
@@ -102,7 +102,8 @@ export function SharePanel({ chatId, uid, isOwner, secondSeat, people, onLeft, o
         </li>
         {people.members.map((member) => (
           <li key={member.uid}>
-            {member.name} {member.uid === uid ? <small>you</small> : isOwner && member === seat && <small>you, second seat</small>}
+            {member.name} {member.uid === uid && <small>you</small>}
+            {isOwner && member.uid === seatUid && <small>you, second seat</small>}
             {isOwner && (
               <button type="button" onClick={() => void act(() => api.removeMember(chatId, member.uid))}>
                 Remove

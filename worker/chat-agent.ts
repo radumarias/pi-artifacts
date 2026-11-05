@@ -669,7 +669,7 @@ export class ChatAgent extends DurableObject<Env> {
       this.#tellSharedOnce();
       return true;
     }
-    if (person.uid !== this.#secondSeat) void this.#index(person.uid).removeSharedChat(this.chatId, this.uid);
+    if (this.#hasSidebar(person.uid)) void this.#index(person.uid).removeSharedChat(this.chatId, this.uid);
     return false;
   }
 
@@ -712,8 +712,7 @@ export class ChatAgent extends DurableObject<Env> {
     const byOwner = author.uid === this.uid;
     // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works. The
     // owner's second seat has none of its own.
-    const ownless = byOwner || author.uid === this.#secondSeat;
-    const own = ownless ? [] : mentionInputs.filter((input): input is OwnFile => input.kind === "file" && input.own === true);
+    const own = this.#account(author.uid) === this.uid ? [] : mentionInputs.filter((input): input is OwnFile => input.kind === "file" && input.own === true);
     const attaching = Promise.all([
       // Someone else attaches only what they uploaded here, or a file the chat already holds: no other of the owner's.
       byOwner ? attachments : this.#attachable(author.uid, attachments),
@@ -1025,19 +1024,22 @@ export class ChatAgent extends DurableObject<Env> {
     return exports.UserDirectory.getByName(uid);
   }
 
-  /** The owner's second seat in this chat (secondSeat): a member, but the owner's account, with no sidebar or files of its own. */
-  get #secondSeat(): string {
-    return secondSeatUid(this.uid);
-  }
-
-  /** Whose account someone in the chat is: their own, or for the owner's second seat the owner's. */
+  /**
+   * Whose account someone in the chat is: their own, or for the owner's second seat (secondSeat) the owner's. Only
+   * someone with an account of their own has a sidebar (a directory) and files; the seat has neither.
+   */
   #account(uid: string): string {
-    return uid === this.#secondSeat ? this.uid : uid;
+    return uid === secondSeatUid(this.uid) ? this.uid : uid;
   }
 
-  /** The members with a sidebar of their own that lists this chat: all but the owner's second seat. */
+  /** Whether `uid`, someone other than the owner, has a sidebar of their own that lists this chat. */
+  #hasSidebar(uid: string): boolean {
+    return this.#account(uid) === uid;
+  }
+
+  /** The members whose sidebars list this chat: all but the owner's second seat. */
   #listingMembers(): Person[] {
-    return this.members.list().filter((member) => member.uid !== this.#secondSeat);
+    return this.members.list().filter((member) => this.#hasSidebar(member.uid));
   }
 
   /** The owner's directory and each member's: every sidebar that lists this chat. */
@@ -1090,9 +1092,7 @@ export class ChatAgent extends DurableObject<Env> {
       await index.removeSharedChat(this.chatId, this.uid).catch(() => {});
       return refuse(403, failed.error);
     }
-    this.sockets.broadcastPeople();
-    this.#notePeople(person, "joined");
-    this.#tellShared();
+    this.#joined(person);
     return null;
   }
 
@@ -1107,10 +1107,15 @@ export class ChatAgent extends DurableObject<Env> {
     if (this.members.has(seat.uid)) return null;
     const full = this.members.add(seat);
     if (full) return refuse(409, full.error);
-    this.sockets.broadcastPeople();
-    this.#notePeople(seat, "joined");
-    this.#tellShared();
+    this.#joined(seat);
     return null;
+  }
+
+  /** Someone new is in the chat: everyone's app and the transcript hear it, and the owner's sidebar that it is shared. */
+  #joined(person: Person): void {
+    this.sockets.broadcastPeople();
+    this.#notePeople(person, "joined");
+    this.#tellShared();
   }
 
   /**
@@ -1143,7 +1148,7 @@ export class ChatAgent extends DurableObject<Env> {
     this.#tellShared();
     // The agent acts as the owner: a removed person's queued requests must not run after they are out.
     await this.#withdrawQueued(uid).catch((error: unknown) => console.error("withdraw queued:", errorMessage(error)));
-    if (uid !== this.#secondSeat) await this.#index(uid).removeSharedChat(this.chatId, this.uid);
+    if (this.#hasSidebar(uid)) await this.#index(uid).removeSharedChat(this.chatId, this.uid);
     return null;
   }
 

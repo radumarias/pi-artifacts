@@ -106,12 +106,11 @@ describe("ChatMembers", () => {
 });
 
 describe("the owner's second seat", () => {
-  it("joins with no invite, once, and leaves like any member", async () => {
+  it("joins with no invite and leaves like any member", async () => {
     const members = new ChatMembers(memorySql());
     const seat = secondSeat(ann);
     expect(seat).toEqual({ uid: secondSeatUid("ann"), name: "ann@example.com (2)" });
     expect(members.add(seat, T0)).toBeNull();
-    expect(members.add(seat, T0 + 1)).toBeNull();
     expect(members.list()).toEqual([seat]);
     expect(members.invites(T0)).toEqual([]);
     expect(members.remove(seat.uid)).toEqual(seat);

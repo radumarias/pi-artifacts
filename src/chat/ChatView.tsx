@@ -52,8 +52,6 @@ interface Props {
   chatId: string;
   /** The signed-in user: their own messages show without a name. */
   uid: string;
-  /** The window is the owner's second seat in the chat (secondSeat), and `uid` that seat's. */
-  secondSeat: boolean;
   /** Called with the newest artifact this chat published, on load (`loading`) and on every publish, and with one the user opens. */
   onArtifact: (artifact: PublishedDetails, loading?: boolean) => void;
   onActivity: () => void;
@@ -71,7 +69,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
-export function ChatView({ chatId, uid, secondSeat, onArtifact, onActivity, onLeft }: Props) {
+export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
   const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react } = useChat(chatId);
   const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
@@ -230,9 +228,7 @@ export function ChatView({ chatId, uid, secondSeat, onArtifact, onActivity, onLe
               </button>
             )}
           </header>
-          {sharing && people && (
-            <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} secondSeat={secondSeat} people={people} onLeft={onLeft} onClose={closeSharing} />
-          )}
+          {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} onClose={closeSharing} />}
           <StepsProvider entries={state.entries} tools={state.tools} busy={state.busy}>
             <Compact.Provider value={compact}>
               <div className="messages" ref={list} onScroll={onScroll} data-compact={compact || undefined}>

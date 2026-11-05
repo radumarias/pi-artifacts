@@ -153,9 +153,8 @@ export class ChatMembers {
     return null;
   }
 
-  /** Add a member with no invite: the owner's second seat (secondSeat), which the owner adds for themselves. */
+  /** Add someone not yet a member, with no invite: the owner's second seat (secondSeat), which the owner adds for themselves. */
   add(person: Person, now = Date.now()): { error: string } | null {
-    if (this.has(person.uid)) return null;
     const full = this.#full();
     if (full) return full;
     this.#insert(person, now);

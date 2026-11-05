@@ -48,12 +48,18 @@ export function inSecondSeat(search = location.search): boolean {
   return new URLSearchParams(search).get(SEAT_PARAM) === SECOND_SEAT;
 }
 
-/** Where the owner's second seat in a chat opens. */
-export const secondSeatPath = (chatId: string) => `/c/${chatId}?${SEAT_PARAM}=${SECOND_SEAT}`;
+const SEAT_QUERY = `?${SEAT_PARAM}=${SECOND_SEAT}`;
 
-/** The URL of one of a chat's routes; from a second seat's window, as that seat. */
+/** Where the owner's second seat in a chat opens. */
+export const secondSeatPath = (chatId: string) => `/c/${chatId}${SEAT_QUERY}`;
+
+/**
+ * The URL of one of the open chat's routes: from a second seat's window, as that seat. Only the chat the window shows:
+ * the sidebar beside it is the owner's.
+ */
 function chatPath(chatId: string, rest: string): string {
-  return `/api/chats/${chatId}${rest}${inSecondSeat() ? `?${SEAT_PARAM}=${SECOND_SEAT}` : ""}`;
+  const seated = location.pathname === `/c/${chatId}` && inSecondSeat();
+  return `/api/chats/${chatId}${rest}${seated ? SEAT_QUERY : ""}`;
 }
 
 /** The JSON body of a successful response; otherwise throws with the Worker's error message. */
