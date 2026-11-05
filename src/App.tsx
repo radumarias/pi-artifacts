@@ -51,7 +51,9 @@ export function App() {
   const { me } = session;
   // Deployed, Cloudflare Access signs people in before the app loads; a 401 here means the session lapsed.
   if (me === null && session.auth === "access") return <AccessExpired />;
-  if (me === null) return <SignIn onSignedIn={(uid) => setSession({ me: { uid, auth: "demo" }, auth: "demo" })} />;
+  // Asked again rather than built here, so the session has everything /api/me tells (the home site, too).
+  if (me === null)
+    return <SignIn onSignedIn={(uid) => api.me().then(setSession, () => setSession({ me: { uid, auth: "demo" }, auth: "demo" }))} />;
 
   const shared = path.match(/^\/a\/([a-z0-9]+)$/);
   if (shared) {

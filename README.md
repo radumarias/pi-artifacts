@@ -507,7 +507,10 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
    [How file encryption works](#how-file-encryption-works)). Pass it as a secret:
    `cf deploy --secrets-file secrets.json` with `{"FILES_MASTER_KEY": "…"}`, then delete `secrets.json`. Later deploys
    keep the secret, so they need no `--secrets-file` unless it changes.
-6. `pnpm run deploy` (`cf deploy`). This builds the sandbox image with Docker and needs the Workers Paid plan.
+6. Optionally, name the website people open the app from: `PI_HOME_SITE_URL` (https) and `PI_HOME_SITE_NAME` at
+   deploy time put a "Back to <name>" link in the sidebar. The site may name the page to come back to in its link to
+   the app as `?from=<url>`, on its own origin. Leave both unset for no link.
+7. `pnpm run deploy` (`cf deploy`). This builds the sandbox image with Docker and needs the Workers Paid plan.
 
 ## Who can read what
 

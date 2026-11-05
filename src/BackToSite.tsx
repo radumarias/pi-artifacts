@@ -3,6 +3,9 @@ import { Icon } from "./Icon.tsx";
 
 const STORE_KEY = "pi:from";
 
+/** The page the site's link named, read once when the app loads (see rememberFromPage). */
+let fromPage: string | null = null;
+
 /**
  * Keep the page the site's link named (`?from=`) for this tab, and take it out of the address bar. Run before the app
  * reads its location. Kept per tab, so moving between chats, or a sign-in on the way in, does not lose it.
@@ -10,22 +13,16 @@ const STORE_KEY = "pi:from";
 export function rememberFromPage(): void {
   const url = new URL(location.href);
   const from = url.searchParams.get(FROM_PARAM);
-  if (from === null) return;
   try {
-    sessionStorage.setItem(STORE_KEY, from);
+    if (from === null) fromPage = sessionStorage.getItem(STORE_KEY);
+    else sessionStorage.setItem(STORE_KEY, from);
   } catch {
-    // Storage off (a private window, blocked site data): the link goes to the site's own URL.
+    // Storage off (a private window, blocked site data): only this page load knows it.
   }
+  if (from === null) return;
+  fromPage = from;
   url.searchParams.delete(FROM_PARAM);
   history.replaceState(history.state, "", url);
-}
-
-function rememberedFromPage(): string | null {
-  try {
-    return sessionStorage.getItem(STORE_KEY);
-  } catch {
-    return null;
-  }
 }
 
 /** A link back to the website the app was opened from, in this tab. `compact`: the arrow alone, for the sidebar rail. */
@@ -34,7 +31,7 @@ export function BackToSite({ site, compact = false }: { site: HomeSite; compact?
   return (
     <a
       className={compact ? "back-to-site compact" : "back-to-site"}
-      href={backUrl(site, rememberedFromPage())}
+      href={backUrl(site, fromPage)}
       title={label}
       aria-label={compact ? label : undefined}
     >
