@@ -91,6 +91,10 @@ export function MessageActions({
   const [pressedAt, setPressedAt] = useState<{ x: number; y: number } | null>(null);
   useLongPress(content, compact, (x, y) => setPressedAt({ x, y }));
   const unpress = useCallback(() => setPressedAt(null), []);
+  // A window widened past compact while the menu was open closes it, so it does not come back when it narrows again.
+  useEffect(() => {
+    if (!compact) setPressedAt(null);
+  }, [compact]);
   const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);

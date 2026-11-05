@@ -325,6 +325,8 @@ body.resizing iframe { pointer-events: none; }
 /* Phones keep the long press for the menu: text is selected from it ("Select text"), not by holding a message. */
 @media (hover: none) {
   :is(.message, .assistant):not(.selecting) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* The callout is inherited: links keep the browser's own long press (OWN_PRESS in gestures.ts). */
+  :is(.message, .assistant) a { -webkit-touch-callout: default; }
 }
 .press-layer { position: fixed; inset: 0; z-index: 50; }
 .press-emoji, .press-menu { position: fixed; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 8px 28px rgb(0 0 0 / 0.18); }

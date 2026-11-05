@@ -48,8 +48,9 @@ function swallowNextClick(): void {
 const OWN_PRESS = "a, button, input, textarea, select, summary";
 
 /**
- * Calls `onPress` with where `target` was pressed, once it is held still for a moment or right-clicked (which is also
- * how Android reports a long press). Only while `on`.
+ * Calls `onPress` with where `target` was pressed, once a finger (or pen) holds it still for a moment, or on a right
+ * click (which is also how Android reports a long press). A mouse only right-clicks: holding its button still is
+ * how a text selection starts. Only while `on`.
  */
 export function useLongPress(target: RefObject<HTMLElement | null>, on: boolean, onPress: (x: number, y: number) => void): void {
   const latest = useRef(onPress);
@@ -59,12 +60,15 @@ export function useLongPress(target: RefObject<HTMLElement | null>, on: boolean,
     if (!on || !el) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let start: { x: number; y: number; id: number } | undefined;
+    // Whether a press is held (followed on the window), and whether it has opened the menu.
+    let held = false;
     let fired = false;
     // Followed on the window while pressed: a drag of the conversation captures the pointer, and its moves never
     // reach the message, but must still cancel the press.
     const cancel = () => {
       clearTimeout(timer);
       start = undefined;
+      held = false;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
@@ -78,10 +82,11 @@ export function useLongPress(target: RefObject<HTMLElement | null>, on: boolean,
       cancel();
     };
     const down = (event: PointerEvent) => {
-      if (!event.isPrimary || event.button !== 0 || (event.target as Element).closest(OWN_PRESS)) return;
+      if (!event.isPrimary || event.button !== 0 || event.pointerType === "mouse" || (event.target as Element).closest(OWN_PRESS)) return;
       cancel();
       const at = { x: event.clientX, y: event.clientY, id: event.pointerId };
       start = at;
+      held = true;
       fired = false;
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
@@ -97,10 +102,11 @@ export function useLongPress(target: RefObject<HTMLElement | null>, on: boolean,
       if ((event.target as Element).closest(OWN_PRESS)) return;
       event.preventDefault();
       // Android reports a long press both ways, in either order: one menu, and the press still ends in a swallowed click.
-      if (fired) return;
+      // A right click holds no press, and each one opens the menu.
+      if (held && fired) return;
       clearTimeout(timer);
       start = undefined;
-      fired = true;
+      fired = held;
       latest.current(event.clientX, event.clientY);
     };
     el.addEventListener("pointerdown", down);
@@ -111,6 +117,14 @@ export function useLongPress(target: RefObject<HTMLElement | null>, on: boolean,
       el.removeEventListener("contextmenu", menu);
     };
   }, [target, on]);
+}
+
+/** Whether `target` is in something under `root` that scrolls sideways (a wide code block or table): a drag there scrolls it. */
+function inSideScroller(target: EventTarget | null, root: HTMLElement): boolean {
+  for (let node = target instanceof Element ? target : null; node && node !== root; node = node.parentElement) {
+    if (node.scrollWidth > node.clientWidth && /auto|scroll/.test(getComputedStyle(node).overflowX)) return true;
+  }
+  return false;
 }
 
 /** How far the conversation moves to the left at most, uncovering the times beside its messages. */
@@ -135,7 +149,7 @@ export function useSwipeReveal(list: RefObject<HTMLElement | null>, track: RefOb
       moved.style.transform = px ? `translateX(${-px}px)` : "";
     };
     const down = (event: PointerEvent) => {
-      if (!event.isPrimary || event.button !== 0) return;
+      if (!event.isPrimary || event.button !== 0 || inSideScroller(event.target, el)) return;
       start = { x: event.clientX, y: event.clientY, id: event.pointerId };
       axis = undefined;
     };

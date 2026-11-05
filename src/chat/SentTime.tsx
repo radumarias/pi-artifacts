@@ -148,7 +148,8 @@ export function DaySeparator({ at }: { at: number }) {
   const text = useSyncExternalStore(subscribe, label, label);
   return (
     <div className="day-separator" role="separator">
-      <time dateTime={new Date(at).toISOString().slice(0, 10)}>{text}</time>
+      {/* The viewer's calendar day, which the label names, not the day in UTC. */}
+      <time dateTime={new Date(calendarDay(at)).toISOString().slice(0, 10)}>{text}</time>
     </div>
   );
 }
