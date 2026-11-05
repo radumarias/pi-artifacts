@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { secondSeat, secondSeatUid, UID_PATTERN } from "../shared/protocol.ts";
 import { ChatMembers, formatInviteToken, INVITE_TTL_MS, MAX_OPEN_INVITES, parseInviteToken } from "../worker/members.ts";
 import { memorySql } from "./fakes.ts";
 
@@ -101,6 +102,34 @@ describe("ChatMembers", () => {
     const sql = memorySql();
     await new ChatMembers(sql).accept((await invited(new ChatMembers(sql))).secret, ann, T0);
     expect(new ChatMembers(sql).list()).toEqual([ann]);
+  });
+});
+
+describe("the owner's second seat", () => {
+  it("joins with no invite, once, and leaves like any member", async () => {
+    const members = new ChatMembers(memorySql());
+    const seat = secondSeat(ann);
+    expect(seat).toEqual({ uid: secondSeatUid("ann"), name: "ann@example.com (2)" });
+    expect(members.add(seat, T0)).toBeNull();
+    expect(members.add(seat, T0 + 1)).toBeNull();
+    expect(members.list()).toEqual([seat]);
+    expect(members.invites(T0)).toEqual([]);
+    expect(members.remove(seat.uid)).toEqual(seat);
+    expect(members.hasAny()).toBe(false);
+  });
+
+  it("counts toward the members a chat can have", async () => {
+    const members = new ChatMembers(memorySql());
+    for (let i = 0; i < 20; i++) expect(members.add({ uid: `m${i}`, name: `m${i}` }, T0 + i)).toBeNull();
+    expect(members.add(secondSeat(ann), T0 + 20)).toEqual({ error: expect.stringContaining("the most there can be") });
+  });
+
+  it("has a uid that is a valid uid and never anyone's own", () => {
+    const access = "0123456789abcdef0123456789abcdef";
+    expect(secondSeatUid(access)).toMatch(UID_PATTERN);
+    // Access uids are hex: a seat's has a dash, so no one signs in as it.
+    expect(secondSeatUid(access)).not.toMatch(/^[a-f0-9]+$/);
+    expect(secondSeatUid(access)).not.toBe(secondSeatUid("fedcba9876543210fedcba9876543210"));
   });
 });
 

@@ -3,6 +3,8 @@ import type { ModelCatalog } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import { FILE_ROUTE, VIEW_PARAM, ZIP_ROUTE } from "../shared/uploads.ts";
 import {
+  SEAT_PARAM,
+  SECOND_SEAT,
   SOCKET_PING,
   type ArtifactSummary,
   type ArtifactView,
@@ -40,6 +42,19 @@ const responseError = (response: Response, body: unknown) =>
   Object.assign(new Error((body as { error?: string } | null)?.error ?? (response.statusText || `HTTP ${response.status}`)), {
     status: response.status,
   });
+
+/** Whether this window sits in its chat as the owner's second seat (secondSeat), which its URL says. */
+export function inSecondSeat(search = location.search): boolean {
+  return new URLSearchParams(search).get(SEAT_PARAM) === SECOND_SEAT;
+}
+
+/** Where the owner's second seat in a chat opens. */
+export const secondSeatPath = (chatId: string) => `/c/${chatId}?${SEAT_PARAM}=${SECOND_SEAT}`;
+
+/** The URL of one of a chat's routes; from a second seat's window, as that seat. */
+function chatPath(chatId: string, rest: string): string {
+  return `/api/chats/${chatId}${rest}${inSecondSeat() ? `?${SEAT_PARAM}=${SECOND_SEAT}` : ""}`;
+}
 
 /** The JSON body of a successful response; otherwise throws with the Worker's error message. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -95,7 +110,9 @@ export const api = {
   createInvite: (chatId: string) => request<CreatedInvite>(`/api/chats/${chatId}/invites`, post({})),
   revokeInvite: (chatId: string, inviteId: string) => request<object>(`/api/chats/${chatId}/invites/${inviteId}`, { method: "DELETE" }),
   /** The owner removes a member; a member passes their own uid to leave. */
-  removeMember: (chatId: string, uid: string) => request<object>(`/api/chats/${chatId}/members/${uid}`, { method: "DELETE" }),
+  removeMember: (chatId: string, uid: string) => request<object>(chatPath(chatId, `/members/${uid}`), { method: "DELETE" }),
+  /** The owner joins their chat a second time, as a member (secondSeat); open it at secondSeatPath. */
+  joinSecondSeat: (chatId: string) => request<object>(`/api/chats/${chatId}/seat`, post({})),
   acceptInvite: (token: string) => request<{ chatId: string }>("/api/invites/accept", post({ token })),
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
   models: () => request<ModelCatalog>("/api/models"),
@@ -156,12 +173,12 @@ export const api = {
   upload: (files: readonly { file: File; path: string }[]) => request<{ paths: string[] }>("/api/files", { method: "POST", body: uploadForm(files) }),
   /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */
   attach: (chatId: string, files: readonly { file: File; path: string }[]) =>
-    request<{ paths: string[] }>(`/api/chats/${chatId}/attachments`, { method: "POST", body: uploadForm(files) }),
+    request<{ paths: string[] }>(chatPath(chatId, "/attachments"), { method: "POST", body: uploadForm(files) }),
   /** For someone a chat is shared with: what it holds of its owner's, its files and artifacts. */
-  chatContents: (chatId: string) => request<ChatContents>(`/api/chats/${chatId}/contents`),
+  chatContents: (chatId: string) => request<ChatContents>(chatPath(chatId, "/contents")),
   /** What "@" offers in a chat's composer: the files and artifacts the chat's agent can open. */
-  mentions: (chatId: string) => request<MentionOptions>(`/api/chats/${chatId}/mentions`),
-  chatSocketUrl: (chatId: string) => socketUrl(`/api/chats/${chatId}/ws`),
+  mentions: (chatId: string) => request<MentionOptions>(chatPath(chatId, "/mentions")),
+  chatSocketUrl: (chatId: string) => socketUrl(chatPath(chatId, "/ws")),
   /** The sidebar's socket, which says when the chat list changed. */
   sidebarSocketUrl: () => socketUrl("/api/me/ws"),
 };

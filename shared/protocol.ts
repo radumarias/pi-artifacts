@@ -236,6 +236,23 @@ export interface Person {
   name: string;
 }
 
+/**
+ * A chat's owner can also sit in it a second time, as a separate person ("Ada (2)") who is a member like anyone they
+ * invited: to try the chat as the people they share it with see it, from the one sign-in. That window's URL says so
+ * (`?as=second`), and its requests carry it; the Worker turns only the verified owner into this person, for their own
+ * chats, so nobody else can be it. Its uid cannot be anyone's own: those are hex (or demo slugs, which prove nothing).
+ */
+export const SEAT_PARAM = "as";
+export const SECOND_SEAT = "second";
+
+export function secondSeatUid(uid: string): string {
+  return `${uid.slice(0, 26)}-seat2`;
+}
+
+export function secondSeat(owner: Person): Person {
+  return { uid: secondSeatUid(owner.uid), name: `${owner.name} (2)` };
+}
+
 /** Everyone in a chat: its owner first, then its members as they joined. */
 export function everyone(people: ChatPeople): Person[] {
   return [people.owner, ...people.members];

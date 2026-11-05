@@ -404,6 +404,8 @@ button.reaction:hover { border-color: var(--muted); }
 .share-warning { margin: 0; font-size: 13px; color: var(--muted); }
 .invite-link { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
 .invite-link input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.second-seat { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; padding-top: 8px; border-top: 1px solid var(--border); }
+.second-seat a { color: var(--accent); }
 .invite-link small { flex-basis: 100%; }
 /* Markdown replies: the bubble's pre-wrap would double the spacing Markdown already gives. */
 .bubble.markdown { white-space: normal; }
