@@ -26,5 +26,6 @@ describe("home site", () => {
     expect(backUrl(site, "http://www.example.com/")).toBe(site.url);
     expect(backUrl(site, "javascript:alert(1)")).toBe(site.url);
     expect(backUrl(site, "/relative")).toBe(site.url);
+    expect(backUrl(site, "blob:https://www.example.com/0c1d")).toBe(site.url);
   });
 });

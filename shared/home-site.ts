@@ -25,7 +25,9 @@ export function homeSite(url: string | undefined, name: string | undefined): Hom
  */
 export function backUrl(site: HomeSite, from: string | null | undefined): string {
   const page = parseUrl(from);
-  return page && page.origin === new URL(site.url).origin ? page.href : site.url;
+  const home = new URL(site.url);
+  // The protocol too: a blob: URL reports the origin it was made on.
+  return page && page.protocol === home.protocol && page.origin === home.origin ? page.href : site.url;
 }
 
 function parseUrl(value: string | null | undefined): URL | undefined {
