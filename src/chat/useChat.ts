@@ -86,7 +86,8 @@ export function reduce(state: ChatState, action: Action): ChatState {
                 output: t.output ?? "",
                 status: t.status === "done" ? "stopped" : t.status,
                 // A call still running from before the socket (re)connected counts on from where it was, else from now.
-                startedAt: t.status === "running" ? (startFrom(action.at, action.toolsElapsedMs?.[t.callId], runningSince(t.callId)) ?? action.at) : undefined,
+                startedAt:
+                  t.status === "running" ? (startFrom(action.at, action.toolsElapsedMs?.[t.callId], runningSince(t.callId)) ?? action.at) : undefined,
               })),
             busy,
             runStartedAt: busy ? (started ?? action.at) : undefined,
