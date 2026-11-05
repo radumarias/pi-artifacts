@@ -100,4 +100,21 @@ describe("elapsed time", () => {
     const again = reduce(running, { type: "events", at: 20_000, events: [{ type: "snapshot", entries: [], tools: [], run: { inputs: [] } }] as never });
     expect(again.runStartedAt).toBe(5_000);
   });
+
+  it("times each running call: from its start, else the server's duration, else the start it knows, else the snapshot", () => {
+    const call = { toolName: "run_python" };
+    const started = reduce(busy, { type: "events", at: 5_000, events: [{ type: "tool_execution_start", toolCallId: "a", ...call, args: {} }] as never });
+    expect(started.tools[0].startedAt).toBe(5_000);
+    const slots = [
+      { callId: "a", name: "run_python", status: "running" },
+      { callId: "b", name: "run_python", status: "running" },
+      { callId: "c", name: "run_python", status: "running" },
+      { callId: "d", name: "run_python", status: "pending" },
+    ];
+    const snapshot = { type: "snapshot", entries: [], tools: slots, run: { inputs: [] } };
+    const again = reduce(started, { type: "events", at: 20_000, toolsElapsedMs: { b: 3_000, c: -1 }, events: [snapshot] as never });
+    expect(again.tools.map((t) => t.startedAt)).toEqual([5_000, 17_000, 20_000, undefined]);
+    const fresh = reduce(idle, { type: "events", at: 20_000, events: [snapshot] as never });
+    expect(fresh.tools[0].startedAt).toBe(20_000);
+  });
 });

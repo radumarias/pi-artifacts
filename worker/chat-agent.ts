@@ -215,6 +215,7 @@ export class ChatAgent extends DurableObject<Env> {
   readonly sockets = new ChatSockets({
     events: () => this.harness.session().events(),
     runStartedAt: (snapshot) => this.runStartedAt(snapshot),
+    toolsStartedAt: (snapshot) => this.toolsStartedAt(snapshot),
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
     queued: (ids) => this.queued(ids),
@@ -367,6 +368,23 @@ export class ChatAgent extends DurableObject<Env> {
     } catch (error) {
       console.error("run start:", errorMessage(error));
       return undefined;
+    }
+  }
+
+  /**
+   * When each call of the snapshot's round that is running now started, by its call id: its tool task's first change to
+   * running. A call whose task can't be read is left out (the browser then counts from when it connected).
+   */
+  async toolsStartedAt(snapshot: SnapshotEvent): Promise<Record<string, number>> {
+    const running = snapshot.tools.filter((slot) => slot.status === "running" && slot.taskId);
+    if (!running.length) return {};
+    try {
+      const pi = await this.harness.pi();
+      const tasks = await Promise.all(running.map((slot) => pi.getTask(slot.taskId!, BACKGROUND_CONTEXT)));
+      return Object.fromEntries(running.flatMap((slot, i) => (tasks[i]?.startedAt === undefined ? [] : [[slot.callId, tasks[i].startedAt]])));
+    } catch (error) {
+      console.error("tool start:", errorMessage(error));
+      return {};
     }
   }
 
@@ -1414,6 +1432,7 @@ interface Routing {
 interface ChatSession {
   events(): Promise<AgentEventStream>;
   runStartedAt(snapshot: SnapshotEvent): Promise<number | undefined>;
+  toolsStartedAt(snapshot: SnapshotEvent): Promise<Record<string, number>>;
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
   queued(ids: readonly number[]): Promise<QueuedMessage[]>;
@@ -1624,7 +1643,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       // After events(): a new chat that starts on Auto is set so as pi opens it.
       send(ws, { type: "auto", on: this.#chat.auto() });
       const snapshot = await this.#events([events.snapshot]);
-      // Not by runElapsedMs, which changes with the time it is sent at.
+      // Not by the elapsed times, which change with the time it is sent at.
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
       if (sent !== attachment.sent && send(ws, snapshot)) ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
       // Ended meanwhile, it has been replaced above (or left for the socket's next message).
@@ -1656,19 +1675,29 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   }
 
   /**
-   * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run has gone;
-   * a batch that changes pi's inbox, with the people's messages waiting in it.
+   * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run and its
+   * running calls have gone; a batch that changes pi's inbox, with the people's messages waiting in it.
    */
   async #events(batch: readonly AgentEvent[]): Promise<Extract<ChatServerMessage, { type: "events" }>> {
     const snapshot = batch.findLast((event) => event.type === "snapshot");
     const ids = inboxIds(batch);
-    const [started, queued] = await Promise.all([
+    const [started, toolsStarted, queued] = await Promise.all([
       snapshot && this.#chat.runStartedAt(snapshot),
+      snapshot && this.#chat.toolsStartedAt(snapshot),
       // Only a view of what pi has queued: without it the chat still works.
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
-    const runElapsedMs = started === undefined ? undefined : Math.max(0, Date.now() - started);
-    return { type: "events", events: batch.map(withoutImageData), runElapsedMs, ...(queued && { queued }) };
+    const now = Date.now();
+    const runElapsedMs = started === undefined ? undefined : Math.max(0, now - started);
+    const tools = Object.entries(toolsStarted ?? {});
+    const toolsElapsedMs = tools.length ? Object.fromEntries(tools.map(([id, at]) => [id, Math.max(0, now - at)])) : undefined;
+    return {
+      type: "events",
+      events: batch.map(withoutImageData),
+      runElapsedMs,
+      ...(toolsElapsedMs && { toolsElapsedMs }),
+      ...(queued && { queued }),
+    };
   }
 
   async #detach(ws: WebSocket): Promise<void> {

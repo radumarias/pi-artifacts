@@ -4,6 +4,7 @@ import { createContext, use, useMemo, useState, type ReactNode } from "react";
 import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
 import { clip, formatBytes, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
+import { formatElapsed, useElapsed } from "./Thinking.tsx";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
 /** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
@@ -194,7 +195,7 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
   hint: string;
   /** The hint is words (a thought), not code. */
   prose?: boolean;
-  status?: string;
+  status?: ReactNode;
   children?: () => ReactNode;
 }) {
   const [open, setOpen] = useState(() => opened.has(openKey));
@@ -293,8 +294,10 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const live = result ? undefined : use(LiveContext);
   const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
   const { text, icon, tone } = STATUS[status];
+  const startedAt = status === "running" ? live!.tools.get(call.id)?.startedAt : undefined;
   const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
-  const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label: stepLabel(call.name), status: text + time };
+  const shown = startedAt === undefined ? text + time : <RunningFor text={text} since={startedAt} />;
+  const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label: stepLabel(call.name), status: shown };
   const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
   // Only when it is needed: a result can be long, and finished steps re-render as the chat grows.
   const output = () => (result ? resultText(result) : live!.tools.get(call.id)?.output) ?? "";
@@ -324,6 +327,17 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
         );
       }}
     </Panel>
+  );
+}
+
+/** A running step's status and how long it has run, from its first whole second on: a quick call never flashes "0s". */
+function RunningFor({ text, since }: { text: string; since: number }) {
+  const elapsed = useElapsed(since);
+  return (
+    <>
+      {text}
+      {elapsed >= 1_000 && <span className="step-time"> {formatElapsed(elapsed)}</span>}
+    </>
   );
 }
 

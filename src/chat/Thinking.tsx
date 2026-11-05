@@ -42,23 +42,28 @@ export function formatElapsed(ms: number): string {
   return `${seconds}s`;
 }
 
+/** Milliseconds since `since`, again on each whole second after it, so a count turns over on time and never skips or repeats one. */
+export function useElapsed(since: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setTimeout(() => setNow(Date.now()), 1_000 - ((((now - since) % 1_000) + 1_000) % 1_000));
+    return () => clearTimeout(timer);
+  }, [now, since]);
+  return now - since;
+}
+
 /**
  * Three pulsing dots, a rotating status word with a shimmer, and the time since the run started. Screen readers hear
  * "Working" once, not every word or second; with reduced motion the word stays put and styles.css stops the animations.
  */
 export function Thinking({ since }: { since: number }) {
   const [word, setWord] = useState(() => nextWord());
-  const [now, setNow] = useState(Date.now);
+  const elapsed = useElapsed(since);
   useEffect(() => {
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const timer = setInterval(() => setWord((current) => nextWord(current)), WORD_MS);
     return () => clearInterval(timer);
   }, []);
-  // Tick on each whole second since the start, so the count turns over on time and never skips or repeats a second.
-  useEffect(() => {
-    const timer = setTimeout(() => setNow(Date.now()), 1_000 - ((((now - since) % 1_000) + 1_000) % 1_000));
-    return () => clearTimeout(timer);
-  }, [now, since]);
   return (
     <div className="thinking" role="status">
       <span className="thinking-dots" aria-hidden="true">
@@ -71,7 +76,7 @@ export function Thinking({ since }: { since: number }) {
         {word}
       </span>
       <span className="thinking-time" aria-hidden="true">
-        {formatElapsed(now - since)}
+        {formatElapsed(elapsed)}
       </span>
       <span className="sr-only">Working…</span>
     </div>

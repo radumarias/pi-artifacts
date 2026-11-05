@@ -366,11 +366,12 @@ export type ChatClientMessage =
 /**
  * ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change.
  * A snapshot taken mid-run comes with `runElapsedMs`: how long ago, by the server's clock, the run's first message was
- * placed, which the snapshot does not say. A duration rather than a time, so the browser's clock need not agree.
+ * placed, which the snapshot does not say, and `toolsElapsedMs`: how long each of its running calls has run, by call id.
+ * Durations rather than times, so the browser's clock need not agree.
  */
 export type ChatServerMessage =
   /** `queued`, with a snapshot or a batch that changes pi's inbox: the people's messages waiting in it, oldest first. */
-  | { type: "events"; events: unknown[]; runElapsedMs?: number; queued?: QueuedMessage[] }
+  | { type: "events"; events: unknown[]; runElapsedMs?: number; toolsElapsedMs?: Record<string, number>; queued?: QueuedMessage[] }
   | { type: "people"; people: ChatPeopleView }
   /** Everyone's reactions on connect; then, whenever one changes, its entry's (`entry`, `reactions` all of that entry's). */
   | { type: "reactions"; reactions: Reactions }

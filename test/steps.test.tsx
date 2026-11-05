@@ -91,6 +91,14 @@ describe("step panel", () => {
     expect(html).toContain('<span class="step-status">Running…</span>');
   });
 
+  it("counts how long a running step has run, from its first whole second", () => {
+    const since = (ms: number) => render("open", [{ ...slot("running"), startedAt: Date.now() - ms }], true);
+    expect(since(47_400)).toContain('<span class="step-status">Running…<span class="step-time"> 47s</span></span>');
+    expect(since(125_000)).toContain('<span class="step-time"> 2m 5s</span>');
+    // A quick call never flashes "0s".
+    expect(since(300)).toContain('<span class="step-status">Running…</span>');
+  });
+
   it("marks a failed step, and one that stopped", () => {
     expect(render("bad")).toMatch(/^<details class="step error"><summary class="step-line"><span class="step-icon">✕<\/span>/);
     expect(render("open")).toMatch(/^<details class="step"><summary class="step-line"><span class="step-icon">■<\/span>/);
