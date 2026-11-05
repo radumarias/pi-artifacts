@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { ChatPeopleView, CreatedInvite } from "../../shared/protocol.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
@@ -10,10 +10,11 @@ interface Props {
   /** Who is in the chat and, for its owner, the open invites: live from the chat's socket. */
   people: ChatPeopleView;
   onLeft: () => void;
+  onClose: () => void;
 }
 
 /** The chat's people. Its owner invites by link and removes members; a member can leave. */
-export function SharePanel({ chatId, uid, isOwner, people, onLeft }: Props) {
+export function SharePanel({ chatId, uid, isOwner, people, onLeft, onClose }: Props) {
   const [created, setCreated] = useState<CreatedInvite | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Once the link is used or revoked, its invite leaves the open list: stop offering a dead link. Only once the list
@@ -50,8 +51,29 @@ export function SharePanel({ chatId, uid, isOwner, people, onLeft }: Props) {
     });
   };
 
+  // Opened from its button, it takes the focus: Escape then closes it straight away, and a screen reader reads its title.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.focus();
+  }, []);
+
+  // Escape closes it while focus is in it, as the × does.
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    onClose();
+  };
+
+  // Not closed by a click elsewhere or by leaving the window (as the other panels are): the owner copies a link out of it.
+  const title = isOwner ? "Share this chat" : "People in this chat";
   return (
-    <div className="share-panel">
+    <div className="share-panel" role="dialog" aria-label={title} ref={box} tabIndex={-1} onKeyDown={onKeyDown}>
+      <div className="panel-head">
+        <strong>{title}</strong>
+        <button type="button" className="icon-button" onClick={onClose} title="Close" aria-label="Close">
+          ×
+        </button>
+      </div>
       <ul>
         <li>
           {people.owner.name} <small>owner{isOwner && " · you"}</small>

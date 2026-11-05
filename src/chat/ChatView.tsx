@@ -71,6 +71,12 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
+  const shareButton = useRef<HTMLButtonElement>(null);
+  // Closed from inside the panel: back to the button that opens it, so the keyboard does not lose its place.
+  const closeSharing = () => {
+    setSharing(false);
+    shareButton.current?.focus();
+  };
   const attachments = useAttachments(chatId);
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -207,12 +213,13 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
             <ChatCost usage={state.usage} entries={state.entries} time={time} />
             {shared && <NotifyButton />}
             {people && (
-              <button type="button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
-                {isOwner && !shared ? "Share" : "People"}
+              <button type="button" ref={shareButton} className="share-button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
+                {/* The owner shares from here also once people have joined; the people bar beside it shows who is in. */}
+                {isOwner ? "Share" : "People"}
               </button>
             )}
           </header>
-          {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} />}
+          {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} onClose={closeSharing} />}
           <StepsProvider entries={state.entries} tools={state.tools} busy={state.busy}>
             <div className="messages" ref={list} onScroll={onScroll}>
               {state.entries.length === 0 && !state.busy && (
