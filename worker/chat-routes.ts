@@ -18,7 +18,8 @@ import type { UserDirectory } from "./users.ts";
  *   DELETE /api/chats/:id/invites/:inviteId   (owner) revoke an invite
  *   DELETE /api/chats/:id/members/:uid        (owner) remove a member, or (member) leave
  *   POST   /api/chats/:id/attachments         files for a message, as POST /api/files takes them, into the owner's files
- *   POST   /api/chats/:id/seen                this user has seen the chat: it is no longer unread in their sidebar
+ *   POST   /api/chats/:id/seen                this user has seen the chat: it is no longer unread in their sidebar.
+ *                                             {seenAt?}: when they had last seen it, if something came in since
  *   GET    /api/chats/:id/mentions            what "@" offers in the composer: for the owner their files and artifacts,
  *                                             for anyone else the chat's files and artifacts, and their own files
  *   GET    /api/chats/:id/contents            the chat's files and artifacts (the owner's), for the people in it to open
@@ -65,8 +66,8 @@ export async function chatRoute(
   if (isSocket && request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade" }, 426);
   // Only this user's own sidebar entry changes, so it needs no chat object.
   if (what === "seen" && method === "POST" && !item) {
-    await directory.markSeen(chatId);
-    return json({});
+    const seenAt = await directory.markSeen(chatId);
+    return json(seenAt === null ? {} : { seenAt });
   }
   // Own chats and chats shared with this user.
   const ownerUid = await directory.chatOwner(chatId);

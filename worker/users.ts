@@ -135,10 +135,9 @@ export class UserDirectory extends DurableObject<Env> {
         status: ChatStatus;
         unread: number;
         mentioned: number;
-        seen_at: number;
       }>(
-        `SELECT id, title, created_at, updated_at, NULL AS shared_by, shared, status, activity_at > seen_at AS unread, mentioned_at > seen_at AS mentioned, seen_at FROM chats
-         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, 0, status, activity_at > seen_at, mentioned_at > seen_at, seen_at FROM shared_chats
+        `SELECT id, title, created_at, updated_at, NULL AS shared_by, shared, status, activity_at > seen_at AS unread, mentioned_at > seen_at AS mentioned FROM chats
+         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, 0, status, activity_at > seen_at, mentioned_at > seen_at FROM shared_chats
          ORDER BY updated_at DESC`,
       )
       .toArray()
@@ -151,8 +150,6 @@ export class UserDirectory extends DurableObject<Env> {
         ...(row.status && { status: row.status }),
         ...(row.unread === 1 && { unread: true as const }),
         ...(row.mentioned === 1 && { mentioned: true as const }),
-        // Where the new part starts, for a chat with some; none for one this user never looked at.
-        ...((row.unread === 1 || row.mentioned === 1) && row.seen_at > 0 && { seenAt: row.seen_at }),
       }));
   }
 
@@ -186,12 +183,21 @@ export class UserDirectory extends DurableObject<Env> {
     if (this.ctx.storage.sql.exec("UPDATE chats SET shared = ? WHERE id = ? AND shared != ?", flag, id, flag).rowsWritten) this.#changed("chats");
   }
 
-  /** This user has seen everything in the chat so far. */
-  markSeen(id: string): void {
+  /**
+   * This user has seen everything in the chat so far. Returns when they had last seen it before, if something came in
+   * since, so the app can mark what is new; null when nothing was unread, or they never looked at the chat.
+   */
+  markSeen(id: string): number | null {
+    const unread = "WHERE id = ? AND activity_at > seen_at";
+    const before = this.ctx.storage.sql
+      .exec<{ seen_at: number }>(`SELECT seen_at FROM chats ${unread} UNION ALL SELECT seen_at FROM shared_chats ${unread}`, id, id)
+      .toArray()[0];
+    if (!before) return null;
     const now = Date.now();
-    const own = this.ctx.storage.sql.exec("UPDATE chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
-    const shared = this.ctx.storage.sql.exec("UPDATE shared_chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
-    if (own + shared > 0) this.#changed("chats");
+    this.ctx.storage.sql.exec(`UPDATE chats SET seen_at = ? ${unread}`, now, id);
+    this.ctx.storage.sql.exec(`UPDATE shared_chats SET seen_at = ? ${unread}`, now, id);
+    this.#changed("chats");
+    return before.seen_at > 0 ? before.seen_at : null;
   }
 
   /** Whose chat `id` is: this user's own uid, the owner's for a chat shared with them, or null. The chat itself still checks membership. */

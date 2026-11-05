@@ -64,6 +64,9 @@ interface Props {
 
 const GROWS_ITSELF = CSS.supports("field-sizing", "content");
 
+/** Whether the conversation is scrolled to (near) its end, where new output is followed. */
+const atBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+
 function published(entry: EntryRecord): PublishedDetails | undefined {
   if (entry.kind !== "pi.tool-result") return undefined;
   const message = entry.model?.[0] as ToolResultMessage | undefined;
@@ -104,7 +107,7 @@ export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft
   const following = useRef(true);
   const onScroll = () => {
     const el = list.current;
-    if (el) following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (el) following.current = atBottom(el);
   };
   const follow = useCallback(() => {
     const el = list.current;
@@ -492,14 +495,15 @@ function NewDivider() {
 function useNewInView(list: RefObject<HTMLDivElement | null>, following: RefObject<boolean>, newAt: number | undefined, since: number | undefined) {
   const shownFor = useRef<number>(undefined);
   useEffect(() => {
+    if (newAt === undefined || since === undefined || shownFor.current === since) return;
     const el = list.current;
     const line = el?.querySelector<HTMLElement>(".new-divider");
-    if (!el || !line || since === undefined || shownFor.current === since) return;
+    if (!el || !line) return;
     shownFor.current = since;
     if (!following.current) return;
     const top = line.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
     el.scrollTop = top - Math.min(Math.max(el.clientHeight * 0.2, 48), 160);
-    following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    following.current = atBottom(el);
   }, [list, following, newAt, since]);
 }
 

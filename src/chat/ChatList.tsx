@@ -7,8 +7,8 @@ import { useLatest, useVisible } from "../sidebar.ts";
 
 /**
  * The user's chats, and a `load` that reads them again (the sidebar's socket calls it when they changed). The open
- * chat (`openId`) is marked seen while the window shows it. `newSince`: when the user had last seen the open chat, taken
- * as they open it, or come back to the window, with something unread in it; what came after is new.
+ * chat (`openId`) is marked seen while the window shows it. `newSince`: when the user had last seen the open chat, as
+ * marking it seen answers when they open it, or come back to the window, with something unread in it; what came after is new.
  */
 export function useChatList(openId: string | undefined) {
   const [chats, load, setChats] = useLatest(api.chats, []);
@@ -30,16 +30,17 @@ export function useChatList(openId: string | undefined) {
   const open = chats.find((chat) => chat.id === openId);
   const listed = open !== undefined;
   const unseen = Boolean(open?.unread || open?.mentioned);
-  const seenAt = open?.seenAt;
   useEffect(() => {
     if (!openId || !listed || !visible) return;
     const arrived = visiting.current;
     visiting.current = false;
     if (!unseen) return;
-    if (arrived && seenAt) setNewSince({ chatId: openId, at: seenAt });
-    setChats((list) => list.map((chat) => (chat.id === openId ? { ...chat, unread: undefined, mentioned: undefined, seenAt: undefined } : chat)));
-    api.markSeen(openId).catch(() => {});
-  }, [openId, listed, unseen, seenAt, visible]);
+    setChats((list) => list.map((chat) => (chat.id === openId ? { ...chat, unread: undefined, mentioned: undefined } : chat)));
+    api
+      .markSeen(openId)
+      .then(({ seenAt }) => arrived && seenAt && setNewSince({ chatId: openId, at: seenAt }))
+      .catch(() => {});
+  }, [openId, listed, unseen, visible]);
 
   return { chats, load, newSince: newSince && newSince.chatId === openId ? newSince.at : undefined };
 }
