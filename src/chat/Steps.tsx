@@ -190,7 +190,7 @@ const opened = new Set<string>();
  * holds, an arrow opens it on what the step was given and what came back; the body is only rendered while open, so a
  * long history of steps stays cheap. Without (`children` left out), the line is all there is, and its hint wraps.
  */
-function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
+function Panel({ openKey, tone, icon, label, hint, prose, status, time, children }: {
   openKey: string;
   tone?: "active" | "done" | "error";
   icon: ReactNode;
@@ -198,7 +198,9 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
   hint: string;
   /** The hint is words (a thought), not code. */
   prose?: boolean;
-  status?: ReactNode;
+  status?: string;
+  /** After the status, out of its shimmer, whose sweep would jump as the count changes width. */
+  time?: ReactNode;
   children?: () => ReactNode;
 }) {
   const [open, setOpen] = useState(() => opened.has(openKey));
@@ -219,6 +221,7 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
         </svg>
       )}
       {status && <span className="step-status">{status}</span>}
+      {time}
     </>
   );
   if (!children) {
@@ -298,9 +301,15 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
   const { text, icon, tone } = STATUS[status];
   const startedAt = status === "running" ? live!.tools.get(call.id)?.startedAt : undefined;
-  const time = result?.durationMs !== undefined ? ` · ${tookFor(result.durationMs)}` : "";
-  const shown = startedAt === undefined ? text + time : <RunningFor text={text} since={startedAt} />;
-  const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label: stepLabel(call.name), status: shown };
+  const took = result?.durationMs !== undefined ? ` · ${tookFor(result.durationMs)}` : "";
+  const props = {
+    openKey: call.id,
+    tone,
+    icon: icon ?? <Spark />,
+    label: stepLabel(call.name),
+    status: text + took,
+    time: startedAt !== undefined && <RunningFor since={startedAt} />,
+  };
   const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
   // Only when it is needed: a result can be long, and finished steps re-render as the chat grows.
   const output = () => (result ? resultText(result) : live!.tools.get(call.id)?.output) ?? "";
@@ -333,15 +342,10 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   );
 }
 
-/** A running step's status and how long it has run, from its first whole second on: a quick call never flashes "0s". */
-function RunningFor({ text, since }: { text: string; since: number }) {
+/** How long a running step has run, from its first whole second on: a quick call never flashes "0s". */
+function RunningFor({ since }: { since: number }) {
   const elapsed = useElapsed(since);
-  return (
-    <>
-      {text}
-      {elapsed >= 1_000 && <span className="step-time"> {formatElapsed(elapsed)}</span>}
-    </>
-  );
+  return elapsed >= 1_000 && <span className="step-time">{formatElapsed(elapsed)}</span>;
 }
 
 /** What a page check saw: its screenshot, and how many errors and warnings it found. */

@@ -449,8 +449,8 @@ button.reaction:hover { border-color: var(--muted); }
 .step[open] .step-hint { display: none; }
 .step-status { flex: none; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .step.error .step-status { color: var(--error); }
-/* A running step's count (RunningFor in Steps.tsx) stays still while its status word shimmers. */
-.step-time { color: var(--muted); }
+/* A running step's count (RunningFor in Steps.tsx), beside its shimmering status. */
+.step-time { flex: none; padding-left: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .step-chevron { flex: none; align-self: center; width: 12px; height: 12px; margin-left: -4px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.15s; }
 .step > summary:hover .step-chevron { stroke: var(--text); }
 .step[open] .step-chevron { transform: rotate(90deg); }

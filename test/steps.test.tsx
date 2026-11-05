@@ -93,10 +93,10 @@ describe("step panel", () => {
 
   it("counts how long a running step has run, from its first whole second", () => {
     const since = (ms: number) => render("open", [{ ...slot("running"), startedAt: Date.now() - ms }], true);
-    expect(since(47_400)).toContain('<span class="step-status">Running…<span class="step-time"> 47s</span></span>');
-    expect(since(125_000)).toContain('<span class="step-time"> 2m 5s</span>');
+    expect(since(47_400)).toContain('<span class="step-status">Running…</span><span class="step-time">47s</span>');
+    expect(since(125_000)).toContain('<span class="step-time">2m 5s</span>');
     // A quick call never flashes "0s".
-    expect(since(300)).toContain('<span class="step-status">Running…</span>');
+    expect(since(300)).not.toContain("step-time");
   });
 
   it("says how long a finished step took the way its count read, finer under ten seconds", () => {

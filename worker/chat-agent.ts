@@ -380,7 +380,10 @@ export class ChatAgent extends DurableObject<Env> {
     if (!running.length) return {};
     try {
       const pi = await this.harness.pi();
-      const tasks = await Promise.all(running.map((slot) => pi.getTask(slot.taskId!, BACKGROUND_CONTEXT)));
+      // Each on its own: one task that can't be read leaves out only its call.
+      const read = (slot: (typeof running)[number]) =>
+        pi.getTask(slot.taskId!, BACKGROUND_CONTEXT).catch((error: unknown) => (console.error("tool start:", errorMessage(error)), undefined));
+      const tasks = await Promise.all(running.map(read));
       return Object.fromEntries(running.flatMap((slot, i) => (tasks[i]?.startedAt === undefined ? [] : [[slot.callId, tasks[i].startedAt]])));
     } catch (error) {
       console.error("tool start:", errorMessage(error));
@@ -1636,16 +1639,18 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
         this.#reattached.set(ws, now);
         void this.#attach(ws);
       });
-      step = "reading its run and queue";
+      step = "reading its run, calls and queue";
       const attachment = ws.deserializeAttachment() as SocketAttachment;
       send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
       send(ws, { type: "reactions", reactions: this.#chat.reactions() });
       // After events(): a new chat that starts on Auto is set so as pi opens it.
       send(ws, { type: "auto", on: this.#chat.auto() });
-      const snapshot = await this.#events([events.snapshot]);
-      // Not by the elapsed times, which change with the time it is sent at.
+      // Timed only once it is to be sent: a wake attaches every socket again, and most find their snapshot already sent.
+      const snapshot = await this.#events([events.snapshot], false);
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
-      if (sent !== attachment.sent && send(ws, snapshot)) ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
+      if (sent !== attachment.sent && send(ws, { ...snapshot, ...(await this.#timing(events.snapshot)) })) {
+        ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
+      }
       // Ended meanwhile, it has been replaced above (or left for the socket's next message).
       if (!ended) {
         events.start(async (batch) => {
@@ -1676,25 +1681,27 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
 
   /**
    * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run and its
-   * running calls have gone; a batch that changes pi's inbox, with the people's messages waiting in it.
+   * running calls have gone, unless `timed` is false; a batch that changes pi's inbox, with the people's messages waiting in it.
    */
-  async #events(batch: readonly AgentEvent[]): Promise<Extract<ChatServerMessage, { type: "events" }>> {
+  async #events(batch: readonly AgentEvent[], timed = true): Promise<Extract<ChatServerMessage, { type: "events" }>> {
     const snapshot = batch.findLast((event) => event.type === "snapshot");
     const ids = inboxIds(batch);
-    const [started, toolsStarted, queued] = await Promise.all([
-      snapshot && this.#chat.runStartedAt(snapshot),
-      snapshot && this.#chat.toolsStartedAt(snapshot),
+    const [timing, queued] = await Promise.all([
+      snapshot && timed ? this.#timing(snapshot) : undefined,
       // Only a view of what pi has queued: without it the chat still works.
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
+    return { type: "events", events: batch.map(withoutImageData), ...timing, ...(queued && { queued }) };
+  }
+
+  /** How long the snapshot's run and its running calls have gone, by the server's clock. */
+  async #timing(snapshot: SnapshotEvent): Promise<Pick<ChatServerMessage & { type: "events" }, "runElapsedMs" | "toolsElapsedMs">> {
+    const [started, toolsStarted] = await Promise.all([this.#chat.runStartedAt(snapshot), this.#chat.toolsStartedAt(snapshot)]);
     const now = Date.now();
     const since = (at: number) => Math.max(0, now - at);
     return {
-      type: "events",
-      events: batch.map(withoutImageData),
       runElapsedMs: started === undefined ? undefined : since(started),
-      toolsElapsedMs: toolsStarted && Object.fromEntries(Object.entries(toolsStarted).map(([id, at]) => [id, since(at)])),
-      ...(queued && { queued }),
+      toolsElapsedMs: Object.fromEntries(Object.entries(toolsStarted).map(([id, at]) => [id, since(at)])),
     };
   }
 
