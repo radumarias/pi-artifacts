@@ -1,7 +1,7 @@
 /**
- * Where the sidebar's "Back" link goes: the website the app was opened from. It is the page the site's link named as
- * `?from=<url>`, else the page the browser came from (its referrer). The sign-in redirect on a first visit replaces
- * the referrer, so a site that wants Back on that visit too names its page in `from`.
+ * Where the sidebar's "Back" link goes: the website the app was opened from, by the browser's referrer. A site can name
+ * the exact page as `?from=<url>` in its link; the sign-in redirect on a first visit replaces the referrer, so `from`
+ * is also what gives Back on that visit.
  */
 export interface BackLink {
   url: string;
@@ -13,18 +13,41 @@ export interface BackLink {
 export const FROM_PARAM = "from";
 
 /**
- * The page to go back to, from the `from` parameter or else the referrer, or undefined when neither is a web page on
- * another site. The app's own pages and its sign-in pages (`signInHosts`, matched with their subdomains) are not a
- * website the user came from.
+ * Sign-in pages: the referrer after a sign-in (Cloudflare Access and the identity providers it sends people to),
+ * never the website the user came from. Matched with their subdomains.
  */
-export function backLink(from: string | null | undefined, referrer: string | null | undefined, ownOrigin: string, signInHosts: string[]): BackLink | undefined {
-  for (const candidate of [from, referrer]) {
-    const url = parseUrl(candidate);
-    if (!url || !isWebOrigin(url) || url.origin === ownOrigin) continue;
-    if (signInHosts.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`))) continue;
-    return { url: url.href, host: url.hostname };
-  }
-  return undefined;
+export const SIGN_IN_HOSTS = [
+  "cloudflareaccess.com",
+  "amazoncognito.com",
+  "accounts.google.com",
+  "github.com",
+  "login.microsoftonline.com",
+  "okta.com",
+  "auth0.com",
+];
+
+/**
+ * The page to go back to, or undefined when there is none: the referrer, when it is a web page on another site that is
+ * not a sign-in page, and the `from` page instead when it is on the referrer's origin, or when the sign-in replaced the
+ * referrer. So a link posted elsewhere cannot point Back at a third site: Back goes where the user came from.
+ */
+export function backLink(
+  from: string | null | undefined,
+  referrer: string | null | undefined,
+  ownOrigin: string,
+  signInHosts: readonly string[] = SIGN_IN_HOSTS,
+): BackLink | undefined {
+  const page = webPage(from, ownOrigin, signInHosts);
+  const came = webPage(referrer, ownOrigin, signInHosts);
+  const url = page && (!came || page.origin === came.origin) ? page : came;
+  return url && { url: url.href, host: url.hostname };
+}
+
+/** `value` as a web page on another site than the app's, and not a sign-in page. */
+function webPage(value: string | null | undefined, ownOrigin: string, signInHosts: readonly string[]): URL | undefined {
+  const url = parseUrl(value);
+  if (!url || !isWebOrigin(url) || url.origin === ownOrigin) return undefined;
+  return signInHosts.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`)) ? undefined : url;
 }
 
 function parseUrl(value: string | null | undefined): URL | undefined {

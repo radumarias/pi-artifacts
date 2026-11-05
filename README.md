@@ -509,6 +509,11 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
    keep the secret, so they need no `--secrets-file` unless it changes.
 6. `pnpm run deploy` (`cf deploy`). This builds the sandbox image with Docker and needs the Workers Paid plan.
 
+A website that links to the app gets a "Back to <hostname>" link at the top of the sidebar, taken from the browser's
+referrer and kept for the tab. The Access sign-in on a first visit replaces the referrer, so a site that wants the
+link on that visit too adds `?from=<its page>` (an https address) to its link; the app takes it off the address. When a
+referrer is there, `from` counts only on the referrer's own site, so a link posted elsewhere cannot point Back at a third site.
+
 ## Who can read what
 
 - **Sign-in:** Cloudflare Access lets only the people in its policy reach the app at all. The Worker then verifies the

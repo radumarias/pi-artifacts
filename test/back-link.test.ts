@@ -2,10 +2,24 @@ import { describe, expect, it } from "vitest";
 import { backLink } from "../src/back-link.ts";
 
 const own = "https://ai.example.com";
-const signIn = ["cloudflareaccess.com"];
-const back = (from: string | null, referrer: string | null) => backLink(from, referrer, own, signIn);
+const back = (from: string | null, referrer: string | null) => backLink(from, referrer, own);
 
 describe("back link", () => {
+  it("takes the page named in from only on the referrer's site, or with no referrer", () => {
+    expect(back("https://evil.example/login", "https://app.slack.com/")).toEqual({ url: "https://app.slack.com/", host: "app.slack.com" });
+    expect(back("https://www.example.com/pricing", null)).toEqual({ url: "https://www.example.com/pricing", host: "www.example.com" });
+    expect(back("https://www.example.com/pricing", "https://team.cloudflareaccess.com/")).toEqual({
+      url: "https://www.example.com/pricing",
+      host: "www.example.com",
+    });
+  });
+
+  it("skips identity providers' sign-in pages", () => {
+    expect(back(null, "https://accounts.google.com/")).toBeUndefined();
+    expect(back(null, "https://pool.auth.eu-west-1.amazoncognito.com/")).toBeUndefined();
+    expect(back(null, "https://github.com/")).toBeUndefined();
+  });
+
   it("goes to the page the site named, before the referrer", () => {
     expect(back("https://www.example.com/tools/ai?tab=2", "https://www.example.com/")).toEqual({
       url: "https://www.example.com/tools/ai?tab=2",

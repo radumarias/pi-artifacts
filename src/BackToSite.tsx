@@ -3,9 +3,6 @@ import { Icon } from "./Icon.tsx";
 
 const STORE_KEY = "pi:back";
 
-/** Cloudflare Access's sign-in pages: the referrer after a sign-in, never the site the user came from. */
-const SIGN_IN_HOSTS = ["cloudflareaccess.com"];
-
 /**
  * Work out where Back goes, once, before the app reads its location: from `?from=` (then taken out of the address bar)
  * or the referrer, else what this tab kept from an earlier load, so moving between chats or reloading keeps it.
@@ -17,10 +14,10 @@ function findBackLink(): BackLink | undefined {
     url.searchParams.delete(FROM_PARAM);
     history.replaceState(history.state, "", url);
   }
-  const found = backLink(from, document.referrer, location.origin, SIGN_IN_HOSTS);
+  const found = backLink(from, document.referrer, location.origin);
   try {
     if (found) sessionStorage.setItem(STORE_KEY, found.url);
-    else return backLink(sessionStorage.getItem(STORE_KEY), null, location.origin, SIGN_IN_HOSTS);
+    else return backLink(sessionStorage.getItem(STORE_KEY), null, location.origin);
   } catch {
     // Storage off (a private window, blocked site data): only this page load knows it.
   }
