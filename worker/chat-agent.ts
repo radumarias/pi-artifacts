@@ -1429,6 +1429,13 @@ interface ChatSession {
 /** How long a socket's attach may take to send its snapshot (see ChatSockets.#attach). */
 const ATTACH_MS = 30_000;
 
+/**
+ * A socket attaches again at once when pi ends its stream, but at most once in this long: when pi ends it again sooner,
+ * the socket waits for its next message (or the object's next start). Otherwise a pi that fails each time it opens
+ * would be opened again and again, for every socket.
+ */
+const REATTACH_MS = 10_000;
+
 /** An attach that did not send its snapshot in time. */
 class AttachStalled extends Error {}
 
@@ -1442,11 +1449,13 @@ type SocketAttachment = { owner: typeof OWNER; person: Person; sent?: string };
  * The chat's browser connections, one or more per person in the chat. Each
  * socket gets its own pi event stream: a snapshot of the conversation first,
  * then one batch per commit. Sockets hibernate; after the object restarts,
- * streams are reattached in onStart.
+ * streams are reattached in onStart, and a stream pi ends is replaced at once.
  */
 class ChatSockets extends LifecycleCapability implements DurableObjectCapability {
   readonly #chat: ChatSession;
   readonly #streams = new Map<WebSocket, Promise<AgentEventStream>>();
+  /** When each socket was last attached again because pi ended its stream (see REATTACH_MS). */
+  readonly #reattached = new WeakMap<WebSocket, number>();
 
   constructor(chat: ChatSession) {
     super("chat-sockets");
@@ -1589,6 +1598,25 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     let step = "opening the conversation";
     const opening = (async () => {
       const events = await this.#chat.events();
+      // A stream pi ended itself delivers nothing more: its session closed (a storage error fails it, and pi opens again
+      // for the next prompt or wake). The socket stays open, and every later attach would find the dead stream, so the
+      // page heard nothing until it was reloaded. Follow the conversation on a new stream: its snapshot brings what the
+      // socket missed. A stream this class stopped has left #streams already. Followed from here, as the session can
+      // close while the snapshot below is read, and a stream that has ended cannot be started.
+      let ended = false;
+      void events.closed.then((end) => {
+        ended = true;
+        if (end.reason === "stopped" || this.#streams.get(ws) !== attached) return;
+        const cause = "error" in end ? `: ${errorMessage(end.error)}` : "";
+        this.#streams.delete(ws);
+        const now = Date.now();
+        const again = ws.readyState === WebSocket.OPEN && now - (this.#reattached.get(ws) ?? -Infinity) >= REATTACH_MS;
+        const next = again ? "attaching again" : "waiting for the socket's next message";
+        console.error(`chat socket: events ended (${end.reason}${cause}), ${next}`);
+        if (!again) return;
+        this.#reattached.set(ws, now);
+        void this.#attach(ws);
+      });
       step = "reading its run and queue";
       const attachment = ws.deserializeAttachment() as SocketAttachment;
       send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
@@ -1599,19 +1627,24 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       // Not by runElapsedMs, which changes with the time it is sent at.
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
       if (sent !== attachment.sent && send(ws, snapshot)) ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
-      events.start(async (batch) => {
-        if (!send(ws, await this.#events(batch))) await this.#detach(ws);
-      });
+      // Ended meanwhile, it has been replaced above (or left for the socket's next message).
+      if (!ended) {
+        events.start(async (batch) => {
+          if (!send(ws, await this.#events(batch))) await this.#detach(ws);
+        });
+      }
       return events;
     })();
     const attached = deadline(opening, ATTACH_MS, () => new AttachStalled(`no snapshot after ${ATTACH_MS / 1000} s, stuck ${step}`));
     this.#streams.set(ws, attached);
     attached.catch((error) => {
+      // Should the stream come after all, it goes unused.
+      if (error instanceof AttachStalled) void opening.then((events) => events.stop()).catch(() => {});
+      // Detached, or replaced as pi ended the stream it was opening: the socket has nothing more to hear from this one.
+      if (this.#streams.get(ws) !== attached) return;
       this.#streams.delete(ws);
       if (error instanceof AttachStalled) {
         console.error("chat socket:", error.message);
-        // Should the stream come after all, it goes unused.
-        void opening.then((events) => events.stop()).catch(() => {});
         close(ws, 1011, "Reconnect");
         // A close the chat makes itself may never come back as onWebSocketClose: the others hear of it now.
         this.#broadcastPresence(new Set([ws]));
