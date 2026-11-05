@@ -126,12 +126,9 @@ export const api = {
     throw new Error(`The proxy answered ${response.status}`);
   },
   /** The user's own system prompt, added to the built-in one in all their chats. Always theirs to change. */
-  systemPrompt: async (): Promise<ChatSystemPrompt> => ({ ...(await request<{ text: string }>("/api/me/system-prompt")), editable: true }),
+  systemPrompt: () => request<ChatSystemPrompt>("/api/me/system-prompt"),
   /** Save it; empty clears it. */
-  setSystemPrompt: async (text: string): Promise<ChatSystemPrompt> => ({
-    ...(await request<{ text: string }>("/api/me/system-prompt", send("PUT", { text }))),
-    editable: true,
-  }),
+  setSystemPrompt: (text: string) => request<ChatSystemPrompt>("/api/me/system-prompt", send("PUT", { text })),
   /** A chat's system prompt, which adds to its owner's own: everyone in the chat reads it, only the owner changes it. */
   chatSystemPrompt: (chatId: string) => request<ChatSystemPrompt>(`/api/chats/${chatId}/system-prompt`),
   setChatSystemPrompt: (chatId: string, text: string) => request<ChatSystemPrompt>(`/api/chats/${chatId}/system-prompt`, send("PUT", { text })),

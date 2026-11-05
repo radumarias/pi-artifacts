@@ -158,7 +158,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   // The user's own system prompt, added to the built-in one in all their chats. PUT {text}; empty clears it. readJson
   // takes only a JSON content type, so another site cannot set it for a signed-in user.
-  if (path === "/api/me/system-prompt" && method === "GET") return json({ text: await directory.systemPrompt() });
+  if (path === "/api/me/system-prompt" && method === "GET") return json(await directory.systemPrompt());
   if (path === "/api/me/system-prompt" && method === "PUT") {
     const saved = await directory.setSystemPrompt((await readJson<{ text?: unknown }>(request))?.text);
     return json(saved, "error" in saved ? 400 : 200);

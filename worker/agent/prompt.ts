@@ -1,4 +1,5 @@
-import { defineExtension, section, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, section, type AgentEvent, type EntryRecord, type Extension } from "@earendil-works/pi-durable";
+import type { Message } from "@earendil-works/pi-ai";
 import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
 import type { ChatPeople } from "../../shared/protocol.ts";
 import RUNTIME_CONTRACT from "../../runtime/runtime.d.ts?raw";
@@ -92,33 +93,29 @@ export function peopleExtension(people: () => ChatPeople): Extension {
 }
 
 /**
- * `value` (an event, or anything holding entries) for a browser: each `pi.system` entry keeps its place but not the
- * prompt's sections and tools, added or removed. Nobody's app shows them, and in a shared chat they are the owner's (their system prompt,
- * the list of their files, their MCP tools), which the people in the chat are not to see. Copies only what changes.
+ * An event for a browser: each `pi.system` entry in it keeps its place, but not the prompt's sections and tools. Nobody's
+ * app shows them, and they are the owner's (their system prompt, the list of their files, their MCP tools): this keeps
+ * them off the browsers of the people they share the chat with. Only hygiene, not a boundary: the agent acts as the
+ * owner, and may tell anyone in the chat what it was told. Entries come only in these four events; copies only what changes.
  */
-export function withoutSystemPrompt<T>(value: T): T {
-  if (Array.isArray(value)) {
-    const stripped = value.map(withoutSystemPrompt);
-    return (stripped.some((item, i) => item !== value[i]) ? stripped : value) as T;
+export function withoutSystemPrompt(event: AgentEvent): AgentEvent {
+  switch (event.type) {
+    case "snapshot":
+      return event.entries.some(isSystem) ? { ...event, entries: event.entries.map(promptless) } : event;
+    case "message_end":
+    case "entry_appended":
+      return isSystem(event.entry) ? { ...event, entry: promptless(event.entry) } : event;
+    case "tool_execution_end":
+      return event.entry && isSystem(event.entry) ? { ...event, entry: promptless(event.entry) } : event;
+    default:
+      return event;
   }
-  if (value === null || typeof value !== "object") return value;
-  const object = value as Record<string, unknown>;
-  if (object.kind === "pi.system" && Array.isArray(object.model)) {
-    return { ...object, model: object.model.map((message) => promptless(message)) } as T;
-  }
-  // An entry holds no entries: only what is not one is searched further.
-  if (typeof object.kind === "string") return value;
-  let copy: Record<string, unknown> | undefined;
-  for (const [key, item] of Object.entries(object)) {
-    const stripped = withoutSystemPrompt(item);
-    if (stripped !== item) (copy ??= { ...object })[key] = stripped;
-  }
-  return (copy ?? value) as T;
 }
 
-/** A system message as a browser gets it: only that it is one, and when. Its sections, tools and anything pi adds later stay on the server. */
-function promptless(message: unknown): unknown {
-  if (message === null || typeof message !== "object") return message;
-  const { role, timestamp } = message as Record<string, unknown>;
-  return { role, content: "", ...(timestamp !== undefined && { timestamp }) };
+const isSystem = (entry: EntryRecord) => entry.kind === "pi.system";
+
+/** A system entry as a browser gets it: only that it is one, and when. Its sections, tools and anything pi adds later stay on the server. */
+function promptless(entry: EntryRecord): EntryRecord {
+  if (!isSystem(entry) || !entry.model) return entry;
+  return { ...entry, model: entry.model.map(({ role, timestamp }) => ({ role, content: "", timestamp }) as Message) };
 }

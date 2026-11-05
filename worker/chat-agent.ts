@@ -44,7 +44,7 @@ import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionIn
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
 import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
-import { checkSystemPrompt, type ChatSystemPrompt } from "../shared/system-prompt.ts";
+import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
@@ -84,7 +84,7 @@ import {
   type Catalog,
 } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
-import { mcpAuthStore, type Tag } from "./users.ts";
+import { mcpAuthStore, saveSystemPrompt, SYSTEM_PROMPT_KEY, type Tag } from "./users.ts";
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
@@ -102,8 +102,6 @@ function refuse(status: ChatRefusal["status"], error: string): ChatRefusal {
 const DELETED = "This chat was deleted.";
 const DELETING = "This chat is being deleted.";
 const GONE_KEY = "deleted";
-/** The chat's own system prompt (see setChatSystemPrompt). */
-const SYSTEM_PROMPT_KEY = "systemPrompt";
 
 const SOCKET_TAG = "chat";
 const OWNER = "chat-sockets";
@@ -556,7 +554,7 @@ export class ChatAgent extends DurableObject<Env> {
    */
   refreshUserPrompt(): Promise<string> {
     const last = this.#userPrompt;
-    return (this.#userPrompt = this.#directory.systemPrompt().catch(async (error: unknown) => {
+    return (this.#userPrompt = this.#directory.systemPrompt().then(({ text }) => text, async (error: unknown) => {
       console.error("system prompt:", errorMessage(error));
       return (await last) ?? "";
     }));
@@ -580,11 +578,8 @@ export class ChatAgent extends DurableObject<Env> {
   setChatSystemPrompt(by: Person, value: unknown): ChatSystemPrompt | ChatRefusal {
     if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can change its system prompt.");
     if (this.#gone) return refuse(404, DELETED);
-    const checked = checkSystemPrompt(value);
-    if ("error" in checked) return refuse(400, checked.error);
-    if (checked.text) this.ctx.storage.kv.put(SYSTEM_PROMPT_KEY, checked.text);
-    else this.ctx.storage.kv.delete(SYSTEM_PROMPT_KEY);
-    return { text: checked.text, editable: true };
+    const saved = saveSystemPrompt(this.ctx.storage.kv, value);
+    return "error" in saved ? refuse(400, saved.error) : { ...saved, editable: true };
   }
 
   /**
@@ -1679,7 +1674,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
     const runElapsedMs = started === undefined ? undefined : Math.max(0, Date.now() - started);
-    return { type: "events", events: batch.map((event) => withoutSystemPrompt(withoutImageData(event))), runElapsedMs, ...(queued && { queued }) };
+    return { type: "events", events: batch.map((event) => withoutImageData(withoutSystemPrompt(event))), runElapsedMs, ...(queued && { queued }) };
   }
 
   async #detach(ws: WebSocket): Promise<void> {

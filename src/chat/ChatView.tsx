@@ -222,7 +222,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
             )}
             <ChatCost usage={state.usage} entries={state.entries} time={time} />
             {shared && <NotifyButton />}
-            {people && <ChatPromptButton chatId={chatId} isOwner={isOwner} />}
+            {people && <ChatPromptButton chatId={chatId} />}
             {people && (
               <button type="button" ref={shareButton} className="share-button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
                 {/* The owner shares from here also once people have joined; the people bar beside it shows who is in. */}

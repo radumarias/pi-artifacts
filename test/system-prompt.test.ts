@@ -1,3 +1,4 @@
+import type { AgentEvent, EntryRecord } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { checkSystemPrompt, MAX_SYSTEM_PROMPT } from "../shared/system-prompt.ts";
 import { systemPromptExtension, userSystemPrompt, withoutSystemPrompt } from "../worker/agent/prompt.ts";
@@ -62,21 +63,29 @@ describe("withoutSystemPrompt", () => {
   const system = {
     kind: "pi.system",
     id: 2,
+    conversationId: "c",
     model: [{ role: "system", content: "", sections: { user_system_prompt: "secret" }, toolsAdded: [{ name: "files_read" }], timestamp: 5 }],
-  };
-  const user = { kind: "pi.user", id: 3, model: [{ role: "user", content: "sections" }] };
+  } as unknown as EntryRecord;
+  const user = { kind: "pi.user", id: 3, conversationId: "c", model: [{ role: "user", content: "sections", timestamp: 6 }] } as unknown as EntryRecord;
+  const snapshot = (entries: EntryRecord[]) => ({ type: "snapshot", entries }) as unknown as AgentEvent;
 
   it("keeps a system entry in its place, without the prompt's sections and tools", () => {
-    const event = { type: "snapshot", snapshot: { entries: [system, user] } };
-    const sent = withoutSystemPrompt(event);
-    expect(sent.snapshot.entries).toEqual([{ kind: "pi.system", id: 2, model: [{ role: "system", content: "", timestamp: 5 }] }, user]);
+    const event = snapshot([system, user]);
+    const sent = withoutSystemPrompt(event) as Extract<AgentEvent, { type: "snapshot" }>;
+    expect(sent.entries).toEqual([{ ...system, model: [{ role: "system", content: "", timestamp: 5 }] }, user]);
     expect(JSON.stringify(sent)).not.toMatch(/secret|files_read/);
     // The event it came from is left as it was.
-    expect(event.snapshot.entries[0]).toBe(system);
+    expect((event as typeof sent).entries[0]).toBe(system);
   });
 
-  it("returns what has no system entry as it is", () => {
-    const event = { type: "entry", entry: user };
-    expect(withoutSystemPrompt(event)).toBe(event);
+  it.each(["message_end", "entry_appended", "tool_execution_end"])("strips the entry of %s", (type) => {
+    const sent = withoutSystemPrompt({ type, entry: system } as unknown as AgentEvent);
+    expect(JSON.stringify(sent)).not.toMatch(/secret|files_read/);
+  });
+
+  it("returns an event with no system entry as it is", () => {
+    for (const event of [snapshot([user]), { type: "entry_appended", entry: user } as AgentEvent, { type: "tool_execution_end" } as AgentEvent]) {
+      expect(withoutSystemPrompt(event)).toBe(event);
+    }
   });
 });
