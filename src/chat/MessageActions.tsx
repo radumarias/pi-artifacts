@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { Reaction } from "../../shared/reactions.ts";
 import { Icon } from "../Icon.tsx";
 import { useDismiss } from "../layout.tsx";
+import { useCompact, useLongPress } from "./gestures.ts";
 import { EmojiRow, type MessageReactions } from "./Reactions.tsx";
 
 /**
@@ -35,6 +37,8 @@ const ICONS = {
   copy: <path d="M5.5 5.5V3.5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z" />,
   copied: <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />,
   more: <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth={2.4} />,
+  markdown: <path d="M2.5 4.5h11v7h-11ZM4.5 9.5v-3l1.5 2 1.5-2v3M10.5 6.5v3M9.3 8.3l1.2 1.2 1.2-1.2" />,
+  select: <path d="M3.5 3.5h9M3.5 6.5h9M3.5 9.5h5M11 9v4.5M9.5 13.5h3M9.5 9h3" />,
 };
 
 function ActionIcon({ name }: { name: keyof typeof ICONS }) {
@@ -46,8 +50,8 @@ function ActionIcon({ name }: { name: keyof typeof ICONS }) {
 }
 
 /**
- * The bar a message shows on hover (always on touch screens): react, copy, answer, and "…" with the same plus a copy
- * as Markdown. `content` is where its bubbles are, `text` what it says as plain text (Markdown for the agent's
+ * The bar a message shows on hover: react, copy, answer, and "…" with the same plus a copy as Markdown. Compact
+ * (phones, narrow windows) it has no bar: a long press on the message opens the same in a menu (PressMenu). `content` is where its bubbles are, `text` what it says as plain text (Markdown for the agent's
  * replies), `reactions` its reactions, for a message that takes them.
  */
 export function MessageActions({
@@ -82,11 +86,21 @@ export function MessageActions({
     const rect = menu.current.getBoundingClientRect();
     setPlace([rect.bottom > area.bottom && "up", rect.right > area.right ? "end" : rect.left < area.left && "start"].filter(Boolean).join(" "));
   }, [open, place, box]);
+  const compact = useCompact();
+  // Where the message was long-pressed (or right-clicked), while its menu is open.
+  const [pressedAt, setPressedAt] = useState<{ x: number; y: number } | null>(null);
+  useLongPress(
+    content,
+    compact,
+    useCallback((x: number, y: number) => setPressedAt({ x, y }), []),
+  );
+  const unpress = useCallback(() => setPressedAt(null), []);
   const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   const copy = (asMarkdown = false) => {
     setOpen(null);
+    setPressedAt(null);
     (asMarkdown ? navigator.clipboard.writeText(text) : copyRich(bubblesHtml(content.current), text)).then(
       () => setCopied("yes"),
       () => setCopied("failed"),
@@ -96,6 +110,7 @@ export function MessageActions({
   };
   const pick = (emoji: Reaction) => {
     setOpen(null);
+    setPressedAt(null);
     reactions?.toggle(emoji);
   };
   const copyLabel = copied === "yes" ? "Copied" : copied === "failed" ? "Could not copy" : "Copy";
@@ -152,11 +167,144 @@ export function MessageActions({
           )}
         </div>
       )}
-      {copied && (
+      {copied && !compact && (
         <span className="sr-only" role="status">
           {copyLabel}
         </span>
       )}
+      {compact &&
+        pressedAt &&
+        createPortal(
+          <PressMenu
+            at={pressedAt}
+            content={content}
+            reactions={reactions}
+            onPick={pick}
+            onClose={unpress}
+            actions={[
+              onReply && { icon: "reply", label: "Reply", run: onReply },
+              text && { icon: "copy", label: "Copy", run: () => copy() },
+              text && { icon: "markdown", label: "Copy as Markdown", run: () => copy(true) },
+              text && { icon: "select", label: "Select text", run: () => selectText(content.current) },
+            ]}
+          />,
+          document.body,
+        )}
+      {compact &&
+        copied &&
+        createPortal(
+          <div className="press-toast" role="status">
+            {copyLabel}
+          </div>,
+          document.body,
+        )}
     </div>
   );
+}
+
+type PressAction = { icon: keyof typeof ICONS; label: string; run: () => void };
+
+/**
+ * A message's menu on a phone, once it is long-pressed: the emoji to react with above the message, its actions under
+ * it. A tap anywhere else, or Escape, closes it.
+ */
+function PressMenu({
+  at,
+  content,
+  reactions,
+  actions,
+  onPick,
+  onClose,
+}: {
+  at: { x: number; y: number };
+  content: RefObject<HTMLElement | null>;
+  reactions: MessageReactions | null;
+  actions: (PressAction | "" | undefined)[];
+  onPick: (emoji: Reaction) => void;
+  onClose: () => void;
+}) {
+  const emoji = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [tops, setTops] = useState<{ emoji: number; menu: number } | null>(null);
+  // Measured before it is painted: the emoji above the message and the menu under it, so the message stays in view;
+  // around the finger instead for a message too tall for that. Both kept on screen, never on top of each other.
+  useLayoutEffect(() => {
+    const gap = 8;
+    const edge = 12;
+    const emojiH = emoji.current?.offsetHeight ?? 0;
+    const menuH = menu.current?.offsetHeight ?? 0;
+    const rect = content.current?.getBoundingClientRect();
+    const fits = rect && rect.height + emojiH + menuH + 4 * gap < window.innerHeight;
+    const [above, below] = fits ? [rect.top, rect.bottom] : [at.y - 16, at.y + 16];
+    // No room under it (a message low on the screen): the menu above it, and the emoji above the menu.
+    const under = below + gap + menuH <= window.innerHeight - edge;
+    let menuTop = under ? below + gap : Math.max(edge, above - gap - menuH);
+    let emojiTop = Math.max(edge, (under ? above : menuTop) - gap - emojiH);
+    if (emojiH && emojiTop + emojiH + gap > menuTop) menuTop = emojiTop + emojiH + gap;
+    setTops({ emoji: emojiTop, menu: Math.min(menuTop, window.innerHeight - edge - menuH) });
+  }, [at, content]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    menu.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const mine = content.current?.classList.contains("mine") ?? false;
+  const hidden = tops === null ? { visibility: "hidden" as const } : undefined;
+  return (
+    <div className="press-layer" onClick={onClose}>
+      {reactions && (
+        <div ref={emoji} className="press-emoji" style={{ ...hidden, top: tops?.emoji }} onClick={(event) => event.stopPropagation()}>
+          <EmojiRow onPick={onPick} isMine={reactions.mine} />
+        </div>
+      )}
+      <div
+        ref={menu}
+        className={mine ? "press-menu mine" : "press-menu"}
+        role="menu"
+        style={{ ...hidden, top: tops?.menu }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {actions.map(
+          (action) =>
+            action && (
+              <button
+                key={action.label}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onClose();
+                  action.run();
+                }}
+              >
+                <ActionIcon name={action.icon} />
+                {action.label}
+              </button>
+            ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Select all the text of the message at `root`, for the phone's own handles to narrow; the message takes selection
+ * (which phones otherwise leave off messages, for the long press) until it is let go.
+ */
+function selectText(root: HTMLElement | null): void {
+  const bubbles = root?.querySelectorAll(".bubble");
+  const selection = getSelection();
+  if (!root || !bubbles?.length || !selection) return;
+  root.classList.add("selecting");
+  const range = document.createRange();
+  range.setStartBefore(bubbles[0]);
+  range.setEndAfter(bubbles[bubbles.length - 1]);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const done = () => {
+    if (!selection.isCollapsed && selection.rangeCount && root.contains(selection.getRangeAt(0).commonAncestorContainer)) return;
+    root.classList.remove("selecting");
+    document.removeEventListener("selectionchange", done);
+  };
+  document.addEventListener("selectionchange", done);
 }

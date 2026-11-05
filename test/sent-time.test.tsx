@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SentTime, sentLabel } from "../src/chat/SentTime.tsx";
+import { dayLabel, SentTime, sentLabel } from "../src/chat/SentTime.tsx";
 
 // 2026-11-05 14:30 UTC, a Thursday.
 const now = Date.UTC(2026, 10, 5, 14, 30);
@@ -50,5 +50,20 @@ describe("when a message was sent", () => {
     const html = renderToStaticMarkup(<SentTime at={Date.UTC(2026, 10, 3, 8, 0)} />);
     expect(html).toContain('class="sent-time"');
     expect(html).toContain('dateTime="2026-11-03T08:00:00.000Z"');
+  });
+});
+
+describe("the day over a day's first message", () => {
+  const day = (at: number) => dayLabel(at, now, { locale: "en-GB", timeZone: "UTC" });
+
+  it("says today and yesterday by the calendar", () => {
+    expect(day(Date.UTC(2026, 10, 5, 0, 0))).toBe("Today");
+    expect(day(Date.UTC(2026, 10, 4, 23, 59))).toBe("Yesterday");
+    expect(day(Date.UTC(2026, 10, 4, 0, 0))).toBe("Yesterday");
+  });
+
+  it("gives the weekday and date before, with the year only for another year", () => {
+    expect(day(Date.UTC(2026, 10, 3, 8, 0))).toBe("Tue 3 Nov");
+    expect(day(Date.UTC(2025, 10, 3, 8, 0))).toBe("Mon, 3 Nov 2025");
   });
 });

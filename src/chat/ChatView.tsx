@@ -26,7 +26,8 @@ import { textOf } from "../../shared/canonical.ts";
 import { AGENT_NAME, AGENT_TOKEN, type Mention } from "../../shared/mentions.ts";
 import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
-import { SentTime } from "./SentTime.tsx";
+import { useCompact, useSwipeReveal } from "./gestures.ts";
+import { calendarDay, DaySeparator, SentTime } from "./SentTime.tsx";
 import { ReactionChips, ReactionsContext, useMessageReactions, type MessageReactions } from "./Reactions.tsx";
 import { isReactable, type EntryReactions } from "../../shared/reactions.ts";
 import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
@@ -105,6 +106,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, []);
   useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length]);
+  // On a phone, dragging the conversation left shows when each message was sent.
+  useSwipeReveal(list, useCompact());
 
   // A finished run may have saved files (run_python): read them again. The rest of the sidebar follows on its own
   // (useSidebarSocket).
@@ -198,6 +201,8 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   const mine = online.find((presence) => presence.uid === uid)?.windows ?? 0;
   // Where each reply of the agent's starts: after a person's message, its name goes over it in a shared chat.
   const bylines = useMemo(() => (shared ? agentTurns(state.entries) : new Set<number>()), [shared, state.entries]);
+  // Recomputed only when entries change, not as a reply streams.
+  const dayStarts = useMemo(() => dayStartsOf(state.entries), [state.entries]);
   const agentLast = useMemo(() => shared !== null && endsInAgentTurn(state.entries), [shared, state.entries]);
   const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
   return (
@@ -230,8 +235,10 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
               )}
               {state.entries.map((entry) => {
                 const spend = prompts.get(entry.id);
+                const dayStart = dayStarts.get(entry.id);
                 return (
                   <Fragment key={entry.id}>
+                    {dayStart !== undefined && <DaySeparator at={dayStart} />}
                     {bylines.has(entry.id) && <AgentByline />}
                     <Entry entry={entry} reactions={reactions[entry.id]} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
                     {spend && <PromptCost spend={spend} />}
@@ -400,8 +407,7 @@ const Entry = memo(function Entry({
         attachments={data.attachments}
         mentions={data.mentions}
         replyTo={data.replyTo}
-        // Messages from before it was kept have only the time pi wrote them, and asides not even that.
-        sentAt={data.sentAt ?? message?.timestamp}
+        sentAt={sentAt(entry)}
         // In the transcript, a message that called the agent was picked up: it was placed in its run.
         picked={data.summoned}
         reactions={reactions}
@@ -434,6 +440,26 @@ const Entry = memo(function Entry({
   }
   return null;
 });
+
+/** When an entry was sent, for one that has a time: messages from before chats kept `sentAt` have only the time pi wrote them, and asides not even that. */
+function sentAt(entry: EntryRecord): number | undefined {
+  const at = entry.kind === CHAT_MESSAGE_KIND ? (entry.data as unknown as ChatMessageData).sentAt : undefined;
+  return at ?? entry.model?.[0]?.timestamp;
+}
+
+/** The entries that start a day, the first of each day the conversation has messages on, with their time. */
+function dayStartsOf(entries: readonly EntryRecord[]): Map<number, number> {
+  const starts = new Map<number, number>();
+  let last: number | undefined;
+  for (const entry of entries) {
+    const at = shown(entry) ? sentAt(entry) : undefined;
+    if (at === undefined) continue;
+    const day = calendarDay(at);
+    if (day !== last) starts.set(entry.id as number, at);
+    last = day;
+  }
+  return starts;
+}
 
 /** Entries the app shows something for; the others (such as asides for the model) do not end an agent's reply, or start one. */
 function shown(entry: EntryRecord): boolean {

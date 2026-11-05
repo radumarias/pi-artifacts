@@ -13,6 +13,9 @@ interface Formats {
   day: Intl.DateTimeFormat;
   date: Intl.DateTimeFormat;
   dateWithYear: Intl.DateTimeFormat;
+  /** A day separator's date: "Tue, 3 Nov", and with the year for another year's. */
+  weekday: Intl.DateTimeFormat;
+  weekdayWithYear: Intl.DateTimeFormat;
   /** The tooltip's full date and time, as `toLocaleString` gives it. */
   full: Intl.DateTimeFormat;
   /** The day of the last `now` asked for: the same for every label between two ticks. */
@@ -30,6 +33,8 @@ function formatsFor(locale: string | undefined, timeZone: string | undefined): F
       day: new Intl.DateTimeFormat("en-US", { year: "numeric", month: "numeric", day: "numeric", numberingSystem: "latn", timeZone }),
       date: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", timeZone }),
       dateWithYear: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", year: "numeric", timeZone }),
+      weekday: new Intl.DateTimeFormat(locale, { weekday: "short", month: "short", day: "numeric", timeZone }),
+      weekdayWithYear: new Intl.DateTimeFormat(locale, { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone }),
       full: new Intl.DateTimeFormat(locale, {
         year: "numeric",
         month: "numeric",
@@ -76,6 +81,21 @@ export function sentLabel(at: number, now: number, { locale, timeZone }: { local
   return new Date(sent).getUTCFullYear() === new Date(today).getUTCFullYear() ? `${f.date.format(at)}, ${time}` : f.dateWithYear.format(at);
 }
 
+/** The calendar day `at` falls on for the viewer, as a number: messages on the same day have the same one. */
+export function calendarDay(at: number): number {
+  return dayOf(formatsFor(undefined, undefined), at);
+}
+
+/** The separator over a day's first message: "Today", "Yesterday", the weekday and date ("Tue 3 Nov"), with the year for another year's. */
+export function dayLabel(at: number, now: number, { locale, timeZone }: { locale?: string; timeZone?: string } = {}): string {
+  const f = formatsFor(locale, timeZone);
+  const day = dayOf(f, at);
+  const today = todayOf(f, now);
+  if (day === today) return "Today";
+  if (day === today - DAY) return "Yesterday";
+  return new Date(day).getUTCFullYear() === new Date(today).getUTCFullYear() ? f.weekday.format(at) : f.weekdayWithYear.format(at);
+}
+
 // One clock for every time shown, ticking while any message is in view (each has its label, hidden until hovered).
 // Rounded down to the tick, so React reads the same label however often it asks between two ticks.
 const listeners = new Set<() => void>();
@@ -100,9 +120,22 @@ export function SentTime({ at }: { at: number }) {
   // The label itself, so a tick draws again only the labels it changes ("now", "N min ago", and those past midnight).
   const label = () => sentLabel(at, clockNow());
   const text = useSyncExternalStore(subscribe, label, label);
+  const f = formatsFor(undefined, undefined);
   return (
-    <time className="sent-time" dateTime={new Date(at).toISOString()} title={formatsFor(undefined, undefined).full.format(at)}>
-      {text}
+    <time className="sent-time" dateTime={new Date(at).toISOString()} title={f.full.format(at)}>
+      <span className="sent-ago">{text}</span>
+      <span className="sent-clock">{f.time.format(at)}</span>
     </time>
+  );
+}
+
+/** A line across the conversation with the day in it, over the first message of each day. */
+export function DaySeparator({ at }: { at: number }) {
+  const label = () => dayLabel(at, clockNow());
+  const text = useSyncExternalStore(subscribe, label, label);
+  return (
+    <div className="day-separator" role="separator">
+      <time dateTime={new Date(at).toISOString().slice(0, 10)}>{text}</time>
+    </div>
   );
 }
