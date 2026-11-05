@@ -729,12 +729,14 @@ function Assistant({
       })}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
-      {text && <ReactionChips reactions={reactions} />}
       {text && (
-        <div className="message-foot">
-          <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} />
-          <SentTime at={message.timestamp} />
-        </div>
+        <>
+          <ReactionChips reactions={reactions} />
+          <div className="message-foot">
+            <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} />
+            <SentTime at={message.timestamp} />
+          </div>
+        </>
       )}
     </div>
   );
