@@ -33,6 +33,7 @@
     "src/chat/Markdown.tsx",
     "src/chat/Thinking.tsx",
     "src/chat/SentTime.tsx",
+    "src/chat/gestures.ts",
     "src/chat/Steps.tsx",
     "src/chat/Linkified.tsx",
     "src/files/highlight.ts",

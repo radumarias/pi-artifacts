@@ -1,25 +1,31 @@
-import { useEffect, useRef, useSyncExternalStore, type RefObject } from "react";
+import { createContext, useEffect, useRef, useSyncExternalStore, type RefObject } from "react";
 
 /**
  * Phones, tablets and narrow windows: messages have no hover bar. A long press (or a right click) opens a message's
- * menu, and dragging the conversation to the left shows when each message was sent. The same query is in styles.css.
+ * menu, and dragging the conversation to the left shows when each message was sent. The chat reads it once
+ * (useCompact), marks its messages `data-compact` for the styles and hands it down in Compact.
  */
-export const COMPACT_QUERY = "(hover: none), (max-width: 640px)";
+const COMPACT_QUERY = "(hover: none), (max-width: 640px)";
+
+let compactQuery: MediaQueryList | undefined;
+const query = () => (compactQuery ??= matchMedia(COMPACT_QUERY));
 
 function subscribeCompact(onChange: () => void): () => void {
-  const query = matchMedia(COMPACT_QUERY);
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
+  query().addEventListener("change", onChange);
+  return () => query().removeEventListener("change", onChange);
 }
 
 /** Whether the app is compact (COMPACT_QUERY), following the window as it changes. */
 export function useCompact(): boolean {
   return useSyncExternalStore(
     subscribeCompact,
-    () => matchMedia(COMPACT_QUERY).matches,
+    () => query().matches,
     () => false,
   );
 }
+
+/** Whether the chat is compact, for its messages: read once by the chat, not by each of them. */
+export const Compact = createContext(false);
 
 /** How long a press is held before it opens the menu, and how far it may wander meanwhile. */
 const PRESS_MS = 450;
@@ -90,9 +96,11 @@ export function useLongPress(target: RefObject<HTMLElement | null>, on: boolean,
     const menu = (event: MouseEvent) => {
       if ((event.target as Element).closest(OWN_PRESS)) return;
       event.preventDefault();
-      // Android reports a long press both ways: one menu.
+      // Android reports a long press both ways, in either order: one menu, and the press still ends in a swallowed click.
       if (fired) return;
-      cancel();
+      clearTimeout(timer);
+      start = undefined;
+      fired = true;
       latest.current(event.clientX, event.clientY);
     };
     el.addEventListener("pointerdown", down);
@@ -106,20 +114,26 @@ export function useLongPress(target: RefObject<HTMLElement | null>, on: boolean,
 }
 
 /** How far the conversation moves to the left at most, uncovering the times beside its messages. */
-export const REVEAL_PX = 72;
+const REVEAL_PX = 72;
 
 /**
- * Dragging the conversation in `list` to the left moves it with the finger, up to REVEAL_PX, and shows the times
- * beside its messages (`--reveal` on the list, which the styles move its children by); letting go puts it back. A
- * drag that starts up or down is the list's own scroll. Only while `on`.
+ * Dragging the conversation in `list` to the left moves `track` (what the list holds) with the finger, up to
+ * REVEAL_PX, showing the times beside its messages; letting go puts it back. A drag that starts up or down is the
+ * list's own scroll. Only while `on`.
  */
-export function useSwipeReveal(list: RefObject<HTMLElement | null>, on: boolean): void {
+export function useSwipeReveal(list: RefObject<HTMLElement | null>, track: RefObject<HTMLElement | null>, on: boolean): void {
   useEffect(() => {
     const el = list.current;
-    if (!on || !el) return;
+    const moved = track.current;
+    if (!on || !el || !moved) return;
     let start: { x: number; y: number; id: number } | undefined;
     let axis: "x" | "y" | undefined;
-    const reveal = (px: number) => el.style.setProperty("--reveal", `${px}px`);
+    let shown = 0;
+    const reveal = (px: number) => {
+      if (px === shown) return;
+      shown = px;
+      moved.style.transform = px ? `translateX(${-px}px)` : "";
+    };
     const down = (event: PointerEvent) => {
       if (!event.isPrimary || event.button !== 0) return;
       start = { x: event.clientX, y: event.clientY, id: event.pointerId };
@@ -133,7 +147,7 @@ export function useSwipeReveal(list: RefObject<HTMLElement | null>, on: boolean)
         if (Math.hypot(dx, dy) < SLOP_PX) return;
         axis = dx < 0 && Math.abs(dx) > Math.abs(dy) ? "x" : "y";
         if (axis === "x") {
-          el.classList.add("revealing");
+          moved.classList.add("revealing");
           el.setPointerCapture(event.pointerId);
           getSelection()?.removeAllRanges();
         }
@@ -144,7 +158,7 @@ export function useSwipeReveal(list: RefObject<HTMLElement | null>, on: boolean)
       if (start?.id !== event.pointerId) return;
       if (axis === "x") {
         if (event.type === "pointerup") swallowNextClick();
-        el.classList.remove("revealing");
+        moved.classList.remove("revealing");
         reveal(0);
       }
       start = undefined;
@@ -159,8 +173,8 @@ export function useSwipeReveal(list: RefObject<HTMLElement | null>, on: boolean)
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", end);
       el.removeEventListener("pointercancel", end);
-      el.classList.remove("revealing");
-      el.style.removeProperty("--reveal");
+      moved.classList.remove("revealing");
+      moved.style.transform = "";
     };
-  }, [list, on]);
+  }, [list, track, on]);
 }

@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from "react";
+import { useContext, useSyncExternalStore } from "react";
+import { Compact } from "./gestures.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -62,6 +63,15 @@ function todayOf(f: Formats, now: number): number {
   return f.today.day;
 }
 
+/** Which day `at` is from `now`'s, by calendar days, not 24 hours back: a day can be 23 or 25 hours long where clocks change. */
+function whichDay(f: Formats, at: number, now: number): "today" | "yesterday" | "this year" | "before" {
+  const day = dayOf(f, at);
+  const today = todayOf(f, now);
+  if (day === today) return "today";
+  if (day === today - DAY) return "yesterday";
+  return new Date(day).getUTCFullYear() === new Date(today).getUTCFullYear() ? "this year" : "before";
+}
+
 /**
  * When a message was sent, as a chat shows it under the message: "now", "12 min ago", the time today ("14:05"),
  * "Yesterday, 14:05", "Nov 3, 14:05" this year, and "Nov 3, 2025" before. `timeZone` and `locale` default to the
@@ -73,27 +83,25 @@ export function sentLabel(at: number, now: number, { locale, timeZone }: { local
   if (ago < HOUR) return `${Math.floor(ago / MINUTE)} min ago`;
   const f = formatsFor(locale, timeZone);
   const time = f.time.format(at);
-  const sent = dayOf(f, at);
-  const today = todayOf(f, now);
-  if (sent === today) return time;
-  // By calendar days, not 24 hours back: a day can be 23 or 25 hours long where clocks change.
-  if (sent === today - DAY) return `Yesterday, ${time}`;
-  return new Date(sent).getUTCFullYear() === new Date(today).getUTCFullYear() ? `${f.date.format(at)}, ${time}` : f.dateWithYear.format(at);
+  const day = whichDay(f, at, now);
+  if (day === "today") return time;
+  if (day === "yesterday") return `Yesterday, ${time}`;
+  return day === "this year" ? `${f.date.format(at)}, ${time}` : f.dateWithYear.format(at);
 }
 
-/** The calendar day `at` falls on for the viewer, as a number: messages on the same day have the same one. */
+/** The calendar day `at` falls on for the viewer, as a number: messages on the same day have the same one. The viewer's own day, read without Intl, which is far slower. */
 export function calendarDay(at: number): number {
-  return dayOf(formatsFor(undefined, undefined), at);
+  const date = new Date(at);
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 /** The separator over a day's first message: "Today", "Yesterday", the weekday and date ("Tue 3 Nov"), with the year for another year's. */
 export function dayLabel(at: number, now: number, { locale, timeZone }: { locale?: string; timeZone?: string } = {}): string {
   const f = formatsFor(locale, timeZone);
-  const day = dayOf(f, at);
-  const today = todayOf(f, now);
-  if (day === today) return "Today";
-  if (day === today - DAY) return "Yesterday";
-  return new Date(day).getUTCFullYear() === new Date(today).getUTCFullYear() ? f.weekday.format(at) : f.weekdayWithYear.format(at);
+  const day = whichDay(f, at, now);
+  if (day === "today") return "Today";
+  if (day === "yesterday") return "Yesterday";
+  return day === "this year" ? f.weekday.format(at) : f.weekdayWithYear.format(at);
 }
 
 // One clock for every time shown, ticking while any message is in view (each has its label, hidden until hovered).
@@ -115,16 +123,21 @@ function subscribe(listener: () => void): () => void {
 
 const clockNow = () => Math.floor(Date.now() / TICK_MS) * TICK_MS;
 
-/** When a message was sent, under it on hover; the full date and time in its tooltip. */
+const unsubscribed = () => () => {};
+
+/**
+ * When a message was sent, under it on hover, how long ago; compact (on a phone), beside it where a drag uncovers it,
+ * the time of day, which needs no clock. The full date and time in its tooltip.
+ */
 export function SentTime({ at }: { at: number }) {
-  // The label itself, so a tick draws again only the labels it changes ("now", "N min ago", and those past midnight).
-  const label = () => sentLabel(at, clockNow());
-  const text = useSyncExternalStore(subscribe, label, label);
+  const compact = useContext(Compact);
   const f = formatsFor(undefined, undefined);
+  // The label itself, so a tick draws again only the labels it changes ("now", "N min ago", and those past midnight).
+  const label = () => (compact ? f.time.format(at) : sentLabel(at, clockNow()));
+  const text = useSyncExternalStore(compact ? unsubscribed : subscribe, label, label);
   return (
     <time className="sent-time" dateTime={new Date(at).toISOString()} title={f.full.format(at)}>
-      <span className="sent-ago">{text}</span>
-      <span className="sent-clock">{f.time.format(at)}</span>
+      {text}
     </time>
   );
 }

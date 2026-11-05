@@ -26,7 +26,7 @@ import { textOf } from "../../shared/canonical.ts";
 import { AGENT_NAME, AGENT_TOKEN, type Mention } from "../../shared/mentions.ts";
 import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
-import { useCompact, useSwipeReveal } from "./gestures.ts";
+import { Compact, useCompact, useSwipeReveal } from "./gestures.ts";
 import { calendarDay, DaySeparator, SentTime } from "./SentTime.tsx";
 import { ReactionChips, ReactionsContext, useMessageReactions, type MessageReactions } from "./Reactions.tsx";
 import { isReactable, type EntryReactions } from "../../shared/reactions.ts";
@@ -107,7 +107,9 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   }, []);
   useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length]);
   // On a phone, dragging the conversation left shows when each message was sent.
-  useSwipeReveal(list, useCompact());
+  const compact = useCompact();
+  const track = useRef<HTMLDivElement>(null);
+  useSwipeReveal(list, track, compact);
 
   // A finished run may have saved files (run_python): read them again. The rest of the sidebar follows on its own
   // (useSidebarSocket).
@@ -226,31 +228,35 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
           </header>
           {sharing && people && <SharePanel chatId={chatId} uid={uid} isOwner={isOwner} people={people} onLeft={onLeft} onClose={closeSharing} />}
           <StepsProvider entries={state.entries} tools={state.tools} busy={state.busy}>
-            <div className="messages" ref={list} onScroll={onScroll}>
-              {state.entries.length === 0 && !state.busy && (
-                <div className="empty-chat">
-                  <h2>What should we build?</h2>
-                  <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
+            <Compact.Provider value={compact}>
+              <div className="messages" ref={list} onScroll={onScroll} data-compact={compact || undefined}>
+                <div className="transcript" ref={track}>
+                  {state.entries.length === 0 && !state.busy && (
+                    <div className="empty-chat">
+                      <h2>What should we build?</h2>
+                      <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
+                    </div>
+                  )}
+                  {state.entries.map((entry) => {
+                    const spend = prompts.get(entry.id);
+                    const dayStart = dayStarts.get(entry.id);
+                    return (
+                      <Fragment key={entry.id}>
+                        {dayStart !== undefined && <DaySeparator at={dayStart} />}
+                        {bylines.has(entry.id) && <AgentByline />}
+                        <Entry entry={entry} reactions={reactions[entry.id]} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
+                        {spend && <PromptCost spend={spend} />}
+                      </Fragment>
+                    );
+                  })}
+                  {shared && !agentLast && (state.partial || thinking) && <AgentByline />}
+                  {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
+                  {thinking && <Thinking since={state.runStartedAt!} />}
+                  {state.error && <div className="chat-error">{state.error}</div>}
+                  <Queue queued={state.queued} uid={uid} />
                 </div>
-              )}
-              {state.entries.map((entry) => {
-                const spend = prompts.get(entry.id);
-                const dayStart = dayStarts.get(entry.id);
-                return (
-                  <Fragment key={entry.id}>
-                    {dayStart !== undefined && <DaySeparator at={dayStart} />}
-                    {bylines.has(entry.id) && <AgentByline />}
-                    <Entry entry={entry} reactions={reactions[entry.id]} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
-                    {spend && <PromptCost spend={spend} />}
-                  </Fragment>
-                );
-              })}
-              {shared && !agentLast && (state.partial || thinking) && <AgentByline />}
-              {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
-              {thinking && <Thinking since={state.runStartedAt!} />}
-              {state.error && <div className="chat-error">{state.error}</div>}
-              <Queue queued={state.queued} uid={uid} />
-            </div>
+              </div>
+            </Compact.Provider>
           </StepsProvider>
           <form className="composer" onSubmit={submit} onDragOver={onDragOver} onDrop={onDrop}>
             {attachments.error && <div className="chat-error">{attachments.error}</div>}

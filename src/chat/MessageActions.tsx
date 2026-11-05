@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { Reaction } from "../../shared/reactions.ts";
 import { Icon } from "../Icon.tsx";
 import { useDismiss } from "../layout.tsx";
-import { useCompact, useLongPress } from "./gestures.ts";
+import { Compact, useLongPress } from "./gestures.ts";
 import { EmojiRow, type MessageReactions } from "./Reactions.tsx";
 
 /**
@@ -86,21 +86,16 @@ export function MessageActions({
     const rect = menu.current.getBoundingClientRect();
     setPlace([rect.bottom > area.bottom && "up", rect.right > area.right ? "end" : rect.left < area.left && "start"].filter(Boolean).join(" "));
   }, [open, place, box]);
-  const compact = useCompact();
+  const compact = useContext(Compact);
   // Where the message was long-pressed (or right-clicked), while its menu is open.
   const [pressedAt, setPressedAt] = useState<{ x: number; y: number } | null>(null);
-  useLongPress(
-    content,
-    compact,
-    useCallback((x: number, y: number) => setPressedAt({ x, y }), []),
-  );
+  useLongPress(content, compact, (x, y) => setPressedAt({ x, y }));
   const unpress = useCallback(() => setPressedAt(null), []);
   const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   const copy = (asMarkdown = false) => {
     setOpen(null);
-    setPressedAt(null);
     (asMarkdown ? navigator.clipboard.writeText(text) : copyRich(bubblesHtml(content.current), text)).then(
       () => setCopied("yes"),
       () => setCopied("failed"),
@@ -110,10 +105,39 @@ export function MessageActions({
   };
   const pick = (emoji: Reaction) => {
     setOpen(null);
-    setPressedAt(null);
     reactions?.toggle(emoji);
   };
   const copyLabel = copied === "yes" ? "Copied" : copied === "failed" ? "Could not copy" : "Copy";
+  // What "…" holds, and the long-press menu with "Select text" too.
+  const actions: MenuAction[] = [
+    ...(onReply ? [{ icon: "reply", label: "Reply", run: onReply } as const] : []),
+    ...(text
+      ? ([
+          { icon: "copy", label: "Copy message", run: () => copy() },
+          { icon: "markdown", label: "Copy as Markdown", run: () => copy(true) },
+        ] as const)
+      : []),
+  ];
+  const status = copied && <span role="status">{copyLabel}</span>;
+  if (compact) {
+    return (
+      <>
+        {pressedAt &&
+          createPortal(
+            <PressMenu
+              at={pressedAt}
+              content={content}
+              reactions={reactions}
+              onPick={pick}
+              onClose={unpress}
+              actions={text ? [...actions, { icon: "select", label: "Select text", run: () => selectText(content.current) }] : actions}
+            />,
+            document.body,
+          )}
+        {status && createPortal(<div className="press-toast">{status}</div>, document.body)}
+      </>
+    );
+  }
   const button = (label: string, icon: keyof typeof ICONS, onClick: () => void, opens?: "react" | "more"): ReactNode => (
     <button
       type="button"
@@ -139,70 +163,28 @@ export function MessageActions({
       {open && (
         <div ref={menu} id={menuId} className={place ? `message-menu ${place}` : "message-menu"} role={open === "more" ? "menu" : undefined}>
           {reactions && <EmojiRow onPick={pick} isMine={reactions.mine} />}
-          {open === "more" && (
-            <>
-              {onReply && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setOpen(null);
-                    onReply();
-                  }}
-                >
-                  Reply
-                </button>
-              )}
-              {text && (
-                <>
-                  <button type="button" role="menuitem" onClick={() => copy()}>
-                    Copy message
-                  </button>
-                  <button type="button" role="menuitem" onClick={() => copy(true)}>
-                    Copy message as Markdown
-                  </button>
-                </>
-              )}
-            </>
-          )}
+          {open === "more" &&
+            actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(null);
+                  action.run();
+                }}
+              >
+                {action.label}
+              </button>
+            ))}
         </div>
       )}
-      {copied && !compact && (
-        <span className="sr-only" role="status">
-          {copyLabel}
-        </span>
-      )}
-      {compact &&
-        pressedAt &&
-        createPortal(
-          <PressMenu
-            at={pressedAt}
-            content={content}
-            reactions={reactions}
-            onPick={pick}
-            onClose={unpress}
-            actions={[
-              onReply && { icon: "reply", label: "Reply", run: onReply },
-              text && { icon: "copy", label: "Copy", run: () => copy() },
-              text && { icon: "markdown", label: "Copy as Markdown", run: () => copy(true) },
-              text && { icon: "select", label: "Select text", run: () => selectText(content.current) },
-            ]}
-          />,
-          document.body,
-        )}
-      {compact &&
-        copied &&
-        createPortal(
-          <div className="press-toast" role="status">
-            {copyLabel}
-          </div>,
-          document.body,
-        )}
+      {status && <span className="sr-only">{status}</span>}
     </div>
   );
 }
 
-type PressAction = { icon: keyof typeof ICONS; label: string; run: () => void };
+type MenuAction = { icon: keyof typeof ICONS; label: string; run: () => void };
 
 /**
  * A message's menu on a phone, once it is long-pressed: the emoji to react with above the message, its actions under
@@ -219,13 +201,12 @@ function PressMenu({
   at: { x: number; y: number };
   content: RefObject<HTMLElement | null>;
   reactions: MessageReactions | null;
-  actions: (PressAction | "" | undefined)[];
+  actions: MenuAction[];
   onPick: (emoji: Reaction) => void;
   onClose: () => void;
 }) {
   const emoji = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
-  const [tops, setTops] = useState<{ emoji: number; menu: number } | null>(null);
   // Measured before it is painted: the emoji above the message and the menu under it, so the message stays in view;
   // around the finger instead for a message too tall for that. Both kept on screen, never on top of each other.
   useLayoutEffect(() => {
@@ -239,49 +220,47 @@ function PressMenu({
     // No room under it (a message low on the screen): the menu above it, and the emoji above the menu.
     const under = below + gap + menuH <= window.innerHeight - edge;
     let menuTop = under ? below + gap : Math.max(edge, above - gap - menuH);
-    let emojiTop = Math.max(edge, (under ? above : menuTop) - gap - emojiH);
+    const emojiTop = Math.max(edge, (under ? above : menuTop) - gap - emojiH);
     if (emojiH && emojiTop + emojiH + gap > menuTop) menuTop = emojiTop + emojiH + gap;
-    setTops({ emoji: emojiTop, menu: Math.min(menuTop, window.innerHeight - edge - menuH) });
+    if (emoji.current) emoji.current.style.top = `${emojiTop}px`;
+    if (menu.current) menu.current.style.top = `${Math.min(menuTop, window.innerHeight - edge - menuH)}px`;
   }, [at, content]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);
-    menu.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    // For a keyboard (the menu key); no ring for a finger.
+    menu.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
   const mine = content.current?.classList.contains("mine") ?? false;
-  const hidden = tops === null ? { visibility: "hidden" as const } : undefined;
   return (
     <div className="press-layer" onClick={onClose}>
       {reactions && (
-        <div ref={emoji} className="press-emoji" style={{ ...hidden, top: tops?.emoji }} onClick={(event) => event.stopPropagation()}>
-          <EmojiRow onPick={onPick} isMine={reactions.mine} />
+        <div ref={emoji} className="press-emoji" onClick={(event) => event.stopPropagation()}>
+          <EmojiRow
+            onPick={(picked) => {
+              onClose();
+              onPick(picked);
+            }}
+            isMine={reactions.mine}
+          />
         </div>
       )}
-      <div
-        ref={menu}
-        className={mine ? "press-menu mine" : "press-menu"}
-        role="menu"
-        style={{ ...hidden, top: tops?.menu }}
-        onClick={(event) => event.stopPropagation()}
-      >
-        {actions.map(
-          (action) =>
-            action && (
-              <button
-                key={action.label}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  onClose();
-                  action.run();
-                }}
-              >
-                <ActionIcon name={action.icon} />
-                {action.label}
-              </button>
-            ),
-        )}
+      <div ref={menu} className={mine ? "press-menu mine" : "press-menu"} role="menu" onClick={(event) => event.stopPropagation()}>
+        {actions.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onClose();
+              action.run();
+            }}
+          >
+            <ActionIcon name={action.icon} />
+            {action.label}
+          </button>
+        ))}
       </div>
     </div>
   );

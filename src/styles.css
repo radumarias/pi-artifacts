@@ -305,27 +305,23 @@ body.resizing iframe { pointer-events: none; }
 .message-foot { display: flex; align-items: center; gap: 8px; }
 .sent-time { padding: 0 4px; color: var(--muted); font-size: 12px; line-height: 16px; white-space: nowrap; }
 :is(.message, .assistant):is(:hover, :focus-within) :is(.message-actions, .sent-time), .message-actions.open { opacity: 1; }
+/* What the conversation holds: in one piece, which a drag moves on a phone. */
+.transcript { flex: 1 0 auto; display: flex; flex-direction: column; gap: 10px; }
 /*
- * Compact (phones, narrow windows; COMPACT_QUERY in gestures.ts): no hover bar. A long press opens a message's menu
- * (.press-*), and dragging the conversation left (--reveal, set while dragging) uncovers each message's time, which
+ * Compact (phones, narrow windows; useCompact in gestures.ts marks the list): no hover bar. A long press opens a
+ * message's menu (.press-*), and dragging the conversation left (useSwipeReveal) uncovers each message's time, which
  * waits just past the right edge. Messages span the row for that, their parts still capped at 88%.
  */
-@media (hover: none), (max-width: 640px) {
-  .message-actions { display: none; }
-  .messages { padding-top: 20px; overflow-x: hidden; touch-action: pan-y pinch-zoom; }
-  .messages > * { transform: translateX(calc(-1 * var(--reveal, 0px))); transition: transform 0.2s ease-out; }
-  .messages.revealing > * { transition: none; }
-  .message:is(.mine, .other) { position: relative; align-self: stretch; max-width: none; }
-  .message > :not(.sent-time) { max-width: 88%; }
-  .assistant { position: relative; }
-  .message-foot { display: contents; }
-  .sent-time { position: absolute; left: calc(100% + 24px); opacity: 1; padding: 0; }
-  .message > .sent-time { top: 50%; translate: 0 -50%; }
-  .assistant .sent-time { top: 8px; }
-  .sent-time > .sent-ago { display: none; }
-}
-/* The time of day where a drag uncovers it (compact), how long ago elsewhere. */
-@media not ((hover: none) or (max-width: 640px)) { .sent-time > .sent-clock { display: none; } }
+.messages[data-compact] { padding-top: 20px; overflow-x: hidden; touch-action: pan-y pinch-zoom; }
+[data-compact] .transcript { transition: transform 0.2s ease-out; }
+[data-compact] .transcript.revealing { transition: none; }
+[data-compact] .message:is(.mine, .other) { position: relative; align-self: stretch; max-width: none; }
+[data-compact] .message > :not(.sent-time) { max-width: 88%; }
+[data-compact] .assistant { position: relative; }
+[data-compact] .message-foot { display: contents; }
+[data-compact] .sent-time { position: absolute; left: calc(100% + 24px); opacity: 1; padding: 0; }
+[data-compact] .message > .sent-time { top: 50%; translate: 0 -50%; }
+[data-compact] .assistant .sent-time { top: 8px; }
 /* Phones keep the long press for the menu: text is selected from it ("Select text"), not by holding a message. */
 @media (hover: none) {
   :is(.message, .assistant):not(.selecting) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -345,8 +341,9 @@ body.resizing iframe { pointer-events: none; }
 .day-separator { display: flex; align-items: center; gap: 12px; margin: 4px 0; color: var(--muted); font-size: 13px; }
 .day-separator::before, .day-separator::after {
   content: ""; flex: 1; height: 6px; background: var(--border);
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3Q3 .5 6 3T12 3' fill='none' stroke='black' stroke-width='1.3'/%3E%3C/svg%3E") repeat-x center / 12px 6px;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3Q3 .5 6 3T12 3' fill='none' stroke='black' stroke-width='1.3'/%3E%3C/svg%3E") repeat-x center / 12px 6px;
+  --wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3Q3 .5 6 3T12 3' fill='none' stroke='black' stroke-width='1.3'/%3E%3C/svg%3E") repeat-x center / 12px 6px;
+  -webkit-mask: var(--wave);
+  mask: var(--wave);
 }
 /* Reactions under a message: each emoji, how many, the viewer's own marked; a click adds or takes back theirs. */
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; }
