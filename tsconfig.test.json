@@ -42,6 +42,7 @@
     "src/artifact/viewport.tsx",
     "src/Icon.tsx",
     "src/layout.tsx",
+    "src/back-link.ts",
     "shared",
     "worker/mcp",
     "worker/agent/mcp.ts",
