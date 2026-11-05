@@ -1,4 +1,4 @@
-import { backLink, FROM_PARAM, type BackLink } from "../shared/home-site.ts";
+import { backLink, FROM_PARAM, type BackLink } from "./back-link.ts";
 import { Icon } from "./Icon.tsx";
 
 const STORE_KEY = "pi:back";
@@ -10,7 +10,7 @@ const SIGN_IN_HOSTS = ["cloudflareaccess.com"];
  * Work out where Back goes, once, before the app reads its location: from `?from=` (then taken out of the address bar)
  * or the referrer, else what this tab kept from an earlier load, so moving between chats or reloading keeps it.
  */
-function rememberBackLink(): BackLink | undefined {
+function findBackLink(): BackLink | undefined {
   const url = new URL(location.href);
   const from = url.searchParams.get(FROM_PARAM);
   if (from !== null) {
@@ -28,13 +28,19 @@ function rememberBackLink(): BackLink | undefined {
 }
 
 /** Where Back goes for this tab, or undefined when the app was not opened from another website. */
-export const back = rememberBackLink();
+let back: BackLink | undefined;
+
+/** Run once in main.tsx, before the app reads its location (it may take `from` out of it). */
+export function rememberBackLink(): void {
+  back = findBackLink();
+}
 
 /** A link back to the website the app was opened from, in this tab. `compact`: the arrow alone, for the sidebar rail. */
-export function BackToSite({ link, compact = false }: { link: BackLink; compact?: boolean }) {
-  const label = `Back to ${link.host}`;
+export function BackToSite({ compact = false }: { compact?: boolean }) {
+  if (!back) return null;
+  const label = `Back to ${back.host}`;
   return (
-    <a className={compact ? "back-to-site compact" : "back-to-site"} href={link.url} title={label} aria-label={compact ? label : undefined}>
+    <a className={compact ? "back-to-site compact" : "back-to-site"} href={back.url} title={label} aria-label={compact ? label : undefined}>
       <Icon size={16} box={16}>
         <path d="M10 3L5 8l5 5" />
       </Icon>

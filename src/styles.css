@@ -128,10 +128,10 @@ body.resizing iframe { pointer-events: none; }
 .back-to-site span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .back-to-site svg { flex: none; }
 .back-to-site:hover { background: var(--surface-2); color: var(--text); }
-.back-to-site.compact { justify-content: center; width: 36px; margin: 0 0 2px; padding: 8px 0; }
+.back-to-site.compact { justify-content: center; margin: 0 0 2px; }
 .sidebar-top .primary { flex: 1; }
 .sidebar.rail { align-items: center; padding: 14px 8px; }
-.sidebar.rail button { width: 36px; padding: 6px 0; }
+.sidebar.rail button, .sidebar.rail .back-to-site { width: 36px; padding: 6px 0; }
 .sidebar h3 { margin: 14px 0 2px; }
 .sidebar h3, .section-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 /* After .sidebar h3, whose margin shorthand would otherwise win at equal specificity. */

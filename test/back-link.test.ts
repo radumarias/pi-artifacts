@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { backLink } from "../shared/home-site.ts";
+import { backLink } from "../src/back-link.ts";
 
 const own = "https://ai.example.com";
 const signIn = ["cloudflareaccess.com"];

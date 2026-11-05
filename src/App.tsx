@@ -4,7 +4,7 @@ import { chatFileRoute } from "../shared/uploads.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
-import { back, BackToSite } from "./BackToSite.tsx";
+import { BackToSite } from "./BackToSite.tsx";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatFilterBar, ChatList, isShared, UnreadDot, useChatFilter, useChatList } from "./chat/ChatList.tsx";
@@ -328,7 +328,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
     >
       {collapsed ? (
         <aside className="sidebar rail">
-          {back && <BackToSite link={back} compact />}
+          <BackToSite compact />
           <button type="button" onClick={() => setCollapsed(false)} title="Show the sidebar" aria-label="Show the sidebar">
             »
           </button>
@@ -338,7 +338,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
         </aside>
       ) : (
         <aside className="sidebar">
-          {back && <BackToSite link={back} />}
+          <BackToSite />
           <div className="sidebar-top">
             <button type="button" className="primary" onClick={newChat}>
               + New chat
