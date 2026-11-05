@@ -47,7 +47,8 @@ describe("Auto's candidates", () => {
 let id = 0;
 const entry = (kind: string, message?: unknown, data?: unknown): EntryRecord =>
   ({ id: ++id, conversationId: 1, kind, ...(message !== undefined && { model: [message] }), ...(data !== undefined && { data }) }) as never;
-const said = (text: string, name?: string) => entry(CHAT_MESSAGE_KIND, { role: "user", content: text, timestamp: 0 }, { uid: "u", name: name ?? "", text });
+const said = (text: string, name?: string, shared = false) =>
+  entry(CHAT_MESSAGE_KIND, { role: "user", content: text, timestamp: 0 }, { uid: "u", name: name ?? "", text, ...(shared && { summoned: true }) });
 const answered = (content: AssistantMessage["content"], input = 0) =>
   entry("pi.assistant", {
     role: "assistant",
@@ -62,13 +63,18 @@ describe("the conversation the router reads", () => {
       answered([{ type: "toolCall", id: "c", name: "artifact_write", arguments: {} }]),
       entry("pi.tool-result", { role: "toolResult", toolCallId: "c", toolName: "artifact_write", content: [] }),
       answered([{ type: "text", text: "Here it is." }]),
-      said("Build a dashboard", "Ana"),
+      said("Build a dashboard", "Ana", true),
     ];
     expect(routeHistory(entries)).toEqual([
       { from: "person", text: "Ana: Build a dashboard" },
       { from: "agent", text: "Here it is." },
       { from: "agent", text: "[called artifact_write]" },
     ]);
+  });
+
+  it("names a person only in a shared chat", () => {
+    expect(routeHistory([said("Hello", "Ana")])).toEqual([{ from: "person", text: "Hello" }]);
+    expect(routeHistory([said("Hello", "Ana", true)])).toEqual([{ from: "person", text: "Ana: Hello" }]);
   });
 
   it("cuts long messages and keeps only the newest turns", () => {

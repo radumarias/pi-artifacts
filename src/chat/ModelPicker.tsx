@@ -300,7 +300,7 @@ function ModelMenu({
       }),
     );
     const autoSection: Section = { key: "auto", models: [AUTO_OPTION], foldable: false, open: true };
-    if (words.length) return [...(words.every((word) => "auto".includes(word)) ? [autoSection] : []), ...groups.filter((group) => group.models.length)];
+    if (words.length) return [...(words.every((word) => "auto".startsWith(word)) ? [autoSection] : []), ...groups.filter((group) => group.models.length)];
     const pinned = favorites.flatMap((key) => byId.get(key) ?? []);
     const lately = recent.filter((key) => !favorites.includes(key)).flatMap((key) => byId.get(key) ?? []);
     return [

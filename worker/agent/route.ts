@@ -75,8 +75,8 @@ export function autoCandidates(models: readonly ModelInfo[], wanted: readonly Au
 
 /**
  * The conversation so far as the router reads it, oldest first, from `entries` newest first (as pi pages them): the
- * people's messages and the agent's replies, by their text, each cut to MAX_TURN_CHARS, the newest MAX_TURNS within
- * MAX_HISTORY_CHARS. A reply that only called tools says which.
+ * people's messages and the agent's replies, by their text (a person's named only in a shared chat), each cut to
+ * MAX_TURN_CHARS, the newest MAX_TURNS within MAX_HISTORY_CHARS. A reply that only called tools says which.
  */
 export function routeHistory(entries: readonly EntryRecord[]): RouteTurn[] {
   const turns: RouteTurn[] = [];
@@ -97,7 +97,10 @@ function turnOf(entry: EntryRecord): RouteTurn | undefined {
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as Partial<ChatMessageData> | undefined;
     const text = data?.text?.trim();
-    return text ? { from: "person", text: data?.name ? `${data.name}: ${text}` : text } : undefined;
+    // Named as the agent's model reads it: only in a shared chat (where a message is summoned or an aside), so no name
+    // reaches the router for a chat nobody shares.
+    const named = data?.name && (data.summoned || data.aside);
+    return text ? { from: "person", text: named ? `${data.name}: ${text}` : text } : undefined;
   }
   if (entry.kind === "pi.user" && message?.role === "user") {
     const text = (typeof message.content === "string" ? message.content : textOf(message.content)).trim();
@@ -257,5 +260,7 @@ export async function recordRouterSpend(tx: Tx, conversationId: ConversationId, 
     return;
   }
   for (const counter of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[counter] += usage[counter];
+  // Optional counters, as pi adds them: once either side reports one.
+  for (const counter of ["cacheWrite1h", "reasoning"] as const) if (usage[counter] !== undefined) total[counter] = (total[counter] ?? 0) + usage[counter];
   for (const counter of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[counter] += usage.cost[counter];
 }

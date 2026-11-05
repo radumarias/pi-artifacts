@@ -260,6 +260,8 @@ export class ChatAgent extends DurableObject<Env> {
   #seen: { through: number; traces: ChatTraces } = { through: -1, traces: chatTraces([]) };
   /** See #oneShotModels. */
   #oneShot: Models | undefined;
+  /** See #placeAuto. */
+  #autoPlacing: Promise<void> = Promise.resolve();
   /** Set once the owner starts deleting the chat, and kept as its only record after: from then on nobody is in it. */
   #gone = this.#deleted();
 
@@ -396,16 +398,25 @@ export class ChatAgent extends DurableObject<Env> {
   /**
    * Auto's pick for a message about to start a run: the deployment's router (ROUTER_MODEL, the first the picker lists
    * that answers) reads the end of the conversation and the message (and how many images and other files it attaches),
-   * and picks one of AUTO_MODELS and an effort. The router call counts in pi's ledger like any model call. `change`: the
-   * agent change to the pick, when it is not what the chat runs on. Undefined while a run is going (as the sidebars last
-   * heard: #applyPick checks again), which the message joins on the model it runs on. Never throws: when no router picks
-   * in time (ROUTE_MS), the pick is the model the chat runs on, with no router, and the failure is logged.
+   * and picks one of AUTO_MODELS and an effort. The router call counts in pi's ledger like any model call. `choice`: the
+   * model and effort to run on, when a router picked. Undefined while a run is going (as the sidebars last heard:
+   * #applyPick checks again), which the message joins on the model it runs on, and when the conversation could not be
+   * read. Never throws: when no router picks in time (ROUTE_MS), the pick is the model the chat runs on, with no router,
+   * and the failure is logged.
    */
-  async #route(message: string, images: number, files: number): Promise<{ pick: AutoPick; change?: AgentChange } | undefined> {
+  async #route(message: string, images: number, files: number): Promise<Routing | undefined> {
     if (this.#status() === "running") return undefined;
     const started = Date.now();
-    const [root, catalog] = await Promise.all([this.#root(), this.#catalog()]);
-    const [agent, page] = await Promise.all([root.agent(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
+    let read;
+    try {
+      const [root, catalog] = await Promise.all([this.#root(), this.#catalog()]);
+      const [agent, page] = await Promise.all([root.agent(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
+      read = { root, catalog, agent, page };
+    } catch (error) {
+      console.error("auto:", errorMessage(error));
+      return undefined;
+    }
+    const { root, catalog, agent, page } = read;
     const current = agent.model ? modelKey(agent.model.provider, agent.model.modelId) : this.env.MODEL;
     const kept = () => ({ pick: { model: current, thinkingLevel: agent.thinkingLevel, ms: Date.now() - started } });
     const tokens = contextTokens(page.items);
@@ -422,8 +433,7 @@ export class ChatAgent extends DurableObject<Env> {
       const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
       if (!choice) return kept();
       const pick: AutoPick = { ...choice, ...(routed.pick.reason && { reason: routed.pick.reason }), router: routed.router, ms: Date.now() - started };
-      const same = choice.model === current && choice.thinkingLevel === agent.thinkingLevel;
-      return { pick, ...(!same && { change: this.#agentChange(choice) }) };
+      return { pick, choice };
     } catch (error) {
       console.error("auto:", errorMessage(error));
       return kept();
@@ -432,14 +442,32 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * Run the chat on Auto's pick, unless a run is going by now (someone else's message started one while the router
-   * thought), which the message then joins on the model it runs on, with no pick. The pick, when it stands.
+   * thought), which the message then joins on the model it runs on, with no pick. The pick, when it stands. Compared
+   * with the model the chat runs on now, not when the router was asked: another message may have changed it since.
+   * Called only inside #placeAuto, so no other Auto message changes the model between this and its message going in.
    */
-  async #applyPick(routed: { pick: AutoPick; change?: AgentChange } | undefined): Promise<AutoPick | undefined> {
-    if (!routed?.change) return routed?.pick;
+  async #applyPick(routed: Routing | undefined): Promise<AutoPick | undefined> {
+    if (!routed) return undefined;
     const pi = await this.harness.pi();
     if ((await pi.inspect(BACKGROUND_CONTEXT)).submissions.length) return undefined;
-    await (await pi.root(BACKGROUND_CONTEXT)).configure(routed.change, BACKGROUND_CONTEXT);
+    if (!routed.choice) return routed.pick;
+    const root = await this.#root();
+    const agent = await root.agent(BACKGROUND_CONTEXT);
+    const current = agent.model ? modelKey(agent.model.provider, agent.model.modelId) : this.env.MODEL;
+    if (current !== routed.choice.model || agent.thinkingLevel !== routed.choice.thinkingLevel) {
+      await root.configure(this.#agentChange(routed.choice), BACKGROUND_CONTEXT);
+    }
     return routed.pick;
+  }
+
+  /**
+   * Apply an Auto message's pick and put the message in, one message at a time: two picked at once would each change
+   * the model before either went in, and the run would start on the last one's pick while the first one's says another.
+   */
+  #placeAuto(place: () => Promise<void>): Promise<void> {
+    const placed = this.#autoPlacing.then(place);
+    this.#autoPlacing = placed.catch(() => {});
+    return placed;
   }
 
   /** pi-ai's models for the chat's calls outside its runs (Auto's router, the chat's title): made once. */
@@ -721,20 +749,22 @@ export class ChatAgent extends DurableObject<Env> {
     const written = [quote && replyLine(quote), text, note].filter(Boolean).join("\n\n");
     const said = shared ? `${author.name}: ${written}` : written;
     const content = attached ? [...attached.content, ...(written ? [{ type: "text" as const, text: said }] : [])] : said;
+    const dataWith = (auto?: AutoPick) =>
+      ({
+        uid: author.uid,
+        name: author.name,
+        text,
+        ...(attached && { attachments: attached.attachments }),
+        ...(mentions.length && { mentions }),
+        ...(quote && { replyTo: quote }),
+        sentAt,
+        ...(auto && { auto }),
+      }) satisfies ChatMessageData;
+    const summon = (data: ReturnType<typeof dataWith>) => this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
     // The model changes before the message goes in, so the run it starts is on the pick.
-    const auto = summoned ? await this.#applyPick(await routing) : undefined;
-    const data = {
-      uid: author.uid,
-      name: author.name,
-      text,
-      ...(attached && { attachments: attached.attachments }),
-      ...(mentions.length && { mentions }),
-      ...(quote && { replyTo: quote }),
-      sentAt,
-      ...(auto && { auto }),
-    } satisfies ChatMessageData;
-    if (summoned) await this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
-    else await this.#aside(content, data);
+    if (summoned && routing) await this.#placeAuto(async () => summon(dataWith(await this.#applyPick(await routing))));
+    else if (summoned) await summon(dataWith());
+    else await this.#aside(content, dataWith());
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
     const tags = taggedPeople(keptMentions(text, mentions));
@@ -1372,6 +1402,12 @@ export class ChatAgent extends DurableObject<Env> {
     }
     return manifest;
   }
+}
+
+/** Auto's pick for a message, and the model and effort to run on when a router picked (see ChatAgent's #route). */
+interface Routing {
+  pick: AutoPick;
+  choice?: ModelChoice;
 }
 
 /** What the chat's sockets need from the chat. */
