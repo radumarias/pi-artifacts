@@ -44,12 +44,13 @@ import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionIn
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
 import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
+import { checkSystemPrompt, type ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
 import { AGENT_REACTOR, isReactable, isReaction, type Reaction, type Reactions } from "../shared/reactions.ts";
 import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
-import { peopleExtension, promptExtension } from "./agent/prompt.ts";
+import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
 import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory } from "./agent/route.ts";
@@ -91,7 +92,7 @@ const MAX_BROUGHT_IN = 200;
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
 export interface ChatRefusal {
   error: string;
-  status: 403 | 404 | 409;
+  status: 400 | 403 | 404 | 409;
 }
 
 function refuse(status: ChatRefusal["status"], error: string): ChatRefusal {
@@ -101,6 +102,8 @@ function refuse(status: ChatRefusal["status"], error: string): ChatRefusal {
 const DELETED = "This chat was deleted.";
 const DELETING = "This chat is being deleted.";
 const GONE_KEY = "deleted";
+/** The chat's own system prompt (see setChatSystemPrompt). */
+const SYSTEM_PROMPT_KEY = "systemPrompt";
 
 const SOCKET_TAG = "chat";
 const OWNER = "chat-sockets";
@@ -242,6 +245,8 @@ export class ChatAgent extends DurableObject<Env> {
   #skillsInstalled: string | undefined;
   /** The agent's prompt's list of the user's files, so a refresh reinstalls it only on a change. */
   #filesInstalled: string | undefined;
+  /** The owner's own system prompt, as last read (see refreshUserPrompt). */
+  #userPrompt: Promise<string> | undefined;
   /** When members' sidebars were last bumped, and with which title. */
   #membersTouched = { title: "", at: 0 };
   /** The pi event stream the chat's status comes from while it may change: from a prompt until its runs settle. */
@@ -296,6 +301,7 @@ export class ChatAgent extends DurableObject<Env> {
     this.registry.install(skillsExtension(scope));
     this.registry.install(reactionsExtension(scope));
     if (env.SANDBOX_ENABLED === "true") this.registry.install(sandboxExtension(scope));
+    this.registry.install(systemPromptExtension(() => this.#systemPrompts()));
   }
 
   /** The uid is this object's name, which the Worker sets from a verified identity. */
@@ -545,6 +551,43 @@ export class ChatAgent extends DurableObject<Env> {
   });
 
   /**
+   * Read the owner's own system prompt again: runs before every prompt, so a change made in any chat, or in the
+   * account menu, applies from the next message on. Never rejects: on a failure the agent keeps the one it has.
+   */
+  refreshUserPrompt(): Promise<string> {
+    const last = this.#userPrompt;
+    return (this.#userPrompt = this.#directory.systemPrompt().catch(async (error: unknown) => {
+      console.error("system prompt:", errorMessage(error));
+      return (await last) ?? "";
+    }));
+  }
+
+  /** What the agent's prompt adds from the owner (see systemPromptExtension): read for every model request. */
+  async #systemPrompts(): Promise<UserPrompts> {
+    return { user: await (this.#userPrompt ?? this.refreshUserPrompt()), chat: this.ctx.storage.kv.get<string>(SYSTEM_PROMPT_KEY) ?? "" };
+  }
+
+  /** The chat's system prompt, for someone in it: everyone may read it, only the owner change it. */
+  chatSystemPrompt(uid: string): ChatSystemPrompt | ChatRefusal {
+    if (!this.isInChat(uid)) return refuse(403, "You are not in this chat.");
+    return { text: this.ctx.storage.kv.get<string>(SYSTEM_PROMPT_KEY) ?? "", editable: uid === this.uid };
+  }
+
+  /**
+   * The owner saves the chat's system prompt, which adds to their own: the agent follows it from its next model
+   * request on, a run going included. Empty clears it.
+   */
+  setChatSystemPrompt(by: Person, value: unknown): ChatSystemPrompt | ChatRefusal {
+    if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can change its system prompt.");
+    if (this.#gone) return refuse(404, DELETED);
+    const checked = checkSystemPrompt(value);
+    if ("error" in checked) return refuse(400, checked.error);
+    if (checked.text) this.ctx.storage.kv.put(SYSTEM_PROMPT_KEY, checked.text);
+    else this.ctx.storage.kv.delete(SYSTEM_PROMPT_KEY);
+    return { text: checked.text, editable: true };
+  }
+
+  /**
    * Show the agent the user's files, newest first, so a file the user names in
    * a message maps to its path. Runs before every prompt, so files uploaded
    * since are in it. Never rejects: on a failure the agent keeps the list it has.
@@ -738,6 +781,7 @@ export class ChatAgent extends DurableObject<Env> {
       calling && this.refreshMcpTools().catch(() => {}),
       calling && this.refreshSkills(),
       calling && this.refreshFiles(),
+      calling && this.refreshUserPrompt(),
     ]);
     // The files they named of their own are named too: "@pi notes.md" is not a call.
     const summoned = !shared || repliesToAgent || summonsAgent(text, [...mentions, ...own]);
@@ -1635,7 +1679,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
     const runElapsedMs = started === undefined ? undefined : Math.max(0, Date.now() - started);
-    return { type: "events", events: batch.map(withoutImageData), runElapsedMs, ...(queued && { queued }) };
+    return { type: "events", events: batch.map((event) => withoutSystemPrompt(withoutImageData(event))), runElapsedMs, ...(queued && { queued }) };
   }
 
   async #detach(ws: WebSocket): Promise<void> {

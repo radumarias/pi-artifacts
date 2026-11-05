@@ -179,6 +179,13 @@ body.resizing iframe { pointer-events: none; }
 .confirm-list { margin: 0 0 10px; padding-left: 20px; max-height: 140px; overflow-y: auto; font-size: 14px; overflow-wrap: anywhere; }
 .confirm-check { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 6px; cursor: pointer; }
 .confirm-check input { margin-top: 4px; }
+.prompt-dialog { width: min(560px, calc(100% - 32px)); }
+.prompt-dialog .prompt-about { color: var(--muted); font-size: 14px; }
+.prompt-dialog textarea { display: block; box-sizing: border-box; width: 100%; min-height: 160px; max-height: 50vh; margin-bottom: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); resize: vertical; }
+.prompt-dialog .prompt-text { max-height: 50vh; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.chat-prompt-button { position: relative; color: var(--muted); }
+.chat-prompt-button:hover { color: var(--text); }
+.chat-prompt-button.set { color: var(--accent); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .sidebar small { color: var(--muted); }
 .sidebar .upload { padding: 5px 8px; color: var(--accent); cursor: pointer; font-size: 14px; }

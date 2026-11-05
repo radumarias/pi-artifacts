@@ -35,6 +35,7 @@ import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } fro
 import { AutoPicked } from "./AutoPick.tsx";
 import { ChatCost, PromptCost } from "./Cost.tsx";
 import { ContextMeter } from "./Context.tsx";
+import { ChatPromptButton } from "../SystemPrompt.tsx";
 import { SharePanel } from "./SharePanel.tsx";
 import { promptSpend, totalTime } from "./spend.ts";
 import { useChat, waitingOnModel } from "./useChat.ts";
@@ -221,6 +222,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
             )}
             <ChatCost usage={state.usage} entries={state.entries} time={time} />
             {shared && <NotifyButton />}
+            {people && <ChatPromptButton chatId={chatId} isOwner={isOwner} />}
             {people && (
               <button type="button" ref={shareButton} className="share-button" onClick={() => setSharing(!sharing)} aria-expanded={sharing}>
                 {/* The owner shares from here also once people have joined; the people bar beside it shows who is in. */}

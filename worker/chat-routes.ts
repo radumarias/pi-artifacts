@@ -3,6 +3,7 @@ import type { MentionOptions } from "../shared/mentions.ts";
 import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type ArtifactSummary, type ChatContents, type ChatDeletion, type CreatedInvite, type Person } from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
 import { serveChatFile, storeUpload } from "./files-routes.ts";
+import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { json, readJson } from "./http.ts";
 import { parseInviteToken } from "./members.ts";
 import { newestFirst, type UserFiles } from "./storage/user-files.ts";
@@ -23,6 +24,8 @@ import type { UserDirectory } from "./users.ts";
  *                                             for anyone else the chat's files and artifacts, and their own files
  *   GET    /api/chats/:id/contents            the chat's files and artifacts (the owner's), for the people in it to open
  *   GET    /api/chats/:id/files/<path>        one of the chat's files, served as GET /api/files/raw/ serves the user's own
+ *   GET    /api/chats/:id/system-prompt       the chat's system prompt, which adds to the owner's own, for the people in it
+ *   PUT    /api/chats/:id/system-prompt       (owner) {text}: change it; empty clears it
  *   POST   /api/invites/accept                {token}: join the chat an invite link is for
  * Returns null for any other path.
  */
@@ -58,7 +61,7 @@ export async function chatRoute(
     );
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen)(?:\/([a-z0-9-]+))?)?$/);
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen|system-prompt)(?:\/([a-z0-9-]+))?)?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
@@ -128,6 +131,12 @@ export async function chatRoute(
   if (what === "deletion" && method === "GET" && !item) {
     const preview = await chat.deletionPreview(person);
     return "status" in preview ? answer(preview) : json(preview satisfies ChatDeletion);
+  }
+  if (what === "system-prompt" && !item && (method === "GET" || method === "PUT")) {
+    // readJson takes only a JSON content type: another site cannot post one into a signed-in owner's chat.
+    const result =
+      method === "GET" ? await chat.chatSystemPrompt(person.uid) : await chat.setChatSystemPrompt(person, (await readJson<{ text?: unknown }>(request))?.text);
+    return "status" in result ? answer(result) : json(result satisfies ChatSystemPrompt);
   }
   if (what === "invites" && method === "DELETE" && item) return answer(await chat.revokeInvite(person, item));
   if (what === "members" && method === "DELETE" && item) return answer(await chat.removeMember(person, item));

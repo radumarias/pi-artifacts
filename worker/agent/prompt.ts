@@ -39,6 +39,35 @@ export const promptExtension: Extension = defineExtension({
   ],
 });
 
+/** The system prompts the chat's owner wrote: their own, for all their chats, and this chat's. "" for none. */
+export interface UserPrompts {
+  user: string;
+  chat: string;
+}
+
+/**
+ * The owner's own system prompts, after the built-in sections, which they add to and never replace. Rendered for every
+ * model request, so a change shows from the next one; none written, no section.
+ */
+export function systemPromptExtension(prompts: () => Promise<UserPrompts>): Extension {
+  return defineExtension({
+    name: "system_prompt",
+    sections: [section("user_system_prompt", async () => userSystemPrompt(await prompts()))],
+  });
+}
+
+/** The section's text: undefined, which leaves it out, when the owner wrote neither prompt. */
+export function userSystemPrompt({ user, chat }: UserPrompts): string | undefined {
+  if (!user && !chat) return undefined;
+  const parts = [
+    "The chat's owner wrote these instructions for you. Follow them in every reply, as you would their own words; " +
+      "where they disagree with the rules above for pages, those rules win, since the page's check and sandbox enforce them.",
+  ];
+  if (user) parts.push(`For all their chats:\n${user}`);
+  if (chat) parts.push(`For this chat${user ? " (where these and the ones above disagree, these win)" : ""}:\n${chat}`);
+  return parts.join("\n\n");
+}
+
 /** Who is in the chat, so the model can tell the people apart. */
 export function peopleExtension(people: () => ChatPeople): Extension {
   return defineExtension({
@@ -60,4 +89,36 @@ export function peopleExtension(people: () => ChatPeople): Extension {
       }),
     ],
   });
+}
+
+/**
+ * `value` (an event, or anything holding entries) for a browser: each `pi.system` entry keeps its place but not the
+ * prompt's sections and tools, added or removed. Nobody's app shows them, and in a shared chat they are the owner's (their system prompt,
+ * the list of their files, their MCP tools), which the people in the chat are not to see. Copies only what changes.
+ */
+export function withoutSystemPrompt<T>(value: T): T {
+  if (Array.isArray(value)) {
+    const stripped = value.map(withoutSystemPrompt);
+    return (stripped.some((item, i) => item !== value[i]) ? stripped : value) as T;
+  }
+  if (value === null || typeof value !== "object") return value;
+  const object = value as Record<string, unknown>;
+  if (object.kind === "pi.system" && Array.isArray(object.model)) {
+    return { ...object, model: object.model.map((message) => promptless(message)) } as T;
+  }
+  // An entry holds no entries: only what is not one is searched further.
+  if (typeof object.kind === "string") return value;
+  let copy: Record<string, unknown> | undefined;
+  for (const [key, item] of Object.entries(object)) {
+    const stripped = withoutSystemPrompt(item);
+    if (stripped !== item) (copy ??= { ...object })[key] = stripped;
+  }
+  return (copy ?? value) as T;
+}
+
+/** A system message as a browser gets it: only that it is one, and when. Its sections, tools and anything pi adds later stay on the server. */
+function promptless(message: unknown): unknown {
+  if (message === null || typeof message !== "object") return message;
+  const { role, timestamp } = message as Record<string, unknown>;
+  return { role, content: "", ...(timestamp !== undefined && { timestamp }) };
 }

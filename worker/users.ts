@@ -1,6 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelSetting } from "../shared/models.ts";
 import { SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type MentionNotice, type SidebarList } from "../shared/protocol.ts";
+import { checkSystemPrompt } from "../shared/system-prompt.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
 import { titleFromMessage, UNNAMED_CHAT } from "./agent/title.ts";
@@ -441,6 +442,20 @@ export class UserDirectory extends DurableObject<Env> {
 
   setModelChoice(choice: ModelSetting): void {
     this.ctx.storage.kv.put("model", choice);
+  }
+
+  /** The user's own system prompt, added to the built-in one in all their chats; "" for none. */
+  systemPrompt(): string {
+    return this.ctx.storage.kv.get<string>("systemPrompt") ?? "";
+  }
+
+  /** Save the user's system prompt; their chats use it from their next message on. */
+  setSystemPrompt(value: unknown): { text: string } | { error: string } {
+    const checked = checkSystemPrompt(value);
+    if ("error" in checked) return checked;
+    if (checked.text) this.ctx.storage.kv.put("systemPrompt", checked.text);
+    else this.ctx.storage.kv.delete("systemPrompt");
+    return checked;
   }
 }
 
