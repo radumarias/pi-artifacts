@@ -245,8 +245,15 @@ export interface Person {
 export const SEAT_PARAM = "as";
 export const SECOND_SEAT = "second";
 
+const SEAT_SUFFIX = "-seat2";
+
 export function secondSeatUid(uid: string): string {
-  return `${uid.slice(0, 26)}-seat2`;
+  return `${uid.slice(0, 26)}${SEAT_SUFFIX}`;
+}
+
+/** Whether a uid is one a second seat has, which no one may sign in as (demo names are refused it). */
+export function isSecondSeatUid(uid: string): boolean {
+  return uid.endsWith(SEAT_SUFFIX);
 }
 
 export function secondSeat(owner: Person): Person {

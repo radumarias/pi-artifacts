@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { secondSeat, secondSeatUid, UID_PATTERN } from "../shared/protocol.ts";
+import { isSecondSeatUid, secondSeat, secondSeatUid, UID_PATTERN } from "../shared/protocol.ts";
 import { ChatMembers, formatInviteToken, INVITE_TTL_MS, MAX_OPEN_INVITES, parseInviteToken } from "../worker/members.ts";
 import { memorySql } from "./fakes.ts";
 
@@ -129,6 +129,8 @@ describe("the owner's second seat", () => {
     // Access uids are hex: a seat's has a dash, so no one signs in as it.
     expect(secondSeatUid(access)).not.toMatch(/^[a-f0-9]+$/);
     expect(secondSeatUid(access)).not.toBe(secondSeatUid("fedcba9876543210fedcba9876543210"));
+    expect(isSecondSeatUid(secondSeatUid(access))).toBe(true);
+    expect(isSecondSeatUid(access)).toBe(false);
   });
 });
 

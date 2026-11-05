@@ -1169,7 +1169,8 @@ export class ChatAgent extends DurableObject<Env> {
       title: title ?? "",
       artifacts: metas.flatMap((meta) => (meta && isOwnedBy(meta, this.uid, this.chatId) ? [{ id: meta.id, title: meta.title }] : [])),
       files: traces.files.filter((path) => stored.has(path)),
-      members: this.members.list().length,
+      // The people it is shared with: the owner's second seat is the owner.
+      members: this.#listingMembers().length,
     };
   }
 
