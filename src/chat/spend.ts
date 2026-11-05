@@ -2,7 +2,7 @@ import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { modelKey, modelKeyOfLedger } from "../../shared/models.ts";
-import { CHAT_MESSAGE_KIND, type ChatMessageData } from "../../shared/protocol.ts";
+import { CHAT_MESSAGE_KIND, type AutoPick, type ChatMessageData } from "../../shared/protocol.ts";
 
 /**
  * What model calls cost. pi-ai prices each model reply when it comes in, from its model's prices (worker/models.ts
@@ -23,6 +23,11 @@ const NONE: Spend = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 
 
 function spendOf(usage: Usage): Spend {
   return { cost: usage.cost.total, input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite };
+}
+
+/** What Auto's router call for a message cost; nothing for a message not sent on Auto, or one whose router failed. */
+function autoSpendOf(pick: AutoPick | undefined): Spend {
+  return pick?.router ? { ...NONE, cost: pick.cost ?? 0, input: pick.input ?? 0, output: pick.output ?? 0 } : NONE;
 }
 
 function plus(a: Spend, b: Spend): Spend {
@@ -55,8 +60,8 @@ function plusTime(a: Timing, b: Timing): Timing {
 }
 
 /**
- * What each prompt cost and took: the model replies, and the tool results that report a spend, from a person's
- * message up to the next one. Keyed by the id of the prompt's last reply or tool result, which is where the app shows
+ * What each prompt cost and took: Auto's pick of its model, the model replies, and the tool results that report a
+ * spend, from a person's message up to the next one. Keyed by the id of the prompt's last reply or tool result, which is where the app shows
  * it. Messages placed together (sent while the agent was busy) make one prompt; one the model never answered is left
  * out. While `running`, the newest prompt no one has written after is left out too: it may cost more yet. Its time
  * runs from when its messages were placed (where the app's run timer starts too) to when its last reply or tool
@@ -74,7 +79,7 @@ export function promptSpend(entries: readonly EntryRecord[], running: boolean): 
     if (entry.kind === CHAT_MESSAGE_KIND && (entry.data as Partial<ChatMessageData> | undefined)?.aside) continue;
     // A person's message: a prompt starts. `pi.user` is one from before chats were shared.
     if (entry.kind === CHAT_MESSAGE_KIND || entry.kind === "pi.user") {
-      total = NONE;
+      total = entry.kind === CHAT_MESSAGE_KIND ? autoSpendOf((entry.data as Partial<ChatMessageData> | undefined)?.auto) : NONE;
       [modelMs, toolMs, replies, tools, end] = [0, 0, 0, 0, 0];
       // Messages placed together share one time, so the newest one's is the prompt's. An earlier one whose run failed
       // before any reply is not part of it: the person wrote again later.
@@ -111,8 +116,25 @@ export function totalTime(prompts: Iterable<PromptSpend>): Timing {
   return [...prompts].reduce((sum, prompt) => plusTime(sum, prompt.time), NO_TIME);
 }
 
-/** One row of a chat's spend: a model at one effort (none for replies from before efforts were recorded), or a tool. */
-export type Share = Spend & { model: string; effort?: ModelThinkingLevel };
+/**
+ * One row of a chat's spend: a model at one effort (none for replies from before efforts were recorded), a tool, or
+ * (`auto`) a router's picks for Auto.
+ */
+export type Share = Spend & { model: string; effort?: ModelThinkingLevel; auto?: true };
+
+/**
+ * What Auto's routers cost in `entries`, a row per router. pi's ledger does not count these calls, so after older
+ * messages were summarized, the picks for them are left out (their entries are no longer loaded).
+ */
+export function autoSpend(entries: readonly EntryRecord[]): Share[] {
+  const routers = new Map<string, Spend>();
+  for (const entry of entries) {
+    if (entry.kind !== CHAT_MESSAGE_KIND) continue;
+    const pick = (entry.data as Partial<ChatMessageData> | undefined)?.auto;
+    if (pick?.router) routers.set(pick.router, plus(routers.get(pick.router) ?? NONE, autoSpendOf(pick)));
+  }
+  return [...routers].map(([model, spend]) => ({ ...spend, model, auto: true }));
+}
 
 /** What a model's replies cost at each effort. */
 type EffortSpend = Map<ModelThinkingLevel | undefined, Spend>;
@@ -150,9 +172,13 @@ function byEffort(model: string, total: Spend, efforts: EffortSpend | undefined,
 /**
  * A chat's spend from pi's ledger, by model and the effort each reply in `entries` was asked at, costliest first: model
  * replies, and the calls that summarize a long conversation. A tool that reports a spend of its own counts too, under
- * the tool's name.
+ * the tool's name, and so does each router of Auto's (`routing`, from autoSpend).
  */
-export function chatSpend(usage: UsageState | undefined, entries: readonly EntryRecord[] = []): { total: Spend; models: Share[] } {
+export function chatSpend(
+  usage: UsageState | undefined,
+  entries: readonly EntryRecord[] = [],
+  routing: readonly Share[] = [],
+): { total: Spend; models: Share[] } {
   const replies = replySpend(entries);
   // Entries that open with a head marker (a summary's) start there: the replies before it are left out.
   const everyReply = entries[0]?.head === undefined;
@@ -160,6 +186,7 @@ export function chatSpend(usage: UsageState | undefined, entries: readonly Entry
     // Keyed `provider/modelId`: named as the picker names the model.
     ...Object.entries(usage?.models ?? {}).flatMap(([key, value]) => byEffort(modelKeyOfLedger(key), spendOf(value as Usage), replies.get(key), everyReply)),
     ...Object.entries(usage?.tools ?? {}).map(([model, value]): Share => ({ ...spendOf(value as Usage), model })),
+    ...routing,
   ]
     .filter((spend) => spend.cost > 0 || spend.input + spend.output > 0)
     .sort((a, b) => b.cost - a.cost);

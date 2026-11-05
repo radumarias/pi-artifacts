@@ -46,6 +46,23 @@ export default defineConfig({
       THINKING_LEVEL: bindings.text("high"),
       // What names a chat after its first message: a small, fast model, as a pi-ai AI Gateway specifier or a Workers AI id.
       TITLE_MODEL: bindings.text("openai/gpt-4.1-nano"),
+      // Auto, in the model picker: before each message that starts a run, a router model reads the end of the
+      // conversation and the message, and picks one of AUTO_MODELS and an effort to answer it (worker/agent/route.ts).
+      // ROUTER_MODEL: the router, a small, fast model; a comma-separated list is tried in order (the first the picker
+      // lists answers; the next if it fails), with ROUTE_MS for all of them. If none answers, the chat keeps its model.
+      ROUTER_MODEL: bindings.text("cerebras/gpt-oss-120b,openai/gpt-4.1-nano"),
+      // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
+      // picker does not list (no key in AI Gateway for their provider) are left out.
+      AUTO_MODELS: bindings.json([
+        { id: "anthropic/claude-opus-5.5", use: "the hardest work: large or intricate pages, debugging what failed, long multi-step tool use" },
+        { id: "anthropic/claude-sonnet-5.5", use: "most page building and editing, data work, writing code" },
+        { id: "anthropic/claude-haiku-5.5", use: "small edits, short answers, simple lookups with a tool or two" },
+        { id: "openai/gpt-6.1-sol", use: "strong reasoning and code, an alternative for page building and analysis" },
+        { id: "openai/gpt-6-luna", use: "cheap quick answers and light tool use" },
+        { id: "google-ai-studio/gemini-pro-latest", use: "long documents and large attachments, analysis over a lot of text" },
+        { id: "google-ai-studio/gemini-flash-latest", use: "fast, cheap answers that read images or long text" },
+        { id: "cerebras/gpt-oss-120b", use: "very fast answers to simple questions; no images" },
+      ]),
       AI_GATEWAY_ID: bindings.text("pi-artifacts"),
       // Alias of the provider keys stored in the gateway (Provider Keys), one each for Anthropic and OpenAI. Empty: the
       // keys aliased "default", else unified billing. Workers AI models need no key.

@@ -2,6 +2,7 @@
 // The MCP shapes mirror the contract Claude's artifacts use, so pages written
 // for one read naturally against the other.
 
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { EntryReactions, Reactions } from "./reactions.ts";
 import type { Attachment, AttachmentInput } from "./attachments.ts";
 import type { Mention, MentionInput } from "./mentions.ts";
@@ -284,7 +285,28 @@ export interface ChatMessageData extends Person {
   replyTo?: ReplyQuote;
   /** When it was sent (ms since the epoch), which for a message that waited in the queue is before it was written. */
   sentAt?: number;
+  /** In a chat on Auto, the model and effort picked to answer it. */
+  auto?: AutoPick;
 }
+
+/**
+ * What Auto picked for a message that started a run: a model (the picker's id) and an effort, and why. When the router
+ * could not pick (it failed or took too long), the chat kept the model it ran on (`kept`). A type, not an interface, so it
+ * is JSON pi can store.
+ */
+export type AutoPick = {
+  model: string;
+  thinkingLevel: ModelThinkingLevel;
+  /** The router's reason, a few words. */
+  reason?: string;
+  kept?: true;
+  /** The router that picked: its picker id, what its call cost in dollars and tokens, and how long it took. */
+  router?: string;
+  cost?: number;
+  input?: number;
+  output?: number;
+  ms: number;
+};
 
 /** A message a reply quotes: its transcript entry, who wrote it (the agent, or a person) and the start of its text. */
 export type ReplyQuote = { id: number; name: string; text: string } & ({ agent: true } | { uid: string });
@@ -339,7 +361,8 @@ export type ChatClientMessage =
   | { type: "abort" }
   // Add (`on`) or take back a reaction (shared/reactions.ts) to a transcript entry: a person's message or the agent's reply.
   | { type: "react"; entry: number; emoji: string; on: boolean }
-  // Run the chat on another model or effort (shared/models.ts). The change reaches every socket as pi's agent_changed.
+  // Run the chat on another model or effort (shared/models.ts), or on Auto (AUTO_MODEL). The change reaches every socket
+  // as pi's agent_changed, and a turn to or from Auto as `auto`.
   | { type: "model"; model: string; thinkingLevel?: string };
 
 /**
@@ -356,6 +379,8 @@ export type ChatServerMessage =
   | { type: "reacted"; entry: number; reactions: EntryReactions }
   /** Who has the chat open: whenever a window opens or closes. */
   | { type: "presence"; online: Presence[] }
+  /** Whether the chat is on Auto (shared/models.ts AUTO_MODEL): on connect, and whenever someone turns it on or off. */
+  | { type: "auto"; on: boolean }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
   /** Sent to everyone just before the chat closes their sockets, when its owner deleted it. */

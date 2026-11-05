@@ -224,6 +224,7 @@ export function useChat(chatId: string) {
   const [people, setPeople] = useState<ChatPeopleView | null>(null);
   const [online, setOnline] = useState<Presence[]>([]);
   const [reactions, setReactions] = useState<Reactions>({});
+  const [auto, setAuto] = useState(false);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -231,6 +232,7 @@ export function useChat(chatId: string) {
     setPeople(null);
     setReactions({});
     setOnline([]);
+    setAuto(false);
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -261,6 +263,7 @@ export function useChat(chatId: string) {
         else if (message.type === "reactions") setReactions((known) => keepSame(known, message.reactions));
         else if (message.type === "reacted") setReactions((known) => withEntry(known, message.entry, message.reactions));
         else if (message.type === "presence") setOnline(message.online);
+        else if (message.type === "auto") setAuto(message.on);
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();
@@ -310,6 +313,8 @@ export function useChat(chatId: string) {
       }),
     abort: () => send({ type: "abort" }),
     setModel,
+    /** Whether the chat is on Auto: a router picks the model and effort for each message. */
+    auto,
     /** Everyone's reactions, by transcript entry; each entry's object stays the same until its reactions change. */
     reactions,
     react,

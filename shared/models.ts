@@ -61,10 +61,23 @@ export interface ModelCatalog {
   checkedAt?: number;
 }
 
-/** A chat's model and effort, and a user's default for new chats. */
+/** A chat's model and effort, and a user's default for new chats, which can be Auto (AUTO_MODEL). */
 export interface ModelChoice {
   model: string;
   thinkingLevel: ModelThinkingLevel;
+}
+
+/**
+ * The picker's id for Auto: before each message that starts a run, a small, fast model (the deployment's ROUTER_MODEL)
+ * reads the conversation and the message and picks the model and effort to answer it with (worker/agent/route.ts),
+ * among the deployment's AUTO_MODELS.
+ */
+export const AUTO_MODEL = "auto";
+
+/** A model Auto may pick (the deployment's AUTO_MODELS): the picker's id, and what it is best at, which the router reads. */
+export interface AutoCandidate {
+  id: string;
+  use?: string;
 }
 
 /** The pi provider every AI Gateway catalog and Workers AI model comes through (agents/models/pi-ai's). */

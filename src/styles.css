@@ -311,6 +311,11 @@ body.resizing iframe { pointer-events: none; }
   .bubble-row { flex-direction: column; }
   .message.mine .bubble-row { align-items: flex-end; }
 }
+/* Under a message sent on Auto: the model and effort picked to answer it. Always shown, small and muted. */
+.auto-pick { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0 4px; color: var(--muted); font-size: 12px; line-height: 16px; cursor: default; }
+.auto-pick-tag { flex: none; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; font-weight: 600; }
+.auto-pick-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auto-pick.kept .auto-pick-model { font-style: italic; }
 /* Reactions under a message: each emoji, how many, the viewer's own marked; a click adds or takes back theirs. */
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; }
 .reactions.mine { justify-content: flex-end; }
@@ -632,6 +637,8 @@ a.mention-chip:hover { text-decoration: underline; }
 .model-option-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 /* Favorites and recent picks have no chevron before them. */
 .model-group.static ~ .model-option { padding-left: 8px; }
+.model-option.model-auto { padding-left: 8px; }
+.model-trigger-pick { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
 .model-star { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; background: transparent; color: var(--muted); opacity: 0; }
 .model-option:is(.active, :hover) .model-star, .model-star.on { opacity: 1; }
 .model-star.on { color: var(--accent); }

@@ -12,7 +12,7 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import { EFFORT_LABELS, effortLabel, providerLabel, type ModelCatalog, type ModelInfo, type ProviderId } from "../../shared/models.ts";
+import { AUTO_MODEL, EFFORT_LABELS, effortLabel, providerLabel, type ModelCatalog, type ModelInfo, type ProviderId } from "../../shared/models.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -87,11 +87,24 @@ function matches(model: ModelInfo, words: readonly string[]): boolean {
   return words.every((word) => text.includes(word));
 }
 
-/** One section of the list: favorites, recent picks, or a provider's models. Only a provider's opens and closes. */
+/** Auto as the list shows it, above the models: a router picks the model and effort for each message. */
+interface AutoOption {
+  id: typeof AUTO_MODEL;
+  name: string;
+  auto: true;
+}
+const AUTO_OPTION: AutoOption = { id: AUTO_MODEL, name: "Auto", auto: true };
+/** What Auto does, under its name in the list and on the trigger. */
+export const AUTO_HINT = "Picks the model and effort for each message";
+
+/** A row of the list: a model, or Auto. */
+type Option = ModelInfo | AutoOption;
+
+/** One section of the list: Auto, favorites, recent picks, or a provider's models. Only a provider's opens and closes. */
 interface Section {
   key: string;
   label: string;
-  models: ModelInfo[];
+  models: Option[];
   /** Whether it opens and closes. */
   foldable: boolean;
   open: boolean;
@@ -100,6 +113,8 @@ interface Section {
 interface Props {
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
+  /** Whether the chat is on Auto: `model` and `thinkingLevel` are then the ones its last message was answered with. */
+  auto?: boolean;
   disabled: boolean;
   /** Whether images wait in the composer: a model that cannot see them says so. */
   attachingImages?: boolean;
@@ -109,9 +124,10 @@ interface Props {
 
 /**
  * The chat's model at the right of the row under the input, by name and, for a model that reasons, its effort ("High"),
- * which its menu also sets. Memoized: the chat re-renders on every streamed token.
+ * which its menu also sets. On Auto, "Auto" and the model it last picked. Memoized: the chat re-renders on every
+ * streamed token.
  */
-export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, disabled, attachingImages, onChange }: Props) {
+export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, auto = false, disabled, attachingImages, onChange }: Props) {
   const catalog = useCatalog();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -129,15 +145,24 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
   const current = catalog.models.find((entry) => entry.id === model);
   const pick = (id: string) => {
     close();
-    // Coming from a model that does not reason (or an unlisted one at "off"), ask for no effort: the chat picks the new model's usual one.
-    if (id !== model) onChange(id, (current ? !current.efforts.length : thinkingLevel === "off") ? undefined : thinkingLevel);
+    if (id === AUTO_MODEL) {
+      if (!auto) onChange(AUTO_MODEL);
+      return;
+    }
+    // Coming from a model that does not reason (or an unlisted one at "off"), ask for no effort: the chat picks the new
+    // model's usual one; so too from Auto, whose effort was picked for another model.
+    if (id !== model || auto) onChange(id, auto || (current ? !current.efforts.length : thinkingLevel === "off") ? undefined : thinkingLevel);
   };
   // The effort the menu offers, for a model that reasons: its levels, plus the chat's own when the model does not list it.
+  // None on Auto, which picks it.
   const efforts =
-    current?.efforts.length && thinkingLevel ? (current.efforts.includes(thinkingLevel) ? current.efforts : [thinkingLevel, ...current.efforts]) : [];
-  const label = current?.name ?? model;
+    !auto && current?.efforts.length && thinkingLevel ? (current.efforts.includes(thinkingLevel) ? current.efforts : [thinkingLevel, ...current.efforts]) : [];
+  const modelName = current?.name ?? model;
+  const label = auto ? AUTO_OPTION.name : modelName;
   const effort = efforts.length ? thinkingLevel : undefined;
   const full = current ? `${current.name} (${providerLabel(current.provider)})` : model;
+  // On Auto: the model, and effort, its last message was answered with.
+  const lastPick = auto && (current?.efforts.length && thinkingLevel ? `${modelName} · ${effortLabel(thinkingLevel)}` : modelName);
   return (
     <div className="model-picker">
       <button
@@ -147,18 +172,19 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={effort ? `Model: ${label}, ${effortLabel(effort).toLowerCase()}` : `Model: ${label}`}
-        title={effort ? `${full} · ${effortLabel(effort)}` : full}
+        aria-label={lastPick ? `Model: Auto, last ${lastPick}` : effort ? `Model: ${label}, ${effortLabel(effort).toLowerCase()}` : `Model: ${label}`}
+        title={lastPick ? `Auto: ${AUTO_HINT.toLowerCase()}. Last: ${lastPick}` : effort ? `${full} · ${effortLabel(effort)}` : full}
         onClick={() => setOpen(!open)}
       >
         {/* A deployment's default can be a model the picker does not list. */}
         <span className="model-trigger-name">{label}</span>
+        {lastPick && <span className="model-trigger-effort model-trigger-pick">{modelName}</span>}
         {effort && <span className="model-trigger-effort">{EFFORT_LABELS[effort]}</span>}
       </button>
       {open && (
         <ModelMenu
           catalog={catalog}
-          current={model}
+          current={auto ? AUTO_MODEL : model}
           efforts={efforts}
           thinkingLevel={thinkingLevel}
           onPick={pick}
@@ -167,7 +193,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, dis
           trigger={trigger}
         />
       )}
-      {current && !current.images && attachingImages && (
+      {!auto && current && !current.images && attachingImages && (
         <span className="model-note">{current.name} cannot see images: it gets their names only. Pick a model that can to ask about them.</span>
       )}
     </div>
@@ -265,10 +291,12 @@ function ModelMenu({
         open: !foldable || openGroups.includes(provider),
       }),
     );
-    if (words.length) return groups.filter((group) => group.models.length);
+    const autoSection: Section = { key: "auto", label: "Auto", models: [AUTO_OPTION], foldable: false, open: true };
+    if (words.length) return [...(words.every((word) => "auto".includes(word)) ? [autoSection] : []), ...groups.filter((group) => group.models.length)];
     const pinned = favorites.flatMap((key) => byId.get(key) ?? []);
     const lately = recent.filter((key) => !favorites.includes(key)).flatMap((key) => byId.get(key) ?? []);
     return [
+      autoSection,
       ...(pinned.length ? [{ key: "favorites", label: "Favorites", models: pinned, foldable: false, open: true }] : []),
       ...(lately.length ? [{ key: "recent", label: "Recent", models: lately, foldable: false, open: true }] : []),
       ...groups,
@@ -317,8 +345,8 @@ function ModelMenu({
     return () => document.removeEventListener("mousedown", onClick);
   }, [onClose, trigger]);
 
-  const choose = (model: ModelInfo) => {
-    setRecent([model.id, ...recent.filter((key) => key !== model.id)].slice(0, MAX_RECENT));
+  const choose = (model: Option) => {
+    if (!("auto" in model)) setRecent([model.id, ...recent.filter((key) => key !== model.id)].slice(0, MAX_RECENT));
     onPick(model.id);
   };
   const toggleFavorite = (model: ModelInfo) =>
@@ -390,7 +418,8 @@ function ModelMenu({
       <div className="model-list" id={`${id}-list`} role="listbox" aria-label="Models" ref={list}>
         {sections.map((section) => (
           <div key={section.key} role="group" aria-label={section.label} className="model-section">
-            {section.foldable ? (
+            {/* Auto is a row of its own, under no heading. */}
+            {section.key === "auto" ? null : section.foldable ? (
               <button type="button" className="model-group" aria-expanded={section.open} tabIndex={-1} onClick={() => toggleGroup(section)}>
                 <Icon size={14} stroke={2}>
                   <path d={section.open ? "m6 9 6 6 6-6" : "m9 6 6 6-6 6"} />
@@ -408,6 +437,29 @@ function ModelMenu({
               section.models.map((model) => {
                 const key = `${section.key}:${model.id}`;
                 const index = indexOf.get(key) ?? -1;
+                if ("auto" in model) {
+                  return (
+                    <div
+                      key={key}
+                      id={optionId(key)}
+                      role="option"
+                      aria-selected={model.id === current}
+                      className={`model-option model-auto${index === activeIndex ? " active" : ""}${model.id === current ? " current" : ""}`}
+                      onMouseMove={() => hover(index)}
+                      onClick={() => choose(model)}
+                    >
+                      <span className="model-option-text">
+                        <span className="model-option-name">{model.name}</span>
+                        <small>{AUTO_HINT}</small>
+                      </span>
+                      {model.id === current && (
+                        <Icon size={16} stroke={2.2}>
+                          <path d="m5 12 5 5 9-10" />
+                        </Icon>
+                      )}
+                    </div>
+                  );
+                }
                 const favorite = favorites.includes(model.id);
                 return (
                   <div

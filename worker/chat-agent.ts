@@ -21,6 +21,7 @@ import {
   type ChatContents,
   type ChatDeletion,
   type ChatInvite,
+  type AutoPick,
   type ChatMessageData,
   type ChatPeople,
   type ChatPeopleData,
@@ -41,7 +42,7 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
-import { COMPACTION, type ModelChoice } from "../shared/models.ts";
+import { AUTO_MODEL, COMPACTION, modelKey, type AutoCandidate, type ModelChoice } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
@@ -51,6 +52,7 @@ import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
+import { autoCandidates, contextTokens, route, routeHistory } from "./agent/route.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
@@ -120,6 +122,10 @@ const PROGRESS = { partialIntervalMs: STREAM_STEP_MS, outputIntervalMs: STREAM_S
 const STATUS_KEY = "status";
 /** Set once the owner's sidebar heard whether this chat has members: chats shared before it kept that tell it once. */
 const SHARED_TOLD_KEY = "sharedTold";
+/** Set while the chat is on Auto: a router picks the model and effort for each message that starts a run. */
+const AUTO_KEY = "auto";
+/** How many of the newest transcript entries the router is shown (routeHistory keeps the people's and agent's words). */
+const ROUTE_ENTRIES = 40;
 
 /**
  * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
@@ -178,10 +184,12 @@ export class ChatAgent extends DurableObject<Env> {
       const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction: COMPACTION };
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
-        // A new chat starts on the model its user last picked; PiHarness then finds the root and leaves it as it is.
+        // A new chat starts on the model its user last picked, or on Auto (which starts from the deployment's default);
+        // PiHarness then finds the root and leaves it as it is.
         if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
           const choice = await this.#savedModel();
-          if (choice) await pi.root(context, { agent: this.#agentChange(choice) });
+          if (choice?.model === AUTO_MODEL) this.ctx.storage.kv.put(AUTO_KEY, true);
+          else if (choice) await pi.root(context, { agent: this.#agentChange(choice) });
         }
       } catch (error) {
         await pi.close(context).catch(() => {});
@@ -203,6 +211,7 @@ export class ChatAgent extends DurableObject<Env> {
     prompt: (text, author, attachments, mentions, replyTo) => this.prompt(text, author, attachments, mentions, replyTo),
     abort: (by) => this.abort(by),
     setModel: (input, by) => this.setModel(input, by),
+    auto: () => this.#auto(),
     reactions: () => this.reactions.all(),
     react: (by, entry, emoji, on) => this.react(by, entry, emoji, on),
   });
@@ -308,10 +317,11 @@ export class ChatAgent extends DurableObject<Env> {
     return loadCatalog(catalogSource(this.env, this.storage.models, (promise) => this.ctx.waitUntil(promise)));
   }
 
-  /** The user's last pick, checked again: the list of models can change. On a failure, the deployment's default. */
+  /** The user's last pick (Auto, or a model checked again: the list of models can change). On a failure, the deployment's default. */
   async #savedModel(): Promise<ModelChoice | null> {
     try {
       const saved = await this.#directory.modelChoice();
+      if (saved?.model === AUTO_MODEL) return saved;
       return saved && (await this.#catalog()).check(saved);
     } catch (error) {
       console.error("model:", errorMessage(error));
@@ -348,17 +358,70 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /**
-   * Run this chat on another model or effort, from its next model request on, for everyone in it. It also becomes the
-   * default for new chats of whoever picked it, owner or member.
+   * Run this chat on another model or effort, from its next model request on, for everyone in it; or on Auto, which picks
+   * them for each message that starts a run (#route), starting with the next. It also becomes the default for new chats
+   * of whoever picked it, owner or member.
    */
   async setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void> {
     this.#requireInChat(by);
-    const choice = (await this.#catalog()).check(input);
+    const auto = input.model === AUTO_MODEL;
+    const choice: ModelChoice | null = auto ? { model: AUTO_MODEL, thinkingLevel: "medium" } : (await this.#catalog()).check(input);
     if (!choice) throw new Error(`There is no model named ${String(input.model)} to pick.`);
-    const conversation = await this.#root();
-    await conversation.configure(this.#agentChange(choice), BACKGROUND_CONTEXT);
+    // On Auto the chat keeps the model it runs on until the next message picks one.
+    if (!auto) await (await this.#root()).configure(this.#agentChange(choice), BACKGROUND_CONTEXT);
+    if (auto !== this.#auto()) {
+      this.ctx.storage.kv.put(AUTO_KEY, auto);
+      this.sockets.broadcastAuto(auto);
+    }
     // The chat has changed by now, so a failure to remember the pick for new chats is logged, not reported as a failed change.
     await this.#index(by.uid).setModelChoice(choice).catch((error: unknown) => console.error("model:", errorMessage(error)));
+  }
+
+  /** Whether the chat is on Auto. */
+  #auto(): boolean {
+    return this.ctx.storage.kv.get<boolean>(AUTO_KEY) === true;
+  }
+
+  /**
+   * Auto's pick for a message about to start a run: the deployment's router (ROUTER_MODEL, the first the picker lists
+   * that answers) reads the end of the conversation and the message, and picks one of AUTO_MODELS and an effort.
+   * Undefined while a run is going, which the message joins on the model it runs on. Never throws: when the router fails
+   * or takes too long (ROUTE_MS), the pick is the model the chat runs on (`kept`), and the failure is logged.
+   */
+  async #route(message: string, attachments: readonly AttachmentInput[]): Promise<AutoPick | undefined> {
+    if (this.#status() === "running") return undefined;
+    const started = Date.now();
+    const root = await this.#root();
+    const [catalog, agent, page] = await Promise.all([
+      this.#catalog(),
+      root.agent(BACKGROUND_CONTEXT),
+      root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT),
+    ]);
+    const current = agent.model ? modelKey(agent.model.provider, agent.model.modelId) : undefined;
+    const kept = (): AutoPick => ({ model: current ?? this.env.MODEL, thinkingLevel: agent.thinkingLevel, kept: true, ms: Date.now() - started });
+    const images = attachments.filter((attachment) => attachment.image).length;
+    const tokens = contextTokens(page.items);
+    try {
+      const candidates = autoCandidates(catalog.models, this.env.AUTO_MODELS as AutoCandidate[], { images: images > 0, contextTokens: tokens });
+      const routers = this.env.ROUTER_MODEL.split(",").flatMap((id) => catalog.model(id.trim()) ?? []);
+      const request = { message, history: routeHistory(page.items), images, files: attachments.length - images, contextTokens: tokens, current, candidates };
+      const routed = await route(piModels(this.ai.provider, this.gemini), routers, request);
+      // An effort the model does not take moves to the nearest it does; none named asks for its usual one.
+      const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
+      if (!choice) return kept();
+      return {
+        ...choice,
+        ...(routed.pick.reason && { reason: routed.pick.reason }),
+        router: modelKey(routed.router.provider, routed.router.id),
+        cost: routed.cost,
+        input: routed.input,
+        output: routed.output,
+        ms: Date.now() - started,
+      };
+    } catch (error) {
+      console.error("auto:", errorMessage(error));
+      return kept();
+    }
   }
 
   /** The chat's one conversation. PiHarness has made it by the time pi() resolves. */
@@ -599,6 +662,8 @@ export class ChatAgent extends DurableObject<Env> {
       byOwner ? attachments : this.#attachable(author.uid, attachments),
       own.length ? this.#copyOwnFiles(author, own) : [],
     ]).then(([given, copied]) => [...given, ...copied]);
+    // On Auto, the router picks the model while the rest gets ready. Its pick is used only if the message is a prompt.
+    const routing = calling && this.#auto() ? attaching.then((inputs) => this.#route(text, inputs)) : undefined;
     const [[attached, title], { mentions, note, broughtIn }] = await Promise.all([
       // Named after its text, or its files when it has none: for the sidebars.
       attaching.then(async (inputs) => [
@@ -632,6 +697,9 @@ export class ChatAgent extends DurableObject<Env> {
     const written = [quote && replyLine(quote), text, note].filter(Boolean).join("\n\n");
     const said = shared ? `${author.name}: ${written}` : written;
     const content = attached ? [...attached.content, ...(written ? [{ type: "text" as const, text: said }] : [])] : said;
+    const auto = summoned ? await routing : undefined;
+    // The model changes before the message goes in, so the run it starts is on the pick.
+    if (auto && !auto.kept) await (await this.#root()).configure(this.#agentChange(auto), BACKGROUND_CONTEXT);
     const data = {
       uid: author.uid,
       name: author.name,
@@ -640,6 +708,7 @@ export class ChatAgent extends DurableObject<Env> {
       ...(mentions.length && { mentions }),
       ...(quote && { replyTo: quote }),
       sentAt,
+      ...(auto && { auto }),
     } satisfies ChatMessageData;
     if (summoned) await this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
     else await this.#aside(content, data);
@@ -1292,6 +1361,8 @@ interface ChatSession {
   prompt(text: string, author: Person, attachments: readonly AttachmentInput[], mentions: readonly MentionInput[], replyTo?: number): Promise<void>;
   abort(by: Person): Promise<void>;
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
+  /** Whether the chat is on Auto. */
+  auto(): boolean;
   reactions(): Reactions;
   react(by: Person, entry: unknown, emoji: unknown, on: boolean): Promise<void>;
 }
@@ -1364,6 +1435,12 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       if (!people) views.set(person.uid, (people = this.#chat.peopleFor(person.uid)));
       send(ws, { type: "people", people });
     }
+  }
+
+  /** Tell every open socket whether the chat is on Auto: someone turned it on or off. */
+  broadcastAuto(on: boolean): void {
+    const message: ChatServerMessage = { type: "auto", on };
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) if (this.#person(ws)) send(ws, message);
   }
 
   /** Tell every open socket an entry's reactions: one of them changed. */
@@ -1464,6 +1541,8 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       const attachment = ws.deserializeAttachment() as SocketAttachment;
       send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
       send(ws, { type: "reactions", reactions: this.#chat.reactions() });
+      // After events(): a new chat that starts on Auto is set so as pi opens it.
+      send(ws, { type: "auto", on: this.#chat.auto() });
       const snapshot = await this.#events([events.snapshot]);
       // Not by runElapsedMs, which changes with the time it is sent at.
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
