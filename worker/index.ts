@@ -1,6 +1,5 @@
 import { exports, waitUntil } from "cloudflare:workers";
 import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
-import { homeSite } from "../shared/home-site.ts";
 import { errorMessage } from "../shared/util.ts";
 import { PageCallCache } from "./artifacts/page-calls.ts";
 import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
@@ -81,7 +80,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const identity = await identify(request, env);
   if (path === "/api/me" && method === "GET") {
     if (!identity) return json({ error: "Not signed in", auth: env.AUTH_MODE }, 401);
-    return json({ ...identity, auth: env.AUTH_MODE, site: homeSite(env.HOME_SITE_URL, env.HOME_SITE_NAME) });
+    return json({ ...identity, auth: env.AUTH_MODE });
   }
   // Everything else needs a verified identity: artifacts are shared by link, but only with people the app lets in.
   if (!identity) return json({ error: "Not signed in" }, 401);

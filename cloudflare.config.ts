@@ -2,7 +2,6 @@ import { bindings, defineConfig, defineContainer, exports } from "cf/config";
 import { existsSync, readFileSync } from "node:fs";
 import * as entrypoint from "./worker/index.ts" with { type: "cf-worker" };
 import type { McpServerConfig } from "./worker/mcp/servers.ts";
-import { homeSite } from "./shared/home-site.ts";
 
 // PI_NO_DOCKER=1 leaves out the sandbox container (and the run_python and run_bash tools), for machines without Docker.
 const withSandbox = process.env.PI_NO_DOCKER !== "1";
@@ -18,14 +17,6 @@ function mcpServerList(): Pick<McpServerConfig, keyof McpServerConfig>[] {
   const file = new URL("./mcp-servers.json", import.meta.url);
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8"));
   return [{ name: "CoinGecko", url: "https://mcp.api.coingecko.com/mcp" }];
-}
-
-// The website the sidebar links back to (see HOME_SITE_URL below): both or neither, and an https URL, or the deploy stops
-// here rather than ship a link that silently never shows.
-const homeSiteUrl = process.env.PI_HOME_SITE_URL ?? "";
-const homeSiteName = process.env.PI_HOME_SITE_NAME ?? "";
-if ((homeSiteUrl || homeSiteName) && !homeSite(homeSiteUrl, homeSiteName)) {
-  throw new Error("PI_HOME_SITE_URL (an https URL) and PI_HOME_SITE_NAME must be set together");
 }
 
 // One Linux container per chat for run_python and run_bash. See Dockerfile.
@@ -85,11 +76,6 @@ export default defineConfig({
       ACCESS_AUD: bindings.text("21dcccf4fbfa5991beb76a9ac48ff0c0de86d3c1a55597c82e141559e3ebcdc9"),
       // 32+ random bytes, base64. Each user's files are encrypted with a key derived from it: losing it loses the files.
       FILES_MASTER_KEY: bindings.secret(),
-      // The website people open the app from, if any: the sidebar then links back to it ("Back to <name>"). Set at deploy
-      // time with PI_HOME_SITE_URL (https) and PI_HOME_SITE_NAME; empty, there is no link. The site may name the exact page
-      // to come back to in its link to the app, as ?from=<url> on the same origin (shared/home-site.ts).
-      HOME_SITE_URL: bindings.text(homeSiteUrl),
-      HOME_SITE_NAME: bindings.text(homeSiteName),
       // DEV_TOOLS=true (when running pnpm dev) enables POST /api/dev/chats/:id/publish. Never set it for a deploy.
       DEV_TOOLS: bindings.text(process.env.DEV_TOOLS === "true" ? "true" : "false"),
       // The MCP servers every chat connects to: just a name and a URL each (see mcpServerList above). The agent learns

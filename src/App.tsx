@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
-import type { HomeSite } from "../shared/home-site.ts";
 import { ID_PATTERN, type ChatContents } from "../shared/protocol.ts";
 import { chatFileRoute } from "../shared/uploads.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
-import { BackToSite } from "./BackToSite.tsx";
+import { back, BackToSite } from "./BackToSite.tsx";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatFilterBar, ChatList, isShared, UnreadDot, useChatFilter, useChatList } from "./chat/ChatList.tsx";
@@ -51,9 +50,7 @@ export function App() {
   const { me } = session;
   // Deployed, Cloudflare Access signs people in before the app loads; a 401 here means the session lapsed.
   if (me === null && session.auth === "access") return <AccessExpired />;
-  // Asked again rather than built here, so the session has everything /api/me tells (the home site, too).
-  if (me === null)
-    return <SignIn onSignedIn={(uid) => api.me().then(setSession, () => setSession({ me: { uid, auth: "demo" }, auth: "demo" }))} />;
+  if (me === null) return <SignIn onSignedIn={(uid) => setSession({ me: { uid, auth: "demo" }, auth: "demo" })} />;
 
   const shared = path.match(/^\/a\/([a-z0-9]+)$/);
   if (shared) {
@@ -75,7 +72,6 @@ export function App() {
     <Workspace
       uid={me.uid}
       label={me.email ?? me.uid}
-      site={me.site}
       chatId={chatId}
       opening={chatId && opening && ID_PATTERN.test(opening) ? opening : undefined}
       showSkills={path === "/skills"}
@@ -183,8 +179,6 @@ interface WorkspaceProps {
   uid: string;
   /** What the sidebar shows for the signed-in user: their email, or the demo name. */
   label: string;
-  /** The website the app was opened from, which the sidebar links back to. */
-  site: HomeSite | undefined;
   chatId: string | undefined;
   /** The artifact to show beside the chat when it opens, rather than the newest one it published. */
   opening: string | undefined;
@@ -210,7 +204,7 @@ const RAIL_WIDTH = 52;
 const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
-function Workspace({ uid, label, site, chatId, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
+function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
   const { chats, load: loadChats } = useChatList(chatId);
   const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
   const [files, loadFiles] = useLatest<FileInfo[]>(api.files, []);
@@ -334,7 +328,7 @@ function Workspace({ uid, label, site, chatId, opening, showSkills, navigate, on
     >
       {collapsed ? (
         <aside className="sidebar rail">
-          {site && <BackToSite site={site} compact />}
+          {back && <BackToSite link={back} compact />}
           <button type="button" onClick={() => setCollapsed(false)} title="Show the sidebar" aria-label="Show the sidebar">
             »
           </button>
@@ -344,7 +338,7 @@ function Workspace({ uid, label, site, chatId, opening, showSkills, navigate, on
         </aside>
       ) : (
         <aside className="sidebar">
-          {site && <BackToSite site={site} />}
+          {back && <BackToSite link={back} />}
           <div className="sidebar-top">
             <button type="button" className="primary" onClick={newChat}>
               + New chat

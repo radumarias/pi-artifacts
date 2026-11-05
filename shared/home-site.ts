@@ -1,33 +1,30 @@
 /**
- * The website people come to the app from, when a deployment has one (HOME_SITE_URL and HOME_SITE_NAME in
- * cloudflare.config.ts): the app shows a link back to it. The site links to the app, optionally naming the page to
- * come back to as `?from=<url>`.
+ * Where the sidebar's "Back" link goes: the website the app was opened from. It is the page the site's link named as
+ * `?from=<url>`, else the page the browser came from (its referrer). The sign-in redirect on a first visit replaces
+ * the referrer, so a site that wants Back on that visit too names its page in `from`.
  */
-export interface HomeSite {
-  name: string;
+export interface BackLink {
   url: string;
+  /** What the link shows: the site's hostname, so where it goes is always visible. */
+  host: string;
 }
 
 /** The query parameter a site's link to the app names its page in. The app takes it off every address it opens on. */
 export const FROM_PARAM = "from";
 
-/** The configured site, or undefined unless both are set and the URL is https (http only for localhost). */
-export function homeSite(url: string | undefined, name: string | undefined): HomeSite | undefined {
-  const parsed = parseUrl(url);
-  const label = name?.trim();
-  if (!parsed || !label || !isWebOrigin(parsed)) return undefined;
-  return { name: label, url: parsed.href };
-}
-
 /**
- * Where "Back" goes: the page the site named in `from`, when it is on the site's own origin, else the site's URL.
- * Only the site's origin, so a link from elsewhere cannot make the app's back link point to another site.
+ * The page to go back to, from the `from` parameter or else the referrer, or undefined when neither is a web page on
+ * another site. The app's own pages and its sign-in pages (`signInHosts`, matched with their subdomains) are not a
+ * website the user came from.
  */
-export function backUrl(site: HomeSite, from: string | null | undefined): string {
-  const page = parseUrl(from);
-  const home = new URL(site.url);
-  // The protocol too: a blob: URL reports the origin it was made on.
-  return page && page.protocol === home.protocol && page.origin === home.origin ? page.href : site.url;
+export function backLink(from: string | null | undefined, referrer: string | null | undefined, ownOrigin: string, signInHosts: string[]): BackLink | undefined {
+  for (const candidate of [from, referrer]) {
+    const url = parseUrl(candidate);
+    if (!url || !isWebOrigin(url) || url.origin === ownOrigin) continue;
+    if (signInHosts.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`))) continue;
+    return { url: url.href, host: url.hostname };
+  }
+  return undefined;
 }
 
 function parseUrl(value: string | null | undefined): URL | undefined {
