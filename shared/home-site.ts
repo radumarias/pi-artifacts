@@ -8,7 +8,7 @@ export interface HomeSite {
   url: string;
 }
 
-/** The query parameter a site's link to the app names its page in. */
+/** The query parameter a site's link to the app names its page in. The app takes it off every address it opens on. */
 export const FROM_PARAM = "from";
 
 /** The configured site, or undefined unless both are set and the URL is https (http only for localhost). */
@@ -24,11 +24,11 @@ export function homeSite(url: string | undefined, name: string | undefined): Hom
  * Only the site's origin, so a link from elsewhere cannot make the app's back link point to another site.
  */
 export function backUrl(site: HomeSite, from: string | null | undefined): string {
-  const page = parseUrl(from ?? undefined);
+  const page = parseUrl(from);
   return page && page.origin === new URL(site.url).origin ? page.href : site.url;
 }
 
-function parseUrl(value: string | undefined): URL | undefined {
+function parseUrl(value: string | null | undefined): URL | undefined {
   if (!value) return undefined;
   try {
     return new URL(value.trim());

@@ -81,8 +81,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const identity = await identify(request, env);
   if (path === "/api/me" && method === "GET") {
     if (!identity) return json({ error: "Not signed in", auth: env.AUTH_MODE }, 401);
-    const site = homeSite(env.HOME_SITE_URL, env.HOME_SITE_NAME);
-    return json({ ...identity, auth: env.AUTH_MODE, ...(site && { site }) });
+    return json({ ...identity, auth: env.AUTH_MODE, site: homeSite(env.HOME_SITE_URL, env.HOME_SITE_NAME) });
   }
   // Everything else needs a verified identity: artifacts are shared by link, but only with people the app lets in.
   if (!identity) return json({ error: "Not signed in" }, 401);
