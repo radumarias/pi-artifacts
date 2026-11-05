@@ -183,12 +183,32 @@ export class UserDirectory extends DurableObject<Env> {
     if (this.ctx.storage.sql.exec("UPDATE chats SET shared = ? WHERE id = ? AND shared != ?", flag, id, flag).rowsWritten) this.#changed("chats");
   }
 
-  /** This user has seen everything in the chat so far. */
-  markSeen(id: string): void {
+  /**
+   * This user has seen everything in the chat so far. Returns when they had last seen it before, if something came in
+   * since, so the app can mark what is new; null when nothing was unread, or they never looked at the chat.
+   */
+  markSeen(id: string): number | null {
+    const unread = "WHERE id = ? AND activity_at > seen_at";
+    const before = this.ctx.storage.sql
+      .exec<{ seen_at: number }>(`SELECT seen_at FROM chats ${unread} UNION ALL SELECT seen_at FROM shared_chats ${unread}`, id, id)
+      .toArray()[0];
+    if (!before) return null;
     const now = Date.now();
-    const own = this.ctx.storage.sql.exec("UPDATE chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
-    const shared = this.ctx.storage.sql.exec("UPDATE shared_chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
-    if (own + shared > 0) this.#changed("chats");
+    this.ctx.storage.sql.exec(`UPDATE chats SET seen_at = ? ${unread}`, now, id);
+    this.ctx.storage.sql.exec(`UPDATE shared_chats SET seen_at = ? ${unread}`, now, id);
+    this.#changed("chats");
+    return before.seen_at > 0 ? before.seen_at : null;
+  }
+
+  /**
+   * This user stopped looking at the chat: what it showed them until now is read, also what came in without making
+   * it unread (an agent's reply as it streams, before its run ends). Not when something unread is waiting, which
+   * stays new for them.
+   */
+  leftChat(id: string): void {
+    const now = Date.now();
+    this.ctx.storage.sql.exec("UPDATE chats SET seen_at = ? WHERE id = ? AND activity_at <= seen_at", now, id);
+    this.ctx.storage.sql.exec("UPDATE shared_chats SET seen_at = ? WHERE id = ? AND activity_at <= seen_at", now, id);
   }
 
   /** Whose chat `id` is: this user's own uid, the owner's for a chat shared with them, or null. The chat itself still checks membership. */

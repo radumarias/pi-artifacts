@@ -14,6 +14,8 @@ export interface RunningTool {
   toolName: string;
   output: string;
   status: "pending" | "running" | "stopped";
+  /** When it started running, by this browser's clock: for the time on its step while it runs. */
+  startedAt?: number;
 }
 
 export interface ChatState {
@@ -38,10 +40,11 @@ const initial: ChatState = { entries: [], tools: [], busy: false, queued: [] };
 
 type Action =
   /**
-   * `at`: when the batch arrived. `runElapsedMs`: how long the snapshot's run had gone, from the server. `queued`: the
-   * messages waiting after the batch, when it changed them; in the same action, so one moves from queued to placed at once.
+   * `at`: when the batch arrived. `runElapsedMs`: how long the snapshot's run had gone, from the server; `toolsElapsedMs`,
+   * its running calls, by call id. `queued`: the messages waiting after the batch, when it changed them; in the same
+   * action, so one moves from queued to placed at once.
    */
-  | { type: "events"; events: AgentEvent[]; at: number; runElapsedMs?: number; queued?: QueuedMessage[] }
+  | (Omit<Extract<ChatServerMessage, { type: "events" }>, "events"> & { events: AgentEvent[]; at: number })
   | { type: "error"; message?: string }
   | { type: "reset" };
 
@@ -66,7 +69,9 @@ export function reduce(state: ChatState, action: Action): ChatState {
         const busy = event.run !== undefined;
         // A duration from the server, applied to this clock: the two clocks need not agree. Without one (the server
         // could not tell), a snapshot after an overflow keeps the start already known.
-        const started = action.runElapsedMs === undefined ? next.runStartedAt : action.at - Math.max(0, action.runElapsedMs);
+        const started = startFrom(action.at, action.runElapsedMs, next.runStartedAt);
+        const known = next.tools;
+        const runningSince = (id: string) => known.find((t) => t.toolCallId === id && t.status === "running")?.startedAt;
         next = withAgent(
           {
             entries: [...event.entries],
@@ -75,7 +80,15 @@ export function reduce(state: ChatState, action: Action): ChatState {
             // A slot done without a result entry faulted or was orphaned: it stays in the round as stopped.
             tools: event.tools
               .filter((t) => t.status !== "done" || t.entry === undefined)
-              .map((t) => ({ toolCallId: t.callId, toolName: t.name, output: t.output ?? "", status: t.status === "done" ? "stopped" : t.status })),
+              .map((t) => ({
+                toolCallId: t.callId,
+                toolName: t.name,
+                output: t.output ?? "",
+                status: t.status === "done" ? "stopped" : t.status,
+                // A call still running from before the socket (re)connected counts on from where it was, else from now.
+                startedAt:
+                  t.status === "running" ? (startFrom(action.at, action.toolsElapsedMs?.[t.callId], runningSince(t.callId)) ?? action.at) : undefined,
+              })),
             busy,
             runStartedAt: busy ? (started ?? action.at) : undefined,
             queued: next.queued,
@@ -132,7 +145,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
         break;
       case "tool_execution_start": {
         if (event.parentToolCallId) break;
-        const tool: RunningTool = { toolCallId: event.toolCallId, toolName: event.toolName, output: "", status: "running" };
+        const tool: RunningTool = { toolCallId: event.toolCallId, toolName: event.toolName, output: "", status: "running", startedAt: action.at };
         next = { ...next, tools: [...next.tools.filter((t) => t.toolCallId !== event.toolCallId), tool] };
         break;
       }
@@ -168,6 +181,14 @@ export function reduce(state: ChatState, action: Action): ChatState {
     }
   }
   return action.queued ? { ...next, queued: action.queued } : next;
+}
+
+/**
+ * When something a snapshot reports started: by the server's duration, applied to this clock (the two clocks need not
+ * agree), else the start already `known`.
+ */
+function startFrom(at: number, elapsedMs: number | undefined, known: number | undefined): number | undefined {
+  return elapsedMs === undefined ? known : at - Math.max(0, elapsedMs);
 }
 
 /** `value` with `delta` appended to the string at `path`, copying only what is on the way there. */
@@ -258,7 +279,7 @@ export function useChat(chatId: string) {
         // that stalls) is retried ever more slowly, not every few seconds.
         if (message.type === "events") {
           attempt = 0;
-          dispatch({ type: "events", events: message.events as AgentEvent[], at: Date.now(), runElapsedMs: message.runElapsedMs, queued: message.queued });
+          dispatch({ ...message, events: message.events as AgentEvent[], at: Date.now() });
         } else if (message.type === "people") setPeople(message.people);
         else if (message.type === "reactions") setReactions((known) => keepSame(known, message.reactions));
         else if (message.type === "reacted") setReactions((known) => withEntry(known, message.entry, message.reactions));

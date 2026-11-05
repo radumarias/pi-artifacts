@@ -217,6 +217,7 @@ export class ChatAgent extends DurableObject<Env> {
   readonly sockets = new ChatSockets({
     events: () => this.harness.session().events(),
     runStartedAt: (snapshot) => this.runStartedAt(snapshot),
+    toolsStartedAt: (snapshot) => this.toolsStartedAt(snapshot),
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
     queued: (ids) => this.queued(ids),
@@ -369,6 +370,26 @@ export class ChatAgent extends DurableObject<Env> {
     } catch (error) {
       console.error("run start:", errorMessage(error));
       return undefined;
+    }
+  }
+
+  /**
+   * When each call of the snapshot's round that is running now started, by its call id: its tool task's first change to
+   * running. A call whose task can't be read is left out (the browser then counts from when it connected).
+   */
+  async toolsStartedAt(snapshot: SnapshotEvent): Promise<Record<string, number>> {
+    const running = snapshot.tools.filter((slot) => slot.status === "running" && slot.taskId);
+    if (!running.length) return {};
+    try {
+      const pi = await this.harness.pi();
+      // Each on its own: one task that can't be read leaves out only its call.
+      const read = (slot: (typeof running)[number]) =>
+        pi.getTask(slot.taskId!, BACKGROUND_CONTEXT).catch((error: unknown) => (console.error("tool start:", errorMessage(error)), undefined));
+      const tasks = await Promise.all(running.map(read));
+      return Object.fromEntries(running.flatMap((slot, i) => (tasks[i]?.startedAt === undefined ? [] : [[slot.callId, tasks[i].startedAt]])));
+    } catch (error) {
+      console.error("tool start:", errorMessage(error));
+      return {};
     }
   }
 
@@ -1458,6 +1479,7 @@ interface Routing {
 interface ChatSession {
   events(): Promise<AgentEventStream>;
   runStartedAt(snapshot: SnapshotEvent): Promise<number | undefined>;
+  toolsStartedAt(snapshot: SnapshotEvent): Promise<Record<string, number>>;
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
   queued(ids: readonly number[]): Promise<QueuedMessage[]>;
@@ -1473,6 +1495,13 @@ interface ChatSession {
 /** How long a socket's attach may take to send its snapshot (see ChatSockets.#attach). */
 const ATTACH_MS = 30_000;
 
+/**
+ * A socket attaches again at once when pi ends its stream, but at most once in this long: when pi ends it again sooner,
+ * the socket waits for its next message (or the object's next start). Otherwise a pi that fails each time it opens
+ * would be opened again and again, for every socket.
+ */
+const REATTACH_MS = 10_000;
+
 /** An attach that did not send its snapshot in time. */
 class AttachStalled extends Error {}
 
@@ -1486,11 +1515,13 @@ type SocketAttachment = { owner: typeof OWNER; person: Person; sent?: string };
  * The chat's browser connections, one or more per person in the chat. Each
  * socket gets its own pi event stream: a snapshot of the conversation first,
  * then one batch per commit. Sockets hibernate; after the object restarts,
- * streams are reattached in onStart.
+ * streams are reattached in onStart, and a stream pi ends is replaced at once.
  */
 class ChatSockets extends LifecycleCapability implements DurableObjectCapability {
   readonly #chat: ChatSession;
   readonly #streams = new Map<WebSocket, Promise<AgentEventStream>>();
+  /** When each socket was last attached again because pi ended its stream (see REATTACH_MS). */
+  readonly #reattached = new WeakMap<WebSocket, number>();
 
   constructor(chat: ChatSession) {
     super("chat-sockets");
@@ -1633,29 +1664,55 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     let step = "opening the conversation";
     const opening = (async () => {
       const events = await this.#chat.events();
-      step = "reading its run and queue";
+      // A stream pi ended itself delivers nothing more: its session closed (a storage error fails it, and pi opens again
+      // for the next prompt or wake). The socket stays open, and every later attach would find the dead stream, so the
+      // page heard nothing until it was reloaded. Follow the conversation on a new stream: its snapshot brings what the
+      // socket missed. A stream this class stopped has left #streams already. Followed from here, as the session can
+      // close while the snapshot below is read, and a stream that has ended cannot be started.
+      let ended = false;
+      void events.closed.then((end) => {
+        ended = true;
+        if (end.reason === "stopped" || this.#streams.get(ws) !== attached) return;
+        const cause = "error" in end ? `: ${errorMessage(end.error)}` : "";
+        this.#streams.delete(ws);
+        const now = Date.now();
+        const again = ws.readyState === WebSocket.OPEN && now - (this.#reattached.get(ws) ?? -Infinity) >= REATTACH_MS;
+        const next = again ? "attaching again" : "waiting for the socket's next message";
+        console.error(`chat socket: events ended (${end.reason}${cause}), ${next}`);
+        if (!again) return;
+        this.#reattached.set(ws, now);
+        void this.#attach(ws);
+      });
+      step = "reading its run, calls and queue";
       const attachment = ws.deserializeAttachment() as SocketAttachment;
       send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
       send(ws, { type: "reactions", reactions: this.#chat.reactions() });
       // After events(): a new chat that starts on Auto is set so as pi opens it.
       send(ws, { type: "auto", on: this.#chat.auto() });
-      const snapshot = await this.#events([events.snapshot]);
-      // Not by runElapsedMs, which changes with the time it is sent at.
+      // Timed only once it is to be sent: a wake attaches every socket again, and most find their snapshot already sent.
+      const snapshot = await this.#events([events.snapshot], false);
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
-      if (sent !== attachment.sent && send(ws, snapshot)) ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
-      events.start(async (batch) => {
-        if (!send(ws, await this.#events(batch))) await this.#detach(ws);
-      });
+      if (sent !== attachment.sent && send(ws, { ...snapshot, ...(await this.#timing(events.snapshot)) })) {
+        ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
+      }
+      // Ended meanwhile, it has been replaced above (or left for the socket's next message).
+      if (!ended) {
+        events.start(async (batch) => {
+          if (!send(ws, await this.#events(batch))) await this.#detach(ws);
+        });
+      }
       return events;
     })();
     const attached = deadline(opening, ATTACH_MS, () => new AttachStalled(`no snapshot after ${ATTACH_MS / 1000} s, stuck ${step}`));
     this.#streams.set(ws, attached);
     attached.catch((error) => {
+      // Should the stream come after all, it goes unused.
+      if (error instanceof AttachStalled) void opening.then((events) => events.stop()).catch(() => {});
+      // Detached, or replaced as pi ended the stream it was opening: the socket has nothing more to hear from this one.
+      if (this.#streams.get(ws) !== attached) return;
       this.#streams.delete(ws);
       if (error instanceof AttachStalled) {
         console.error("chat socket:", error.message);
-        // Should the stream come after all, it goes unused.
-        void opening.then((events) => events.stop()).catch(() => {});
         close(ws, 1011, "Reconnect");
         // A close the chat makes itself may never come back as onWebSocketClose: the others hear of it now.
         this.#broadcastPresence(new Set([ws]));
@@ -1667,19 +1724,29 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   }
 
   /**
-   * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run has gone;
-   * a batch that changes pi's inbox, with the people's messages waiting in it.
+   * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run and its
+   * running calls have gone, unless `timed` is false; a batch that changes pi's inbox, with the people's messages waiting in it.
    */
-  async #events(batch: readonly AgentEvent[]): Promise<Extract<ChatServerMessage, { type: "events" }>> {
+  async #events(batch: readonly AgentEvent[], timed = true): Promise<Extract<ChatServerMessage, { type: "events" }>> {
     const snapshot = batch.findLast((event) => event.type === "snapshot");
     const ids = inboxIds(batch);
-    const [started, queued] = await Promise.all([
-      snapshot && this.#chat.runStartedAt(snapshot),
+    const [timing, queued] = await Promise.all([
+      snapshot && timed ? this.#timing(snapshot) : undefined,
       // Only a view of what pi has queued: without it the chat still works.
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
-    const runElapsedMs = started === undefined ? undefined : Math.max(0, Date.now() - started);
-    return { type: "events", events: batch.map(withoutImageData), runElapsedMs, ...(queued && { queued }) };
+    return { type: "events", events: batch.map(withoutImageData), ...timing, ...(queued && { queued }) };
+  }
+
+  /** How long the snapshot's run and its running calls have gone, by the server's clock. */
+  async #timing(snapshot: SnapshotEvent): Promise<Pick<ChatServerMessage & { type: "events" }, "runElapsedMs" | "toolsElapsedMs">> {
+    const [started, toolsStarted] = await Promise.all([this.#chat.runStartedAt(snapshot), this.#chat.toolsStartedAt(snapshot)]);
+    const now = Date.now();
+    const since = (at: number) => Math.max(0, now - at);
+    return {
+      runElapsedMs: started === undefined ? undefined : since(started),
+      toolsElapsedMs: Object.fromEntries(Object.entries(toolsStarted).map(([id, at]) => [id, since(at)])),
+    };
   }
 
   async #detach(ws: WebSocket): Promise<void> {

@@ -107,8 +107,10 @@ export const api = {
   signOut: () => request<object>("/api/session", { method: "DELETE" }),
   chats: () => request<ChatSummary[]>("/api/chats"),
   createChat: () => request<ChatSummary>("/api/chats", { method: "POST" }),
-  /** The user has seen the chat: it is no longer unread in their sidebar. */
-  markSeen: (chatId: string) => request<object>(`/api/chats/${chatId}/seen`, { method: "POST" }),
+  /** The user has seen the chat: it is no longer unread in their sidebar. `seenAt`: when they had last seen it, if something came in since. */
+  markSeen: (chatId: string) => request<{ seenAt?: number }>(`/api/chats/${chatId}/seen`, { method: "POST" }),
+  /** The user stopped looking at the chat (left it, or hid the window): what it showed them is read. Sent also as the page closes. */
+  leftChat: (chatId: string) => request<object>(`/api/chats/${chatId}/seen?left`, { method: "POST", keepalive: true }),
   /** What deleting a chat would delete with it. Only for its owner. */
   chatDeletion: (chatId: string) => request<ChatDeletion>(`/api/chats/${chatId}/deletion`),
   /** Delete a chat for everyone in it, with its artifacts and those of its files in `files` (from chatDeletion). Only for its owner. */

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSummary } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -7,21 +7,50 @@ import { useLatest, useVisible } from "../sidebar.ts";
 
 /**
  * The user's chats, and a `load` that reads them again (the sidebar's socket calls it when they changed). The open
- * chat (`openId`) is marked seen while the window shows it.
+ * chat (`openId`) is marked seen while the window shows it. `newSince`: when the user had last seen the open chat, as
+ * marking it seen answers when they open it, or come back to the window, with something unread in it; what came after is new.
  */
 export function useChatList(openId: string | undefined) {
   const [chats, load, setChats] = useLatest(api.chats, []);
   const visible = useVisible();
   useEffect(load, [load]);
 
-  const unseen = chats.some((chat) => chat.id === openId && (chat.unread || chat.mentioned));
+  const [newSince, setNewSince] = useState<{ chatId: string; at: number } | null>(null);
+  // Whether the next look at the open chat starts a new visit, which may move the "New" line: true when another chat
+  // opens or the window is hidden. Something that comes in while the user is looking is not new to them.
+  const visiting = useRef(true);
   useEffect(() => {
-    if (!openId || !unseen || !visible) return;
-    setChats((list) => list.map((chat) => (chat.id === openId ? { ...chat, unread: undefined, mentioned: undefined } : chat)));
-    api.markSeen(openId).catch(() => {});
-  }, [openId, unseen, visible]);
+    visiting.current = true;
+    setNewSince(null);
+  }, [openId]);
+  useEffect(() => {
+    if (!visible) visiting.current = true;
+  }, [visible]);
+  // Leaving the chat, or hiding the window, ends the visit: what the user watched come in (a reply as it streamed)
+  // is not new when they come back.
+  useEffect(() => {
+    if (!openId || !visible) return;
+    return () => void api.leftChat(openId).catch(() => {});
+  }, [openId, visible]);
 
-  return { chats, load };
+  const open = chats.find((chat) => chat.id === openId);
+  const listed = open !== undefined;
+  const unseen = Boolean(open?.unread || open?.mentioned);
+  useEffect(() => {
+    if (!openId || !listed || !visible) return;
+    const arrived = visiting.current;
+    visiting.current = false;
+    // On arriving, ask even when the list shows nothing unread: it can be behind (its socket reconnects only after the
+    // window shows again, and loads lag), and the server knows whether something came in.
+    if (!unseen && !arrived) return;
+    if (unseen) setChats((list) => list.map((chat) => (chat.id === openId ? { ...chat, unread: undefined, mentioned: undefined } : chat)));
+    api
+      .markSeen(openId)
+      .then(({ seenAt }) => arrived && seenAt && setNewSince({ chatId: openId, at: seenAt }))
+      .catch(() => {});
+  }, [openId, listed, unseen, visible]);
+
+  return { chats, load, newSince: newSince && newSince.chatId === openId ? newSince.at : undefined };
 }
 
 /** On the right of a chat's name: a tag of the user, its agent working, waiting for an answer, or a reply nobody here has read. */
