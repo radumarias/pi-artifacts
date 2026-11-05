@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
+import type { HomeSite } from "../shared/home-site.ts";
 import { ID_PATTERN, type ChatContents } from "../shared/protocol.ts";
 import { chatFileRoute } from "../shared/uploads.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
+import { BackToSite } from "./BackToSite.tsx";
 import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatFilterBar, ChatList, isShared, UnreadDot, useChatFilter, useChatList } from "./chat/ChatList.tsx";
@@ -71,6 +73,7 @@ export function App() {
     <Workspace
       uid={me.uid}
       label={me.email ?? me.uid}
+      site={me.site}
       chatId={chatId}
       opening={chatId && opening && ID_PATTERN.test(opening) ? opening : undefined}
       showSkills={path === "/skills"}
@@ -178,6 +181,8 @@ interface WorkspaceProps {
   uid: string;
   /** What the sidebar shows for the signed-in user: their email, or the demo name. */
   label: string;
+  /** The website the app was opened from, which the sidebar links back to. */
+  site: HomeSite | undefined;
   chatId: string | undefined;
   /** The artifact to show beside the chat when it opens, rather than the newest one it published. */
   opening: string | undefined;
@@ -203,7 +208,7 @@ const RAIL_WIDTH = 52;
 const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
-function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
+function Workspace({ uid, label, site, chatId, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
   const { chats, load: loadChats } = useChatList(chatId);
   const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
   const [files, loadFiles] = useLatest<FileInfo[]>(api.files, []);
@@ -327,6 +332,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
     >
       {collapsed ? (
         <aside className="sidebar rail">
+          {site && <BackToSite site={site} compact />}
           <button type="button" onClick={() => setCollapsed(false)} title="Show the sidebar" aria-label="Show the sidebar">
             »
           </button>
@@ -336,6 +342,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
         </aside>
       ) : (
         <aside className="sidebar">
+          {site && <BackToSite site={site} />}
           <div className="sidebar-top">
             <button type="button" className="primary" onClick={newChat}>
               + New chat

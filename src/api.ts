@@ -1,3 +1,4 @@
+import type { HomeSite } from "../shared/home-site.ts";
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
@@ -22,6 +23,8 @@ export interface Me {
   uid: string;
   email?: string;
   auth: "access" | "demo";
+  /** The website the app links back to, when the deployment names one. */
+  site?: HomeSite;
 }
 
 export interface FileInfo {

@@ -123,6 +123,12 @@ body.resizing iframe { pointer-events: none; }
 .section-head svg { margin-left: auto; transition: transform 0.15s; }
 .section-head[aria-expanded="true"] svg { transform: rotate(180deg); }
 .sidebar-top { display: flex; gap: 6px; }
+/* Back to the website the app was opened from: a quiet row above New chat, the arrow alone on the rail. */
+.back-to-site { display: flex; align-items: center; gap: 6px; margin: -4px -8px 2px; padding: 6px 8px; border-radius: 6px; color: var(--muted); font-size: 13px; text-decoration: none; min-width: 0; }
+.back-to-site span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.back-to-site svg { flex: none; }
+.back-to-site:hover { background: var(--surface-2); color: var(--text); }
+.back-to-site.compact { justify-content: center; width: 36px; margin: 0 0 2px; padding: 8px 0; }
 .sidebar-top .primary { flex: 1; }
 .sidebar.rail { align-items: center; padding: 14px 8px; }
 .sidebar.rail button { width: 36px; padding: 6px 0; }

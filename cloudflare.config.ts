@@ -76,6 +76,11 @@ export default defineConfig({
       ACCESS_AUD: bindings.text("21dcccf4fbfa5991beb76a9ac48ff0c0de86d3c1a55597c82e141559e3ebcdc9"),
       // 32+ random bytes, base64. Each user's files are encrypted with a key derived from it: losing it loses the files.
       FILES_MASTER_KEY: bindings.secret(),
+      // The website people open the app from, if any: the sidebar then links back to it ("Back to <name>"). Set at deploy
+      // time with PI_HOME_SITE_URL (https) and PI_HOME_SITE_NAME; empty, there is no link. The site may name the exact page
+      // to come back to in its link to the app, as ?from=<url> on the same origin (shared/home-site.ts).
+      HOME_SITE_URL: bindings.text(process.env.PI_HOME_SITE_URL ?? ""),
+      HOME_SITE_NAME: bindings.text(process.env.PI_HOME_SITE_NAME ?? ""),
       // DEV_TOOLS=true (when running pnpm dev) enables POST /api/dev/chats/:id/publish. Never set it for a deploy.
       DEV_TOOLS: bindings.text(process.env.DEV_TOOLS === "true" ? "true" : "false"),
       // The MCP servers every chat connects to: just a name and a URL each (see mcpServerList above). The agent learns
