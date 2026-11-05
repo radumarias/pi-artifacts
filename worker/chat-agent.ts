@@ -1442,7 +1442,7 @@ type SocketAttachment = { owner: typeof OWNER; person: Person; sent?: string };
  * The chat's browser connections, one or more per person in the chat. Each
  * socket gets its own pi event stream: a snapshot of the conversation first,
  * then one batch per commit. Sockets hibernate; after the object restarts,
- * streams are reattached in onStart.
+ * streams are reattached in onStart, and a stream pi ends is replaced at once.
  */
 class ChatSockets extends LifecycleCapability implements DurableObjectCapability {
   readonly #chat: ChatSession;
@@ -1606,6 +1606,17 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     })();
     const attached = deadline(opening, ATTACH_MS, () => new AttachStalled(`no snapshot after ${ATTACH_MS / 1000} s, stuck ${step}`));
     this.#streams.set(ws, attached);
+    // A stream pi ended itself delivers nothing more: its session closed (a storage error fails it, and pi opens again
+    // for the next prompt or wake). The socket stays open, and every later attach would find the dead stream, so the
+    // page heard nothing until it was reloaded. Follow the conversation on a new stream: its snapshot brings what the
+    // socket missed.
+    void attached.then(async (events) => {
+      const end = await events.closed;
+      if (end.reason === "stopped" || this.#streams.get(ws) !== attached) return;
+      console.error(`chat socket: events ended (${end.reason}), attaching again`);
+      this.#streams.delete(ws);
+      if (ws.readyState === WebSocket.OPEN) void this.#attach(ws);
+    }, () => {});
     attached.catch((error) => {
       this.#streams.delete(ws);
       if (error instanceof AttachStalled) {
