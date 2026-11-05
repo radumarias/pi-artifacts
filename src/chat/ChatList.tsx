@@ -26,6 +26,12 @@ export function useChatList(openId: string | undefined) {
   useEffect(() => {
     if (!visible) visiting.current = true;
   }, [visible]);
+  // Leaving the chat, or hiding the window, ends the visit: what the user watched come in (a reply as it streamed)
+  // is not new when they come back.
+  useEffect(() => {
+    if (!openId || !visible) return;
+    return () => void api.leftChat(openId).catch(() => {});
+  }, [openId, visible]);
 
   const open = chats.find((chat) => chat.id === openId);
   const listed = open !== undefined;
@@ -34,8 +40,10 @@ export function useChatList(openId: string | undefined) {
     if (!openId || !listed || !visible) return;
     const arrived = visiting.current;
     visiting.current = false;
-    if (!unseen) return;
-    setChats((list) => list.map((chat) => (chat.id === openId ? { ...chat, unread: undefined, mentioned: undefined } : chat)));
+    // On arriving, ask even when the list shows nothing unread: it can be behind (its socket reconnects only after the
+    // window shows again, and loads lag), and the server knows whether something came in.
+    if (!unseen && !arrived) return;
+    if (unseen) setChats((list) => list.map((chat) => (chat.id === openId ? { ...chat, unread: undefined, mentioned: undefined } : chat)));
     api
       .markSeen(openId)
       .then(({ seenAt }) => arrived && seenAt && setNewSince({ chatId: openId, at: seenAt }))

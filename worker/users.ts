@@ -200,6 +200,17 @@ export class UserDirectory extends DurableObject<Env> {
     return before.seen_at > 0 ? before.seen_at : null;
   }
 
+  /**
+   * This user stopped looking at the chat: what it showed them until now is read, also what came in without making
+   * it unread (an agent's reply as it streams, before its run ends). Not when something unread is waiting, which
+   * stays new for them.
+   */
+  leftChat(id: string): void {
+    const now = Date.now();
+    this.ctx.storage.sql.exec("UPDATE chats SET seen_at = ? WHERE id = ? AND activity_at <= seen_at", now, id);
+    this.ctx.storage.sql.exec("UPDATE shared_chats SET seen_at = ? WHERE id = ? AND activity_at <= seen_at", now, id);
+  }
+
   /** Whose chat `id` is: this user's own uid, the owner's for a chat shared with them, or null. The chat itself still checks membership. */
   chatOwner(id: string): string | null {
     if (this.hasChat(id)) return this.ctx.id.name!;

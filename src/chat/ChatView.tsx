@@ -215,8 +215,9 @@ export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft
   const dayStarts = useMemo(() => dayStartsOf(state.entries), [state.entries]);
   const agentLast = useMemo(() => shared !== null && endsInAgentTurn(state.entries), [shared, state.entries]);
   const newAt = useMemo(
-    () => (newSince === undefined ? undefined : firstNew(state.entries, newSince, uid, ownerName === undefined)),
-    [newSince, state.entries, uid, ownerName],
+    // Only once it is known who owns the chat: until then a member's own legacy messages could not be told apart.
+    () => (newSince === undefined || !people ? undefined : firstNew(state.entries, newSince, uid, isOwner)),
+    [newSince, state.entries, uid, people, isOwner],
   );
   useNewInView(list, following, newAt, newSince);
   const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
