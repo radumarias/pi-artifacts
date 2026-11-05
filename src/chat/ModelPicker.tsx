@@ -12,7 +12,17 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import { AUTO_MODEL, EFFORT_LABELS, effortLabel, providerLabel, type ModelCatalog, type ModelInfo, type ProviderId } from "../../shared/models.ts";
+import {
+  AUTO_MODEL,
+  choiceLabel,
+  EFFORT_LABELS,
+  effortLabel,
+  pricePerMillion,
+  providerLabel,
+  type ModelCatalog,
+  type ModelInfo,
+  type ProviderId,
+} from "../../shared/models.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
@@ -58,18 +68,13 @@ const isIdList = (value: unknown): value is string[] => Array.isArray(value) && 
 const isIdListOrNull = (value: unknown): value is string[] | null => value === null || isIdList(value);
 const MAX_RECENT = 5;
 
-/** "$3", "$0.15", "$2.5": a price per million tokens, short. */
-function dollars(value: number): string {
-  return `$${Number(value.toPrecision(3))}`;
-}
-
 /** The short facts under a model's name: its context, its price per million tokens in and out, whether it sees images. */
 function facts(model: ModelInfo): string[] {
   const parts: string[] = [];
   if (model.contextWindow) parts.push(`${COMPACT.format(model.contextWindow)} context`);
   if (!model.price) parts.push("price unknown");
   else if (model.price.input === 0 && model.price.output === 0) parts.push("free");
-  else parts.push(`${dollars(model.price.input)} / ${dollars(model.price.output)}`);
+  else parts.push(`${pricePerMillion(model.price.input)} / ${pricePerMillion(model.price.output)}`);
   if (model.images) parts.push("images");
   return parts;
 }
@@ -91,19 +96,20 @@ function matches(model: ModelInfo, words: readonly string[]): boolean {
 interface AutoOption {
   id: typeof AUTO_MODEL;
   name: string;
-  auto: true;
 }
-const AUTO_OPTION: AutoOption = { id: AUTO_MODEL, name: "Auto", auto: true };
+const AUTO_OPTION: AutoOption = { id: AUTO_MODEL, name: "Auto" };
 /** What Auto does, under its name in the list and on the trigger. */
-export const AUTO_HINT = "Picks the model and effort for each message";
+const AUTO_HINT = "Picks the model and effort for each message";
 
 /** A row of the list: a model, or Auto. */
 type Option = ModelInfo | AutoOption;
+const isAutoOption = (option: Option): option is AutoOption => option.id === AUTO_MODEL;
 
 /** One section of the list: Auto, favorites, recent picks, or a provider's models. Only a provider's opens and closes. */
 interface Section {
   key: string;
-  label: string;
+  /** Its heading; none for Auto's, a row of its own. */
+  label?: string;
   models: Option[];
   /** Whether it opens and closes. */
   foldable: boolean;
@@ -156,13 +162,12 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, aut
   // The effort the menu offers, for a model that reasons: its levels, plus the chat's own when the model does not list it.
   // None on Auto, which picks it.
   const efforts =
-    !auto && current?.efforts.length && thinkingLevel ? (current.efforts.includes(thinkingLevel) ? current.efforts : [thinkingLevel, ...current.efforts]) : [];
-  const modelName = current?.name ?? model;
-  const label = auto ? AUTO_OPTION.name : modelName;
+    current?.efforts.length && thinkingLevel ? (current.efforts.includes(thinkingLevel) ? current.efforts : [thinkingLevel, ...current.efforts]) : [];
+  const name = current?.name ?? model;
   const effort = efforts.length ? thinkingLevel : undefined;
   const full = current ? `${current.name} (${providerLabel(current.provider)})` : model;
   // On Auto: the model, and effort, its last message was answered with.
-  const lastPick = auto && (current?.efforts.length && thinkingLevel ? `${modelName} · ${effortLabel(thinkingLevel)}` : modelName);
+  const last = choiceLabel(current, model, effort);
   return (
     <div className="model-picker">
       <button
@@ -172,20 +177,23 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, aut
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={lastPick ? `Model: Auto, last ${lastPick}` : effort ? `Model: ${label}, ${effortLabel(effort).toLowerCase()}` : `Model: ${label}`}
-        title={lastPick ? `Auto: ${AUTO_HINT.toLowerCase()}. Last: ${lastPick}` : effort ? `${full} · ${effortLabel(effort)}` : full}
+        aria-label={auto ? `Model: Auto, last ${last}` : effort ? `Model: ${name}, ${effortLabel(effort).toLowerCase()}` : `Model: ${name}`}
+        title={auto ? `Auto: ${AUTO_HINT.toLowerCase()}. Last: ${last}` : effort ? `${full} · ${effortLabel(effort)}` : full}
         onClick={() => setOpen(!open)}
       >
         {/* A deployment's default can be a model the picker does not list. */}
-        <span className="model-trigger-name">{label}</span>
-        {lastPick && <span className="model-trigger-effort model-trigger-pick">{modelName}</span>}
-        {effort && <span className="model-trigger-effort">{EFFORT_LABELS[effort]}</span>}
+        <span className="model-trigger-name">{auto ? AUTO_OPTION.name : name}</span>
+        {auto ? (
+          <span className="model-trigger-effort model-trigger-pick">{name}</span>
+        ) : (
+          effort && <span className="model-trigger-effort">{EFFORT_LABELS[effort]}</span>
+        )}
       </button>
       {open && (
         <ModelMenu
           catalog={catalog}
           current={auto ? AUTO_MODEL : model}
-          efforts={efforts}
+          efforts={auto ? [] : efforts}
           thinkingLevel={thinkingLevel}
           onPick={pick}
           onEffort={(level) => level !== thinkingLevel && onChange(model, level)}
@@ -291,7 +299,7 @@ function ModelMenu({
         open: !foldable || openGroups.includes(provider),
       }),
     );
-    const autoSection: Section = { key: "auto", label: "Auto", models: [AUTO_OPTION], foldable: false, open: true };
+    const autoSection: Section = { key: "auto", models: [AUTO_OPTION], foldable: false, open: true };
     if (words.length) return [...(words.every((word) => "auto".includes(word)) ? [autoSection] : []), ...groups.filter((group) => group.models.length)];
     const pinned = favorites.flatMap((key) => byId.get(key) ?? []);
     const lately = recent.filter((key) => !favorites.includes(key)).flatMap((key) => byId.get(key) ?? []);
@@ -346,7 +354,7 @@ function ModelMenu({
   }, [onClose, trigger]);
 
   const choose = (model: Option) => {
-    if (!("auto" in model)) setRecent([model.id, ...recent.filter((key) => key !== model.id)].slice(0, MAX_RECENT));
+    if (!isAutoOption(model)) setRecent([model.id, ...recent.filter((key) => key !== model.id)].slice(0, MAX_RECENT));
     onPick(model.id);
   };
   const toggleFavorite = (model: ModelInfo) =>
@@ -417,9 +425,8 @@ function ModelMenu({
       </label>
       <div className="model-list" id={`${id}-list`} role="listbox" aria-label="Models" ref={list}>
         {sections.map((section) => (
-          <div key={section.key} role="group" aria-label={section.label} className="model-section">
-            {/* Auto is a row of its own, under no heading. */}
-            {section.key === "auto" ? null : section.foldable ? (
+          <div key={section.key} role="group" aria-label={section.label ?? AUTO_OPTION.name} className="model-section">
+            {section.label === undefined ? null : section.foldable ? (
               <button type="button" className="model-group" aria-expanded={section.open} tabIndex={-1} onClick={() => toggleGroup(section)}>
                 <Icon size={14} stroke={2}>
                   <path d={section.open ? "m6 9 6 6 6-6" : "m9 6 6 6-6 6"} />
@@ -437,75 +444,59 @@ function ModelMenu({
               section.models.map((model) => {
                 const key = `${section.key}:${model.id}`;
                 const index = indexOf.get(key) ?? -1;
-                if ("auto" in model) {
-                  return (
-                    <div
-                      key={key}
-                      id={optionId(key)}
-                      role="option"
-                      aria-selected={model.id === current}
-                      className={`model-option model-auto${index === activeIndex ? " active" : ""}${model.id === current ? " current" : ""}`}
-                      onMouseMove={() => hover(index)}
-                      onClick={() => choose(model)}
-                    >
-                      <span className="model-option-text">
-                        <span className="model-option-name">{model.name}</span>
-                        <small>{AUTO_HINT}</small>
-                      </span>
-                      {model.id === current && (
-                        <Icon size={16} stroke={2.2}>
-                          <path d="m5 12 5 5 9-10" />
-                        </Icon>
-                      )}
-                    </div>
-                  );
-                }
-                const favorite = favorites.includes(model.id);
+                const auto = isAutoOption(model);
+                const favorite = !auto && favorites.includes(model.id);
                 return (
                   <div
                     key={key}
                     id={optionId(key)}
                     role="option"
                     aria-selected={model.id === current}
-                    className={`model-option${index === activeIndex ? " active" : ""}${model.id === current ? " current" : ""}`}
+                    className={`model-option${auto ? " model-auto" : ""}${index === activeIndex ? " active" : ""}${model.id === current ? " current" : ""}`}
                     onMouseMove={() => hover(index)}
                     onClick={() => choose(model)}
                   >
                     <span className="model-option-text">
                       <span className="model-option-name">{model.name}</span>
-                      <small
-                        title={
-                          model.price
-                            ? "Context window; dollars per million input / output tokens"
-                            : "No list price is known for this model: the cost panel leaves its replies out of the total."
-                        }
-                      >
-                        {/* Favorites and recent picks mix providers: say whose each is. */}
-                        {(section.key === "favorites" || section.key === "recent" ? [providerLabel(model.provider), ...facts(model)] : facts(model)).join(
-                          " · ",
-                        )}
-                      </small>
+                      {auto ? (
+                        <small>{AUTO_HINT}</small>
+                      ) : (
+                        <small
+                          title={
+                            model.price
+                              ? "Context window; dollars per million input / output tokens"
+                              : "No list price is known for this model: the cost panel leaves its replies out of the total."
+                          }
+                        >
+                          {/* Favorites and recent picks mix providers: say whose each is. */}
+                          {(section.key === "favorites" || section.key === "recent" ? [providerLabel(model.provider), ...facts(model)] : facts(model)).join(
+                            " · ",
+                          )}
+                        </small>
+                      )}
                     </span>
                     {model.id === current && (
                       <Icon size={16} stroke={2.2}>
                         <path d="m5 12 5 5 9-10" />
                       </Icon>
                     )}
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      className={`model-star${favorite ? " on" : ""}`}
-                      aria-label={favorite ? `Remove ${model.name} from favorites` : `Add ${model.name} to favorites`}
-                      title={favorite ? "Remove from favorites" : "Add to favorites"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleFavorite(model);
-                      }}
-                    >
-                      <Icon size={15} stroke={1.8}>
-                        <path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" fill={favorite ? "currentColor" : "none"} />
-                      </Icon>
-                    </button>
+                    {!auto && (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        className={`model-star${favorite ? " on" : ""}`}
+                        aria-label={favorite ? `Remove ${model.name} from favorites` : `Add ${model.name} to favorites`}
+                        title={favorite ? "Remove from favorites" : "Add to favorites"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleFavorite(model);
+                        }}
+                      >
+                        <Icon size={15} stroke={1.8}>
+                          <path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" fill={favorite ? "currentColor" : "none"} />
+                        </Icon>
+                      </button>
+                    )}
                   </div>
                 );
               })}

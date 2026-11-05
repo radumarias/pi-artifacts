@@ -1,36 +1,31 @@
 import { memo } from "react";
-import { effortLabel } from "../../shared/models.ts";
+import { choiceLabel } from "../../shared/models.ts";
 import type { AutoPick } from "../../shared/protocol.ts";
 import { useCatalog } from "./ModelPicker.tsx";
-import { formatCost } from "./spend.ts";
+import { autoSpendOf, formatCost, shortTokens } from "./spend.ts";
 
 /**
  * Under a message sent on Auto, the model and effort picked to answer it ("Auto · Claude Sonnet 5.5 · High effort"); its
- * tooltip says why, and which router picked, at what cost and in how long. When the router could not pick, it says the
- * chat kept its model. Memoized: the chat re-renders on every streamed token.
+ * tooltip says why, and which router picked, at what cost and in how long. When no router could pick, it says the chat
+ * kept its model. Memoized: the chat re-renders on every streamed token.
  */
 export const AutoPicked = memo(function AutoPicked({ pick }: { pick: AutoPick }) {
   const catalog = useCatalog();
-  const nameOf = (id: string) => catalog.models.find((model) => model.id === id)?.name ?? id;
-  const efforts = catalog.models.find((model) => model.id === pick.model)?.efforts;
-  // A model that does not reason has no effort to show; an unlisted one shows what it ran at.
-  const effort = efforts?.length === 0 ? undefined : effortLabel(pick.thinkingLevel);
-  const label = [nameOf(pick.model), effort].filter(Boolean).join(" · ");
-  const why = pick.kept
-    ? "The router did not answer in time, so the chat kept the model it was on."
-    : [
+  const info = (id: string) => catalog.models.find((model) => model.id === id);
+  const label = choiceLabel(info(pick.model), pick.model, pick.thinkingLevel);
+  const { router } = pick;
+  const why = router
+    ? [
         pick.reason && `Why: ${pick.reason}.`,
-        pick.router &&
-          `Picked by ${nameOf(pick.router)} in ${(pick.ms / 1_000).toFixed(1)} s${pick.cost !== undefined ? ` for ${formatCost(pick.cost)}` : ""}${
-            pick.input !== undefined ? ` (${pick.input} in · ${pick.output ?? 0} out tokens)` : ""
-          }.`,
+        `Picked by ${info(router.model)?.name ?? router.model} in ${(pick.ms / 1_000).toFixed(1)} s for ${formatCost(router.cost)} (${shortTokens(autoSpendOf(pick))}).`,
       ]
         .filter(Boolean)
-        .join("\n");
+        .join("\n")
+    : "The router could not pick (it failed, or took too long), so the chat kept the model it was on.";
   return (
-    <div className={pick.kept ? "auto-pick kept" : "auto-pick"} title={why}>
+    <div className={router ? "auto-pick" : "auto-pick kept"} title={why}>
       <span className="auto-pick-tag">Auto</span>
-      <span className="auto-pick-model">{pick.kept ? `kept ${label}` : label}</span>
+      <span className="auto-pick-model">{router ? label : `kept ${label}`}</span>
     </div>
   );
 });

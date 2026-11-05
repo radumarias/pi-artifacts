@@ -61,7 +61,7 @@ export interface ModelCatalog {
   checkedAt?: number;
 }
 
-/** A chat's model and effort, and a user's default for new chats, which can be Auto (AUTO_MODEL). */
+/** A chat's model and effort. */
 export interface ModelChoice {
   model: string;
   thinkingLevel: ModelThinkingLevel;
@@ -73,6 +73,20 @@ export interface ModelChoice {
  * among the deployment's AUTO_MODELS.
  */
 export const AUTO_MODEL = "auto";
+
+/** What a chat runs on, and a user's default for new chats: a model at an effort, or Auto. */
+export type ModelSetting = ModelChoice | { model: typeof AUTO_MODEL };
+
+/** Whether a setting is Auto. */
+export function isAuto(setting: { model: string } | null | undefined): setting is { model: typeof AUTO_MODEL } {
+  return setting?.model === AUTO_MODEL;
+}
+
+/**
+ * pi's ledger key (a `tools` key of its usage) for what a router's picks cost: `auto:` and the router's picker id. The
+ * chat records each router call there (worker/chat-agent.ts), so the cost panel counts it with the rest.
+ */
+export const AUTO_LEDGER_PREFIX = "auto:";
 
 /** A model Auto may pick (the deployment's AUTO_MODELS): the picker's id, and what it is best at, which the router reads. */
 export interface AutoCandidate {
@@ -117,4 +131,18 @@ export const EFFORT_LABELS: Record<ModelThinkingLevel, string> = {
 /** How the app names an effort: "High effort". */
 export function effortLabel(level: ModelThinkingLevel): string {
   return `${EFFORT_LABELS[level]} effort`;
+}
+
+/**
+ * A model at an effort, as the app names it: "Claude Sonnet 5.5 · High effort"; the name alone for a model that does not
+ * reason. `info` is the model as the picker lists it; an unlisted one goes by its id and shows the effort it ran at.
+ */
+export function choiceLabel(info: ModelInfo | undefined, id: string, level: ModelThinkingLevel | undefined): string {
+  const name = info?.name ?? id;
+  return level && (info ? info.efforts.length > 0 : level !== "off") ? `${name} · ${effortLabel(level)}` : name;
+}
+
+/** "$3", "$0.15", "$2.5": a price per million tokens, short. */
+export function pricePerMillion(value: number): string {
+  return `$${Number(value.toPrecision(3))}`;
 }

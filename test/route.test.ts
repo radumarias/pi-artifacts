@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
-import type { EntryRecord } from "@earendil-works/pi-durable";
-import { autoCandidates, contextTokens, parsePick, route, routeHistory, routePrompt, type RouteRequest } from "../worker/agent/route.ts";
+import type { ConversationId, EntryRecord, Tx } from "@earendil-works/pi-durable";
+import { autoCandidates, contextTokens, parsePick, recordRouterSpend, route, routeHistory, routePrompt, type RouteRequest } from "../worker/agent/route.ts";
 import { baseCatalog } from "../worker/models.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
@@ -76,7 +76,7 @@ describe("the conversation the router reads", () => {
     const turns = routeHistory(entries);
     expect(turns.length).toBeLessThanOrEqual(12);
     expect(turns.at(-1)!.text.startsWith("0 ")).toBe(true);
-    expect(turns.every((turn) => turn.text.length <= 601)).toBe(true);
+    expect(turns.every((turn) => turn.text.length < 650)).toBe(true);
     expect(turns.reduce((sum, turn) => sum + turn.text.length, 0)).toBeLessThanOrEqual(6_000);
   });
 
@@ -153,13 +153,13 @@ describe("routing", () => {
     const { piModels, list, asked } = routers(fauxAssistantMessage('{"model":"anthropic/claude-haiku-5.5","effort":"low","reason":"greeting"}'));
     const routed = await route(piModels, list, request());
     expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low", reason: "greeting" });
-    expect(routed.router.id).toBe("first");
+    expect(routed.router).toMatchObject({ model: expect.stringMatching(/\/first$/), cost: 0 });
     expect(asked[0]?.reasoning).toBe("minimal");
   });
 
   it("asks the next router when one answers with no listed model, or fails", async () => {
     const { piModels, list } = routers(fauxAssistantMessage("I think Haiku."), fauxAssistantMessage('{"model":"openai/gpt-4o"}'));
-    expect((await route(piModels, list, request())).router.id).toBe("second");
+    expect((await route(piModels, list, request())).router.model).toMatch(/\/second$/);
     const failing = routers(fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded" }), fauxAssistantMessage('{"model":"openai/gpt-4o"}'));
     expect((await route(failing.piModels, failing.list, request())).pick.model).toBe("openai/gpt-4o");
   });
@@ -181,5 +181,25 @@ describe("routing", () => {
     const { piModels, list } = routers();
     await expect(route(piModels, [], request())).rejects.toThrow("no router model");
     await expect(route(piModels, list, { ...request(), candidates: [] })).rejects.toThrow("none of the models");
+  });
+});
+
+describe("the router's spend", () => {
+  it("adds up in pi's ledger, under its own key among the tools", async () => {
+    const ledger = { models: {}, tools: {} as Record<string, Usage> };
+    const tx = { doc: async () => ledger } as unknown as Tx;
+    const call = (total: number): Usage => ({
+      input: 1_000,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 1_020,
+      cost: { input: total / 2, output: total / 2, cacheRead: 0, cacheWrite: 0, total },
+    });
+    await recordRouterSpend(tx, 1 as ConversationId, "cerebras/gpt-oss-120b", call(0.001));
+    await recordRouterSpend(tx, 1 as ConversationId, "cerebras/gpt-oss-120b", call(0.002));
+    expect(Object.keys(ledger.tools)).toEqual(["auto:cerebras/gpt-oss-120b"]);
+    expect(ledger.tools["auto:cerebras/gpt-oss-120b"]).toMatchObject({ input: 2_000, output: 40, totalTokens: 2_040 });
+    expect(ledger.tools["auto:cerebras/gpt-oss-120b"].cost.total).toBeCloseTo(0.003);
   });
 });

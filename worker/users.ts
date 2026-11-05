@@ -1,5 +1,5 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import type { ModelChoice } from "../shared/models.ts";
+import type { ModelSetting } from "../shared/models.ts";
 import { SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type MentionNotice, type SidebarList } from "../shared/protocol.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
@@ -435,11 +435,11 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /** The model and effort the user last picked in any chat: what their new chats start on. Checked by the chat that reads it. */
-  modelChoice(): ModelChoice | null {
-    return this.ctx.storage.kv.get<ModelChoice>("model") ?? null;
+  modelChoice(): ModelSetting | null {
+    return this.ctx.storage.kv.get<ModelSetting>("model") ?? null;
   }
 
-  setModelChoice(choice: ModelChoice): void {
+  setModelChoice(choice: ModelSetting): void {
     this.ctx.storage.kv.put("model", choice);
   }
 }

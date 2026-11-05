@@ -1,9 +1,9 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
-import { effortLabel, type ModelInfo } from "../../shared/models.ts";
+import { AUTO_LEDGER_PREFIX, effortLabel, type ModelInfo } from "../../shared/models.ts";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
-import { autoSpend, chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
+import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
 import { formatElapsed } from "./Thinking.tsx";
 
 /** Where the time went, for a tooltip: "model replies 48s (3), tools 31s (2)". */
@@ -18,8 +18,11 @@ function describeTime(time: Timing): string {
  * Auto's router ("Auto picks · GPT OSS 120B").
  */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
+  if (share.model.startsWith(AUTO_LEDGER_PREFIX)) {
+    const router = share.model.slice(AUTO_LEDGER_PREFIX.length);
+    return `Auto picks · ${models.get(router)?.name ?? router}`;
+  }
   const name = models.get(share.model)?.name ?? share.model;
-  if (share.auto) return `Auto picks · ${name}`;
   return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;
 }
 
@@ -44,9 +47,7 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
   const models = useMemo(() => new Map(catalog.models.map((model) => [model.id, model])), [catalog]);
   // Only the open panel splits models by effort: the button shows totals, and the entries change with every message.
   const split = open ? entries : undefined;
-  // Auto's routers are counted from the entries alone (pi's ledger has no record of them), so always.
-  const routing = useMemo(() => autoSpend(entries), [entries]);
-  const spend = useMemo(() => chatSpend(usage, split, routing), [usage, split, routing]);
+  const spend = useMemo(() => chatSpend(usage, split), [usage, split]);
   // A click anywhere else, or Escape, closes the panel.
   const box = useDismiss<HTMLDivElement>(open, setOpen);
   if (spend.models.length === 0) return null;
@@ -65,10 +66,7 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
           <strong>AI cost and time of this chat</strong>
           <ul>
             {spend.models.map((share) => (
-              <li
-                key={`${share.model} ${share.effort} ${share.auto}`}
-                title={share.auto ? `Auto's choice of model for each message. ${describeTokens(share)}` : describeTokens(share)}
-              >
+              <li key={`${share.model} ${share.effort}`} title={describeTokens(share)}>
                 <span>{shareName(share, models)}</span>
                 <small>{shortTokens(share)}</small>
                 <span className="cost-amount">{unpriced.includes(share) ? "unknown" : formatCost(share.cost)}</span>

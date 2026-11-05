@@ -1,7 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { autoSpend, chatSpend, contextUse, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
+import { chatSpend, contextUse, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
 /** A reply's usage: `tokens`, at `total` dollars. */
@@ -149,12 +149,10 @@ describe("chat spend", () => {
 });
 
 describe("Auto's spend", () => {
-  /** A message sent on Auto, whose router call cost `cost`; `router` undefined for one where the chat kept its model. */
+  /** A message sent on Auto, whose router call cost `cost`; with no router, one where the chat kept its model. */
   const routed = (cost: number, router: string | undefined = "cerebras/gpt-oss-120b") => {
     const message = prompt();
-    const pick = router
-      ? { model: "m", thinkingLevel: "low", router, cost, input: 1_000, output: 20, ms: 400 }
-      : { model: "m", thinkingLevel: "low", kept: true, ms: 4_000 };
+    const pick = { model: "m", thinkingLevel: "low", ms: 400, ...(router && { router: { model: router, cost, input: 1_000, output: 20 } }) };
     (message as { data?: unknown }).data = { uid: "u", name: "U", text: "hi", auto: pick };
     return message;
   };
@@ -167,17 +165,14 @@ describe("Auto's spend", () => {
     expect(spend.get(entries[3].id)!.cost).toBeCloseTo(0.02);
   });
 
-  it("adds a row per router to the chat's spend, and to its total", () => {
-    const entries = [routed(0.001), reply(0.01), routed(0.002), routed(0.004, "openai/gpt-4.1-nano")];
-    const routing = autoSpend(entries);
-    expect(routing.map(({ model, auto, cost }) => ({ model, auto, cost: +cost.toFixed(4) }))).toEqual([
-      { model: "cerebras/gpt-oss-120b", auto: true, cost: 0.003 },
-      { model: "openai/gpt-4.1-nano", auto: true, cost: 0.004 },
-    ]);
-    const ledger = { models: { "cloudflare/m": usage({ input: 100 }, 0.01) }, tools: {} } as unknown as UsageState;
-    const { total, models: rows } = chatSpend(ledger, [], routing);
-    expect(total.cost).toBeCloseTo(0.017);
-    expect(rows.map((row) => row.model)).toEqual(["m", "openai/gpt-4.1-nano", "cerebras/gpt-oss-120b"]);
+  it("counts the routers from pi's ledger, a row each, in the chat's total", () => {
+    const ledger = {
+      models: { "cloudflare/m": usage({ input: 100 }, 0.01) },
+      tools: { "auto:cerebras/gpt-oss-120b": usage({ input: 2_000 }, 0.003) },
+    } as unknown as UsageState;
+    const { total, models: rows } = chatSpend(ledger);
+    expect(total.cost).toBeCloseTo(0.013);
+    expect(rows.map((row) => row.model)).toEqual(["m", "auto:cerebras/gpt-oss-120b"]);
   });
 });
 

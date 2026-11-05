@@ -290,23 +290,21 @@ export interface ChatMessageData extends Person {
 }
 
 /**
- * What Auto picked for a message that started a run: a model (the picker's id) and an effort, and why. When the router
- * could not pick (it failed or took too long), the chat kept the model it ran on (`kept`). A type, not an interface, so it
- * is JSON pi can store.
+ * What Auto picked for a message that started a run: a model (the picker's id) and an effort, why, and the router that
+ * picked. With no router, none could pick (it failed or took too long), and the chat kept the model it ran on. `ms`: how
+ * long picking took. A type, not an interface, so it is JSON pi can store.
  */
 export type AutoPick = {
   model: string;
   thinkingLevel: ModelThinkingLevel;
   /** The router's reason, a few words. */
   reason?: string;
-  kept?: true;
-  /** The router that picked: its picker id, what its call cost in dollars and tokens, and how long it took. */
-  router?: string;
-  cost?: number;
-  input?: number;
-  output?: number;
+  router?: RouterSpend;
   ms: number;
 };
+
+/** A router call: the router's picker id, and what the call cost, in dollars and tokens. */
+export type RouterSpend = { model: string; cost: number; input: number; output: number };
 
 /** A message a reply quotes: its transcript entry, who wrote it (the agent, or a person) and the start of its text. */
 export type ReplyQuote = { id: number; name: string; text: string } & ({ agent: true } | { uid: string });
