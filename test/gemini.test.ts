@@ -8,20 +8,8 @@ import { GeminiCompat, showThoughts, sign, UNSIGNED } from "../worker/gemini.ts"
 const GEMINI = "google-ai-studio/gemini-test";
 const catalog = catalogFrom({ checkedAt: 1, providers: { "google-ai-studio": { status: "ok", models: [{ id: "gemini-test", reasoning: true }] } } });
 
-/** Gemini's streamed answer that calls `tool`, its signature on the call (as its OpenAI-compatible API sends it). */
-function callingAnswer(id: string, signature: string | undefined): Response {
-  const call = {
-    index: 0,
-    id,
-    type: "function",
-    function: { name: "lookup", arguments: '{"q":"x"}' },
-    ...(signature && { extra_content: { google: { thought_signature: signature } } }),
-  };
-  const chunks = [
-    { id: "r", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [call] } }] },
-    { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
-  ];
-  // In small pieces, splitting lines and characters, as the network may.
+/** A streamed answer of `chunks`, sent in small pieces that split lines and characters, as the network may. */
+function streamed(chunks: object[]): Response {
   const bytes = new TextEncoder().encode(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join("") + "data: [DONE]\r\n\r\n");
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -32,21 +20,24 @@ function callingAnswer(id: string, signature: string | undefined): Response {
   return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
 
-/** A streamed answer of `chunks`, each a `choices[0].delta`, sent in small pieces that split lines and characters. */
-function answerOf(...deltas: object[]): Response {
-  const chunks = [
-    ...deltas.map((delta) => ({ id: "r", choices: [{ index: 0, delta }] })),
-    { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
-  ];
-  const bytes = new TextEncoder().encode(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join("") + "data: [DONE]\r\n\r\n");
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (let at = 0; at < bytes.length; at += 7) controller.enqueue(bytes.slice(at, at + 7));
-      controller.close();
-    },
-  });
-  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+/** Gemini's streamed answer that calls `tool`, its signature on the call (as its OpenAI-compatible API sends it). */
+function callingAnswer(id: string, signature: string | undefined): Response {
+  const call = {
+    index: 0,
+    id,
+    type: "function",
+    function: { name: "lookup", arguments: '{"q":"x"}' },
+    ...(signature && { extra_content: { google: { thought_signature: signature } } }),
+  };
+  return streamed([
+    { id: "r", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [call] } }] },
+    { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+  ]);
 }
+
+/** Gemini's streamed answer of `deltas` (each a chunk's `choices[0].delta`). */
+const answerOf = (...deltas: object[]): Response =>
+  streamed([...deltas.map((delta) => ({ id: "r", choices: [{ index: 0, delta }] })), { id: "r", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }]);
 
 /** The chat's models over a stand-in AI binding that answers with `answers`, in turn, and keeps each request body. */
 function chat(...answers: (() => Response)[]) {

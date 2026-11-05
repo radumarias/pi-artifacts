@@ -7,7 +7,7 @@ import { tapStream } from "./streams.ts";
 /**
  * What Gemini needs on the OpenAI-compatible API the app reaches it by (see GATEWAY_PROVIDERS["google-ai-studio"]),
  * which the chat-completions wire of agents/models/pi-ai (0.31) and pi-ai (1.4) do not do. Remove it once that wire
- * keeps and sends back `extra_content.google.thought_signature`.
+ * keeps and sends back `extra_content.google.thought_signature`, and asks for and reads Gemini's thought summaries.
  *
  * Thought signatures: a Gemini model that reasons signs each step that calls tools, and refuses with HTTP 400 a request
  * whose earlier tool calls come back without their signatures, so every chat with it failed right after its first tool
@@ -62,6 +62,7 @@ export class GeminiCompat {
         onPayload: (payload, payloadModel) => {
           sign(payload, signaturesOf(context, model));
           showThoughts(payload, model.id);
+          forgetThoughts(payload);
           return onPayload?.(payload, payloadModel);
         },
       });
@@ -107,7 +108,7 @@ export class GeminiCompat {
     let partial = "";
     // Each tool call's id and signature, by its index in the answer: a chunk may carry either without the other.
     const calls = new Map<number, { id?: string; signature?: string }>();
-    // Whether the answer is inside a `<thought>` its text opened, and whether it said anything else yet.
+    // Whether the answer is inside a `<thought>` its text opened, and whether it said anything else yet (then a tag is text).
     const thoughts = { open: false, said: false };
     const readCalls = (choice: Json) => {
       const deltas = isObject(choice.delta) ? choice.delta.tool_calls : undefined;
@@ -130,9 +131,8 @@ export class GeminiCompat {
     const read = (line: string): string => {
       if (!line.startsWith("data:")) return line;
       const withCalls = line.includes('"tool_calls"');
-      // "thought" also finds a flagged summary and a tag Google wrote as \u003cthought\u003e.
-      const withThoughts = thoughts.open || line.includes("thought");
-      if (!withThoughts && !thoughts.said && SAYS.test(line)) thoughts.said = true;
+      // Every event until the answer says something, as a tag counts only first; then those that may be flagged.
+      const withThoughts = !thoughts.said || thoughts.open || line.includes('"thought"');
       if (!withCalls && !withThoughts) return line;
       let chunk: unknown;
       try {
@@ -147,14 +147,9 @@ export class GeminiCompat {
     };
     return new TransformStream({
       transform(bytes, controller) {
-        const lines = decoder.decode(bytes, { stream: true }).split("\n");
-        if (lines.length === 1) {
-          partial += lines[0];
-          return;
-        }
-        const whole = [partial + lines[0], ...lines.slice(1, -1)];
-        partial = lines.at(-1)!;
-        controller.enqueue(encoder.encode(whole.map((line) => read(line) + "\n").join("")));
+        const lines = (partial + decoder.decode(bytes, { stream: true })).split("\n");
+        partial = lines.pop()!;
+        if (lines.length) controller.enqueue(encoder.encode(lines.map(read).join("\n") + "\n"));
       },
       flush(controller) {
         const last = partial + decoder.decode();
@@ -175,12 +170,8 @@ const MAX_READ = 256;
 /** The tags around thought summaries in an answer's text, where an endpoint that does not flag them puts them. */
 const THOUGHT_OPEN = "<thought>";
 const THOUGHT_CLOSE = "</thought>";
-/** Whether an answer's event has text in it. */
-const SAYS = /"content":\s*"[^"]/;
 /** Gemini 2.5's thinking budgets for the efforts the picker offers, as Google maps `reasoning_effort` to them. */
 const BUDGETS: Readonly<Record<string, number>> = { low: 1_024, medium: 8_192, high: 24_576 };
-/** The fields pi-ai sends a model's earlier thoughts back in. */
-const REASONING_FIELDS = ["reasoning_content", "reasoning", "reasoning_text"];
 
 /** A wire tool call's signature. */
 function signatureOf(call: Json): string | undefined {
@@ -209,10 +200,7 @@ function signaturesOf(context: Context, model: Model<Api>): Map<string, string> 
 export function sign(payload: unknown, signatures: ReadonlyMap<string, string>): void {
   const messages = isObject(payload) && Array.isArray(payload.messages) ? payload.messages : [];
   for (const message of messages) {
-    if (!isObject(message) || message.role !== "assistant") continue;
-    // Its thought summaries, read as reasoning_content (see thoughtsApart): Gemini has its signatures for those.
-    for (const field of REASONING_FIELDS) delete message[field];
-    if (!Array.isArray(message.tool_calls)) continue;
+    if (!isObject(message) || message.role !== "assistant" || !Array.isArray(message.tool_calls)) continue;
     const calls = message.tool_calls.filter(isObject);
     let signed = false;
     for (const call of calls) {
@@ -242,33 +230,43 @@ export function showThoughts(payload: unknown, model: string): void {
   payload.extra_body = { ...extra, google: { ...google, thinking_config: { ...thinking, include_thoughts: true } } };
 }
 
+/** Keep the thought summaries pi-ai sends back (as the reader named them, `reasoning_content`) from Gemini, which has its signatures. */
+function forgetThoughts(payload: unknown): void {
+  const messages = isObject(payload) && Array.isArray(payload.messages) ? payload.messages : [];
+  for (const message of messages) if (isObject(message) && message.role === "assistant") delete message.reasoning_content;
+}
+
 /**
  * Move an answer chunk's thought summary from `content` to `reasoning_content`, where the wire reads thinking. Gemini
  * flags a summary with `extra_content.google.thought`; an endpoint that does not starts the answer's text with it in
  * `<thought>` tags, which may close in a later chunk (`state.open` carries that over). A tag after other text is text.
  * Whether it changed the chunk.
  */
-export function thoughtsApart(delta: Json, state: { open: boolean; said: boolean }): boolean {
+function thoughtsApart(delta: Json, state: { open: boolean; said: boolean }): boolean {
   const content = delta.content;
-  if (typeof content !== "string") return false;
+  if (typeof content !== "string" || !content) return false;
   const google = isObject(delta.extra_content) ? delta.extra_content.google : undefined;
-  let thought = "";
+  let thought = content;
   let said = "";
-  if (isObject(google) && google.thought === true) thought = content;
-  else if (state.open || (!state.said && content.trimStart().startsWith(THOUGHT_OPEN))) {
-    const rest = state.open ? content : content.trimStart().slice(THOUGHT_OPEN.length);
+  if (!isObject(google) || google.thought !== true) {
+    const start = content.trimStart();
+    // Blank text before a tag says nothing yet.
+    if (!state.open && !start) return false;
+    if (!state.open && (state.said || !start.startsWith(THOUGHT_OPEN))) {
+      state.said = true;
+      return false;
+    }
+    const rest = state.open ? content : start.slice(THOUGHT_OPEN.length);
     const end = rest.indexOf(THOUGHT_CLOSE);
     state.open = end < 0;
-    thought = state.open ? rest : rest.slice(0, end);
-    said = state.open ? "" : rest.slice(end + THOUGHT_CLOSE.length);
-  } else {
-    if (content) state.said = true;
-    return false;
+    [thought, said] = state.open ? [rest, ""] : [rest.slice(0, end), rest.slice(end + THOUGHT_CLOSE.length)];
   }
-  if (said) state.said = true;
   delete delta.content;
-  if (said) delta.content = said;
-  if (thought) delta.reasoning_content = (text(delta.reasoning_content) ?? "") + thought;
+  if (said) {
+    delta.content = said;
+    state.said = true;
+  }
+  if (thought) delta.reasoning_content = thought;
   return true;
 }
 
