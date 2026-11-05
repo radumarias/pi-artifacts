@@ -108,8 +108,9 @@ export class GeminiCompat {
     let partial = "";
     // Each tool call's id and signature, by its index in the answer: a chunk may carry either without the other.
     const calls = new Map<number, { id?: string; signature?: string }>();
-    // Whether the answer is inside a `<thought>` its text opened, and whether it said anything else yet (then a tag is text).
-    const thoughts = { open: false, said: false };
+    // Whether the answer is inside a `<thought>` its text opened, whether it said anything else yet (then a tag is text),
+    // and the end of its text that may be the start of a tag the network split, held for the next chunk.
+    const thoughts: ThoughtState = { open: false, said: false, held: "" };
     const readCalls = (choice: Json) => {
       const deltas = isObject(choice.delta) ? choice.delta.tool_calls : undefined;
       if (!Array.isArray(deltas)) return;
@@ -216,14 +217,15 @@ export function sign(payload: unknown, signatures: ReadonlyMap<string, string>):
 /**
  * Ask Gemini to stream its thought summaries, so its answer starts while it thinks (see GeminiCompat). Google takes them
  * only in `thinking_config`, which may not come with `reasoning_effort`, so the effort moves there too: as a thinking
- * budget for Gemini 2.5, a thinking level for later models. A request with no effort (a model that does not reason) or
- * another one (`none` turns thinking off) is left as it is.
+ * level for Gemini 3 and later, a thinking budget for the rest (Gemini 2.5 takes only that). A request with no effort
+ * (a model that does not reason) or another one (`none` turns thinking off) is left as it is.
  */
 export function showThoughts(payload: unknown, model: string): void {
   if (!isObject(payload)) return;
   const effort = payload.reasoning_effort;
   if (typeof effort !== "string" || !Object.hasOwn(BUDGETS, effort)) return;
-  const thinking = /^gemini-2\./.test(model) ? { thinking_budget: BUDGETS[effort] } : { thinking_level: effort };
+  // A budget for any id not plainly Gemini 3 or later (2.5, an alias like gemini-flash-latest): those take both.
+  const thinking = /^gemini-(?:[3-9]|\d{2,})/.test(model) ? { thinking_level: effort } : { thinking_budget: BUDGETS[effort] };
   delete payload.reasoning_effort;
   const extra = isObject(payload.extra_body) ? payload.extra_body : {};
   const google = isObject(extra.google) ? extra.google : {};
@@ -236,30 +238,60 @@ function forgetThoughts(payload: unknown): void {
   for (const message of messages) if (isObject(message) && message.role === "assistant") delete message.reasoning_content;
 }
 
+/** Where an answer's text is as its chunks go by (see thoughtsApart). */
+interface ThoughtState {
+  open: boolean;
+  said: boolean;
+  held: string;
+}
+
 /**
  * Move an answer chunk's thought summary from `content` to `reasoning_content`, where the wire reads thinking. Gemini
  * flags a summary with `extra_content.google.thought`; an endpoint that does not starts the answer's text with it in
- * `<thought>` tags, which may close in a later chunk (`state.open` carries that over). A tag after other text is text.
+ * `<thought>` tags, which may close in a later chunk (`state.open` carries that over), and either of which the network
+ * may split (`state.held` keeps the start of one for the next chunk). A tag after other text is text.
  * Whether it changed the chunk.
  */
-function thoughtsApart(delta: Json, state: { open: boolean; said: boolean }): boolean {
-  const content = delta.content;
-  if (typeof content !== "string" || !content) return false;
+function thoughtsApart(delta: Json, state: ThoughtState): boolean {
+  const content = typeof delta.content === "string" ? delta.content : "";
+  if (!content) return false;
   const google = isObject(delta.extra_content) ? delta.extra_content.google : undefined;
-  let thought = content;
-  let said = "";
-  if (!isObject(google) || google.thought !== true) {
-    const start = content.trimStart();
+  if (isObject(google) && google.thought === true) {
+    delete delta.content;
+    delta.reasoning_content = content;
+    return true;
+  }
+  const held = state.held;
+  state.held = "";
+  let rest = held + content;
+  if (!state.open) {
+    const start = rest.trimStart();
     // Blank text before a tag says nothing yet.
-    if (!state.open && !start) return false;
-    if (!state.open && (state.said || !start.startsWith(THOUGHT_OPEN))) {
+    if (!start) return false;
+    if (state.said || !start.startsWith(THOUGHT_OPEN)) {
+      if (!state.said && THOUGHT_OPEN.startsWith(start)) {
+        // Maybe a tag the network split: held until the next chunk says.
+        state.held = rest;
+        delete delta.content;
+        return true;
+      }
       state.said = true;
-      return false;
+      if (!held) return false;
+      delta.content = rest;
+      return true;
     }
-    const rest = state.open ? content : start.slice(THOUGHT_OPEN.length);
-    const end = rest.indexOf(THOUGHT_CLOSE);
-    state.open = end < 0;
-    [thought, said] = state.open ? [rest, ""] : [rest.slice(0, end), rest.slice(end + THOUGHT_CLOSE.length)];
+    rest = start.slice(THOUGHT_OPEN.length);
+  }
+  const end = rest.indexOf(THOUGHT_CLOSE);
+  let thought = rest;
+  let said = "";
+  if (end < 0) {
+    state.open = true;
+    state.held = rest.slice(rest.length - splitTag(rest, THOUGHT_CLOSE));
+    thought = rest.slice(0, rest.length - state.held.length);
+  } else {
+    state.open = false;
+    [thought, said] = [rest.slice(0, end), rest.slice(end + THOUGHT_CLOSE.length)];
   }
   delete delta.content;
   if (said) {
@@ -268,6 +300,12 @@ function thoughtsApart(delta: Json, state: { open: boolean; said: boolean }): bo
   }
   if (thought) delta.reasoning_content = thought;
   return true;
+}
+
+/** How many characters at the end of `text` start `tag`, as when the network split it. */
+function splitTag(text: string, tag: string): number {
+  for (let length = Math.min(text.length, tag.length - 1); length > 0; length--) if (text.endsWith(tag.slice(0, length))) return length;
+  return 0;
 }
 
 /** A failed answer, with Google's one-item error array (`[{ error }]`) turned into the `{ error }` the wire reads. */

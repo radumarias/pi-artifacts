@@ -162,11 +162,20 @@ describe("Gemini's thought signatures", () => {
 describe("Gemini's thought summaries", () => {
   const thought = (content: string) => ({ content, extra_content: { google: { thought: true } } });
 
-  it("asks for them, with the effort as a thinking level instead of reasoning_effort", async () => {
+  it("asks for them, with the effort in thinking_config instead of reasoning_effort", async () => {
     const { models, model, requests } = chat(() => answerOf({ content: "hi" }));
     await models.streamSimple(model, { messages: [user] }, { reasoning: "high" }).result();
     expect(requests[0].body.reasoning_effort).toBeUndefined();
-    expect(requests[0].body.extra_body).toEqual({ google: { thinking_config: { thinking_level: "high", include_thoughts: true } } });
+    expect(requests[0].body.extra_body).toEqual({ google: { thinking_config: { thinking_budget: 24_576, include_thoughts: true } } });
+  });
+
+  it("gives Gemini 3 a thinking level, and an alias that may name Gemini 2.5 a budget", () => {
+    const pro = { reasoning_effort: "low" };
+    showThoughts(pro, "gemini-3-pro-preview");
+    expect(pro).toEqual({ extra_body: { google: { thinking_config: { thinking_level: "low", include_thoughts: true } } } });
+    const alias = { reasoning_effort: "low" };
+    showThoughts(alias, "gemini-flash-latest");
+    expect(alias).toEqual({ extra_body: { google: { thinking_config: { thinking_budget: 1_024, include_thoughts: true } } } });
   });
 
   it("gives Gemini 2.5 a thinking budget, and leaves a request without an effort it maps alone", () => {
@@ -195,7 +204,7 @@ describe("Gemini's thought summaries", () => {
     ]);
   });
 
-  it("reads summaries in <thought> tags that close in a later chunk", async () => {
+  it("reads summaries in <thought> tags that close in a later chunk, or that the network split", async () => {
     const { models, model } = chat(() =>
       answerOf({ content: "<thought>Weighing " }, { content: "it" }, { content: " up.</thought>Done." }, { content: " <thought> stays text" }),
     );
@@ -204,6 +213,15 @@ describe("Gemini's thought summaries", () => {
       { type: "thinking", thinking: "Weighing it up." },
       { type: "text", text: "Done. <thought> stays text" },
     ]);
+    const split = chat(() => answerOf({ content: "<tho" }, { content: "ught>Hmm.</th" }, { content: "ought>Yes." }));
+    const told = await split.models.streamSimple(split.model, { messages: [user] }, { reasoning: "low" }).result();
+    expect(told.content).toMatchObject([
+      { type: "thinking", thinking: "Hmm." },
+      { type: "text", text: "Yes." },
+    ]);
+    const tagLike = chat(() => answerOf({ content: "<t" }, { content: "able>" }));
+    const table = await tagLike.models.streamSimple(tagLike.model, { messages: [user] }, { reasoning: "low" }).result();
+    expect(table.content).toMatchObject([{ type: "text", text: "<table>" }]);
     const later = chat(() => answerOf({ content: "Hi. " }, { content: "<thought>x</thought>" }));
     const said = await later.models.streamSimple(later.model, { messages: [user] }, { reasoning: "low" }).result();
     expect(said.content).toMatchObject([{ type: "text", text: "Hi. <thought>x</thought>" }]);
