@@ -64,6 +64,7 @@
     "worker/queue.ts",
     "worker/chat-status.ts",
     "worker/agent/title.ts",
+    "worker/agent/route.ts",
     "worker/chat-traces.ts",
     "worker/agent/skills.ts",
     "worker/models.ts",
