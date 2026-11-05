@@ -208,6 +208,8 @@ export interface ChatSummary {
   unread?: true;
   /** Set when someone tagged this user ("@name") in a message they have not seen yet. */
   mentioned?: true;
+  /** With `unread` or `mentioned`: when this user last saw the chat (ms since the epoch), so the app marks what came after as new. */
+  seenAt?: number;
 }
 
 /**

@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -47,11 +47,14 @@ import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
 import { useRevealedText } from "./reveal.ts";
+import { firstNew, isAgent, sentAt, shown } from "./entries.ts";
 
 interface Props {
   chatId: string;
   /** The signed-in user: their own messages show without a name. */
   uid: string;
+  /** When the user had last seen the chat, if something came in since: a "New" line goes over the first such message. */
+  newSince?: number;
   /** Called with the newest artifact this chat published, on load (`loading`) and on every publish, and with one the user opens. */
   onArtifact: (artifact: PublishedDetails, loading?: boolean) => void;
   onActivity: () => void;
@@ -69,7 +72,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
-export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props) {
+export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft }: Props) {
   const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react } = useChat(chatId);
   const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
@@ -208,6 +211,11 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
   // Recomputed only when entries change, not as a reply streams.
   const dayStarts = useMemo(() => dayStartsOf(state.entries), [state.entries]);
   const agentLast = useMemo(() => shared !== null && endsInAgentTurn(state.entries), [shared, state.entries]);
+  const newAt = useMemo(
+    () => (newSince === undefined ? undefined : firstNew(state.entries, newSince, uid, ownerName === undefined)),
+    [newSince, state.entries, uid, ownerName],
+  );
+  useNewInView(list, following, newAt, newSince);
   const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
   return (
     <SharedChat.Provider value={shared}>
@@ -245,6 +253,7 @@ export function ChatView({ chatId, uid, onArtifact, onActivity, onLeft }: Props)
                     return (
                       <Fragment key={entry.id}>
                         {dayStart !== undefined && <DaySeparator at={dayStart} />}
+                        {entry.id === newAt && <NewDivider />}
                         {bylines.has(entry.id) && <AgentByline />}
                         <Entry entry={entry} reactions={reactions[entry.id]} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
                         {spend && <PromptCost spend={spend} />}
@@ -451,12 +460,6 @@ const Entry = memo(function Entry({
   return null;
 });
 
-/** When an entry was sent, for one that has a time: messages from before chats kept `sentAt` have only the time pi wrote them, and asides not even that. */
-function sentAt(entry: EntryRecord): number | undefined {
-  const at = entry.kind === CHAT_MESSAGE_KIND ? (entry.data as unknown as ChatMessageData).sentAt : undefined;
-  return at ?? entry.model?.[0]?.timestamp;
-}
-
 /** The entries that start a day, the first of each day the conversation has messages on, with their time. */
 function dayStartsOf(entries: readonly EntryRecord[]): Map<number, number> {
   const starts = new Map<number, number>();
@@ -471,13 +474,33 @@ function dayStartsOf(entries: readonly EntryRecord[]): Map<number, number> {
   return starts;
 }
 
-/** Entries the app shows something for; the others (such as asides for the model) do not end an agent's reply, or start one. */
-function shown(entry: EntryRecord): boolean {
-  return entry.kind === CHAT_MESSAGE_KIND || entry.kind === CHAT_PEOPLE_KIND || entry.kind === "pi.user" || isAgent(entry);
+/** Over the first message the user has not seen: "New", between two wavy lines. */
+function NewDivider() {
+  return (
+    <div className="new-divider" role="separator" aria-label="New messages">
+      New
+    </div>
+  );
 }
 
-function isAgent(entry: EntryRecord): boolean {
-  return entry.kind === "pi.assistant" || entry.kind === "pi.tool-result";
+/**
+ * Once the "New" line is drawn (`newAt`), for each time the user arrives to something new (`since`): scroll the
+ * conversation so the end of what they read, the line and the start of what is new show together, with the line about
+ * a fifth of the way down. Only when the reader was at the bottom, which opening a chat starts at; one reading higher
+ * up stays where they are. Declared after the effect that follows new output, so it runs after it.
+ */
+function useNewInView(list: RefObject<HTMLDivElement | null>, following: RefObject<boolean>, newAt: number | undefined, since: number | undefined) {
+  const shownFor = useRef<number>(undefined);
+  useEffect(() => {
+    const el = list.current;
+    const line = el?.querySelector<HTMLElement>(".new-divider");
+    if (!el || !line || since === undefined || shownFor.current === since) return;
+    shownFor.current = since;
+    if (!following.current) return;
+    const top = line.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    el.scrollTop = top - Math.min(Math.max(el.clientHeight * 0.2, 48), 160);
+    following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, [list, following, newAt, since]);
 }
 
 /** The agent's entries that start one of its replies: the first of its own after anything else the chat shows. */

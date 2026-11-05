@@ -135,9 +135,10 @@ export class UserDirectory extends DurableObject<Env> {
         status: ChatStatus;
         unread: number;
         mentioned: number;
+        seen_at: number;
       }>(
-        `SELECT id, title, created_at, updated_at, NULL AS shared_by, shared, status, activity_at > seen_at AS unread, mentioned_at > seen_at AS mentioned FROM chats
-         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, 0, status, activity_at > seen_at, mentioned_at > seen_at FROM shared_chats
+        `SELECT id, title, created_at, updated_at, NULL AS shared_by, shared, status, activity_at > seen_at AS unread, mentioned_at > seen_at AS mentioned, seen_at FROM chats
+         UNION ALL SELECT id, title, joined_at, updated_at, owner_name, 0, status, activity_at > seen_at, mentioned_at > seen_at, seen_at FROM shared_chats
          ORDER BY updated_at DESC`,
       )
       .toArray()
@@ -150,6 +151,8 @@ export class UserDirectory extends DurableObject<Env> {
         ...(row.status && { status: row.status }),
         ...(row.unread === 1 && { unread: true as const }),
         ...(row.mentioned === 1 && { mentioned: true as const }),
+        // Where the new part starts, for a chat with some; none for one this user never looked at.
+        ...((row.unread === 1 || row.mentioned === 1) && row.seen_at > 0 && { seenAt: row.seen_at }),
       }));
   }
 

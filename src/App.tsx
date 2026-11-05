@@ -204,7 +204,7 @@ const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
 function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
-  const { chats, load: loadChats } = useChatList(chatId);
+  const { chats, load: loadChats, newSince } = useChatList(chatId);
   const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
   const [files, loadFiles] = useLatest<FileInfo[]>(api.files, []);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -423,6 +423,7 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
             <ChatView
               chatId={chatId}
               uid={uid}
+              newSince={newSince}
               onArtifact={onArtifact}
               onActivity={onActivity}
               onLeft={() => navigate("/")}
