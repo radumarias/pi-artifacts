@@ -73,6 +73,20 @@ export class UserFiles {
     for (let i = 0; i < keys.length; i += 1000) await this.#bucket.delete(keys.slice(i, i + 1000));
   }
 
+  /** Delete `folder` and everything under it, however many files; answers how many went. */
+  async deleteFolder(folder: string): Promise<number> {
+    // Always end the prefix with "/": deleting "uploads/q3" must never touch "uploads/q30".
+    const prefix = `${this.#objectKey(folder)}/`;
+    let deleted = 0;
+    // A page's keys are gone once deleted, so each listing starts again from the top.
+    for (;;) {
+      const page = await this.#bucket.list({ prefix, limit: 1000 });
+      if (page.objects.length === 0) return deleted;
+      await this.#bucket.delete(page.objects.map((object: R2Object) => object.key));
+      deleted += page.objects.length;
+    }
+  }
+
   #objectKey(path: string): string {
     return this.#prefix + normalisePath(path);
   }

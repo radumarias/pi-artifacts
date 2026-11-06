@@ -290,6 +290,14 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
   const openChatFile = useCallback((file: string) => chatFileBase && setPreview({ file, base: chatFileBase }), [chatFileBase]);
   const previewing = preview && "file" in preview ? preview : null;
   const closePreview = useCallback(() => setPreview(null), []);
+  // Deleted files leave the sidebar, and the preview when it shows one of them.
+  const onFilesDeleted = useCallback(
+    (gone: (path: string) => boolean) => {
+      loadFiles();
+      setPreview((shown) => (shown && "file" in shown && !shown.base && gone(shown.file) ? null : shown));
+    },
+    [loadFiles],
+  );
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
   const proposed = (skills ?? []).filter((s) => s.origin === "agent" && !s.enabled).length;
@@ -432,6 +440,7 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
             upload={upload}
             openFile={previewing && !previewing.base ? previewing.file : null}
             onOpenFile={openFile}
+            onDeleted={onFilesDeleted}
           />
           <AccountMenu label={label} onSignOut={onSignOut} />
         </aside>

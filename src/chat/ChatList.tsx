@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSummary } from "../../shared/protocol.ts";
 import { api } from "../api.ts";
-import { Icon } from "../Icon.tsx";
+import { TrashIcon } from "../Icon.tsx";
 import { useStoredState } from "../layout.tsx";
 import { useLatest, useVisible } from "../sidebar.ts";
 
@@ -187,9 +187,7 @@ export function ChatList({ chats, openId, navigate, onDelete, empty }: ChatListP
           {/* Only the owner can delete a chat; someone it is shared with leaves it from the chat's People panel. */}
           {!chat.sharedBy && (
             <button type="button" className="chat-delete" title="Delete chat" aria-label={`Delete chat ${chat.title}`} onClick={() => onDelete(chat.id)}>
-              <Icon size={15} box={24}>
-                <path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
-              </Icon>
+              <TrashIcon />
             </button>
           )}
         </div>

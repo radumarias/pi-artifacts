@@ -4,8 +4,9 @@ import { MAX_FILE_BYTES, MAX_LISTED, underUploads, uploadBatches, uploadTargets,
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
 import { UnreadDot } from "../chat/ChatList.tsx";
-import { Icon } from "../Icon.tsx";
+import { Icon, TrashIcon } from "../Icon.tsx";
 import { isBoolean, opensElsewhere, SectionHead, useStoredState } from "../layout.tsx";
+import { DeleteFiles, isDoomed, type Doomed } from "./DeleteFiles.tsx";
 import { fromInput, type Picked } from "./pick.ts";
 import { fileMatcher, SEARCH_HELP } from "./search.ts";
 
@@ -122,6 +123,29 @@ interface Opening {
 
 const OpeningContext = createContext<Opening>({ open: null, onOpen: () => {} });
 
+/** Asks the user to confirm deleting some files and folders (DeleteFiles). */
+const DeletingContext = createContext<(doomed: Doomed) => void>(() => {});
+
+/** A file's or folder's delete button, which asks first. In a folder's summary, its click must not open or close the folder. */
+function DeleteButton({ path, kind }: { path: string; kind: Kind }) {
+  const ask = useContext(DeletingContext);
+  const name = baseName(path) + (kind === "folder" ? "/" : "");
+  return (
+    <button
+      type="button"
+      className="file-action file-delete"
+      title={`Delete ${name}`}
+      aria-label={`Delete ${name}`}
+      onClick={(event) => {
+        event.preventDefault();
+        ask(kind === "folder" ? { files: [], folders: [path] } : { files: [path], folders: [] });
+      }}
+    >
+      <TrashIcon stroke={2.4} />
+    </button>
+  );
+}
+
 /**
  * A file's name, which opens it in the preview beside the chat; with a modifier key, or from the context menu,
  * it opens in a tab of its own, as the browser shows it (a file the preview reads as text then downloads).
@@ -187,17 +211,20 @@ const FolderView = memo(function FolderView({ folder, depth, expand }: { folder:
             <summary title={sub.path}>
               <Pick path={sub.path} kind="folder" />
               {sub.name}/ <small>{sub.count}</small>
-              {/* Without an href when the folder is too big to zip, so it says why and does nothing; without preventDefault its click would open or close the folder. */}
-              <a
-                className="file-action"
-                href={refusal ? undefined : api.folderZipUrl(sub.path)}
-                download={`${sub.name}.zip`}
-                title={refusal ?? `Download ${sub.name} as a zip`}
-                aria-disabled={!!refusal}
-                onClick={refusal ? (event) => event.preventDefault() : undefined}
-              >
-                <DownloadIcon />
-              </a>
+              <span className="file-actions">
+                {/* Without an href when the folder is too big to zip, so it says why and does nothing; without preventDefault its click would open or close the folder. */}
+                <a
+                  className="file-action"
+                  href={refusal ? undefined : api.folderZipUrl(sub.path)}
+                  download={`${sub.name}.zip`}
+                  title={refusal ?? `Download ${sub.name} as a zip`}
+                  aria-disabled={!!refusal}
+                  onClick={refusal ? (event) => event.preventDefault() : undefined}
+                >
+                  <DownloadIcon />
+                </a>
+                <DeleteButton path={sub.path} kind="folder" />
+              </span>
             </summary>
             <FolderView folder={sub} depth={depth + 1} expand={expand} />
           </details>
@@ -213,6 +240,7 @@ const FolderView = memo(function FolderView({ folder, depth, expand }: { folder:
             <a className="file-action" href={api.fileUrl(file.path)} download={name} title={`Download ${name}`}>
               <DownloadIcon />
             </a>
+            <DeleteButton path={file.path} kind="file" />
           </div>
         );
       })}
@@ -232,12 +260,14 @@ function SelectionBar({
   picked,
   error,
   onSubmit,
+  onDelete,
   onDone,
 }: {
   files: readonly FileInfo[];
   picked: ReadonlyMap<string, Kind>;
   error: string | null;
   onSubmit: () => void;
+  onDelete: () => void;
   onDone: () => void;
 }) {
   // What the zip would hold, from the sidebar's listing (the Worker checks again).
@@ -250,18 +280,38 @@ function SelectionBar({
   }, [files, picked]);
   // One file downloads as it does from the tree; anything else, one folder too, goes through the form and its checks.
   const [only] = picked.size === 1 ? [...picked].filter(([, kind]) => kind === "file") : [];
+  const count = picked.size ? `${picked.size} picked` : "Pick files and folders";
   return (
     <div className="files-selection">
-      <span>{picked.size ? `${picked.size} picked` : "Pick files and folders"}</span>
+      <span title={count}>{count}</span>
+      {/* Icons, as on each row: the bar has no room for two more words beside the count and Done. */}
       {only ? (
-        <a className="button" href={api.fileUrl(only[0])} download={baseName(only[0])}>
-          Download
+        <a className="button selection-icon" href={api.fileUrl(only[0])} download={baseName(only[0])} title={`Download ${baseName(only[0])}`}>
+          <DownloadIcon />
         </a>
       ) : (
-        <button type="submit" form="files-zip" disabled={!picked.size || !!refusal} title={refusal ?? "Download them as one zip"} onClick={onSubmit}>
-          Download
+        <button
+          type="submit"
+          form="files-zip"
+          className="selection-icon"
+          disabled={!picked.size || !!refusal}
+          title={refusal ?? "Download them as one zip"}
+          aria-label="Download the picked files as one zip"
+          onClick={onSubmit}
+        >
+          <DownloadIcon />
         </button>
       )}
+      <button
+        type="button"
+        className="selection-icon files-delete"
+        disabled={!picked.size}
+        title="Delete them, after you confirm"
+        aria-label="Delete the picked files"
+        onClick={onDelete}
+      >
+        <TrashIcon stroke={2.4} />
+      </button>
       <button type="button" onClick={onDone}>
         Done
       </button>
@@ -311,6 +361,7 @@ export const FilesNav = memo(function FilesNav({
   upload,
   openFile,
   onOpenFile,
+  onDeleted,
 }: {
   files: readonly FileInfo[];
   status: UploadStatus | null;
@@ -318,6 +369,8 @@ export const FilesNav = memo(function FilesNav({
   /** The file showing in the preview, marked in the tree. */
   openFile: string | null;
   onOpenFile: (path: string) => void;
+  /** Some files were deleted: those `gone` says. */
+  onDeleted: (gone: (path: string) => boolean) => void;
 }) {
   const [open, setOpen] = useStoredState("layout.filesOpen", false, isBoolean);
   // The last status the user saw with the panel open: one that went wrong while it was closed is marked on its head.
@@ -353,6 +406,13 @@ export const FilesNav = memo(function FilesNav({
     [picked],
   );
   const opening = useMemo<Opening>(() => ({ open: openFile, onOpen: onOpenFile }), [openFile, onOpenFile]);
+  // What the delete dialog asks about, while it is open.
+  const [doomed, setDoomed] = useState<Doomed | null>(null);
+  const deleted = (gone: Doomed) => {
+    // Picks that went are no longer picked; the rest stay.
+    setPicked((before) => before && new Map([...before].filter(([path]) => !isDoomed(gone, path))));
+    onDeleted((path) => isDoomed(gone, path));
+  };
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
     // Cleared, so picking the same files again (after changing them) uploads them again.
@@ -399,13 +459,22 @@ export const FilesNav = memo(function FilesNav({
                 ensureDownloadFrame();
                 setZipError(null);
               }}
+              onDelete={() => {
+                const all = [...picked];
+                setDoomed({
+                  files: all.filter(([, kind]) => kind === "file").map(([path]) => path),
+                  folders: all.filter(([, kind]) => kind === "folder").map(([path]) => path),
+                });
+              }}
               onDone={() => setPicked(null)}
             />
           )}
           <nav className="files">
             <OpeningContext.Provider value={opening}>
               <SelectionContext.Provider value={selection}>
-                <FolderView folder={root} depth={0} expand={!!search} />
+                <DeletingContext.Provider value={setDoomed}>
+                  <FolderView folder={root} depth={0} expand={!!search} />
+                </DeletingContext.Provider>
               </SelectionContext.Provider>
             </OpeningContext.Provider>
             {search && !root.matches && <small className="files-empty">No files match.</small>}
@@ -429,6 +498,7 @@ export const FilesNav = memo(function FilesNav({
               "Or drop files and folders anywhere."
             )}
           </small>
+          {doomed && <DeleteFiles doomed={doomed} files={files} onClose={() => setDoomed(null)} onDeleted={() => deleted(doomed)} />}
         </>
       )}
     </section>

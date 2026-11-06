@@ -5,6 +5,7 @@ import {
   FILE_ROUTE,
   MAX_FILE_BYTES,
   MAX_FILES_PER_UPLOAD,
+  MAX_LISTED,
   MAX_UPLOAD_BYTES,
   MAX_ZIP_BYTES,
   MAX_ZIP_FILES,
@@ -18,7 +19,7 @@ import {
 } from "../shared/uploads.ts";
 import { formatBytes } from "../shared/util.ts";
 import { PAGE_HEADERS, PAGE_POLICY } from "./artifacts/serve.ts";
-import { json } from "./http.ts";
+import { json, readJson } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
 import type { ByteRange, FileEntry, UserFiles } from "./storage/user-files.ts";
 import { zipStream } from "./zip.ts";
@@ -41,6 +42,7 @@ export async function filesRoute(request: Request, userFiles: () => Promise<User
   if (request.method === "POST" && pathname === ZIP_ROUTE) return serveSelection(request, await userFiles());
   if (pathname !== "/api/files") return undefined;
   if (request.method === "GET") return json(await (await userFiles()).list());
+  if (request.method === "DELETE") return deleteFiles(request, await userFiles());
   if (request.method !== "POST") return undefined;
   return storeUpload(request, userFiles);
 }
@@ -280,6 +282,30 @@ function zipResponse(files: UserFiles, root: string, paths: readonly string[]): 
   return new Response(zip, {
     headers: { ...SERVED_HEADERS, "content-type": "application/zip", "content-disposition": `attachment; filename="${name}.zip"` },
   });
+}
+
+/**
+ * Delete some of the user's files: a JSON body of `files` and `folders` (the sidebar's picks), each folder with
+ * everything under it. Answers how many files went. Only the signed-in user's own files: someone in a chat shared with
+ * them never deletes the owner's (those are served through the chat, read only). readJson takes only a JSON body, which
+ * another site cannot send without a CORS preflight, so it cannot delete a signed-in user's files.
+ */
+async function deleteFiles(request: Request, files: UserFiles): Promise<Response> {
+  if (Number(request.headers.get("content-length")) > MAX_SELECTION_FORM) return json({ error: "Too many files picked." }, 413);
+  const body = await readJson<{ files?: unknown; folders?: unknown }>(request);
+  const fields = (value: unknown) => (Array.isArray(value) ? value : null)?.map((path) => normalisePath(typeof path === "string" ? path : ""));
+  const picked = fields(body?.files ?? []);
+  const folders = fields(body?.folders ?? []);
+  if (!body || !picked || !folders) return json({ error: "Expected a JSON body of files and folders." }, 400);
+  if (picked.length + folders.length === 0) return json({ error: "Pick at least one file or folder." }, 400);
+  if (picked.length + folders.length > MAX_LISTED) return json({ error: "Too many files picked." }, 413);
+  // A folder inside another picked one goes with it.
+  const top = [...new Set(folders)].filter((folder, _, all) => !all.some((other) => folder.startsWith(`${other}/`)));
+  const loose = [...new Set(picked)].filter((path) => !top.some((folder) => path.startsWith(`${folder}/`)));
+  await files.delete(loose);
+  let deleted = loose.length;
+  for (const folder of top) deleted += await files.deleteFolder(folder);
+  return json({ deleted });
 }
 
 function tooBig(): string {

@@ -362,3 +362,58 @@ describe("uploads into someone else's files", () => {
     expect(await (await files.get("uploads/budget.xlsx"))!.text()).toBe("");
   });
 });
+
+describe("deleting files", () => {
+  const bucket = () => {
+    const b = new FakeBucket();
+    b.objects.set("users/ada/files/uploads/q3/sales.csv", "a");
+    b.objects.set("users/ada/files/uploads/q3/2024/old.csv", "b");
+    b.objects.set("users/ada/files/uploads/q30/other.csv", "c");
+    b.objects.set("users/ada/files/out/c1/report.md", "d");
+    b.objects.set("users/ada/files/out/c1/chart.png", "e");
+    b.objects.set("users/bob/files/uploads/q3/secret.csv", "bob's");
+    return b;
+  };
+  const remove = async (b: FakeBucket, body: unknown, contentType = "application/json") => {
+    const files = new UserFiles(b.r2, "ada", await deriveUserKey(MASTER, "ada"));
+    const request = new Request("https://app.test/api/files", {
+      method: "DELETE",
+      headers: { "content-type": contentType },
+      body: JSON.stringify(body),
+    });
+    return (await filesRoute(request, async () => files))!;
+  };
+  const left = (b: FakeBucket) => [...b.objects.keys()].sort();
+
+  it("deletes picked files and folders, everything under a folder and nothing beside it, only the user's", async () => {
+    const b = bucket();
+    const response = await remove(b, { files: ["out/c1/report.md", "uploads/q3/sales.csv"], folders: ["uploads/q3"] });
+    expect(response.status).toBe(200);
+    // sales.csv is in the picked folder: counted once.
+    expect(await response.json()).toEqual({ deleted: 3 });
+    expect(left(b)).toEqual(["users/ada/files/out/c1/chart.png", "users/ada/files/uploads/q30/other.csv", "users/bob/files/uploads/q3/secret.csv"]);
+  });
+
+  it("deletes a folder of more files than one listing holds", async () => {
+    const b = new FakeBucket();
+    for (let i = 0; i < 2_500; i++) b.objects.set(`users/ada/files/out/big/${i}.txt`, "x");
+    b.objects.set("users/ada/files/out/keep.txt", "x");
+    expect(await (await remove(b, { folders: ["out/big"] })).json()).toEqual({ deleted: 2_500 });
+    expect(left(b)).toEqual(["users/ada/files/out/keep.txt"]);
+  });
+
+  it("refuses an empty pick, a path that climbs or names every file, and a body that is not JSON, deleting nothing", async () => {
+    const b = bucket();
+    expect((await remove(b, { files: [], folders: [] })).status).toBe(400);
+    expect((await remove(b, { files: "uploads/q3/sales.csv" })).status).toBe(400);
+    // A form another site could post is not read.
+    expect((await remove(b, { files: ["uploads/q3/sales.csv"] }, "text/plain")).status).toBe(400);
+    await expect(remove(b, { folders: ["../bob/files"] })).rejects.toThrow(/not allowed|Invalid/);
+    await expect(remove(b, { folders: [""] })).rejects.toThrow(/empty/);
+    await expect(remove(b, { folders: ["/"] })).rejects.toThrow(/relative/);
+    await expect(remove(b, { folders: [{}] })).rejects.toThrow(/empty/);
+    // A bad path anywhere in the pick stops it all.
+    await expect(remove(b, { files: ["uploads/q3/sales.csv", "../x"] })).rejects.toThrow(/not allowed|Invalid/);
+    expect(left(b)).toEqual(left(bucket()));
+  });
+});
