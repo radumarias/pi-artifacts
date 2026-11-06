@@ -48,14 +48,18 @@ export async function dictationRoute(request: Request, env: DictationEnv, uid: s
   if (seconds < 0.1) return json({ text: "" });
 
   const language = dictationLanguage(new URL(request.url).searchParams.get("lang"));
+  let text: string;
   try {
-    const text = await transcribe(env.AI, model, audio, language);
-    await ledger.recordDictation(seconds);
-    return json({ text });
+    text = await transcribe(env.AI, model, audio, language);
   } catch (error) {
     console.error("dictation failed", error);
     return json({ error: `Dictation failed: ${errorMessage(error)}` }, 502);
   }
+  // The text is paid for already: a count that fails is logged, not the clip lost.
+  await Promise.resolve()
+    .then(() => ledger.recordDictation(seconds))
+    .catch((error) => console.error("dictation not counted", error));
+  return json({ text });
 }
 
 /** The text a speech-to-text model on Workers AI heard in a WAV clip. Silence (cut by its voice filter) is "". */

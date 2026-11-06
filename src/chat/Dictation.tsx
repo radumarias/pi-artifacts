@@ -83,13 +83,16 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string>();
   const session = useRef<Session>(undefined);
-  useEffect(
-    () => () => {
+  const mounted = useRef(false);
+  useEffect(() => {
+    // Set here, not at first render: React's development mode unmounts and mounts again.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       session.current?.abort();
       session.current = undefined;
-    },
-    [],
-  );
+    };
+  }, []);
   if (!Recognition && !canRecord) return null;
 
   const lang = navigator.language;
@@ -115,8 +118,9 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     };
     next.onerror = (event) => {
       if (session.current !== next) return;
-      // No service or no model here: record for the Worker instead, now and for the rest of the visit.
-      if (fallsBackToServer(event.error) && canRecord) {
+      // No service or no model here: record for the Worker instead, now and for the rest of the visit. Offline, the
+      // Worker cannot be reached either, and the browser's service may work again once back online.
+      if (fallsBackToServer(event.error) && canRecord && navigator.onLine) {
         browserFailed = true;
         next.abort();
         void startServer();
@@ -155,7 +159,14 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     if (controller.signal.aborted) return release();
 
     const chunks: Blob[] = [];
-    recorder = new MediaRecorder(stream);
+    try {
+      recorder = new MediaRecorder(stream);
+      recorder.start();
+    } catch (failed) {
+      release();
+      if (session.current === handle) setError(micError(failed));
+      return finish(handle);
+    }
     recorder.ondataavailable = (event) => {
       if (event.data.size) chunks.push(event.data);
     };
@@ -164,7 +175,8 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     recorder.onstop = async () => {
       clearTimeout(timer);
       release();
-      if (controller.signal.aborted) return;
+      // Stopped before anything was recorded: nothing to write out.
+      if (controller.signal.aborted || !chunks.length) return finish(handle);
       setPhase("transcribing");
       try {
         const wav = await clipToWav(new Blob(chunks, { type: recorder!.mimeType }));
@@ -176,7 +188,6 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
         finish(handle);
       }
     };
-    recorder.start();
     setPhase("listening");
   };
 
@@ -186,6 +197,8 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     setError(undefined);
     setPhase("starting");
     const local = !browserFailed && Recognition ? await localStatus(lang) : undefined;
+    // Closed while the browser was asked: start nothing that no cleanup would stop.
+    if (!mounted.current) return;
     const engine = pickEngine({ recognition: !!Recognition, local, browserFailed, record: canRecord });
     if (engine === "server") void startServer();
     else startBrowser(engine === "local");

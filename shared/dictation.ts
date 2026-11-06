@@ -77,8 +77,24 @@ export function wavSeconds(bytes: Uint8Array): number | string {
   return "The WAV file has no audio data.";
 }
 
-/** The language Whisper is told the clip is in, from a BCP 47 tag ("en-GB" → "en"); undefined lets it detect it. */
+/** The languages Whisper knows, by its own codes: it refuses a clip told any other. */
+const WHISPER_LANGUAGES = new Set(
+  (
+    "en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy " +
+    "sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi " +
+    "lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue"
+  ).split(" "),
+);
+
+/** BCP 47 languages Whisper knows under another code. */
+const WHISPER_ALIASES: Record<string, string> = { nb: "no", fil: "tl", jv: "jw", iw: "he", in: "id" };
+
+/**
+ * The language Whisper is told the clip is in, from a BCP 47 tag ("en-GB" → "en", "nb-NO" → "no"); undefined, which
+ * lets it detect it, for one it does not know.
+ */
 export function dictationLanguage(tag: string | null | undefined): string | undefined {
-  const language = tag?.split("-")[0]?.toLowerCase();
-  return language && /^[a-z]{2,3}$/.test(language) ? language : undefined;
+  const base = tag?.split("-")[0]?.toLowerCase() ?? "";
+  const language = WHISPER_ALIASES[base] ?? base;
+  return WHISPER_LANGUAGES.has(language) ? language : undefined;
 }

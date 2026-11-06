@@ -40,6 +40,9 @@ describe("dictation WAV", () => {
   it("tells Whisper the language, or nothing", () => {
     expect(dictationLanguage("en-GB")).toBe("en");
     expect(dictationLanguage("RO")).toBe("ro");
+    expect(dictationLanguage("nb-NO")).toBe("no");
+    expect(dictationLanguage("fil-PH")).toBe("tl");
+    expect(dictationLanguage("ast-ES")).toBeUndefined();
     expect(dictationLanguage("")).toBeUndefined();
     expect(dictationLanguage("x-klingon")).toBeUndefined();
     expect(dictationLanguage(null)).toBeUndefined();
