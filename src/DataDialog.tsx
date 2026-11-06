@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, formatBytes, plural } from "../shared/util.ts";
 import { download, exportData, exportName, type Progress } from "./data/export.ts";
-import { importData, type ImportReport } from "./data/import.ts";
+import { importData, KINDS, type ImportReport } from "./data/import.ts";
 import { Icon } from "./Icon.tsx";
 
 /** What the dialog is for: taking everything out as a zip, or bringing a zip in. */
@@ -44,7 +44,7 @@ export function DataDialog({ mode, onClose }: { mode: DataMode; onClose: () => v
 
   const startExport = () =>
     run(async () => {
-      const { zip } = await exportData(setProgress);
+      const zip = await exportData(setProgress);
       const name = exportName();
       setExported({ zip, name });
       download(zip, name);
@@ -121,7 +121,6 @@ function ProgressBar({ progress }: { progress: Progress }) {
   );
 }
 
-const KINDS = ["chats", "artifacts", "files", "skills"] as const;
 const NOUNS: Record<(typeof KINDS)[number], string> = { chats: "chat", artifacts: "artifact", files: "file", skills: "skill" };
 
 function ImportSummary({ report }: { report: ImportReport }) {

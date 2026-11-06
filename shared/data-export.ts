@@ -58,6 +58,9 @@ export interface ExportedAccount {
   pageValues: ExportedPageValues[];
 }
 
+/** The settings an import sets, each only where the user has none of their own. */
+export type ImportedSettings = Pick<ExportedAccount, "systemPrompt" | "model" | "builtinSkillsOff">;
+
 export interface ExportedChat {
   id: string;
   title: string;
@@ -116,10 +119,20 @@ export interface ChatDumpCursor {
   after: number;
 }
 
-/** GET /api/me/export/chats/:id: one part, and where the next starts (none after the last). */
+/** One part, and where the next starts (none after the last). GET /api/me/export/chats/:id answers with the part, and the cursor in NEXT_PART_HEADER. */
 export interface ChatDumpPage {
   part: ChatDumpPart;
   next?: ChatDumpCursor;
+}
+
+/** The header that says where a chat's next part starts, as `<table>.<after>`; none after the last part. */
+export const NEXT_PART_HEADER = "x-next-part";
+
+export const formatCursor = ({ table, after }: ChatDumpCursor) => `${table}.${after}`;
+
+export function parseCursor(value: string | null): ChatDumpCursor | undefined {
+  const [table, after, ...rest] = (value ?? "").split(".").map(Number);
+  return value && !rest.length && Number.isSafeInteger(table) && Number.isSafeInteger(after) && table >= 0 && after >= 0 ? { table, after } : undefined;
 }
 
 /** GET /api/me/export/skills/:name: a skill's files, base64. */

@@ -1,9 +1,12 @@
-import { ARCHIVE, checkManifest, MAX_IMPORT_FILE_BYTES, type ExportManifest } from "../../shared/data-export.ts";
+import { ARCHIVE, checkManifest, MAX_IMPORT_FILE_BYTES, type ExportedArtifact, type ExportedChat } from "../../shared/data-export.ts";
 import type { ArtifactMeta } from "../../shared/protocol.ts";
-import { readZipFile, zipDirectory, type ZipSource } from "../../shared/unzip.ts";
+import { readZipFile, storedRange, zipDirectory, type ZipItem, type ZipSource } from "../../shared/unzip.ts";
 import { errorMessage, formatBytes, mapLimit, toBase64 } from "../../shared/util.ts";
-import { dataApi } from "../api.ts";
+import { dataApi, type DraftJson } from "../api.ts";
 import type { Progress } from "./export.ts";
+
+export const KINDS = ["chats", "artifacts", "files", "skills"] as const;
+type Kind = (typeof KINDS)[number];
 
 /** What an import did: how many of each kind went in, how many were here already, and what failed, with why. */
 export interface ImportReport {
@@ -14,14 +17,15 @@ export interface ImportReport {
   settings: string[];
 }
 
-type Kind = "chats" | "artifacts" | "files" | "skills";
-
 const PARALLEL = 4;
+const FILES = ARCHIVE.file("");
 
 /** A file the browser reads from disk, a part at a time. */
 export function fileSource(file: Blob): ZipSource {
   return { size: file.size, read: async (start, end) => new Uint8Array(await file.slice(start, end).arrayBuffer()) };
 }
+
+const counts = () => Object.fromEntries(KINDS.map((kind) => [kind, 0])) as Record<Kind, number>;
 
 /**
  * Bring an export (shared/data-export.ts) into the signed-in user's account, a piece at a time: settings, skills,
@@ -32,7 +36,12 @@ export function fileSource(file: Blob): ZipSource {
 export async function importData(zip: Blob, onProgress: (progress: Progress) => void): Promise<ImportReport> {
   const source = fileSource(zip);
   const items = new Map((await zipDirectory(source)).map((item) => [item.name, item]));
-  const read = async (name: string): Promise<Uint8Array<ArrayBuffer> | null> => {
+  /** An entry as a blob: a stored one (as exports are) is a slice of the zip, read from disk only as it is sent. */
+  const blobOf = async (item: ZipItem): Promise<Blob> => {
+    const range = await storedRange(source, item);
+    return range ? zip.slice(...range) : new Blob([await readZipFile(source, item)]);
+  };
+  const read = async (name: string) => {
     const item = items.get(name);
     return item ? readZipFile(source, item) : null;
   };
@@ -40,28 +49,25 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
     const bytes = await read(name);
     return bytes && (JSON.parse(new TextDecoder().decode(bytes)) as T);
   };
-  const checked = checkManifest(await readJson(ARCHIVE.manifest).catch(() => null));
-  if ("error" in checked) throw new Error(checked.error);
-  const manifest: ExportManifest = checked;
+  const manifest = checkManifest(await readJson(ARCHIVE.manifest).catch(() => null));
+  if ("error" in manifest) throw new Error(manifest.error);
 
-  const report: ImportReport = {
-    imported: { chats: 0, artifacts: 0, files: 0, skills: 0 },
-    skipped: { chats: 0, artifacts: 0, files: 0, skills: 0 },
-    failed: [],
-    settings: [],
-  };
-  const fileItems = [...items.values()].filter((item) => item.name.startsWith("files/"));
-  const steps = { done: 0, total: 3 + manifest.account.skills.length + fileItems.length + manifest.chats.length + manifest.artifacts.length };
+  const report: ImportReport = { imported: counts(), skipped: counts(), failed: [], settings: [] };
+  const fileItems = [...items.values()].filter((item) => item.name.startsWith(FILES));
+  const steps = { done: 0, total: 2 + manifest.account.skills.length + fileItems.length + manifest.chats.length + manifest.artifacts.length };
   const step = (now: string) => onProgress({ ...steps, now });
-  /** Run one step: its failure is reported under `what`, and the import goes on. */
-  const attempt = async (what: string, run: () => Promise<void>) => {
+  /** Run one step: its failure is reported under `what`, and the import goes on. Whether it went in. */
+  const attempt = async (what: string, run: () => Promise<void>): Promise<boolean> => {
     step(what);
     try {
       await run();
+      return true;
     } catch (error) {
       report.failed.push(`${what}: ${errorMessage(error)}`);
+      return false;
+    } finally {
+      steps.done++;
     }
-    steps.done++;
   };
 
   const plan = await dataApi.plan({ chats: manifest.chats.map((chat) => chat.id), artifacts: manifest.artifacts.map(({ id, chatId }) => ({ id, chatId })) });
@@ -87,46 +93,42 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
     });
   }
 
-  await mapLimit(fileItems, PARALLEL, (item) =>
-    attempt(item.name.slice("files/".length), async () => {
+  await mapLimit(fileItems, PARALLEL, (item) => {
+    const path = item.name.slice(FILES.length);
+    return attempt(path, async () => {
       if (item.size > MAX_IMPORT_FILE_BYTES) throw new Error(`over ${formatBytes(MAX_IMPORT_FILE_BYTES)}, the most one file can be`);
-      const { skipped } = await dataApi.importFile(item.name.slice("files/".length), new Blob([await readZipFile(source, item)]));
+      const { skipped } = await dataApi.importFile(path, await blobOf(item));
       report[skipped ? "skipped" : "imported"].files++;
-    }),
-  );
+    });
+  });
 
-  // A chat, then its artifacts: an artifact goes only into a chat the user has.
-  const imported = new Set<string>();
-  for (const chat of manifest.chats) {
-    await attempt(`Chat “${chat.title}”`, async () => {
+  const importChat = (chat: ExportedChat) =>
+    attempt(`Chat “${chat.title}”`, async () => {
       if (plan.chats[chat.id] === "exists") {
         report.skipped.chats++;
-        imported.add(chat.id);
         return;
       }
       await dataApi.importChatBegin(chat.id, { from: manifest.uid, artifacts: moved });
       for (let n = 1; n <= chat.parts; n++) {
-        const part = await read(ARCHIVE.chatPart(chat.id, n));
-        if (!part) throw new Error(`the zip lacks part ${n} of it`);
-        await dataApi.importChatPart(chat.id, new Blob([part]));
+        const item = items.get(ARCHIVE.chatPart(chat.id, n));
+        if (!item) throw new Error(`the zip lacks part ${n} of it`);
+        await dataApi.importChatPart(chat.id, await blobOf(item));
       }
-      const drafts = await readJson<Record<string, unknown>[]>(ARCHIVE.chatDrafts(chat.id));
+      const drafts = await readJson<DraftJson[]>(ARCHIVE.chatDrafts(chat.id));
       if (drafts?.length) {
         const mapped = drafts.map((draft) => (typeof draft.artifactId === "string" ? { ...draft, artifactId: newId(draft.artifactId) } : draft));
         await dataApi.importChatDrafts(chat.id, mapped);
       }
       await dataApi.importChatFinish(chat.id, chat);
       report.imported.chats++;
-      imported.add(chat.id);
     });
-  }
 
-  for (const artifact of manifest.artifacts) {
-    await attempt(`Artifact “${artifact.title}”`, async () => {
+  const importArtifact = (artifact: ExportedArtifact, chatHere: boolean) =>
+    attempt(`Artifact “${artifact.title}”`, async () => {
       const target = plan.artifacts[artifact.id];
       if (!target) throw new Error("not planned");
       if ("error" in target) throw new Error(target.error);
-      if (!imported.has(artifact.chatId)) throw new Error("its chat was not imported");
+      if (!chatHere) throw new Error("its chat was not imported");
       const meta = await readJson<ArtifactMeta>(ARCHIVE.artifactMeta(artifact.id));
       if (!meta) throw new Error("the zip lacks it");
       const missing = meta.versions.filter((version) => version.version > target.latest);
@@ -147,12 +149,21 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
       }
       report.imported.artifacts++;
     });
-  }
+
+  // Each chat, then its artifacts: an artifact goes only into a chat the user has. Chats side by side.
+  const byChat = new Map<string, ExportedArtifact[]>();
+  for (const artifact of manifest.artifacts) byChat.set(artifact.chatId, [...(byChat.get(artifact.chatId) ?? []), artifact]);
+  await mapLimit(manifest.chats, PARALLEL, async (chat) => {
+    const here = await importChat(chat);
+    for (const artifact of byChat.get(chat.id) ?? []) await importArtifact(artifact, here);
+    byChat.delete(chat.id);
+  });
+  for (const artifact of [...byChat.values()].flat()) await importArtifact(artifact, false);
 
   await attempt("What pages saved", async () => {
     const values = manifest.account.pageValues.map((entry) => ({ ...entry, artifactId: newId(entry.artifactId) }));
     if (values.length) await dataApi.importPageValues(values);
   });
-  await attempt("Done", async () => {});
+  onProgress({ ...steps, now: "Done" });
   return report;
 }

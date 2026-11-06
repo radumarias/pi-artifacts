@@ -116,17 +116,21 @@ export class ArtifactStore {
       createdToken = (await this.#repos.create(repoName(meta.id), { description: input.title, setDefaultBranch: BRANCH })).token;
     }
 
-    const version = meta.latest + 1;
-    const message = input.message?.trim().split("\n")[0].slice(0, 200) || undefined;
-    meta = {
-      ...meta,
-      title: input.title,
-      updatedAt: now,
-      latest: version,
-      versions: [...meta.versions, { version, publishedAt: now, manifest: input.manifest, ...(message ? { message } : {}) }],
+    return this.#addVersion(meta, input.title, { version: meta.latest + 1, publishedAt: now, manifest: input.manifest, message: input.message }, input.html, createdToken);
+  }
+
+  /** Commit `version` after the ones `meta` has, push it, and cache it. Its message is cut to its first line. */
+  async #addVersion(before: ArtifactMeta, title: string, version: ArtifactVersion, html: string, createdToken?: string): Promise<ArtifactMeta> {
+    const message = version.message?.trim().split("\n")[0].slice(0, 200) || undefined;
+    const meta: ArtifactMeta = {
+      ...before,
+      title,
+      updatedAt: version.publishedAt,
+      latest: version.version,
+      versions: [...before.versions, { version: version.version, publishedAt: version.publishedAt, manifest: version.manifest, ...(message && { message }) }],
     };
-    await this.#commit(meta, input.html, now, createdToken);
-    await Promise.all([this.#cacheHtml(meta.id, version, input.html), this.#cacheMeta(meta)]);
+    await this.#commit(meta, html, version.publishedAt, createdToken);
+    await Promise.all([this.#cacheHtml(meta.id, version.version, html), this.#cacheMeta(meta)]);
     return meta;
   }
 
@@ -137,32 +141,21 @@ export class ArtifactStore {
    * version out of order.
    */
   async importVersion(input: { id: string; ownerUid: string; chatId: string; title: string; createdAt: number; version: ArtifactVersion; html: string }): Promise<ArtifactMeta> {
-    const { id, version } = input;
-    const existing = await this.#readRepoMeta(id);
-    if (existing && !isOwnedBy(existing, input.ownerUid, input.chatId)) throw new ArtifactImportError(`Artifact ${id} belongs to another chat here.`);
+    const { id, ownerUid, chatId, version } = input;
+    // One published before repos has only its read cache: it is replayed into a repo first, as a publish does.
+    const existing = (await this.#readRepoMeta(id)) ?? (await this.#importFromCache(id, ownerUid, chatId));
+    if (existing && !isOwnedBy(existing, ownerUid, chatId)) throw new ArtifactImportError(`Artifact ${id} belongs to another chat here.`);
     if (existing && existing.latest >= version.version) return existing;
-    if ((existing?.latest ?? 0) + 1 !== version.version) throw new ArtifactImportError(`Artifact ${id} needs version ${(existing?.latest ?? 0) + 1} before ${version.version}.`);
+    const next = (existing?.latest ?? 0) + 1;
+    if (next !== version.version) throw new ArtifactImportError(`Artifact ${id} needs version ${next} before ${version.version}.`);
     let createdToken: string | undefined;
     if (!existing) {
-      // Not someone else's either, in the read cache only (published before repos): that would be served as this one.
-      const cached = await this.#cache.get(metaKey(id));
-      if (cached && !isOwnedBy((await cached.json()) as ArtifactMeta, input.ownerUid, input.chatId)) throw new ArtifactImportError(`Artifact ${id} belongs to another chat here.`);
       // A repo without artifact.json holds nothing yet (an import that stopped before its first push): start it again.
       await this.#repos.delete(repoName(id)).catch(() => false);
       createdToken = (await this.#repos.create(repoName(id), { description: input.title, setDefaultBranch: BRANCH })).token;
     }
-    const before = existing ?? { id, title: input.title, ownerUid: input.ownerUid, chatId: input.chatId, createdAt: input.createdAt, updatedAt: input.createdAt, latest: 0, versions: [] };
-    const { version: n, publishedAt, manifest, message } = version;
-    const meta: ArtifactMeta = {
-      ...before,
-      title: input.title,
-      updatedAt: publishedAt,
-      latest: n,
-      versions: [...before.versions, { version: n, publishedAt, manifest, ...(message && { message: message.slice(0, 200) }) }],
-    };
-    await this.#commit(meta, input.html, publishedAt, createdToken);
-    await Promise.all([this.#cacheHtml(id, n, input.html), this.#cacheMeta(meta)]);
-    return meta;
+    const before = existing ?? { id, title: input.title, ownerUid, chatId, createdAt: input.createdAt, updatedAt: input.createdAt, latest: 0, versions: [] };
+    return this.#addVersion(before, input.title, version, input.html, createdToken);
   }
 
   /**

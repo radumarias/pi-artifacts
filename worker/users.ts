@@ -1,7 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelSetting } from "../shared/models.ts";
 import { PAGE_STORAGE_LIMITS, SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type MentionNotice, type SidebarList } from "../shared/protocol.ts";
-import type { ExportedAccount, ExportedArtifact, ExportedChat, ExportedPageValues, ExportedSkill } from "../shared/data-export.ts";
+import type { ExportedChat, ExportedPageValues, ExportedSkill, ExportStart, ImportedSettings } from "../shared/data-export.ts";
 import type { SkillFileInfo } from "../shared/skill-files.ts";
 import { checkSystemPrompt, type ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
@@ -579,7 +579,7 @@ export class UserDirectory extends DurableObject<Env> {
    * saved for them, their own chats and artifacts, and by name the chats others shared with them. Not their sign-ins
    * to MCP servers (tokens, which belong to this deployment), nor what their pages' model calls cost.
    */
-  exportAccount(): { account: ExportedAccount; chats: Omit<ExportedChat, "parts">[]; artifacts: ExportedArtifact[]; sharedWithMe: { title: string; ownerName: string }[] } {
+  exportAccount(): Pick<ExportStart, "account" | "chats" | "artifacts" | "sharedWithMe"> {
     const sql = this.ctx.storage.sql;
     const values = new Map<string, Record<string, string | null>>();
     for (const row of sql.exec<{ artifact_id: string; key: string; value: string | null }>("SELECT artifact_id, key, value FROM page_values ORDER BY artifact_id, key")) {
@@ -617,7 +617,7 @@ export class UserDirectory extends DurableObject<Env> {
    * An import's settings, each only where this user has none of their own yet: an import adds to what is here, never
    * over it. Built-in skills turned off there are turned off here too. Returns what it set.
    */
-  importSettings(input: Pick<ExportedAccount, "systemPrompt" | "model" | "builtinSkillsOff">): string[] {
+  importSettings(input: ImportedSettings): string[] {
     const applied: string[] = [];
     if (input.systemPrompt && !readSystemPrompt(this.ctx.storage.kv) && !("error" in saveSystemPrompt(this.ctx.storage.kv, input.systemPrompt))) applied.push("system prompt");
     // The chat that reads it checks it against the models this deployment has (ChatAgent.#savedModel).
@@ -650,10 +650,30 @@ export class UserDirectory extends DurableObject<Env> {
     this.#changed("chats");
   }
 
-  /** Keep what a page saved for this user, as an import brings it: only for a page that has saved nothing for them here. */
-  importPageValues(artifactId: string, values: Record<string, string | null>): boolean {
-    if (Object.keys(this.pageValues(artifactId)).length) return false;
-    return "ok" in this.writePageValues(artifactId, values, false);
+  /**
+   * Keep what pages saved for this user, as an import brings it: only for a page that has saved nothing for them here,
+   * and within PAGE_STORAGE_LIMITS. Returns how many pages' values it kept.
+   */
+  importPageValues(pages: readonly ExportedPageValues[]): number {
+    let kept = 0;
+    for (const { artifactId, values } of pages) {
+      if (!Object.keys(this.pageValues(artifactId)).length && "ok" in this.writePageValues(artifactId, values, false)) kept++;
+    }
+    return kept;
+  }
+
+  /** Which of `ids` are this user's own chats. */
+  ownChats(ids: readonly string[]): string[] {
+    return ids.filter((id) => this.hasChat(id));
+  }
+
+  /** This user's artifacts among `ids`, with the chat each is in and its latest version. */
+  ownArtifacts(ids: readonly string[]): Pick<ArtifactRow, "id" | "chat_id" | "latest">[] {
+    const wanted = new Set(ids);
+    return this.ctx.storage.sql
+      .exec<ArtifactRow>("SELECT id, chat_id, latest FROM artifacts")
+      .toArray()
+      .filter((row) => wanted.has(row.id));
   }
 
   /** Save the user's system prompt; their chats use it from their next message on. */

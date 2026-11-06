@@ -106,7 +106,7 @@ const SERVED_HEADERS = {
  * so a listing's paths start with it and its last segment is safe in a header.
  * Throws PathError (a 400) for anything a user file path may not be.
  */
-function urlPath(encoded: string): string {
+export function urlPath(encoded: string): string {
   let path: string;
   try {
     path = encoded.split("/").map(decodeURIComponent).join("/");

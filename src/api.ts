@@ -1,17 +1,17 @@
 import type {
   ArtifactVersionImport,
   ChatDumpCursor,
-  ChatDumpPage,
   ChatImportStart,
   ExportedChat,
   ExportedPageValues,
   ExportedSkill,
   ExportedSkillFiles,
-  ExportManifest,
   ExportStart,
+  ImportedSettings,
   ImportPlan,
   ImportPlanRequest,
 } from "../shared/data-export.ts";
+import { formatCursor, NEXT_PART_HEADER, parseCursor } from "../shared/data-export.ts";
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
@@ -230,19 +230,31 @@ export const api = {
 };
 
 /** Draft pages as an export carries them (worker/storage/drafts.ts Draft): JSON the import gives back as it came. */
-type DraftJson = Record<string, unknown>;
+/** A draft as the export holds it: as the Worker stores it (worker/storage/drafts.ts). */
+export type DraftJson = Record<string, unknown>;
+
+/** A GET's body as a blob, or null when it is not there (404); throws with the Worker's error otherwise. */
+export async function fetchBlob(url: string): Promise<{ blob: Blob; response: Response } | null> {
+  const response = await fetch(url);
+  if (response.status === 404) return null;
+  if (!response.ok) throw responseError(response, await response.json().catch(() => null));
+  return { blob: await response.blob(), response };
+}
 
 /** Export and import of everything the user has, a piece at a time (worker/data-routes.ts, src/data/). */
 export const dataApi = {
   exportStart: () => request<ExportStart>("/api/me/export"),
-  exportChatPart: (chatId: string, cursor?: ChatDumpCursor) =>
-    request<ChatDumpPage>(`/api/me/export/chats/${chatId}${cursor ? `?cursor=${cursor.table}.${cursor.after}` : ""}`),
+  /** One part of a chat's storage as its JSON (a ChatDumpPart), kept as a blob, and where the next part starts. */
+  exportChatPart: async (chatId: string, cursor?: ChatDumpCursor): Promise<{ part: Blob; next?: ChatDumpCursor }> => {
+    const fetched = await fetchBlob(`/api/me/export/chats/${chatId}${cursor ? `?cursor=${formatCursor(cursor)}` : ""}`);
+    if (!fetched) throw new Error("The chat is gone.");
+    return { part: fetched.blob, next: parseCursor(fetched.response.headers.get(NEXT_PART_HEADER)) };
+  },
   exportDrafts: (chatId: string) => request<DraftJson[]>(`/api/me/export/chats/${chatId}/drafts`),
   exportArtifact: (id: string) => request<ArtifactMeta>(`/api/me/export/artifacts/${id}`),
   exportSkillFiles: (name: string) => request<ExportedSkillFiles>(`/api/me/export/skills/${name}`),
   plan: (body: ImportPlanRequest) => request<ImportPlan>("/api/me/import/plan", post(body)),
-  importSettings: (account: Pick<ExportManifest["account"], "systemPrompt" | "model" | "builtinSkillsOff">) =>
-    request<{ applied: string[] }>("/api/me/import/account", post(account)),
+  importSettings: (settings: ImportedSettings) => request<{ applied: string[] }>("/api/me/import/account", post(settings)),
   importSkill: (skill: ExportedSkill, files: ExportedSkillFiles["files"]) => request<{ skipped?: string }>("/api/me/import/skills", post({ skill, files })),
   /** One file at its own path; `skipped` when there is one there already. */
   importFile: (path: string, body: Blob) => request<{ skipped?: true }>(`/api/me/import/files/${encodePath(path)}`, { method: "PUT", body }),

@@ -1,3 +1,4 @@
+import { CURRENT_SQLITE_SCHEMA_VERSION } from "@earendil-works/pi-durable/storage/sqlite";
 import { CHAT_PART_BYTES, type ChatDumpCursor, type ChatDumpPage, type ChatDumpPart, type SqlCell, type SqlRow } from "../shared/data-export.ts";
 import { fromBase64, toBase64 } from "../shared/util.ts";
 
@@ -102,6 +103,14 @@ function toCell(value: unknown): SqlCell {
 /** A part of an import that cannot be stored as it is. */
 export class DumpError extends Error {}
 
+/** Whether the chat object has a conversation: pi made its tables, which it does when the chat first opens. */
+export function hasConversation(sql: DumpSql): boolean {
+  return carriedTables(sql).some((name) => PI_TABLE.test(name));
+}
+
+/** pi-durable's own record of its schema's version: an export from a newer pi than this deployment's cannot be read here. */
+const PI_SCHEMA = "pi_durable_schema";
+
 /** Drop what an import that stopped part way wrote, so that it can start again: the carried tables' rows and the settings. */
 export function clearImported(sql: DumpSql, kv: DumpKv, kvKeys: readonly string[]): void {
   for (const name of carriedTables(sql)) {
@@ -130,6 +139,9 @@ export function restorePart(sql: DumpSql, kv: DumpKv, kvKeys: readonly string[],
       if (!columns.size) throw new DumpError(`The export has no schema for ${name}.`);
     }
     for (const row of rows) {
+      if (name === PI_SCHEMA && Number(row.version) > CURRENT_SQLITE_SCHEMA_VERSION) {
+        throw new DumpError("The chat comes from a newer version of the app; update this deployment first.");
+      }
       const names = Object.keys(row);
       const unknown = names.find((column) => !columns.has(column));
       if (unknown !== undefined || !names.length) throw new DumpError(`${name} has no column ${JSON.stringify(unknown ?? "")}.`);

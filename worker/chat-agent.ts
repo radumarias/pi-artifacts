@@ -84,7 +84,7 @@ import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtens
 import type { SandboxFile } from "./sandbox.ts";
 import { formatSkillFile } from "./skills/index.ts";
 import { ChatReactions } from "./reactions.ts";
-import { clearImported, DumpError, dumpChat, restorePart } from "./chat-dump.ts";
+import { clearImported, DumpError, dumpChat, hasConversation, restorePart } from "./chat-dump.ts";
 import { idRemapper, type ChatDumpCursor, type ChatDumpPage, type ChatDumpPart, type ChatImportStart } from "../shared/data-export.ts";
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
@@ -1698,12 +1698,11 @@ export class ChatAgent extends DurableObject<Env> {
   importBegin(start: ChatImportStart): ChatRefusal | null {
     const { sql, kv } = this.ctx.storage;
     const resuming = kv.get(IMPORTING_KEY) !== undefined;
-    const conversation = sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name LIKE 'pi\\_%' ESCAPE '\\'").toArray().length > 0;
-    if (!resuming && !this.#deleted() && conversation) return refuse(409, "This chat already has a conversation here.");
+    if (!resuming && !this.#deleted() && hasConversation(sql)) return refuse(409, "This chat already has a conversation here.");
     this.ctx.storage.transactionSync(() => {
       clearImported(sql, kv, EXPORTED_KV);
       kv.delete(GONE_KEY);
-      kv.put(IMPORTING_KEY, { from: start.from, artifacts: start.artifacts } satisfies ChatImportStart);
+      kv.put(IMPORTING_KEY, start);
     });
     this.#gone = false;
     return null;

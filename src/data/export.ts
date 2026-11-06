@@ -1,7 +1,7 @@
 import { ARCHIVE, type ExportedChat, type ExportManifest } from "../../shared/data-export.ts";
-import { fromBase64, mapLimit } from "../../shared/util.ts";
+import { fromBase64, mapLimit, memoAsync } from "../../shared/util.ts";
 import { zipStream, type ZipEntry } from "../../shared/zip.ts";
-import { api, dataApi } from "../api.ts";
+import { api, dataApi, fetchBlob } from "../api.ts";
 
 /** How far an export or import is: `done` of `total` steps, and what it is on now. */
 export interface Progress {
@@ -25,41 +25,41 @@ const blobEntry = (name: string, blob: () => Promise<Blob | null>, modified = ne
 });
 
 /** A piece's body, or null when it is gone (deleted since it was listed). */
-async function fetched(url: string): Promise<Blob | null> {
-  const response = await fetch(url);
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`${url} answered ${response.status}.`);
-  return response.blob();
-}
+const fetched = async (url: string) => (await fetchBlob(url))?.blob ?? null;
 
 /**
  * Everything the signed-in user has, as one zip (shared/data-export.ts ARCHIVE), read a piece at a time: first the
  * chats' storage and the artifacts' versions, which say how many more pieces there are, then the zip itself, each file
  * fetched when its turn comes. `onProgress` hears each step.
  */
-export async function exportData(onProgress: (progress: Progress) => void): Promise<{ zip: Blob; manifest: ExportManifest }> {
+export async function exportData(onProgress: (progress: Progress) => void): Promise<Blob> {
   const start = await dataApi.exportStart();
   const steps = { done: 0, total: start.chats.length + start.artifacts.length };
   const step = (now: string) => onProgress({ ...steps, now });
   const entries: ZipEntry[] = [];
 
-  const chats: ExportedChat[] = [];
-  for (const chat of start.chats) {
+  // Each chat's parts and drafts kept as blobs, which the browser may keep on disk, rather than as parsed JSON.
+  const chats = await mapLimit(start.chats, PARALLEL, async (chat): Promise<{ chat: ExportedChat; entries: ZipEntry[] }> => {
     step(`Chat “${chat.title}”`);
-    let parts = 0;
+    const parts: Blob[] = [];
     let page = await dataApi.exportChatPart(chat.id);
-    for (;;) {
-      // Kept as a blob, which the browser may keep on disk, rather than as parsed JSON.
-      const blob = jsonBlob(page.part);
-      entries.push(blobEntry(ARCHIVE.chatPart(chat.id, ++parts), async () => blob));
-      if (!page.next) break;
+    parts.push(page.part);
+    while (page.next) {
       page = await dataApi.exportChatPart(chat.id, page.next);
+      parts.push(page.part);
     }
     const drafts = await dataApi.exportDrafts(chat.id);
-    if (drafts.length) entries.push(blobEntry(ARCHIVE.chatDrafts(chat.id), async () => jsonBlob(drafts)));
-    chats.push({ ...chat, parts });
+    const draftsBlob = drafts.length ? jsonBlob(drafts) : null;
     steps.done++;
-  }
+    return {
+      chat: { ...chat, parts: parts.length },
+      entries: [
+        ...parts.map((part, i) => blobEntry(ARCHIVE.chatPart(chat.id, i + 1), async () => part)),
+        ...(draftsBlob ? [blobEntry(ARCHIVE.chatDrafts(chat.id), async () => draftsBlob)] : []),
+      ],
+    };
+  });
+  for (const chat of chats) entries.push(...chat.entries);
 
   const metas = await mapLimit(start.artifacts, PARALLEL, async (artifact) => {
     step(`Artifact “${artifact.title}”`);
@@ -79,8 +79,7 @@ export async function exportData(onProgress: (progress: Progress) => void): Prom
   // A skill's files come in one answer: read once, by whichever of its entries opens first.
   for (const skill of start.account.skills) {
     if (!skill.files?.length) continue;
-    let read: Promise<Map<string, Uint8Array<ArrayBuffer>>> | undefined;
-    const files = () => (read ??= dataApi.exportSkillFiles(skill.name).then(({ files }) => new Map(files.map((file) => [file.path, fromBase64(file.data)]))));
+    const files = memoAsync(async () => new Map((await dataApi.exportSkillFiles(skill.name)).files.map((file) => [file.path, fromBase64(file.data)])));
     for (const file of skill.files) {
       entries.push(
         blobEntry(ARCHIVE.skillFile(skill.name, file.path), async () => {
@@ -92,7 +91,7 @@ export async function exportData(onProgress: (progress: Progress) => void): Prom
   }
   for (const file of start.files) entries.push(blobEntry(ARCHIVE.file(file.path), () => fetched(api.fileUrl(file.path))));
 
-  const manifest: ExportManifest = { ...start, chats, artifacts };
+  const manifest: ExportManifest = { ...start, chats: chats.map((entry) => entry.chat), artifacts };
   entries.unshift(blobEntry(ARCHIVE.manifest, async () => jsonBlob(manifest)));
 
   // Now the zip: a step per entry, its files fetched as it gets to them.
@@ -111,7 +110,7 @@ export async function exportData(onProgress: (progress: Progress) => void): Prom
   );
   const zip = await new Response(zipStream(counted)).blob();
   onProgress({ ...steps, now: "Done" });
-  return { zip: new Blob([zip], { type: "application/zip" }), manifest };
+  return new Blob([zip], { type: "application/zip" });
 }
 
 /** Save `blob` as `name` in the browser's downloads. */

@@ -92,8 +92,27 @@ export async function zipDirectory(source: ZipSource): Promise<ZipItem[]> {
  * lies about it (a zip bomb) stops at that size rather than filling memory.
  */
 export async function readZipFile(source: ZipSource, item: ZipItem): Promise<Uint8Array<ArrayBuffer>> {
-  const { name, local, compressed, size, method } = item;
-  if (item.encrypted) throw new UnzipError(`"${name}" is encrypted; zip it without a password.`);
+  const start = await dataStart(source, item);
+  const raw = await source.read(start, start + item.compressed);
+  const bytes = item.method === STORED ? raw : await inflate(raw, item.size, item.name);
+  if (bytes.byteLength !== item.size) throw new UnzipError(`"${item.name}" is not the size the zip says.`);
+  return bytes;
+}
+
+/**
+ * Where a stored (not compressed) file's bytes lie in the zip, from and up to, so that they can be read as a part of
+ * it (Blob.slice) without a copy; null for a compressed one, which readZipFile unpacks. Refuses what readZipFile does.
+ */
+export async function storedRange(source: ZipSource, item: ZipItem): Promise<[number, number] | null> {
+  const start = await dataStart(source, item);
+  if (item.method !== STORED) return null;
+  if (item.compressed !== item.size) throw new UnzipError(`"${item.name}" is not the size the zip says.`);
+  return [start, start + item.size];
+}
+
+/** Where a file's data starts, past its local header, once it is one this reader can read. */
+async function dataStart(source: ZipSource, { name, local, compressed, method, encrypted }: ZipItem): Promise<number> {
+  if (encrypted) throw new UnzipError(`"${name}" is encrypted; zip it without a password.`);
   if (method !== STORED && method !== DEFLATED) throw new UnzipError(`"${name}" uses a compression zip tools rarely write; zip it again.`);
   if (local + 30 > source.size) throw new UnzipError(`"${name}" is damaged.`);
   const header = await source.read(local, local + 30);
@@ -101,10 +120,7 @@ export async function readZipFile(source: ZipSource, item: ZipItem): Promise<Uin
   if (view.getUint32(0, true) !== LOCAL) throw new UnzipError(`"${name}" is damaged.`);
   const start = local + 30 + view.getUint16(26, true) + view.getUint16(28, true);
   if (start + compressed > source.size) throw new UnzipError(`"${name}" is cut short.`);
-  const raw = await source.read(start, start + compressed);
-  const bytes = method === STORED ? raw : await inflate(raw, size, name);
-  if (bytes.byteLength !== size) throw new UnzipError(`"${name}" is not the size the zip says.`);
-  return bytes;
+  return start;
 }
 
 /** The files of a zip held in memory (see zipDirectory and readZipFile), within `limits`. */
