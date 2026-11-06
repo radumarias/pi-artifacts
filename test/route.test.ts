@@ -420,6 +420,8 @@ describe("a failed Auto pick", () => {
     expect(autoPickFailed({ ...pick, failed: "no router could pick: jev: 402" })).toBe(true);
     expect(autoPickFailed(pick)).toBe(true);
     expect(autoPickFailed({ ...pick, failed: "a reply was running", running: true })).toBe(false);
+    // Kept for a reply that started while a fallback router picked: the router that failed still shows.
+    expect(autoPickFailed({ ...pick, failed: "a reply was running", running: true, missed: "jev: 402" })).toBe(true);
     // Sent before picks said so with `running`.
     expect(autoPickFailed({ ...pick, failed: "a reply was still running when it was sent, so the router was not asked" })).toBe(false);
     expect(autoPickFailed({ ...pick, failed: "a reply started while the router picked, so the message went in on the model it runs on" })).toBe(false);

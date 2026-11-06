@@ -12,7 +12,7 @@ function pickedBy(name: string, ms: number, spend: RouterSpend): string {
 
 /**
  * A pick under a message: a tag and what was picked; its tooltip says why. A tap shows the same under it: phones have no
- * hover. When a call behind it failed (`failed`), a red dot before the tag says so while it is closed, and names it.
+ * hover. When a call behind it failed (`failed`), a red dot before the tag says so, seen without opening it; its label names it.
  */
 function PickChip({ tag, label, why, kept, failed }: { tag: string; label: string; why: string; kept?: boolean; failed?: boolean }) {
   return (
@@ -46,7 +46,9 @@ export const AutoPicked = memo(function AutoPicked({ pick }: { pick: AutoPick })
       ]
         .filter(Boolean)
         .join("\n")
-    : `The chat kept the model it was on.\nWhy: ${pick.failed ?? "no router could pick"}`;
+    : [`The chat kept the model it was on.`, `Why: ${pick.failed ?? "no router could pick"}`, pick.missed && `Failed before it: ${pick.missed}`]
+        .filter(Boolean)
+        .join("\n");
   return <PickChip tag="Auto" label={router ? label : `kept ${label}`} why={why} kept={!router} failed={autoPickFailed(pick)} />;
 });
 

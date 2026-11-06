@@ -483,11 +483,11 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async #route(message: string, images: number, files: number, recent: RecentEntries): Promise<Routing | undefined> {
     const started = Date.now();
-    const kept = (failed: string, running?: true): Routing => ({ kept: { failed, ...(running && { running }), ms: Date.now() - started } });
+    const kept = (failed: string, more?: Pick<AutoPick, "running" | "missed">): Routing => ({ kept: { failed, ...more, ms: Date.now() - started } });
     let read;
     try {
       const [root, catalog, busy] = await Promise.all([this.#root(), this.#catalog(), this.#replying()]);
-      if (busy) return kept(RUNNING_WHEN_SENT, true);
+      if (busy) return kept(RUNNING_WHEN_SENT, { running: true });
       const [agent, items] = await Promise.all([root.agent(BACKGROUND_CONTEXT), recent()]);
       if (!items) return undefined;
       read = { root, catalog, agent, items };
@@ -508,7 +508,9 @@ export class ChatAgent extends DurableObject<Env> {
         .catch((error: unknown) => console.error("auto spend:", errorMessage(error)));
       // An effort the model does not take moves to the nearest it does; none named asks for its usual one.
       const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
-      if (!choice) return kept(`the router picked ${routed.pick.model}, which is not in the picker`);
+      if (!choice) {
+        return kept(`the router picked ${routed.pick.model}, which is not in the picker`, { ...(routed.missed && { missed: routed.missed }) });
+      }
       const pick: AutoPick = {
         ...choice,
         ...(routed.pick.reason && { reason: routed.pick.reason }),
@@ -534,7 +536,11 @@ export class ChatAgent extends DurableObject<Env> {
     const { root, busy, agent } = await now();
     const current = this.#modelOf(agent);
     if ("kept" in routed || busy) {
-      const kept = "kept" in routed ? routed.kept : { failed: RUNNING_WHEN_PICKED, running: true as const, ms: routed.pick.ms };
+      // A reply started meanwhile: the pick goes unused, but what failed on the way to it still shows.
+      const kept =
+        "kept" in routed
+          ? routed.kept
+          : { failed: RUNNING_WHEN_PICKED, running: true as const, ...(routed.pick.missed && { missed: routed.pick.missed }), ms: routed.pick.ms };
       return { model: current, thinkingLevel: agent.thinkingLevel, ...kept };
     }
     if (current !== routed.choice.model || agent.thinkingLevel !== routed.choice.thinkingLevel) {
@@ -1911,9 +1917,8 @@ interface ChatNow {
   agent: Agent;
 }
 
-/** Auto's pick for a message, and the model and effort to run on when a router picked (see ChatAgent's #route). */
 /** What #route found: a router's pick and the model choice it names, or why the chat keeps its model, and how long that took. */
-type Routing = { pick: AutoPick; choice: ModelChoice } | { kept: { failed: string; running?: true; ms: number } };
+type Routing = { pick: AutoPick; choice: ModelChoice } | { kept: Pick<AutoPick, "running" | "missed" | "ms"> & { failed: string } };
 
 /** What the chat's sockets need from the chat. */
 interface ChatSession {
