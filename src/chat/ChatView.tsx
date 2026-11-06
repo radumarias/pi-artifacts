@@ -1,4 +1,4 @@
-import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
@@ -45,6 +45,7 @@ import { promptSpend, totalTime } from "./spend.ts";
 import { useChat, waitingOnModel } from "./useChat.ts";
 import { ComposerMore } from "./ComposerMore.tsx";
 import { Dictation } from "./Dictation.tsx";
+import { ownMessages, useHistory } from "./history.ts";
 import { Markdown } from "./Markdown.tsx";
 import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
 import { NotifyButton } from "./notify.tsx";
@@ -53,7 +54,7 @@ import { OrphanResult, StepRun, StepsProvider } from "./Steps.tsx";
 import { endedEarly, stepRuns, streamingSteps, type MessageSteps, type StepRuns, type StreamingSteps } from "./stepRuns.ts";
 import { Thinking } from "./Thinking.tsx";
 import { useRevealedText } from "./reveal.ts";
-import { firstNew, isAgent, openHints, published, sentAt, shown } from "./entries.ts";
+import { blocks, firstNew, isAgent, openHints, published, sentAt, shown, userText } from "./entries.ts";
 
 interface Props {
   chatId: string;
@@ -93,6 +94,11 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   const input = useRef<HTMLTextAreaElement>(null);
   const shared = people && people.members.length > 0 ? people : null;
   const mentions = useMentions(chatId, draft, setDraft, input, shared, uid);
+  // The viewer's own earlier messages, to bring back into the composer (Up, or the "more" menu). Who owns the chat must be
+  // known first: a plain `pi.user` entry is the owner's.
+  const isOwner = people?.owner.uid === uid;
+  const history = useMemo(() => (people ? ownMessages(state.entries, uid, isOwner) : []), [people, state.entries, uid, isOwner]);
+  const recalling = useHistory(history, draft, setDraft, input, (message) => mentions.restore(message.mentions));
   // The message the next one answers, quoted above the composer until it is sent or let go.
   const [replying, setReplying] = useState<ReplyQuote | null>(null);
   const reply = useCallback((quote: ReplyQuote) => {
@@ -165,6 +171,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     setDraft("");
     setReplying(null);
     mentions.clear();
+    recalling.reset();
     // Clicking Send moves focus to the button; keep typing where you were.
     input.current?.focus();
   };
@@ -189,9 +196,11 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   };
 
   // Enter sends, Shift+Enter adds a line. Not while an IME is composing (Enter then confirms the text). Escape lets go
-  // of the message being replied to.
+  // of the message being replied to. Up and Down bring back earlier messages (history.ts); while one brought back is
+  // not edited they go on stepping, even where an "@" in it opens the list.
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mentions.onKeyDown(event)) return;
+    if (recalling.recalled && recalling.onKeyDown(event)) return;
+    if (mentions.onKeyDown(event) || recalling.onKeyDown(event)) return;
     if (event.key === "Escape" && replying) {
       event.preventDefault();
       setReplying(null);
@@ -218,7 +227,6 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   const prompts = useMemo(() => promptSpend(state.entries, state.busy), [state.entries, state.busy]);
   const time = useMemo(() => totalTime(prompts.values()), [prompts]);
 
-  const isOwner = people?.owner.uid === uid;
   const sendLabel = attachments.sending ? "Sending…" : "Send";
   const ownerName = people && !isOwner ? people.owner.name : undefined;
   const mine = online.find((presence) => presence.uid === uid)?.windows ?? 0;
@@ -431,6 +439,8 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
               <ComposerMore
                 mentionLabel={shared ? `Ask ${AGENT_NAME}, or name someone, a file or an artifact` : "Name a file or artifact"}
                 onMention={mentions.insertAt}
+                history={history}
+                onRecall={recalling.recall}
               />
               {/* The model and the context ring at the right. Stop and the transcript show a run; only an upload needs the spinner. */}
               <div className="composer-model">
@@ -678,19 +688,6 @@ function Waiting({ message, uid, label, incoming = false }: { message: QueuedMes
       <small className="queued-label">{label}</small>
     </div>
   );
-}
-
-/** A message's blocks, skipping any slot a stream has not filled yet. */
-function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {
-  return typeof content === "string" ? [] : content.filter((b): b is T => b != null);
-}
-
-function userText(message: UserMessage): string {
-  return typeof message.content === "string"
-    ? message.content
-    : blocks(message.content)
-        .map((b) => (b.type === "text" ? b.text : ""))
-        .join("");
 }
 
 /**

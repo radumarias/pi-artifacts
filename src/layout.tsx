@@ -48,7 +48,9 @@ export function useDismiss<T extends HTMLElement>(open: boolean, setOpen: (open:
   const box = useRef<T>(null);
   useEffect(() => {
     if (!open) return;
-    const onClick = (event: MouseEvent) => box.current?.contains(event.target as Node) || setOpen(false);
+    // By the path the click took, not where its target is now: a click that swaps a popup's content (a menu item that
+    // opens a list in its place) has a target no longer in the document by the time it gets here.
+    const onClick = (event: MouseEvent) => (box.current && event.composedPath().includes(box.current)) || setOpen(false);
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // Focus inside the popup would fall to the page as it closes: hand it back to the button that opened it.

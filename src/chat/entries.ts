@@ -1,4 +1,4 @@
-import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import type { ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, PUBLISH_TOOL, type ChatMessageData, type ChatPeopleData, type PublishedDetails } from "../../shared/protocol.ts";
 
@@ -60,4 +60,18 @@ export function openHints(hints: ReadonlySet<number>, entries: readonly EntryRec
   );
   const after = called === undefined ? -1 : (called.id as number);
   return new Set([...hints].filter((id) => id > after));
+}
+
+/** A message's blocks, skipping any slot a stream has not filled yet. */
+export function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {
+  return typeof content === "string" ? [] : content.filter((b): b is T => b != null);
+}
+
+/** A person's message as pi stored it, as text: its text blocks, without the images. */
+export function userText(message: UserMessage): string {
+  return typeof message.content === "string"
+    ? message.content
+    : blocks(message.content)
+        .map((b) => (b.type === "text" ? b.text : ""))
+        .join("");
 }

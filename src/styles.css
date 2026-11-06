@@ -731,7 +731,19 @@ a.mention-chip:hover { text-decoration: underline; }
 /* As wide as its longest action (its 24px button would otherwise squeeze it to min-width), within the window. */
 .composer-more-menu { bottom: calc(100% + 6px); width: max-content; min-width: 220px; max-width: calc(100vw - 32px); }
 .composer-more-menu button { border-radius: 6px; font-size: 14px; }
-.composer-more-glyph { flex: none; width: 18px; text-align: center; font-size: 16px; color: var(--muted); }
+.composer-more-glyph { flex: none; display: flex; justify-content: center; width: 18px; font-size: 16px; color: var(--muted); }
+.composer-more-menu button:disabled { color: var(--muted); cursor: default; }
+.composer-more-menu button:disabled:hover { background: none; }
+.composer-more-menu kbd { margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 12px; line-height: 18px; }
+/* Earlier messages: a search box over a list that scrolls, in place of the menu, as wide as the window allows. */
+.composer-history { display: flex; flex-direction: column; gap: 4px; width: min(440px, calc(100vw - 32px)); }
+.composer-history-head { display: flex; align-items: center; gap: 4px; }
+.composer-history-head .icon-button { flex: none; width: 30px; height: 30px; padding: 0; justify-content: center; }
+.composer-history-head input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-size: 14px; }
+.composer-history-list { max-height: min(340px, 50dvh); overflow-y: auto; overscroll-behavior: contain; }
+.composer-more-menu .composer-history-item { align-items: baseline; }
+.composer-history-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.composer-history-item small { flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .composer-model { margin-left: auto; }
 .composer-model .spinner { flex: none; width: 14px; height: 14px; margin-right: 6px; border-top-color: var(--text); }
 .dictation-error, .dictation-status { min-width: 0; padding: 0 6px; font-size: 13px; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -955,6 +967,9 @@ a.mention-chip:hover { text-decoration: underline; }
   .people-bar .avatar { --size: 24px; box-shadow: 0 0 0 2px var(--ring); }
   .people-divider { margin: 0 6px; }
   .chat-cost > button { padding: 5px 8px; font-size: 13px; }
+  /* Earlier messages span the composer, over the transcript as the "@" list does, rather than run off the right edge. */
+  .composer-more:has(> .composer-history) { position: static; }
+  .composer-history { left: 12px; right: 12px; bottom: calc(100% - 8px); width: auto; }
 }
 /* A phone's header has room for the name, the people and sharing; each answer's cost still shows under it. */
 @media (max-width: 480px) { .chat-header .chat-cost { display: none; } }
