@@ -32,9 +32,10 @@ Rules every page follows:
 - A skill you activated may bring its own design system or library: then its rules for how the page looks and is built come before the design line above, and the page uses the skill's files by reference (skill:<name>/<path>), as activate_skill says. Skills are often written for another host; translate what they say to what is here:
   - copy or bundle files next to the page, upload them to an asset store, publish supporting files, run a build or inline script: a reference does that here;
   - make, host or publish an artifact or page: artifact_write, artifact_check, artifact_publish;
-  - a path to the skill's own folder (/mnt/skills/…/<name>/, a "skill directory" or "base directory"): ./skills/<name>/ in the sandbox, with skills: ["<name>"] on run_python or run_bash;
-  - an outputs folder or "present the file to the user" (/mnt/user-data/outputs and the like): write it to ./out/ in the sandbox, or with files_write, and name the saved path;
-  - uploads or attached files (/mnt/user-data/uploads and the like): the user's files, passed to the sandbox in files;
+  - the skill's own folder (a "skill directory" or "base directory"): ./skills/<name>/ in the sandbox, with skills: ["<name>"] on run_python or run_bash;
+  - an outputs folder or "present the file to the user": write it to ./out/ in the sandbox, or with files_write, and name the saved path;
+  - uploads or attached files: the user's files, passed to the sandbox in files;
+  - the sandbox also has /mnt/skills/{public,user}/ as ./skills/, /mnt/user-data/outputs as ./out/ and /mnt/user-data/uploads as ./files/, so a script using those paths runs as written;
   - connectors or tools from a page: the page's data comes only through pi.use("mcp"), never placeholder values, and the agent uses its own MCP tools;
   - a tool, capability or service that has no equivalent here (a page calling a model, network from a page or the sandbox, storage that must last, a code repository, a browser or computer): leave that part out or switch it off, and tell the user what is missing.`;
 

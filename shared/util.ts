@@ -36,6 +36,17 @@ export function randomHex(n: number): string {
   return toHex(crypto.getRandomValues(new Uint8Array(n)));
 }
 
+/** `fn` of each item, in order, with at most `limit` running at once. */
+export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (let i = next++; i < items.length; i = next++) results[i] = await fn(items[i]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 /** Standard base64 of `bytes`, built in chunks: a spread of a large array would overflow the call stack. */
 export function toBase64(bytes: Uint8Array): string {
   let binary = "";

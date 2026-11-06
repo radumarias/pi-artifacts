@@ -39,9 +39,9 @@ export interface ChatScope extends PublishScope {
   react(emoji: Reaction): Promise<string | null>;
   /**
    * The folders of those of the owner's skills named that are on, for the sandbox: each skill's SKILL.md and files,
-   * named <skill>/<path>. Throws naming a skill that is not one.
+   * named <skill>/<path>. Throws naming a skill that is not one, and, before reading, when they hold over `maxBytes`.
    */
-  skillFolders(names: readonly string[]): Promise<SandboxFile[]>;
+  skillFolders(names: readonly string[], maxBytes: number): Promise<SandboxFile[]>;
 }
 
 /**
@@ -137,13 +137,13 @@ const SANDBOX_FILES =
   "Returns exit code, stdout and stderr.";
 
 /** The files `refs` name, read, keyed by where they go under ./files/ (see sandboxLayout). */
-async function sandboxInputs(files: UserFiles, refs: readonly string[], ownFolder: string): Promise<SandboxFile[]> {
+async function sandboxInputs(files: UserFiles, refs: readonly string[], ownFolder: string, maxBytes = MAX_SANDBOX_BYTES): Promise<SandboxFile[]> {
   if (refs.length === 0) return [];
   const { entries, paths, missing } = await findFiles(files, refs, (entries, ref) => resolveRef(entries, ref, ownFolder));
   const layout = sandboxLayout(paths);
   const sizes = new Map(entries.map((e) => [e.path, e.size]));
   const listedBytes = paths.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
-  if (listedBytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(listedBytes));
+  if (listedBytes > maxBytes) throw new Error(tooMuch(listedBytes, maxBytes));
   // Paths past the end of the listing had no size above: they count as they come, before their body is read.
   let unlisted = 0;
   // Once one file fails the run is refused: the others still opening are not read.
@@ -157,7 +157,7 @@ async function sandboxInputs(files: UserFiles, refs: readonly string[], ownFolde
       }
       let error: Error | undefined;
       if (failed) error = new Error("Another file failed.");
-      else if (!sizes.has(path) && listedBytes + (unlisted += object.size) > MAX_SANDBOX_BYTES) error = new Error(tooMuch(listedBytes + unlisted));
+      else if (!sizes.has(path) && listedBytes + (unlisted += object.size) > maxBytes) error = new Error(tooMuch(listedBytes + unlisted, maxBytes));
       if (error) {
         failed = true;
         // Thrown before the cancel settles, so the first failure is the one Promise.all reports.
@@ -170,8 +170,8 @@ async function sandboxInputs(files: UserFiles, refs: readonly string[], ownFolde
   );
 }
 
-function tooMuch(bytes: number): string {
-  return `Those files hold ${formatBytes(bytes)}; one run takes at most ${formatBytes(MAX_SANDBOX_BYTES)}. Pass fewer.`;
+function tooMuch(bytes: number, maxBytes: number): string {
+  return `Those files hold ${formatBytes(bytes)}; one run takes at most ${formatBytes(maxBytes)}${maxBytes < MAX_SANDBOX_BYTES ? " besides the skills" : ""}. Pass fewer.`;
 }
 
 /** The name of a chat's sandbox object. */
@@ -191,15 +191,15 @@ async function runInSandbox(
 ) {
   const files = await scope.files();
   const folder = chatOutFolder(scope.chatId);
-  const [inputs, skills] = await Promise.all([sandboxInputs(files, args.files ?? [], folder), args.skills?.length ? scope.skillFolders(args.skills) : []]);
-  const bytes = [...inputs, ...skills].reduce((sum, file) => sum + file.bytes.byteLength, 0);
-  if (bytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(bytes));
+  // The skills first: their sizes are known before they are read, and the files get what they leave of the limit.
+  const skills = args.skills?.length ? await scope.skillFolders(args.skills, MAX_SANDBOX_BYTES) : [];
+  const inputs = await sandboxInputs(files, args.files ?? [], folder, MAX_SANDBOX_BYTES - skills.reduce((sum, file) => sum + file.bytes.byteLength, 0));
   const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs, skills);
   const { toSave, skipped } = outputPaths(folder, result.outputs);
   const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
   const report = [
     inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,
-    skills.length && `skills copied in: ${[...new Set(skills.map((file) => `./skills/${file.name.split("/")[0]}/`))].join(", ")}`,
+    skills.length && `skills copied in: ${[...new Set(args.skills)].map((name) => `./skills/${name}/`).join(", ")}`,
     `exit code ${result.exitCode}`,
     `stdout:\n${result.stdout}`,
     result.stderr && `stderr:\n${result.stderr}`,

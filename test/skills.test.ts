@@ -63,15 +63,11 @@ describe("SKILL.md", () => {
     expect(parseSkillFile(`${head}allowed-tools:\n  - files_read\n---\nGo.`).tools).toEqual(["files_read"]);
   });
 
-  it("reads a Claude Code skill's allowed-tools as the tools here that do their work", () => {
+  it("reads a Claude Code skill's allowed-tools, and tells the agent which tool here does each one's work", () => {
     const head = "---\nname: a\ndescription: Use when.\nlicense: MIT\n";
-    expect(parseSkillFile(`${head}allowed-tools: Bash(git add:*) Read Edit Write Grep WebFetch\n---\nGo.`).tools).toEqual([
-      "run_bash",
-      "files_read",
-      "files_write",
-      "files_list",
-      "WebFetch",
-    ]);
+    const skill = parseSkillFile(`${head}allowed-tools: Bash(git add:*) Read Edit WebFetch\n---\nGo.`);
+    expect(skill.tools).toEqual(["Bash", "Read", "Edit", "WebFetch"]);
+    expect(skillBody(skill)).toContain("Tools this skill works with: Bash (here: run_bash), Read (here: files_read), Edit (here: files_write), WebFetch.");
   });
 
   it("accepts CRLF line ends and a byte-order mark", () => {

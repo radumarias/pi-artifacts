@@ -120,12 +120,17 @@ describe("skill file references", () => {
     for (const bad of ["Kit/a.js", "kit", "kit/../x.js", "kit//a.js", "kit/./a.js"]) expect(parseSkillRef(bad)).toBeNull();
   });
 
-  it("lists each file a page names once, and refuses one named anywhere but a script src or stylesheet href", () => {
+  it("lists each file a page names once, and refuses one named anywhere but a script src, stylesheet href or attribute value", () => {
     expect(skillRefs(page + '<script src="skill:kit/dist/ds.js"></script>')).toEqual([
       { skill: "kit", path: "dist/ds.css" },
       { skill: "kit", path: "dist/ds.js" },
     ]);
-    expect(() => skillRefs('<div data-x="skill:kit/logo.svg"></div>')).toThrow(/nowhere else/);
+    expect(() => skillRefs('<script>const logo = "skill:kit/logo.svg";</script>')).toThrow(/nowhere else/);
+    expect(() => skillRefs('<style>.x{background:url("skill:kit/logo.svg")}</style>')).toThrow(/nowhere else/);
+    expect(skillRefs('<link rel="icon" href="skill:kit/logo.svg"><video poster=\'skill:kit/p.png\'></video>')).toEqual([
+      { skill: "kit", path: "logo.svg" },
+      { skill: "kit", path: "p.png" },
+    ]);
     expect(() => skillRefs('<script src="skill:kit/a.js">x()</script>')).toThrow(/nowhere else/);
     expect(() => skillRefs('<script src="skill:kit"></script>')).toThrow(/Not a skill file: "skill:kit"/);
   });

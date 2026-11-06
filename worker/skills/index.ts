@@ -7,9 +7,9 @@ import reviseArtifact from "./builtin/revise-artifact/SKILL.md?raw";
 
 /**
  * A skill from a SKILL.md file (the Agent Skills format): YAML frontmatter with
- * `name`, `description` and an optional space-separated `allowed-tools` (Claude
- * Code's tool names become the tools here that do their work, skillTools), then
- * the instructions; other fields are ignored. Throws with what to fix.
+ * `name`, `description` and an optional space-separated `allowed-tools` (a Claude
+ * Code entry such as "Bash(git:*)" read as its tool, skillTools), then the
+ * instructions; other fields are ignored. Throws with what to fix.
  */
 export function parseSkillFile(markdown: string): SkillInput {
   const match = markdown.replace(/^﻿/, "").match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/);

@@ -61,7 +61,7 @@ import {
   type ModelChoice,
   type ModelSetting,
 } from "../shared/models.ts";
-import { deadline, errorMessage, memoAsync, serial, sha256Hex, singleFlight } from "../shared/util.ts";
+import { deadline, errorMessage, formatBytes, memoAsync, serial, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import type { SkillFileInfo } from "../shared/skill-files.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -350,7 +350,7 @@ export class ChatAgent extends DurableObject<Env> {
       drafts: memoAsync(() => this.storage.chatDrafts(this.uid, this.chatId)),
       skillSets: (names) => this.#skillSets(names),
       readSkillFile: (skill, set, path) => this.#readSkillSetFile(skill, set, path),
-      skillFolders: (names) => this.#skillFolders(names),
+      skillFolders: (names, maxBytes) => this.#skillFolders(names, maxBytes),
       look: lookFrom(env.CHECK_LOOK_MODEL, env.AI),
       publishUnchecked: env.AUTH_MODE === "demo",
       failedChecks: new FailedChecks(),
@@ -795,23 +795,27 @@ export class ChatAgent extends DurableObject<Env> {
     return bytes;
   }
 
-  /** The folders of the owner's skills named, for the sandbox (ChatScope.skillFolders): SKILL.md and every file. */
-  async #skillFolders(names: readonly string[]): Promise<SandboxFile[]> {
+  /**
+   * The folders of the owner's skills named, for the sandbox (ChatScope.skillFolders): SKILL.md (as the skill is now)
+   * and every file. Refused before anything is read when they hold more than `maxBytes`. Read past the cache: a whole
+   * folder would push out the files pages use.
+   */
+  async #skillFolders(names: readonly string[], maxBytes: number): Promise<SandboxFile[]> {
     const unique = [...new Set(names)];
-    const skills = await Promise.all(unique.map((name) => this.#directory.getSkill(name)));
-    const off = unique.filter((_, i) => !skills[i] || !isActive(skills[i]));
-    if (off.length) throw new Error(`No such skill turned on: ${off.join(", ")}.`);
-    const copy = (bytes: Uint8Array): ArrayBuffer => bytes.slice().buffer;
+    const skills = await this.#skillsWithFiles(unique);
+    const missing = unique.filter((name) => !skills.some((skill) => skill.name === name));
+    if (missing.length) throw new Error(`No skill of the user's that is on and has files: ${missing.join(", ")}.`);
+    const bytes = skills.reduce((sum, { files }) => sum + files.reduce((total, file) => total + file.size, 0), 0);
+    if (bytes > maxBytes) throw new Error(`Those skills hold ${formatBytes(bytes)}; one run takes at most ${formatBytes(maxBytes)} with its files.`);
+    const store = await this.#skillFiles();
     const folders = await Promise.all(
       skills.map(async (skill) => {
-        const files = await Promise.all(
-          (skill!.fileSet ? (skill!.files ?? []) : []).map(async ({ path }) => {
-            const bytes = await (await this.#skillFiles()).read(skill!.name, skill!.fileSet!, path);
-            if (bytes === null) throw new Error(`The skill "${skill!.name}" lost its file ${path}: import it again.`);
-            return { name: `${skill!.name}/${path}`, bytes: copy(bytes) };
-          }),
-        );
-        return [{ name: `${skill!.name}/SKILL.md`, bytes: copy(new TextEncoder().encode(formatSkillFile(skill!))) }, ...files];
+        const read = await store.readAll(skill.name, skill.fileSet, skill.files.map((file) => file.path));
+        const lost = skill.files.find((_, i) => !read[i]);
+        if (lost) throw new Error(`The skill "${skill.name}" lost its file ${lost.path}: import it again.`);
+        // SkillFiles.read gives each file a buffer of its own, so it goes as it is.
+        const folder = skill.files.map((file, i) => ({ name: `${skill.name}/${file.path}`, bytes: read[i]!.buffer as ArrayBuffer }));
+        return [{ name: `${skill.name}/SKILL.md`, bytes: new TextEncoder().encode(formatSkillFile(skill)).buffer as ArrayBuffer }, ...folder];
       }),
     );
     return folders.flat();
@@ -819,8 +823,13 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** The file sets of the owner's own skills named that are on and have files (PublishScope.skillSets). */
   async #skillSets(names: readonly string[]): Promise<Map<string, { set: string; files: SkillFileInfo[] }>> {
+    return new Map((await this.#skillsWithFiles(names)).map((skill) => [skill.name, { set: skill.fileSet, files: skill.files }]));
+  }
+
+  /** Those of the owner's own skills named that are on and have files. */
+  async #skillsWithFiles(names: readonly string[]): Promise<(SkillInfo & { fileSet: string; files: SkillFileInfo[] })[]> {
     const skills = await Promise.all(names.map((name) => this.#directory.getSkill(name)));
-    return new Map(skills.flatMap((skill) => (skill?.enabled && skill.fileSet && skill.files ? [[skill.name, { set: skill.fileSet, files: skill.files }] as const] : [])));
+    return skills.flatMap((skill) => (skill?.enabled && skill.fileSet && skill.files ? [{ ...skill, fileSet: skill.fileSet, files: skill.files }] : []));
   }
 
   /**

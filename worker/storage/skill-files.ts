@@ -1,10 +1,10 @@
 import { SKILL_NAME_PATTERN } from "../../shared/skills.ts";
-import { randomHex } from "../../shared/util.ts";
+import { mapLimit, randomHex } from "../../shared/util.ts";
 import { normalisePath } from "./paths.ts";
 import { deletePrefix } from "./r2.ts";
 
-/** How many files are written to R2 at once. */
-const PARALLEL_WRITES = 8;
+/** How many files are written to, or read from, R2 at once. */
+const PARALLEL = 8;
 const SET_PATTERN = /^[0-9a-f]{16}$/;
 
 /**
@@ -28,14 +28,8 @@ export class SkillFiles {
   /** Write a skill's files as a new set; returns the set's id, for the skill's row to name. */
   async write(skill: string, files: readonly { path: string; bytes: Uint8Array }[]): Promise<string> {
     const set = randomHex(8);
-    const queue = [...files];
-    const worker = async () => {
-      for (let file = queue.shift(); file; file = queue.shift()) {
-        await this.#bucket.put(this.#objectKey(skill, set, file.path), file.bytes, { ssecKey: this.#key });
-      }
-    };
     try {
-      await Promise.all(Array.from({ length: Math.min(PARALLEL_WRITES, files.length) }, worker));
+      await mapLimit(files, PARALLEL, (file) => this.#bucket.put(this.#objectKey(skill, set, file.path), file.bytes, { ssecKey: this.#key }));
     } catch (error) {
       await this.drop(skill, set).catch(() => {});
       throw error;
@@ -53,6 +47,11 @@ export class SkillFiles {
     }
     const object = await this.#bucket.get(key, { ssecKey: this.#key });
     return object ? new Uint8Array(await object.arrayBuffer()) : null;
+  }
+
+  /** Several files' bytes, read a few at a time: null for each the set has no such file. */
+  readAll(skill: string, set: string, paths: readonly string[]): Promise<(Uint8Array | null)[]> {
+    return mapLimit(paths, PARALLEL, (path) => this.read(skill, set, path));
   }
 
   /** Delete one set of a skill's files. */

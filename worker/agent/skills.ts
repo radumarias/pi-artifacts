@@ -1,5 +1,6 @@
 import type { SkillContent, SkillResource, SkillResourceDescriptor, SkillSource } from "agents/skills";
-import { mediaType, skillFilesNote, type SkillFileInfo } from "../../shared/skill-files.ts";
+import { skillFilesNote, type SkillFileInfo } from "../../shared/skill-files.ts";
+import { contentType } from "../../shared/uploads.ts";
 import { isActive, type SkillInfo, type SkillInput } from "../../shared/skills.ts";
 import { formatBytes } from "../../shared/util.ts";
 
@@ -54,7 +55,7 @@ export function skillSource(skills: readonly SkillInfo[], version: string, shown
         return {
           ...resource(file),
           content:
-            `[A binary file (${mediaType(path)}, ${formatBytes(file.size)}), not shown. A page uses it as skill:${name}/${path} ` +
+            `[A binary file (${contentType(path)}, ${formatBytes(file.size)}), not shown. A page uses it as skill:${name}/${path} ` +
             `(an <img> src, or from the skill's stylesheet)${access.sandbox ? `; a script finds it at ./skills/${name}/${path} when run with skills: ["${name}"]` : ""}.]`,
         };
       const bytes = await access.read(skill, path);
@@ -73,11 +74,25 @@ export function skillSource(skills: readonly SkillInfo[], version: string, shown
 /** A skill file as the agent's skill tools describe it. */
 function resource(file: SkillFileInfo): SkillResourceDescriptor {
   const kind = /^references?\//.test(file.path) || /\.(md|txt)$/i.test(file.path) ? "reference" : /^(scripts|tools|bin)\//.test(file.path) ? "script" : "asset";
-  return { path: file.path, kind, size: file.size, encoding: "text", ...(file.binary && { mimeType: mediaType(file.path) }) };
+  return { path: file.path, kind, size: file.size, encoding: "text", ...(file.binary && { mimeType: contentType(file.path) }) };
 }
 
-/** What `activate_skill` hands the agent: the instructions, then the tools the skill works with. */
+/** Claude Code's tools, as the tools here that do their work: a skill written for Claude Code names them. */
+const CLAUDE_CODE_TOOLS: Record<string, string> = {
+  Read: "files_read",
+  Write: "files_write",
+  Edit: "files_write",
+  MultiEdit: "files_write",
+  NotebookEdit: "files_write",
+  Glob: "files_list",
+  Grep: "files_list",
+  LS: "files_list",
+  Bash: "run_bash",
+};
+
+/** What `activate_skill` hands the agent: the instructions, then the tools the skill works with (a Claude Code tool with the one here that does its work). */
 export function skillBody(skill: SkillInput): string {
   if (!skill.tools.length) return skill.instructions;
-  return `${skill.instructions}\n\nTools this skill works with: ${skill.tools.join(", ")}. Prefer these; a tool not in this chat is unavailable, so say so instead of guessing.`;
+  const tools = skill.tools.map((tool) => (CLAUDE_CODE_TOOLS[tool] ? `${tool} (here: ${CLAUDE_CODE_TOOLS[tool]})` : tool));
+  return `${skill.instructions}\n\nTools this skill works with: ${tools.join(", ")}. Prefer these; a tool not in this chat is unavailable, so say so instead of guessing.`;
 }

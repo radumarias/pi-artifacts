@@ -1,10 +1,13 @@
 import { Files } from "@cloudflare/sandbox";
 import { DurableObject } from "cloudflare:workers";
+import { mapLimit } from "../shared/util.ts";
 
 const WORKSPACE = "/workspace";
 const INACTIVITY_TIMEOUT_MS = 10 * 60_000;
 const RUN_TIMEOUT_SECONDS = 60;
 const MAX_OUTPUT_CHARS = 20_000;
+/** How many files are written into the container at once. */
+const PARALLEL_WRITES = 16;
 
 export interface SandboxFile {
   /** Relative to ./files/ for an input, which may be in folders ("q3/sales.csv"); a file name for an output. */
@@ -30,12 +33,12 @@ export interface SandboxRun {
  */
 export class Sandbox extends DurableObject<Env> {
   /** `skills` are skill folders' files, named <skill>/<path>: they go under ./skills/. */
-  async runPython(code: string, inputs: SandboxFile[], skills: SandboxFile[] = []): Promise<SandboxRun> {
+  async runPython(code: string, inputs: SandboxFile[], skills: SandboxFile[]): Promise<SandboxRun> {
     return this.#run({ name: "main.py", contents: code }, ["python3", "main.py"], inputs, skills);
   }
 
   /** A bash script, run as written: it stops at the first failing command only if it says `set -e`. */
-  async runBash(script: string, inputs: SandboxFile[], skills: SandboxFile[] = []): Promise<SandboxRun> {
+  async runBash(script: string, inputs: SandboxFile[], skills: SandboxFile[]): Promise<SandboxRun> {
     return this.#run({ name: "run.sh", contents: script }, ["bash", "run.sh"], inputs, skills);
   }
 
@@ -55,11 +58,12 @@ export class Sandbox extends DurableObject<Env> {
     const folders = new Set(placed.map((file) => file.path.slice(0, file.path.lastIndexOf("/"))));
     const dirs = [`${WORKSPACE}/files`, `${WORKSPACE}/skills`, `${WORKSPACE}/out`, ...folders];
     await this.#exec(container, ["sh", "-c", `rm -rf ${WORKSPACE}/files ${WORKSPACE}/skills ${WORKSPACE}/out && mkdir -p "$@"`, "sh", ...dirs]);
-    await Promise.all([...placed.map((file) => files.writeFile(file.path, file.bytes)), files.writeFile(`${WORKSPACE}/${entry.name}`, entry.contents)]);
-    // A skill's scripts may be run by their path, as its instructions say: they need to be executable.
-    if (skills.length) await this.#exec(container, ["chmod", "-R", "u+x", `${WORKSPACE}/skills`]);
+    await mapLimit([...placed, { path: `${WORKSPACE}/${entry.name}`, bytes: entry.contents }], PARALLEL_WRITES, (file) => files.writeFile(file.path, file.bytes));
 
-    const run = await this.#exec(container, ["timeout", String(RUN_TIMEOUT_SECONDS), ...argv]);
+    // A skill's scripts may be run by their path, as its instructions say: the zip kept no modes, so they are made
+    // executable, in the same exec as the run.
+    const prepare = skills.length ? `chmod -R u+x ${WORKSPACE}/skills && ` : "";
+    const run = await this.#exec(container, ["sh", "-c", `${prepare}exec timeout ${RUN_TIMEOUT_SECONDS} "$@"`, "sh", ...argv]);
 
     const written = (await files.readDirectory(`${WORKSPACE}/out`)).filter((entry) => entry.type === "file");
     const outputs = await Promise.all(

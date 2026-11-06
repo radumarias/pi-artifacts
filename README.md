@@ -316,15 +316,18 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   it runs on import. The files are kept encrypted in your R2 folder (`users/<uid>/skills/<name>/<set>/`,
   `worker/storage/skill-files.ts`), a new set per import, binary ones (images, fonts…) marked as such. The agent reads
   them with `read_skill_resource`, and a page uses one by reference: `<script src="skill:<name>/<path>"></script>`,
-  `<link rel="stylesheet" href="skill:…">`, or an image or media file as `<img src="skill:…">`. The draft keeps the
+  `<link rel="stylesheet" href="skill:…">`, or as another attribute's whole value (`<img src="skill:…">`, an icon's
+  `href`…). The draft keeps the
   reference and pins the set; the check and the publish put the file in its place (`shared/skill-files.ts`): a
-  script's or stylesheet's text, an image as a `data:` URL, and the fonts and images a skill stylesheet names by
+  script's or stylesheet's text, any other file as a `data:` URL, and the fonts and images a skill stylesheet names by
   relative `url()` as `data:` URLs too. So a version holds everything it runs and never changes when the skill does,
   and what was checked is what is published. Reading a published page back (`artifact_read`, edits, diffs) shows the
   references again. A skill's scripts run in the sandbox: `run_python` and `run_bash` take `skills: ["<name>"]`,
-  which copies the skill's folder (its `SKILL.md` and files) to `./skills/<name>/`. A Claude Code skill's
-  `allowed-tools` become the tools here that do their work (`Bash` → `run_bash`, `Read` → `files_read`, `Write`/`Edit`
-  → `files_write`, `Glob`/`Grep` → `files_list`). A skill written for another host (copy `dist/`, supporting files,
+  which copies the skill's folder (its `SKILL.md` and files) to `./skills/<name>/`; `/mnt/skills/{public,user}/`,
+  `/mnt/user-data/outputs` and `/mnt/user-data/uploads` point at `./skills/`, `./out/` and `./files/`, so scripts
+  written for those paths run as they are. A Claude Code skill's
+  `allowed-tools` are read as written ("Bash(git:*)" is `Bash`), and the agent is told which tool here does each one's
+  work (`Bash` → `run_bash`, `Read` → `files_read`, `Write`/`Edit` → `files_write`, `Glob`/`Grep` → `files_list`). A skill written for another host (copy `dist/`, supporting files,
   `/mnt/skills/…`, an outputs folder) works unchanged: the system prompt tells the agent what each means here.
 - **The agent can propose a skill** with `skill_propose` when you ask it to ("save this as a skill"). A proposal is
   saved **off** and can replace only another proposal that is still off. Text from a tool result or a file therefore

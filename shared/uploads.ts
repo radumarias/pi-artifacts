@@ -146,6 +146,28 @@ const MEDIA_TYPES: ReadonlyMap<string, string> = new Map([
   ["mov", "video/quicktime"],
 ]);
 
+/** Other types a file is served or embedded as (a data: URL), by extension: fonts, captions and the text of a web page's parts. */
+const OTHER_TYPES: ReadonlyMap<string, string> = new Map([
+  ["woff", "font/woff"],
+  ["woff2", "font/woff2"],
+  ["ttf", "font/ttf"],
+  ["otf", "font/otf"],
+  ["eot", "application/vnd.ms-fontobject"],
+  ["vtt", "text/vtt"],
+  ["css", "text/css"],
+  ["js", "text/javascript"],
+  ["json", "application/json"],
+  ["pdf", "application/pdf"],
+  ["html", "text/html"],
+  ["txt", "text/plain"],
+]);
+
+/** The content type `path` is by its extension: an image, sound, video, font…; application/octet-stream for one not known. */
+export function contentType(path: string): string {
+  const ext = extension(path);
+  return IMAGE_TYPES.get(ext) ?? MEDIA_TYPES.get(ext) ?? OTHER_TYPES.get(ext) ?? "application/octet-stream";
+}
+
 /**
  * How the app previews a user file: an image as itself, sound and video in the browser's player, a web page in a sandboxed frame, a PDF in the browser's
  * viewer, Markdown rendered, a CSV or TSV as a table, and plain text and code as text (highlighted where the app
