@@ -52,6 +52,8 @@ describe("page model requests", () => {
     expect(jsonIn('{"order":["a"]}')).toEqual({ order: ["a"] });
     expect(jsonIn('Sure:\n```json\n{"order": ["b"]}\n```')).toEqual({ order: ["b"] });
     expect(jsonIn('Here it is: {"a": 1} hope that helps')).toEqual({ a: 1 });
+    expect(jsonIn('See [1]: {"model": "a"} [done]')).toEqual({ model: "a" });
+    expect(jsonIn('Order: [{"a":1},{"b":2}] ok')).toEqual([{ a: 1 }, { b: 2 }]);
     expect(jsonIn("no json here")).toBeUndefined();
   });
 });
@@ -84,6 +86,15 @@ describe("askPageModel", () => {
     const answer = await askPageModel(models as never, [model("a"), model("b")], { ...request, json: true });
     expect(answer).toMatchObject({ ok: false, error: { code: "bad_output" }, usage });
     expect(calls).toBe(1);
+  });
+
+  it("asks the next model when one spends its allowance without an answer, and counts what both cost", async () => {
+    const replies = [reply("", "length"), reply("done")];
+    const models = { completeSimple: async () => replies.shift()! };
+    const answer = await askPageModel(models as never, [model("a", true), model("b")], request);
+    expect(answer).toMatchObject({ ok: true, text: "done" });
+    expect(answer.usage.input).toBe(20);
+    expect(answer.usage.cost.total).toBeCloseTo(0.002);
   });
 
   it("is unavailable when no model answers, or there is none", async () => {

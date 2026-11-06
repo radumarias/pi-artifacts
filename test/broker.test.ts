@@ -256,4 +256,30 @@ describe("ArtifactBroker saved values and model", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(posted[0]).toMatchObject({ id: 1, ok: false, error: { code: "unavailable" } });
   });
+
+  it("still takes the page's last saved values for a moment after it closed, and nothing else", async () => {
+    const sent: unknown[] = [];
+    const timers: (() => void)[] = [];
+    let closed = false;
+    const broker = new ArtifactBroker({
+      artifactId: "abc12345",
+      version: 1,
+      cacheNamespace: "ann",
+      transport: async (request) => (sent.push(request), fresh(0)),
+      describe: async () => [],
+      manifest: {},
+      pageStorage: async (request) => (sent.push(request), { ok: true }),
+      setTimer: (fn) => timers.push(fn),
+    });
+    const port = { onmessage: null as ((e: { data: unknown }) => void) | null, postMessage() {}, close: () => (closed = true) };
+    broker.connect(port as unknown as MessagePort);
+    broker.close();
+    expect(closed).toBe(false);
+    port.onmessage!({ data: { type: "request", id: 1, method: "storage", params: { op: "write", changes: { a: "1" } } } });
+    port.onmessage!({ data: { type: "request", id: 2, method: "call", params: { server: "S", tool: "t", input: {} } } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual([{ op: "write", changes: { a: "1" } }]);
+    for (const fn of timers) fn();
+    expect(closed).toBe(true);
+  });
 });

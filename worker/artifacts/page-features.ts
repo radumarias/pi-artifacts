@@ -2,6 +2,7 @@ import { clampThinkingLevel, type Api, type AssistantMessage, type Context, type
 import { textOf } from "../../shared/canonical.ts";
 import { PAGE_AI_LIMITS, PAGE_STORAGE_LIMITS, type PageAiRequest, type PageError } from "../../shared/protocol.ts";
 import { clip, errorMessage, isObject, jsonIn } from "../../shared/util.ts";
+import { addUsage } from "../agent/ledger.ts";
 import { NO_USAGE } from "../agent/route.ts";
 
 // The parts of a page's saved values and model calls that need no Worker: checks, merging, the model call itself.
@@ -72,15 +73,17 @@ export function checkPageAiRequest(body: unknown): CheckedPageAiRequest | string
   };
 }
 
-/** What a page's model answered, and what it cost. */
-export type PageAiAnswer = { ok: true; text: string; json?: unknown; usage: Usage } | { ok: false; error: PageError; usage?: Usage };
+/** What a page's model answered, and what every attempt at it cost (also those that failed). */
+export type PageAiAnswer = ({ ok: true; text: string; json?: unknown } | { ok: false; error: PageError }) & { usage: Usage };
 
 /**
- * Ask the first of `candidates` that answers. A model that fails passes the request to the next one; a reply that
- * is not the JSON asked for is `bad_output` (it was answered and paid for, so no other model is asked).
+ * Ask the first of `candidates` that answers. A model that fails, or spends its whole allowance without an answer,
+ * passes the request to the next one; a reply that is not the JSON asked for is `bad_output` (it was answered, so no
+ * other model is asked).
  */
 export async function askPageModel(models: Pick<Models, "completeSimple">, candidates: readonly Model<Api>[], request: CheckedPageAiRequest): Promise<PageAiAnswer> {
   const failures: string[] = [];
+  const usage = structuredClone(NO_USAGE);
   for (const model of candidates) {
     let reply: AssistantMessage;
     try {
@@ -93,18 +96,20 @@ export async function askPageModel(models: Pick<Models, "completeSimple">, candi
       failures.push(`${model.id}: ${errorMessage(error)}`);
       continue;
     }
-    if (reply.stopReason !== "stop" && reply.stopReason !== "length") {
-      failures.push(`${model.id}: ${reply.errorMessage ?? reply.stopReason}`);
+    addUsage(usage, reply.usage);
+    const text = textOf(reply.content, "").trim();
+    if ((reply.stopReason !== "stop" && reply.stopReason !== "length") || !text) {
+      failures.push(`${model.id}: ${reply.errorMessage ?? (text ? reply.stopReason : `no answer (${reply.stopReason})`)}`);
       continue;
     }
-    const text = textOf(reply.content, "").trim();
-    if (!request.json) return { ok: true, text, usage: reply.usage };
+    if (!request.json) return { ok: true, text, usage };
     const json = jsonIn(text);
-    if (json === undefined) return { ok: false, error: { code: "bad_output", message: `The model did not answer with JSON: ${clip(text, 200)}` }, usage: reply.usage };
-    return { ok: true, text, json, usage: reply.usage };
+    if (json === undefined) return { ok: false, error: { code: "bad_output", message: `The model did not answer with JSON: ${clip(text, 200)}` }, usage };
+    return { ok: true, text, json, usage };
   }
   if (failures.length) console.error("page ai:", failures.join("; "));
-  return { ok: false, error: { code: "unavailable", message: candidates.length ? "The model did not answer; try again in a moment." : "This app has no model for pages." } };
+  const message = candidates.length ? "The model did not answer; try again in a moment." : "This app has no model for pages.";
+  return { ok: false, error: { code: "unavailable", message }, usage };
 }
 
 function context(model: Model<Api>, request: PageAiRequest): Context {

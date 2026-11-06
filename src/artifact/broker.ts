@@ -61,6 +61,8 @@ interface Group {
 }
 
 const CACHE_LIFETIME_MS = 10 * 60_000;
+/** How long a closed broker still takes the page's last saved values (see close). */
+const CLOSING_GRACE_MS = 2_000;
 /** The storages swept of expired results already (see #sweepStorage). */
 const sweptStorages = new WeakSet<object>();
 /** Errors no refetch can fix: stop polling and drop the data. */
@@ -131,11 +133,15 @@ export class ArtifactBroker {
     this.#groups.clear();
     this.#watchGroup.clear();
     this.#waiting.clear();
-    this.#port?.close();
+    // A page that is going away saves its last changes as it goes (pagehide), and those reach this port only after
+    // the frame was taken down: they still get a moment to arrive.
+    const port = this.#port;
+    this.#o.setTimer(() => port?.close(), CLOSING_GRACE_MS);
   }
 
   #onMessage(message: any): void {
-    if (!message || this.#closed) return;
+    if (!message) return;
+    if (this.#closed && !(message.type === "request" && message.method === "storage" && message.params?.op === "write")) return;
     if (message.type === "request") void this.#onRequest(message.id, message.method, message.params ?? {});
     else if (message.type === "watch") this.#watch(message);
     else if (message.type === "unwatch") this.#unwatch(message.watchId);

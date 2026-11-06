@@ -61,8 +61,9 @@ interface Pi {
  * over those is refused: flush() rejects with `too_large`, and the page keeps the value only until it is reloaded).
  *
  * `window.localStorage` is this same store (the frame's opaque origin has no localStorage of its own), so a library
- * that saves its state there keeps it; it reads empty until `use("storage")` resolved. sessionStorage lives as long
- * as the page.
+ * that saves its state there with getItem and setItem keeps it (not with property access: `localStorage.theme`). It
+ * reads empty until `use("storage")` resolved, and what is set before then counts only for keys with nothing saved.
+ * sessionStorage lives as long as the page.
  */
 interface PiStorage extends Storage {
   /** The keys saved. */
@@ -72,8 +73,8 @@ interface PiStorage extends Storage {
   /** Save the pending writes now. Rejects with a PiPageError when they were not saved. */
   flush(): Promise<void>;
   /**
-   * Drop the viewer's own values and go back to the author's (for the author: drop the defaults for everyone), then
-   * re-render from the values it resolves with. Use it for "Reset layout".
+   * Drop the viewer's own values and go back to the author's (for the author: drop the defaults for everyone). Once it
+   * resolves, re-render from getItem. Use it for "Reset layout".
    */
   reset(): Promise<void>;
 }
@@ -104,6 +105,7 @@ type PiPageErrorCode =
   | "limit_reached" // the viewer used today's model allowance; it renews at midnight UTC
   | "unavailable" //   no model answered, or this view has none (the check, a page outside a viewer)
   | "bad_output" //    asked for JSON, the model answered something else
+  | "upstream_error" // the request to the Worker failed; try again later
   | "cancelled"; //    the call's AbortSignal fired
 
 /** Storage and model rejections are Errors carrying `code` (and `retryAfterMs` on rate_limited). Branch on `code`. */

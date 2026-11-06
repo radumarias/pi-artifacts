@@ -37,9 +37,11 @@
   }
 
   const namespaces = new Map();
+  const makers = { mcp: createMcp, storage: createStorage, ai: createAi };
   function use(name) {
-    const make = { mcp: createMcp, storage: createStorage, ai: createAi }[name];
-    if (typeof make !== "function") return Promise.resolve(null);
+    // Own names only: "constructor" or "toString" are not capabilities.
+    if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(makers, name)) return Promise.resolve(null);
+    const make = makers[name];
     if (!namespaces.has(name)) namespaces.set(name, connected().then((l) => (l ? make(l) : null)));
     return namespaces.get(name);
   }
@@ -197,7 +199,7 @@
   // stand-in below is the same store. The Worker puts its limits in when it serves the page (worker/artifacts/serve.ts).
   const LIMITS = __PAGE_STORAGE_LIMITS__;
   const WRITE_DELAY_MS = 500;
-  const saved = { values: new Map(), changes: new Map(), isAuthor: false, link: null, timer: 0 };
+  const saved = { values: new Map(), changes: new Map(), isAuthor: false, link: null, timer: 0, loadFailed: false };
 
   function quotaError(message) {
     return new DOMException(message, "QuotaExceededError");
@@ -213,6 +215,9 @@
   /** Send the changes made so far. Resolves once they are saved; rejects with why they were not. */
   function flush() {
     clearTimeout(saved.timer);
+    if (saved.loadFailed && saved.changes.size) {
+      return Promise.reject(piError({ code: "unavailable", message: "Saved values could not be loaded, so nothing is saved." }));
+    }
     if (!saved.link || saved.changes.size === 0) return Promise.resolve();
     const changes = Object.fromEntries(saved.changes);
     saved.changes.clear();
@@ -250,8 +255,7 @@
     },
     removeItem(key) {
       key = String(key);
-      if (!saved.values.delete(key)) return;
-      change(key, null);
+      if (saved.values.delete(key)) change(key, null);
     },
     clear() {
       for (const key of [...saved.values.keys()]) store.removeItem(key);
@@ -275,9 +279,10 @@
     return link.request("storage", { op: "load" }).then(
       (loaded) => {
         const values = new Map(Object.entries(loaded.values || {}));
-        // What the page changed while the values loaded wins over them, and is saved now.
-        for (const [key, value] of saved.changes) {
-          if (value === null) values.delete(key);
+        // What the page set before they loaded counts only for keys with nothing saved: code that writes its defaults
+        // at startup (as code written for localStorage does) must not overwrite what the viewer saved.
+        for (const [key, value] of [...saved.changes]) {
+          if (values.has(key) || value === null) saved.changes.delete(key);
           else values.set(key, value);
         }
         saved.values = values;
@@ -291,6 +296,7 @@
       (error) => {
         // The page still runs on what it sets now; nothing is saved, so a later load cannot be overwritten with it.
         console.warn("pi storage: saved values could not be loaded:", error.message);
+        saved.loadFailed = true;
         return store;
       },
     );

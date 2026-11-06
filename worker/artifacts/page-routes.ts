@@ -51,12 +51,15 @@ export async function pageAiRoute(request: Request, env: Env, storage: Storage, 
   const directory = exports.UserDirectory.getByName(uid);
   const [{ success }, spent, [models, candidates]] = await Promise.all([env.PAGE_AI.limit({ key: uid }), directory.pageAiSpentToday(), pageModels(env, storage)]);
   if (!success) return pageFailed({ code: "rate_limited", message: "Too many requests to the model; wait a minute.", retryAfterMs: 60_000 }, 429);
+  // Checked before the call and counted after it: calls at the same moment can each pass, so the allowance can be
+  // passed by what a few calls cost (cents at most, with the rate limit above).
   if (spent >= (Number(env.PAGE_AI_DAILY_USD) || 0)) {
     return pageFailed({ code: "limit_reached", message: "You used today's allowance for asking pages' model; it renews at midnight UTC." }, 429);
   }
 
   const answer = await askPageModel(models, candidates, checked);
-  if (answer.usage) waitUntil(directory.recordPageAi({ input: answer.usage.input, output: answer.usage.output, cost: answer.usage.cost.total }));
+  const { usage } = answer;
+  if (usage.input || usage.output) waitUntil(directory.recordPageAi({ input: usage.input, output: usage.output, cost: usage.cost.total }));
   if (!answer.ok) return pageFailed(answer.error, answer.error.code === "unavailable" ? 503 : 422);
   return json({ ok: true, text: answer.text, ...(answer.json !== undefined && { json: answer.json }) } satisfies PageAiResponse);
 }
