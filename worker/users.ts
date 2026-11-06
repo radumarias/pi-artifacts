@@ -1,6 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelSetting } from "../shared/models.ts";
 import { SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type MentionNotice, type SidebarList } from "../shared/protocol.ts";
+import { checkSystemPrompt, type ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
 import { titleFromMessage, UNNAMED_CHAT } from "./agent/title.ts";
@@ -11,6 +12,23 @@ import { mcpServers } from "./mcp/servers.ts";
 export function mcpAuthStore(uid: string, server: string): McpAuthStore {
   const directory = exports.UserDirectory.getByName(uid);
   return { get: () => directory.mcpAuth(server), update: (change) => directory.updateMcpAuth(server, change) };
+}
+
+/** Where a user's, or a chat's, own system prompt is kept, in its object's KV storage. */
+const SYSTEM_PROMPT_KEY = "systemPrompt";
+
+/** The system prompt kept under SYSTEM_PROMPT_KEY in `kv`; "" for none. */
+export function readSystemPrompt(kv: SyncKvStorage): string {
+  return kv.get<string>(SYSTEM_PROMPT_KEY) ?? "";
+}
+
+/** Check `value` as a system prompt and keep it under SYSTEM_PROMPT_KEY in `kv`; empty clears it. */
+export function saveSystemPrompt(kv: SyncKvStorage, value: unknown): { text: string } | { error: string } {
+  const checked = checkSystemPrompt(value);
+  if ("error" in checked) return checked;
+  if (checked.text) kv.put(SYSTEM_PROMPT_KEY, checked.text);
+  else kv.delete(SYSTEM_PROMPT_KEY);
+  return checked;
 }
 
 /** A message that tagged this user: who wrote it, its start, and when. */
@@ -183,12 +201,32 @@ export class UserDirectory extends DurableObject<Env> {
     if (this.ctx.storage.sql.exec("UPDATE chats SET shared = ? WHERE id = ? AND shared != ?", flag, id, flag).rowsWritten) this.#changed("chats");
   }
 
-  /** This user has seen everything in the chat so far. */
-  markSeen(id: string): void {
+  /**
+   * This user has seen everything in the chat so far. Returns when they had last seen it before, if something came in
+   * since, so the app can mark what is new; null when nothing was unread, or they never looked at the chat.
+   */
+  markSeen(id: string): number | null {
+    const unread = "WHERE id = ? AND activity_at > seen_at";
+    const before = this.ctx.storage.sql
+      .exec<{ seen_at: number }>(`SELECT seen_at FROM chats ${unread} UNION ALL SELECT seen_at FROM shared_chats ${unread}`, id, id)
+      .toArray()[0];
+    if (!before) return null;
     const now = Date.now();
-    const own = this.ctx.storage.sql.exec("UPDATE chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
-    const shared = this.ctx.storage.sql.exec("UPDATE shared_chats SET seen_at = ? WHERE id = ? AND activity_at > seen_at", now, id).rowsWritten;
-    if (own + shared > 0) this.#changed("chats");
+    this.ctx.storage.sql.exec(`UPDATE chats SET seen_at = ? ${unread}`, now, id);
+    this.ctx.storage.sql.exec(`UPDATE shared_chats SET seen_at = ? ${unread}`, now, id);
+    this.#changed("chats");
+    return before.seen_at > 0 ? before.seen_at : null;
+  }
+
+  /**
+   * This user stopped looking at the chat: what it showed them until now is read, also what came in without making
+   * it unread (an agent's reply as it streams, before its run ends). Not when something unread is waiting, which
+   * stays new for them.
+   */
+  leftChat(id: string): void {
+    const now = Date.now();
+    this.ctx.storage.sql.exec("UPDATE chats SET seen_at = ? WHERE id = ? AND activity_at <= seen_at", now, id);
+    this.ctx.storage.sql.exec("UPDATE shared_chats SET seen_at = ? WHERE id = ? AND activity_at <= seen_at", now, id);
   }
 
   /** Whose chat `id` is: this user's own uid, the owner's for a chat shared with them, or null. The chat itself still checks membership. */
@@ -441,6 +479,17 @@ export class UserDirectory extends DurableObject<Env> {
 
   setModelChoice(choice: ModelSetting): void {
     this.ctx.storage.kv.put("model", choice);
+  }
+
+  /** The user's own system prompt, added to the built-in one in all their chats; "" for none. Always theirs to change. */
+  systemPrompt(): ChatSystemPrompt {
+    return { text: readSystemPrompt(this.ctx.storage.kv), editable: true };
+  }
+
+  /** Save the user's system prompt; their chats use it from their next message on. */
+  setSystemPrompt(value: unknown): ChatSystemPrompt | { error: string } {
+    const saved = saveSystemPrompt(this.ctx.storage.kv, value);
+    return "error" in saved ? saved : { ...saved, editable: true };
   }
 }
 

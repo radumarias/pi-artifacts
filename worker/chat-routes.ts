@@ -1,8 +1,20 @@
 import { exports } from "cloudflare:workers";
 import type { MentionOptions } from "../shared/mentions.ts";
-import { ID_PATTERN, SOCKET_NOT_A_MEMBER, type ArtifactSummary, type ChatContents, type ChatDeletion, type CreatedInvite, type Person } from "../shared/protocol.ts";
+import {
+  ID_PATTERN,
+  SEAT_PARAM,
+  SECOND_SEAT,
+  secondSeat,
+  SOCKET_NOT_A_MEMBER,
+  type ArtifactSummary,
+  type ChatContents,
+  type ChatDeletion,
+  type CreatedInvite,
+  type Person,
+} from "../shared/protocol.ts";
 import { chatAgentName, closedSocket, PERSON_HEADER, type ChatRefusal } from "./chat-agent.ts";
 import { serveChatFile, storeUpload } from "./files-routes.ts";
+import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { json, readJson } from "./http.ts";
 import { parseInviteToken } from "./members.ts";
 import { newestFirst, type UserFiles } from "./storage/user-files.ts";
@@ -17,19 +29,25 @@ import type { UserDirectory } from "./users.ts";
  *   POST   /api/chats/:id/invites             (owner) a new single-use invite link
  *   DELETE /api/chats/:id/invites/:inviteId   (owner) revoke an invite
  *   DELETE /api/chats/:id/members/:uid        (owner) remove a member, or (member) leave
+ *   POST   /api/chats/:id/seat                (owner) join the chat a second time, as a member (secondSeat)
  *   POST   /api/chats/:id/attachments         files for a message, as POST /api/files takes them, into the owner's files
- *   POST   /api/chats/:id/seen                this user has seen the chat: it is no longer unread in their sidebar
+ *   POST   /api/chats/:id/seen                this user has seen the chat: it is no longer unread in their sidebar.
+ *                                             {seenAt?}: when they had last seen it, if something came in since.
+ *                                             ?left: they stopped looking at it, so what it showed them is read
  *   GET    /api/chats/:id/mentions            what "@" offers in the composer: for the owner their files and artifacts,
  *                                             for anyone else the chat's files and artifacts, and their own files
  *   GET    /api/chats/:id/contents            the chat's files and artifacts (the owner's), for the people in it to open
  *   GET    /api/chats/:id/files/<path>        one of the chat's files, served as GET /api/files/raw/ serves the user's own
+ *   GET    /api/chats/:id/system-prompt       the chat's system prompt, which adds to the owner's own, for the people in it
+ *   PUT    /api/chats/:id/system-prompt       (owner) {text}: change it; empty clears it
  *   POST   /api/invites/accept                {token}: join the chat an invite link is for
+ * With `?as=second`, a chat's routes (but its files) take the owner as their second seat in it, and refuse anyone else.
  * Returns null for any other path.
  */
 export async function chatRoute(
   request: Request,
   directory: DurableObjectStub<UserDirectory>,
-  person: Person,
+  signedIn: Person,
   filesOf: (uid: string) => Promise<UserFiles>,
 ): Promise<Response | null> {
   const url = new URL(request.url);
@@ -41,7 +59,7 @@ export async function chatRoute(
     // Checked against the owner's index first, so a made-up token never wakes a chat object.
     const title = token && (await exports.UserDirectory.getByName(token.ownerUid).chatTitle(token.chatId));
     if (!token || !title) return json({ error: "This invite link is not valid." }, 404);
-    const refused = await exports.ChatAgent.getByName(chatAgentName(token.ownerUid, token.chatId)).acceptInvite(token.secret, person, title);
+    const refused = await exports.ChatAgent.getByName(chatAgentName(token.ownerUid, token.chatId)).acceptInvite(token.secret, signedIn, title);
     return refused ? answer(refused) : json({ chatId: token.chatId });
   }
 
@@ -54,24 +72,32 @@ export async function chatRoute(
       request,
       file[2],
       () => filesOf(ownerUid),
-      (path) => chat.mayOpenFile(person.uid, path),
+      (path) => chat.mayOpenFile(signedIn.uid, path),
     );
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen)(?:\/([a-z0-9-]+))?)?$/);
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen|seat|system-prompt)(?:\/([a-z0-9-]+))?)?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
   if (isSocket && request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade" }, 426);
   // Only this user's own sidebar entry changes, so it needs no chat object.
   if (what === "seen" && method === "POST" && !item) {
-    await directory.markSeen(chatId);
-    return json({});
+    if (url.searchParams.has("left")) {
+      await directory.leftChat(chatId);
+      return json({});
+    }
+    const seenAt = await directory.markSeen(chatId);
+    return json(seenAt === null ? {} : { seenAt });
   }
   // Own chats and chats shared with this user.
+  const deny = (error: string, status: number) => (isSocket ? closedSocket(SOCKET_NOT_A_MEMBER, error) : json({ error }, status));
   const ownerUid = await directory.chatOwner(chatId);
-  if (!ownerUid) return isSocket ? closedSocket(SOCKET_NOT_A_MEMBER, "No such chat") : json({ error: "No such chat" }, 404);
+  if (!ownerUid) return deny("No such chat", 404);
   const chat = exports.ChatAgent.getByName(chatAgentName(ownerUid, chatId));
+  const seated = url.searchParams.get(SEAT_PARAM) === SECOND_SEAT;
+  if (seated && ownerUid !== signedIn.uid) return deny("Only the chat's owner can sit in it a second time.", 403);
+  const person = seated ? secondSeat(signedIn) : signedIn;
 
   if (isSocket) {
     // Set here, from the verified identity, replacing anything the browser sent under that name.
@@ -100,10 +126,12 @@ export async function chatRoute(
     if (!(await chat.isInChat(person.uid))) return json({ error: "You are not in this chat." }, 403);
     const offered = (artifacts: ArtifactSummary[]) => artifacts.map(({ id, title, latest, chatId }) => ({ id, title, latest, chatId }));
     if (person.uid !== ownerUid) {
-      const [contents, own] = await Promise.all([chat.contents(person.uid), filesOf(person.uid).then((f) => f.list())]);
+      // The owner's second seat is their account: it has no files of its own.
+      const own = seated ? [] : filesOf(person.uid).then((f) => f.list());
+      const [contents, ownFiles] = await Promise.all([chat.contents(person.uid), own]);
       if (!contents) return json({ error: "You are not in this chat." }, 403);
       return json({
-        files: [...contents.files, ...newestFirst(own).map((f) => ({ ...f, own: true as const }))],
+        files: [...contents.files, ...newestFirst(ownFiles).map((f) => ({ ...f, own: true as const }))],
         artifacts: offered(contents.artifacts),
       } satisfies MentionOptions);
     }
@@ -128,6 +156,13 @@ export async function chatRoute(
   if (what === "deletion" && method === "GET" && !item) {
     const preview = await chat.deletionPreview(person);
     return "status" in preview ? answer(preview) : json(preview satisfies ChatDeletion);
+  }
+  if (what === "seat" && method === "POST" && !item) return answer(await chat.addSecondSeat(person));
+  if (what === "system-prompt" && !item && (method === "GET" || method === "PUT")) {
+    // readJson takes only a JSON content type: another site cannot post one into a signed-in owner's chat.
+    const result =
+      method === "GET" ? await chat.chatSystemPrompt(person.uid) : await chat.setChatSystemPrompt(person, (await readJson<{ text?: unknown }>(request))?.text);
+    return "status" in result ? answer(result) : json(result satisfies ChatSystemPrompt);
   }
   if (what === "invites" && method === "DELETE" && item) return answer(await chat.revokeInvite(person, item));
   if (what === "members" && method === "DELETE" && item) return answer(await chat.removeMember(person, item));

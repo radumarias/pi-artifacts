@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
-import { ID_PATTERN, type ChatContents } from "../shared/protocol.ts";
+import { ID_PATTERN, secondSeatUid, type ChatContents } from "../shared/protocol.ts";
 import { chatFileRoute } from "../shared/uploads.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
 import { BackToSite } from "./BackToSite.tsx";
-import { api, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
+import { api, inSecondSeat, type ArtifactSummary, type FileInfo, type Me } from "./api.ts";
 import { ArtifactPanel } from "./artifact/ArtifactPanel.tsx";
 import { ChatFilterBar, ChatList, isShared, UnreadDot, useChatFilter, useChatList } from "./chat/ChatList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
@@ -73,6 +73,7 @@ export function App() {
       uid={me.uid}
       label={me.email ?? me.uid}
       chatId={chatId}
+      secondSeat={chatId !== undefined && inSecondSeat(url.search)}
       opening={chatId && opening && ID_PATTERN.test(opening) ? opening : undefined}
       showSkills={path === "/skills"}
       navigate={navigate}
@@ -180,6 +181,8 @@ interface WorkspaceProps {
   /** What the sidebar shows for the signed-in user: their email, or the demo name. */
   label: string;
   chatId: string | undefined;
+  /** The chat is open as the owner's second seat in it (secondSeat): a member, as the people they share it with are. */
+  secondSeat: boolean;
   /** The artifact to show beside the chat when it opens, rather than the newest one it published. */
   opening: string | undefined;
   /** The skills page in place of a chat. */
@@ -204,8 +207,8 @@ const RAIL_WIDTH = 52;
 const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
 
-function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
-  const { chats, load: loadChats } = useChatList(chatId);
+function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
+  const { chats, load: loadChats, newSince } = useChatList(chatId);
   const [artifacts, loadArtifacts] = useLatest<ArtifactSummary[]>(api.artifacts, []);
   const [files, loadFiles] = useLatest<FileInfo[]>(api.files, []);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -213,7 +216,8 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
   const [preview, setPreview] = useState<Preview | null>(null);
   // In a chat someone shared with this user, what it holds of theirs: its files and artifacts, which the sidebar lists
   // beside the user's own (the owner's other files and artifacts stay theirs).
-  const guestChat = chatId && chats.some((chat) => chat.id === chatId && chat.sharedBy) ? chatId : undefined;
+  // The owner's second seat sees the chat as they do.
+  const guestChat = chatId && (secondSeat || chats.some((chat) => chat.id === chatId && chat.sharedBy)) ? chatId : undefined;
   const [contents, loadContents, setContents] = useLatest<ChatContents | null>(() => (guestChat ? api.chatContents(guestChat) : Promise.resolve(null)), null);
   const [chatFilesOpen, setChatFilesOpen] = useStoredState("layout.chatFilesOpen", true, isBoolean);
   // The chat whose deletion is being confirmed.
@@ -422,10 +426,12 @@ function Workspace({ uid, label, chatId, opening, showSkills, navigate, onSignOu
             <SkillsView skills={skills} loadError={skillsError} reload={loadSkills} />
           </ErrorBoundary>
         ) : chatId ? (
-          <ErrorBoundary key={chatId} what="this chat">
+          // A new chat view, with a new socket, also between the owner and their second seat in the same chat.
+          <ErrorBoundary key={`${chatId}${secondSeat ? ".2" : ""}`} what="this chat">
             <ChatView
               chatId={chatId}
-              uid={uid}
+              uid={secondSeat ? secondSeatUid(uid) : uid}
+              newSince={newSince}
               onArtifact={onArtifact}
               onActivity={onActivity}
               onLeft={() => navigate("/")}

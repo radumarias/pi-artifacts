@@ -1,4 +1,5 @@
-import { defineExtension, section, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, section, type AgentEvent, type EntryRecord, type Extension } from "@earendil-works/pi-durable";
+import type { Message } from "@earendil-works/pi-ai";
 import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
 import type { ChatPeople } from "../../shared/protocol.ts";
 import RUNTIME_CONTRACT from "../../runtime/runtime.d.ts?raw";
@@ -39,6 +40,36 @@ export const promptExtension: Extension = defineExtension({
   ],
 });
 
+/** The system prompts the chat's owner wrote: their own, for all their chats, and this chat's. "" for none. */
+export interface UserPrompts {
+  user: string;
+  chat: string;
+}
+
+/**
+ * The owner's own system prompts, after the built-in sections, which they add to and never replace. Rendered for every
+ * model request, so a change shows from the next one. Always there, also with none written: pi patches a changed
+ * section in place, but a section that comes or goes among the ones installed after it rewrites the whole prompt.
+ */
+export function systemPromptExtension(prompts: () => Promise<UserPrompts>): Extension {
+  return defineExtension({
+    name: "system_prompt",
+    sections: [section("user_system_prompt", async () => userSystemPrompt(await prompts()))],
+  });
+}
+
+/** The section's text. */
+export function userSystemPrompt({ user, chat }: UserPrompts): string {
+  if (!user && !chat) return "The chat's owner wrote no instructions of their own.";
+  const parts = [
+    "The chat's owner wrote these instructions for you. Follow them in every reply, as you would their own words; " +
+      "where they disagree with the rules above for pages, those rules win, since the page's check and sandbox enforce them.",
+  ];
+  if (user) parts.push(`For all their chats:\n${user}`);
+  if (chat) parts.push(`For this chat${user ? " (where these and the ones above disagree, these win)" : ""}:\n${chat}`);
+  return parts.join("\n\n");
+}
+
 /** Who is in the chat, so the model can tell the people apart. */
 export function peopleExtension(people: () => ChatPeople): Extension {
   return defineExtension({
@@ -60,4 +91,32 @@ export function peopleExtension(people: () => ChatPeople): Extension {
       }),
     ],
   });
+}
+
+/**
+ * An event for a browser: each `pi.system` entry in it keeps its place, but not the prompt's sections and tools. Nobody's
+ * app shows them, and they are the owner's (their system prompt, the list of their files, their MCP tools): this keeps
+ * them off the browsers of the people they share the chat with. Only hygiene, not a boundary: the agent acts as the
+ * owner, and may tell anyone in the chat what it was told. Entries come only in these four events; copies only what changes.
+ */
+export function withoutSystemPrompt(event: AgentEvent): AgentEvent {
+  switch (event.type) {
+    case "snapshot":
+      return event.entries.some(isSystem) ? { ...event, entries: event.entries.map(promptless) } : event;
+    case "message_end":
+    case "entry_appended":
+      return isSystem(event.entry) ? { ...event, entry: promptless(event.entry) } : event;
+    case "tool_execution_end":
+      return event.entry && isSystem(event.entry) ? { ...event, entry: promptless(event.entry) } : event;
+    default:
+      return event;
+  }
+}
+
+const isSystem = (entry: EntryRecord) => entry.kind === "pi.system";
+
+/** A system entry as a browser gets it: only that it is one, and when. Its sections, tools and anything pi adds later stay on the server. */
+function promptless(entry: EntryRecord): EntryRecord {
+  if (!isSystem(entry) || !entry.model) return entry;
+  return { ...entry, model: entry.model.map(({ role, timestamp }) => ({ role, content: "", timestamp }) as Message) };
 }

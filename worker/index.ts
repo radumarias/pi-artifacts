@@ -1,5 +1,5 @@
 import { exports, waitUntil } from "cloudflare:workers";
-import { ID_PATTERN, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
+import { ID_PATTERN, isSecondSeatUid, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { PageCallCache } from "./artifacts/page-calls.ts";
 import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
@@ -72,6 +72,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const { name } = await request.json<{ name?: string }>();
       const slug = String(name ?? "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
       if (!UID_PATTERN.test(slug)) return json({ error: "Pick a name of 2–32 letters or digits." }, 400);
+      if (isSecondSeatUid(slug)) return json({ error: "That name is taken; pick another." }, 400);
       return json({ uid: slug }, 200, { "set-cookie": demoCookie(url, slug, 60 * 60 * 24 * 365) });
     }
     if (method === "DELETE") return json({}, 200, { "set-cookie": demoCookie(url, "", 0) });
@@ -154,6 +155,14 @@ async function route(request: Request, env: Env): Promise<Response> {
   // POST asks the providers again now, for a key added since.
   if (path === "/api/models" && (method === "GET" || method === "POST")) {
     return json(await loadCatalog(catalogSource(env, storage.models, waitUntil), { refresh: method === "POST" }), 200, { "cache-control": "private, no-cache" });
+  }
+
+  // The user's own system prompt, added to the built-in one in all their chats. PUT {text}; empty clears it. readJson
+  // takes only a JSON content type, so another site cannot set it for a signed-in user.
+  if (path === "/api/me/system-prompt" && method === "GET") return json(await directory.systemPrompt());
+  if (path === "/api/me/system-prompt" && method === "PUT") {
+    const saved = await directory.setSystemPrompt((await readJson<{ text?: unknown }>(request))?.text);
+    return json(saved, "error" in saved ? 400 : 200);
   }
 
   const skills = await skillsRoute(request, directory);

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { inputSections, liveStatus, shortOutput, stepHint, stepLabel, stepResults, StepsProvider, stepsLive, thoughtLine, ThoughtStep, ToolStep } from "../src/chat/Steps.tsx";
+import { inputSections, liveStatus, shortOutput, stepHint, stepLabel, stepResults, StepsProvider, stepsLive, thoughtLine, ThoughtStep, tookFor, ToolStep } from "../src/chat/Steps.tsx";
 import type { RunningTool } from "../src/chat/useChat.ts";
 
 const call = (id: string, name: string, args: Record<string, unknown>) => ({ type: "toolCall", id, name, arguments: args });
@@ -81,7 +81,7 @@ describe("step panel", () => {
     expect(html).toMatch(/^<details class="step done">/);
     expect(html).not.toContain("step-body");
     expect(html).toContain('<summary class="step-line"><span class="step-icon">✓</span><span class="step-label">Python</span><span class="step-hint">print(1)</span><svg class="step-chevron"');
-    expect(html).toContain('<span class="step-status">Done · 1.3 s</span></summary>');
+    expect(html).toContain('<span class="step-status">Done · 1.3s</span></summary>');
   });
 
   it("spins the thinking indicator's spark while the step runs", () => {
@@ -89,6 +89,18 @@ describe("step panel", () => {
     expect(html).toMatch(/^<details class="step active">/);
     expect(html).toContain('<svg class="thinking-spark"');
     expect(html).toContain('<span class="step-status">Running…</span>');
+  });
+
+  it("counts how long a running step has run, from its first whole second", () => {
+    const since = (ms: number) => render("open", [{ ...slot("running"), startedAt: Date.now() - ms }], true);
+    expect(since(47_400)).toContain('<span class="step-status">Running…</span><span class="step-time">47s</span>');
+    expect(since(125_000)).toContain('<span class="step-time">2m 5s</span>');
+    // A quick call never flashes "0s".
+    expect(since(300)).not.toContain("step-time");
+  });
+
+  it("says how long a finished step took the way its count read, finer under ten seconds", () => {
+    expect([40, 1_250, 9_960, 47_400, 125_000].map(tookFor)).toEqual(["40ms", "1.3s", "10s", "47s", "2m 5s"]);
   });
 
   it("marks a failed step, and one that stopped", () => {
@@ -99,7 +111,7 @@ describe("step panel", () => {
   it("says a call without arguments and with a one-line output on its line, with nothing to open", () => {
     const html = render("short", [], false, "files_list", {});
     expect(html).toMatch(/^<div class="step done static"><div class="step-line">/);
-    expect(html).toContain('<span class="step-hint">2 files</span><span class="step-status">Done · 40 ms</span>');
+    expect(html).toContain('<span class="step-hint">2 files</span><span class="step-status">Done · 40ms</span>');
     expect(html).not.toContain("step-chevron");
     expect(render("long", [], false, "files_list", {})).toMatch(/^<details class="step done">/);
     // Stopped before any output: the status says it all.

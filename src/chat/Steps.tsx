@@ -4,6 +4,7 @@ import { createContext, use, useMemo, useState, type ReactNode } from "react";
 import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
 import { clip, formatBytes, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
+import { formatElapsed, useElapsed } from "./elapsed.ts";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
 /** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
@@ -174,8 +175,11 @@ function resultText(result: ToolResultMessage): string {
   return result.content.map((block) => (block.type === "text" ? block.text : "[image]")).join("\n");
 }
 
-function seconds(ms: number): string {
-  return ms < 1_000 ? `${Math.round(ms)} ms` : `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+/** How long a finished step took: like the count it showed while running ("47s", "2m 5s"), finer under 10 s ("1.2s", "40ms"). */
+export function tookFor(ms: number): string {
+  // From where a tenth would round up to 10.0.
+  if (ms >= 9_950) return formatElapsed(Math.max(ms, 10_000));
+  return ms < 1_000 ? `${Math.round(ms)}ms` : `${(ms / 1_000).toFixed(1)}s`;
 }
 
 /** Panels the reader opened, by key: one stays open when its streaming message becomes an entry and remounts. */
@@ -186,7 +190,7 @@ const opened = new Set<string>();
  * holds, an arrow opens it on what the step was given and what came back; the body is only rendered while open, so a
  * long history of steps stays cheap. Without (`children` left out), the line is all there is, and its hint wraps.
  */
-function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
+function Panel({ openKey, tone, icon, label, hint, prose, status, time, children }: {
   openKey: string;
   tone?: "active" | "done" | "error";
   icon: ReactNode;
@@ -195,6 +199,8 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
   /** The hint is words (a thought), not code. */
   prose?: boolean;
   status?: string;
+  /** After the status, out of its shimmer, whose sweep would jump as the count changes width. */
+  time?: ReactNode;
   children?: () => ReactNode;
 }) {
   const [open, setOpen] = useState(() => opened.has(openKey));
@@ -215,6 +221,7 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, children }: {
         </svg>
       )}
       {status && <span className="step-status">{status}</span>}
+      {time}
     </>
   );
   if (!children) {
@@ -293,8 +300,16 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const live = result ? undefined : use(LiveContext);
   const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
   const { text, icon, tone } = STATUS[status];
-  const time = result?.durationMs !== undefined ? ` · ${seconds(result.durationMs)}` : "";
-  const props = { openKey: call.id, tone, icon: icon ?? <Spark />, label: stepLabel(call.name), status: text + time };
+  const startedAt = status === "running" ? live!.tools.get(call.id)?.startedAt : undefined;
+  const took = result?.durationMs !== undefined ? ` · ${tookFor(result.durationMs)}` : "";
+  const props = {
+    openKey: call.id,
+    tone,
+    icon: icon ?? <Spark />,
+    label: stepLabel(call.name),
+    status: text + took,
+    time: startedAt !== undefined && <RunningFor since={startedAt} />,
+  };
   const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
   // Only when it is needed: a result can be long, and finished steps re-render as the chat grows.
   const output = () => (result ? resultText(result) : live!.tools.get(call.id)?.output) ?? "";
@@ -325,6 +340,12 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
       }}
     </Panel>
   );
+}
+
+/** How long a running step has run, from its first whole second on: a quick call never flashes "0s". */
+function RunningFor({ since }: { since: number }) {
+  const elapsed = useElapsed(since);
+  return elapsed >= 1_000 && <span className="step-time">{formatElapsed(elapsed)}</span>;
 }
 
 /** What a page check saw: its screenshot, and how many errors and warnings it found. */

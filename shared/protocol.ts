@@ -236,6 +236,30 @@ export interface Person {
   name: string;
 }
 
+/**
+ * A chat's owner can also sit in it a second time, as a separate person ("Ada (2)") who is a member like anyone they
+ * invited: to try the chat as the people they share it with see it, from the one sign-in. That window's URL says so
+ * (`?as=second`), and its requests carry it; the Worker turns only the verified owner into this person, for their own
+ * chats, so nobody else can be it. Its uid cannot be anyone's own: those are hex (or demo slugs, which prove nothing).
+ */
+export const SEAT_PARAM = "as";
+export const SECOND_SEAT = "second";
+
+const SEAT_SUFFIX = "-seat2";
+
+export function secondSeatUid(uid: string): string {
+  return `${uid.slice(0, 26)}${SEAT_SUFFIX}`;
+}
+
+/** Whether a uid is one a second seat has, which no one may sign in as (demo names are refused it). */
+export function isSecondSeatUid(uid: string): boolean {
+  return uid.endsWith(SEAT_SUFFIX);
+}
+
+export function secondSeat(owner: Person): Person {
+  return { uid: secondSeatUid(owner.uid), name: `${owner.name} (2)` };
+}
+
 /** Everyone in a chat: its owner first, then its members as they joined. */
 export function everyone(people: ChatPeople): Person[] {
   return [people.owner, ...people.members];
@@ -366,11 +390,12 @@ export type ChatClientMessage =
 /**
  * ChatAgent → browser. `events` carries pi-durable AgentEvents verbatim; `people` comes on connect and whenever the people or invites change.
  * A snapshot taken mid-run comes with `runElapsedMs`: how long ago, by the server's clock, the run's first message was
- * placed, which the snapshot does not say. A duration rather than a time, so the browser's clock need not agree.
+ * placed, which the snapshot does not say, and `toolsElapsedMs`: how long each of its running calls has run, by call id.
+ * Durations rather than times, so the browser's clock need not agree.
  */
 export type ChatServerMessage =
   /** `queued`, with a snapshot or a batch that changes pi's inbox: the people's messages waiting in it, oldest first. */
-  | { type: "events"; events: unknown[]; runElapsedMs?: number; queued?: QueuedMessage[] }
+  | { type: "events"; events: unknown[]; runElapsedMs?: number; toolsElapsedMs?: Record<string, number>; queued?: QueuedMessage[] }
   | { type: "people"; people: ChatPeopleView }
   /** Everyone's reactions on connect; then, whenever one changes, its entry's (`entry`, `reactions` all of that entry's). */
   | { type: "reactions"; reactions: Reactions }

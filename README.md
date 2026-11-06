@@ -309,6 +309,21 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   built-in added later can take one of yours: then the agent uses yours while it is on, and the list says so.
 - The tool list is guidance shown on activation, not a sandbox: every tool of the chat stays callable.
 
+## System prompts
+
+You can add your own instructions to the agent's built-in system prompt, which they never replace:
+
+- **Your own system prompt** (account menu, **System prompt**) applies in all your chats, the ones you share
+  included. It is kept in your `UserDirectory` (`GET`/`PUT /api/me/system-prompt`), read again before every message.
+- **A chat's system prompt** (the pen icon in the chat's header) adds to yours for that chat, and wins where the two
+  disagree. Only the owner changes it; the people the chat is shared with can read it there
+  (`GET`/`PUT /api/chats/:id/system-prompt`). It applies from the agent's next model request, a run going included.
+- Both go after the built-in sections (`worker/agent/prompt.ts`, section `user_system_prompt`), up to 8,000 characters
+  each, and the built-in rules for pages win over them: the page check and sandbox enforce those anyway.
+- The agent's system prompt stays on the server: the chat's socket sends its `pi.system` entries without their
+  sections and tools, so a member's browser never gets the owner's prompts, file list or MCP tools. That is hygiene,
+  not a boundary: the agent acts as the owner and may tell anyone in the chat what it was told.
+
 ## Shared chats
 
 A chat's owner can invite other people to build artifacts with them in the same chat. Pi Durable is multiplayer for

@@ -1,8 +1,11 @@
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
+import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import { FILE_ROUTE, VIEW_PARAM, ZIP_ROUTE } from "../shared/uploads.ts";
 import {
+  SEAT_PARAM,
+  SECOND_SEAT,
   SOCKET_PING,
   type ArtifactSummary,
   type ArtifactView,
@@ -40,6 +43,25 @@ const responseError = (response: Response, body: unknown) =>
   Object.assign(new Error((body as { error?: string } | null)?.error ?? (response.statusText || `HTTP ${response.status}`)), {
     status: response.status,
   });
+
+/** Whether this window sits in its chat as the owner's second seat (secondSeat), which its URL says. */
+export function inSecondSeat(search = location.search): boolean {
+  return new URLSearchParams(search).get(SEAT_PARAM) === SECOND_SEAT;
+}
+
+const SEAT_QUERY = `?${SEAT_PARAM}=${SECOND_SEAT}`;
+
+/** Where the owner's second seat in a chat opens. */
+export const secondSeatPath = (chatId: string) => `/c/${chatId}${SEAT_QUERY}`;
+
+/**
+ * The URL of one of the open chat's routes: from a second seat's window, as that seat. Only the chat the window shows:
+ * the sidebar beside it is the owner's.
+ */
+function chatPath(chatId: string, rest: string): string {
+  const seated = location.pathname === `/c/${chatId}` && inSecondSeat();
+  return `/api/chats/${chatId}${rest}${seated ? SEAT_QUERY : ""}`;
+}
 
 /** The JSON body of a successful response; otherwise throws with the Worker's error message. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -86,8 +108,10 @@ export const api = {
   signOut: () => request<object>("/api/session", { method: "DELETE" }),
   chats: () => request<ChatSummary[]>("/api/chats"),
   createChat: () => request<ChatSummary>("/api/chats", { method: "POST" }),
-  /** The user has seen the chat: it is no longer unread in their sidebar. */
-  markSeen: (chatId: string) => request<object>(`/api/chats/${chatId}/seen`, { method: "POST" }),
+  /** The user has seen the chat: it is no longer unread in their sidebar. `seenAt`: when they had last seen it, if something came in since. */
+  markSeen: (chatId: string) => request<{ seenAt?: number }>(`/api/chats/${chatId}/seen`, { method: "POST" }),
+  /** The user stopped looking at the chat (left it, or hid the window): what it showed them is read. Sent also as the page closes. */
+  leftChat: (chatId: string) => request<object>(`/api/chats/${chatId}/seen?left`, { method: "POST", keepalive: true }),
   /** What deleting a chat would delete with it. Only for its owner. */
   chatDeletion: (chatId: string) => request<ChatDeletion>(`/api/chats/${chatId}/deletion`),
   /** Delete a chat for everyone in it, with its artifacts and those of its files in `files` (from chatDeletion). Only for its owner. */
@@ -95,7 +119,9 @@ export const api = {
   createInvite: (chatId: string) => request<CreatedInvite>(`/api/chats/${chatId}/invites`, post({})),
   revokeInvite: (chatId: string, inviteId: string) => request<object>(`/api/chats/${chatId}/invites/${inviteId}`, { method: "DELETE" }),
   /** The owner removes a member; a member passes their own uid to leave. */
-  removeMember: (chatId: string, uid: string) => request<object>(`/api/chats/${chatId}/members/${uid}`, { method: "DELETE" }),
+  removeMember: (chatId: string, uid: string) => request<object>(chatPath(chatId, `/members/${uid}`), { method: "DELETE" }),
+  /** The owner joins their chat a second time, as a member (secondSeat); open it at secondSeatPath. */
+  joinSecondSeat: (chatId: string) => request<object>(`/api/chats/${chatId}/seat`, post({})),
   acceptInvite: (token: string) => request<{ chatId: string }>("/api/invites/accept", post({ token })),
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
   models: () => request<ModelCatalog>("/api/models"),
@@ -124,6 +150,13 @@ export const api = {
     if (proxied && typeof proxied.ok === "boolean") return proxied;
     throw new Error(`The proxy answered ${response.status}`);
   },
+  /** The user's own system prompt, added to the built-in one in all their chats. Always theirs to change. */
+  systemPrompt: () => request<ChatSystemPrompt>("/api/me/system-prompt"),
+  /** Save it; empty clears it. */
+  setSystemPrompt: (text: string) => request<ChatSystemPrompt>("/api/me/system-prompt", send("PUT", { text })),
+  /** A chat's system prompt, which adds to its owner's own: everyone in the chat reads it, only the owner changes it. */
+  chatSystemPrompt: (chatId: string) => request<ChatSystemPrompt>(chatPath(chatId, "/system-prompt")),
+  setChatSystemPrompt: (chatId: string, text: string) => request<ChatSystemPrompt>(chatPath(chatId, "/system-prompt"), send("PUT", { text })),
   skills: () => request<SkillInfo[]>("/api/skills"),
   /** Save one of the user's skills, from its fields or from a SKILL.md file's text. */
   saveSkill: (skill: (SkillInput | { markdown: string }) & { enabled?: boolean }) => request<SkillInfo>("/api/skills", post(skill)),
@@ -156,12 +189,12 @@ export const api = {
   upload: (files: readonly { file: File; path: string }[]) => request<{ paths: string[] }>("/api/files", { method: "POST", body: uploadForm(files) }),
   /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */
   attach: (chatId: string, files: readonly { file: File; path: string }[]) =>
-    request<{ paths: string[] }>(`/api/chats/${chatId}/attachments`, { method: "POST", body: uploadForm(files) }),
+    request<{ paths: string[] }>(chatPath(chatId, "/attachments"), { method: "POST", body: uploadForm(files) }),
   /** For someone a chat is shared with: what it holds of its owner's, its files and artifacts. */
-  chatContents: (chatId: string) => request<ChatContents>(`/api/chats/${chatId}/contents`),
+  chatContents: (chatId: string) => request<ChatContents>(chatPath(chatId, "/contents")),
   /** What "@" offers in a chat's composer: the files and artifacts the chat's agent can open. */
-  mentions: (chatId: string) => request<MentionOptions>(`/api/chats/${chatId}/mentions`),
-  chatSocketUrl: (chatId: string) => socketUrl(`/api/chats/${chatId}/ws`),
+  mentions: (chatId: string) => request<MentionOptions>(chatPath(chatId, "/mentions")),
+  chatSocketUrl: (chatId: string) => socketUrl(chatPath(chatId, "/ws")),
   /** The sidebar's socket, which says when the chat list changed. */
   sidebarSocketUrl: () => socketUrl("/api/me/ws"),
 };
