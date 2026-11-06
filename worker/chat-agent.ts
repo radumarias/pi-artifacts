@@ -45,7 +45,7 @@ import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
 import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
-import { clip, deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
+import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
@@ -139,8 +139,6 @@ const SHARED_TOLD_KEY = "sharedTold";
 const AUTO_KEY = "auto";
 /** How many of the newest transcript entries the router is shown (routeHistory keeps the people's and agent's words). */
 const ROUTE_ENTRIES = 40;
-/** How much of why no router picked a message its pick keeps, for the tooltip. */
-const MAX_FAILED_CHARS = 300;
 
 /**
  * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
@@ -449,7 +447,7 @@ export class ChatAgent extends DurableObject<Env> {
     }
     const { root, catalog, agent, page } = read;
     const current = agent.model ? modelKey(agent.model.provider, agent.model.modelId) : this.env.MODEL;
-    const kept = (failed: string) => ({ pick: { model: current, thinkingLevel: agent.thinkingLevel, failed: clip(failed, MAX_FAILED_CHARS), ms: Date.now() - started } });
+    const kept = (failed: string) => ({ pick: { model: current, thinkingLevel: agent.thinkingLevel, failed, ms: Date.now() - started } });
     const tokens = contextTokens(page.items);
     try {
       const candidates = autoCandidates(catalog.models, this.env.AUTO_MODELS as AutoCandidate[], { images: images > 0, contextTokens: tokens });

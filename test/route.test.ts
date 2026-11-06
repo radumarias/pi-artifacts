@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type ClassifierModel, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
+import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { ConversationId, EntryRecord, Tx } from "@earendil-works/pi-durable";
 import {
   autoCandidates,
   contextTokens,
-  decisionOf,
   decisionsRouter,
   modelRouter,
   parsePick,
@@ -204,62 +204,62 @@ describe("routing", () => {
 });
 
 describe("the Decisions router", () => {
-  const luna = baseCatalog().model("openai/gpt-6-luna")!;
-  const answer = (model: string, effort = "low") => ({
-    answers: [
-      { type: "choice", name: "model", choice: model, confidence: 0.9 },
-      { type: "choice", name: "effort", choice: effort },
-    ],
-    usage: { input_tokens: 2_000 },
-  });
-
-  it("asks two choice questions through AI Gateway, priced as its model's input", async () => {
+  const luna = OPENAI_CLASSIFIER_MODELS["gpt-6-luna"] as ClassifierModel<"openai-decisions">;
+  const choice = (name: string, value: string) => ({ type: "choice", name, choice: value, probabilities: [{ value, probability: 0.9 }], confidence: 0.9 });
+  const answer = (model: string, effort = "low") => ({ answers: [choice("model", model), choice("effort", effort)], usage: { input_tokens: 2_000 } });
+  /** AI Gateway's side of the binding, answering each request with `reply`. */
+  const gateway = (reply: () => Response, byokAlias?: string) => {
     const sent: { url: string; init?: RequestInit }[] = [];
     const ai = {
       fetch: async (url: string, init?: RequestInit) => {
         sent.push({ url, init });
-        return Response.json(answer("anthropic/claude-haiku-5.5"));
+        return reply();
       },
     };
-    const routed = await route([decisionsRouter({ ai, gateway: "gw", byokAlias: "team" }, luna)], { ...request(), current: "openai/gpt-4o" });
+    return { options: { ai, gateway: "gw", ...(byokAlias && { byokAlias }) }, sent };
+  };
+
+  it("asks two choice questions through AI Gateway with its key, priced as its model's input", async () => {
+    const { options, sent } = gateway(() => Response.json(answer("anthropic/claude-haiku-5.5")), "team");
+    const routed = await route([decisionsRouter(options, luna)], { ...request(), current: "openai/gpt-4o" });
     expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low" });
     expect(routed.router).toEqual({ model: "openai/gpt-6-luna", cost: 0.0002, input: 2_000, output: 0 });
     expect(sent[0].url).toBe("https://workers-binding.ai/ai-gateway/gateways/gw/openai/v1/decisions");
     expect(sent[0].init?.headers).toMatchObject({ "cf-aig-byok-alias": "team", "cf-aig-collect-log": "false" });
+    // The gateway's stored key answers, not one of the request's.
+    expect(sent[0].init?.headers).not.toHaveProperty("authorization");
     const body = JSON.parse(sent[0].init?.body as string);
     expect(body.model).toBe("gpt-6-luna");
     expect(body.questions.map((question: { name: string }) => question.name)).toEqual(["model", "effort"]);
-    expect(body.questions[0].choices.map((choice: { value: string }) => choice.value)).toEqual(request().candidates.map((candidate) => candidate.id));
+    expect(body.questions[0].choices.map((item: { value: string }) => item.value)).toEqual(request().candidates.map((candidate) => candidate.id));
     expect(body.questions[0].choices[2].description).toMatch(/^id: openai\/gpt-4o .*efforts: none.*\(current\)$/);
-    expect(body.questions[1].choices[0].value).toBe("none");
-    // The models are in the choices only, not again in the input.
-    expect(body.input[0].content[0].text).not.toContain("<models>");
-    expect(body.input[0].content[0].text).toContain("<message>\nhi\n</message>");
+    expect(body.questions[1].choices[0]).toEqual({ value: "none" });
+    expect(JSON.parse(body.input)).toMatchObject({ message: "hi", conversation: [], attached: { images: 0, files: 0 } });
   });
 
-  it("reads none as no effort, and refuses a refusal or a model not listed", () => {
-    const { candidates } = request();
-    expect(decisionOf(answer("openai/gpt-4o", "none"), candidates, luna).pick).toEqual({ model: "openai/gpt-4o", thinkingLevel: "off" });
-    expect(() => decisionOf({ answers: [{ type: "refusal", name: "model" }] }, candidates, luna)).toThrow("refused");
-    expect(() => decisionOf(answer("openai/gpt-9"), candidates, luna)).toThrow("no listed model");
-    expect(() => decisionOf("nonsense", candidates, luna)).toThrow("no listed model");
+  it("reads none as no effort, and fails on a refusal or a model not listed", async () => {
+    const ask = async (reply: unknown) => decisionsRouter(gateway(() => Response.json(reply)).options, luna).ask(request(), AbortSignal.timeout(1_000));
+    expect((await ask(answer("openai/gpt-4o", "none"))).pick).toEqual({ model: "openai/gpt-4o", thinkingLevel: "off" });
+    await expect(ask({ answers: [{ type: "refusal", name: "model" }, choice("effort", "low")] })).rejects.toThrow("refused");
+    await expect(ask(answer("openai/gpt-9"))).rejects.toThrow("no listed model");
   });
 
-  it("hands over to the next router when the API fails", async () => {
-    const ai = { fetch: async () => new Response("not found", { status: 404 }) };
+  it("hands over to the next router when the API fails, saying why", async () => {
+    const { options } = gateway(() => new Response("not found", { status: 404 }));
     const { list } = routers(fauxAssistantMessage('{"model":"anthropic/claude-opus-5.5","effort":"high"}'));
-    const routed = await route([decisionsRouter({ ai, gateway: "gw" }, luna), ...list], request());
+    const routed = await route([decisionsRouter(options, luna), ...list], request());
     expect(routed.pick.model).toBe("anthropic/claude-opus-5.5");
     expect(routed.router.model).toMatch(/\/first$/);
+    await expect(route([decisionsRouter(options, luna)], request())).rejects.toThrow(/^openai\/gpt-6-luna: .*404/);
   });
 
-  it("is named in ROUTER_MODEL by decisions: and a listed model, in order with the others", () => {
-    const gateway = { ai: { fetch: async () => new Response() }, gateway: "gw" };
+  it("is named in ROUTER_MODEL by decisions: and an OpenAI model, in order with the others; one neither names says so", async () => {
     const found = routersFrom("decisions:openai/gpt-6-luna, openai/gpt-4o, nobody/unlisted, decisions:nobody/unlisted", baseCatalog(), {
       models: createModels(),
-      gateway,
+      gateway: gateway(() => new Response()).options,
     });
-    expect(found.map((router) => router.id)).toEqual(["openai/gpt-6-luna", "openai/gpt-4o"]);
+    expect(found.map((router) => router.id)).toEqual(["openai/gpt-6-luna", "openai/gpt-4o", "nobody/unlisted", "nobody/unlisted"]);
+    await expect(route(found.slice(2), request())).rejects.toThrow("nobody/unlisted: not in the picker; nobody/unlisted: not an OpenAI Decisions model");
   });
 });
 

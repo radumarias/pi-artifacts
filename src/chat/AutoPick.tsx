@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo } from "react";
 import { choiceLabel } from "../../shared/models.ts";
 import type { AutoPick } from "../../shared/protocol.ts";
 import { useCatalog } from "./ModelPicker.tsx";
@@ -23,14 +23,13 @@ export const AutoPicked = memo(function AutoPicked({ pick }: { pick: AutoPick })
         .join("\n")
     : `The router could not pick, so the chat kept the model it was on.${pick.failed ? `\nWhy: ${pick.failed}` : ""}`;
   // A tap shows the tooltip's text under it too: phones have no hover.
-  const [open, setOpen] = useState(false);
   return (
-    <>
-      <button type="button" className={router ? "auto-pick" : "auto-pick kept"} title={why} aria-expanded={open} onClick={() => setOpen(!open)}>
+    <details className={router ? "auto-pick" : "auto-pick kept"}>
+      <summary title={why}>
         <span className="auto-pick-tag">Auto</span>
         <span className="auto-pick-model">{router ? label : `kept ${label}`}</span>
-      </button>
-      {open && <div className="auto-pick-why">{why}</div>}
-    </>
+      </summary>
+      <div className="auto-pick-why">{why}</div>
+    </details>
   );
 });

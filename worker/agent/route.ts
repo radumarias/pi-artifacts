@@ -1,4 +1,6 @@
-import { calculateCost, clampThinkingLevel, type Api, type Model, type Models, type ModelThinkingLevel, type Usage } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type Api, type ClassifierModel, type Model, type Models, type ModelThinkingLevel, type Usage } from "@earendil-works/pi-ai";
+import { classify } from "@earendil-works/pi-ai/api/openai-decisions";
+import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { UsageDoc, type ConversationId, type EntryRecord, type Tx } from "@earendil-works/pi-durable";
 import { textOf } from "../../shared/canonical.ts";
@@ -47,9 +49,11 @@ export interface RoutePick {
 }
 
 /** How long the routers together may take before the chat goes on without a pick: a person is waiting. */
-export const ROUTE_MS = 4_000;
+export const ROUTE_MS = 5_000;
 /** How long one router may take when another is left to ask: a hung first router leaves the next one time to answer. */
-const TRY_MS = 2_500;
+const TRY_MS = 2_000;
+/** How much of each router's error a failed pick keeps. */
+const MAX_ERROR_CHARS = 120;
 /** Enough for a reasoning router's few thoughts and the JSON line. */
 const MAX_ROUTER_TOKENS = 1_024;
 /** How much of the conversation the router reads: the newest turns, each cut, up to a total. */
@@ -199,13 +203,18 @@ export function parsePick(reply: string, candidates: readonly Candidate[]): Rout
   } catch {
     return undefined;
   }
-  if (!isObject(value) || typeof value.model !== "string") return undefined;
-  const id = value.model.trim().toLowerCase();
-  const model = candidates.find((candidate) => candidate.id.toLowerCase() === id);
-  if (!model) return undefined;
-  const thinkingLevel = effortOf(value.effort);
-  const reason = typeof value.reason === "string" ? value.reason.replace(/\s+/g, " ").trim().slice(0, MAX_REASON_CHARS) : "";
-  return { model: model.id, ...(thinkingLevel && { thinkingLevel }), ...(reason && { reason }) };
+  if (!isObject(value)) return undefined;
+  return pickOf(candidates, value.model, value.effort, value.reason);
+}
+
+/** A pick of a listed model (by id, in any case), at the effort named, if any, and why; undefined for none listed. */
+function pickOf(candidates: readonly Candidate[], model: unknown, effort: unknown, reason?: unknown): RoutePick | undefined {
+  const id = typeof model === "string" ? model.trim().toLowerCase() : undefined;
+  const listed = candidates.find((candidate) => candidate.id.toLowerCase() === id);
+  if (!listed) return undefined;
+  const thinkingLevel = effortOf(effort);
+  const why = typeof reason === "string" ? reason.replace(/\s+/g, " ").trim().slice(0, MAX_REASON_CHARS) : "";
+  return { model: listed.id, ...(thinkingLevel && { thinkingLevel }), ...(why && { reason: why }) };
 }
 
 /** One way to pick: a model the picker lists (modelRouter), or OpenAI's Decisions API (decisionsRouter). */
@@ -242,67 +251,66 @@ export function modelRouter(models: Models, model: Model<Api>): Router {
 
 /** How ROUTER_MODEL marks a model to ask through OpenAI's Decisions API: `decisions:openai/gpt-6-luna`. */
 const DECISIONS_PREFIX = "decisions:";
+/** How the Decisions router's effort question is to be answered; the model question has the whole GUIDANCE. */
+const EFFORT_QUESTION =
+  "How long the model picked in the model question should reason before it answers: none for a greeting, thanks or a quick fact; low for a small change or a short explanation; medium for building a page or dashboard, data work or code; high or more for a hard problem.";
 
 /**
- * OpenAI's Decisions API (POST /v1/decisions) as a router, through AI Gateway with the deployment's OpenAI key: two
- * choice questions, the model (among the candidates, each described in its choice) and the effort, answered without
- * any text written, so it is fast and charges only for input, at `model`'s price. It gives no reason.
+ * OpenAI's Decisions API (POST /v1/decisions, pi-ai's classify) as a router, through AI Gateway with the deployment's
+ * OpenAI key: two choice questions, the model (among the candidates, each described in its choice) and the effort,
+ * answered without any text written, so it is fast and charges only for input. It gives no reason.
  */
-export function decisionsRouter(gateway: GatewayOptions, model: Model<Api>): Router {
+export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<"openai-decisions">): Router {
+  // pi-ai posts to api.openai.com with a bearer key; AI Gateway takes the request instead, with the deployment's key.
+  const viaGateway = (url: string | URL | Request, init?: RequestInit) => {
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
+    delete headers.authorization;
+    return gatewayFetch(gateway, "openai", new URL(String(url)).pathname.slice(1), { ...init, headers });
+  };
   return {
     id: modelKey(model.provider, model.id),
     async ask(request, signal) {
-      const body = {
-        // OpenAI's own id: AI Gateway's unified catalog names it openai/<id>.
-        model: model.id.slice(model.id.lastIndexOf("/") + 1),
-        input: [{ role: "user", content: [{ type: "input_text", text: routeContext(request) }] }],
-        questions: [
-          {
-            type: "choice",
-            name: "model",
-            instructions: `${GUIDANCE}\n\nAnswer with the model.`,
-            choices: request.candidates.map((candidate) => ({ value: candidate.id, description: candidateLine(candidate, request.current) })),
+      const efforts = ["none", ...new Set(request.candidates.flatMap((candidate) => candidate.efforts))];
+      const result = await classify(
+        model,
+        {
+          state: {
+            conversation: request.history.map(({ from, text }) => ({ from, text })),
+            conversationTokens: request.contextTokens,
+            message: clip(request.message, MAX_MESSAGE_CHARS),
+            attached: { images: request.images, files: request.files },
           },
-          // Any candidate's effort, "none" first: the chat moves one the picked model does not take to the nearest it does.
-          {
-            type: "choice",
-            name: "effort",
-            instructions: `${GUIDANCE}\n\nAnswer with the effort for the model you pick.`,
-            choices: ["none", ...new Set(request.candidates.flatMap((candidate) => candidate.efforts))].map((value) => ({ value })),
+          questions: {
+            model: {
+              type: "choice",
+              instructions: GUIDANCE,
+              criteria: Object.fromEntries(request.candidates.map((candidate) => [candidate.id, candidateLine(candidate, request.current)])),
+            },
+            // Any candidate's effort, "none" first: the chat moves one the picked model does not take to the nearest it does.
+            effort: { type: "choice", instructions: EFFORT_QUESTION, criteria: Object.fromEntries(efforts.map((effort) => [effort, ""])) },
           },
-        ],
-      };
-      const headers = { "content-type": "application/json" };
-      const response = await gatewayFetch(gateway, "openai", "v1/decisions", { method: "POST", headers, body: JSON.stringify(body), signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text().catch(() => "")).slice(0, 200)}`);
-      return decisionOf(await response.json(), request.candidates, model);
+        },
+        // The key is AI Gateway's; pi-ai only wants one to send.
+        { apiKey: "ai-gateway", fetch: viaGateway, signal, maxRetries: 0 },
+      );
+      if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `stopped: ${result.stopReason}`);
+      const { model: chosen, effort } = result.answers;
+      const pick = pickOf(request.candidates, chosen?.type === "choice" ? chosen.choice : undefined, effort?.type === "choice" ? effort.choice : undefined);
+      if (!pick) throw new Error(`no listed model in its answer: ${JSON.stringify(chosen)}`);
+      return { pick, usage: result.usage ?? NO_USAGE };
     },
   };
 }
 
-/** The pick in a Decisions API answer, and its usage, priced as `router`'s; a throw when it refused, or named no listed model. */
-export function decisionOf(reply: unknown, candidates: readonly Candidate[], router: Model<Api>): { pick: RoutePick; usage: Usage } {
-  const answers = isObject(reply) && Array.isArray(reply.answers) ? reply.answers.filter(isObject) : [];
-  const answer = (name: string) => answers.find((item) => item.name === name);
-  const chosen = answer("model");
-  if (chosen?.type === "refusal") throw new Error("it refused to pick");
-  const id = typeof chosen?.choice === "string" ? chosen.choice : "";
-  const model = candidates.find((candidate) => candidate.id === id);
-  if (!model) throw new Error(`no listed model in its answer: ${JSON.stringify(JSON.stringify(reply).slice(0, 200))}`);
-  const effort = answer("effort");
-  const thinkingLevel = effort?.type === "choice" ? effortOf(effort.choice) : undefined;
-  const input = isObject(reply) && isObject(reply.usage) && typeof reply.usage.input_tokens === "number" ? reply.usage.input_tokens : 0;
-  const usage: Usage = {
-    input,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: input,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  usage.cost = calculateCost(router, usage);
-  return { pick: { model: model.id, ...(thinkingLevel && { thinkingLevel }) }, usage };
-}
+/** A call that reported no usage. */
+const NO_USAGE: Usage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 
 /** A router's pick, the router that made it (by the picker's id) and what its call cost, and the call's usage, for pi's ledger. */
 export interface Routed {
@@ -313,7 +321,7 @@ export interface Routed {
 
 /**
  * Ask `routers` in turn, until one picks, within `timeoutMs` in all; one with another after it gets at most TRY_MS.
- * Throws when none picked, with each one's error.
+ * Throws when none picked, with each one's error, cut short.
  */
 export async function route(routers: readonly Router[], request: RouteRequest, timeoutMs = ROUTE_MS): Promise<Routed> {
   if (!routers.length) throw new Error("no router model is available");
@@ -331,24 +339,40 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
       const spend = { model: router.id, cost: usage.cost.total, input: usage.input + usage.cacheRead, output: usage.output };
       return { pick, router: spend, usage };
     } catch (error) {
-      errors.push(`${router.id}: ${errorMessage(error)}`);
+      errors.push(`${router.id}: ${clip(errorMessage(error), MAX_ERROR_CHARS)}`);
     }
   }
   throw new Error(errors.join("; "));
 }
 
 /**
- * The routers a deployment's ROUTER_MODEL names, in its order, those the picker lists: each a model asked for a JSON
- * reply, or, marked `decisions:`, one asked through OpenAI's Decisions API.
+ * The routers a deployment's ROUTER_MODEL names, in its order: each a model the picker lists, asked for a JSON reply, or,
+ * marked `decisions:`, an OpenAI model asked through the Decisions API. One neither names fails when asked, saying so.
  */
 export function routersFrom(spec: string, catalog: Catalog, use: { models: Models; gateway: GatewayOptions }): Router[] {
-  return spec.split(",").flatMap((entry): Router[] => {
-    const id = entry.trim();
-    const decisions = id.startsWith(DECISIONS_PREFIX);
-    const model = catalog.model(decisions ? id.slice(DECISIONS_PREFIX.length) : id);
-    if (!model) return [];
-    return [decisions ? decisionsRouter(use.gateway, model) : modelRouter(use.models, model)];
-  });
+  return spec
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((id): Router => {
+      if (id.startsWith(DECISIONS_PREFIX)) {
+        const name = id.slice(DECISIONS_PREFIX.length);
+        const model = name.startsWith("openai/")
+          ? (OPENAI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"openai-decisions">>)[name.slice("openai/".length)]
+          : undefined;
+        return model ? decisionsRouter(use.gateway, model) : unavailable(name, "not an OpenAI Decisions model");
+      }
+      const model = catalog.model(id);
+      return model ? modelRouter(use.models, model) : unavailable(id, "not in the picker");
+    });
+}
+
+/** A router ROUTER_MODEL names that cannot be asked: it fails at once, saying why. */
+function unavailable(id: string, why: string): Router {
+  return {
+    id,
+    ask: () => Promise.reject(new Error(why)),
+  };
 }
 
 /**
