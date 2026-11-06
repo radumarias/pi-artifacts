@@ -318,7 +318,8 @@ export interface ChatMessageData extends Person {
 /**
  * The tool picker's pick for a message: the agent tool names offered (none for a message that needs no MCP tool), the
  * picker and what its call cost, and how long it took. With no picker, it failed (`failed` says why), and every tool
- * was offered. `added`: a reply was running, so the picks were added to the tools it has. A type, so pi can store it.
+ * was offered. `added`: a reply was running, so the picks were added to the tools it has. `unchanged`: the tools could
+ * not be changed at all (`failed` says why), so the reply had the ones it had. A type, so pi can store it.
  */
 export type ToolPickNote = {
   tools: string[];
@@ -327,6 +328,7 @@ export type ToolPickNote = {
   picker?: RouterSpend;
   failed?: string;
   added?: true;
+  unchanged?: true;
   ms: number;
 };
 

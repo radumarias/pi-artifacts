@@ -78,7 +78,7 @@ const MAX_ROUTER_TOKENS = 1_024;
 const MAX_TURNS = 12;
 const MAX_TURN_CHARS = 600;
 const MAX_HISTORY_CHARS = 6_000;
-const MAX_MESSAGE_CHARS = 4_000;
+export const MAX_MESSAGE_CHARS = 4_000;
 const MAX_REASON_CHARS = 120;
 
 /**

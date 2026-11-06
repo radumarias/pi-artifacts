@@ -90,8 +90,8 @@ describe("the tool picker", () => {
     });
     const picked = await pickTools(ai, jev, { message: "x", history: [], tools: tools(300) }, AbortSignal.timeout(1_000));
     expect(runs).toHaveLength(2);
-    expect(runs.map((run) => Object.keys((run.input.questions as { tool: Question }).tool.criteria).length)).toEqual([255, 47]);
-    expect(picked.tools).toEqual(["portal__tool_0", "portal__tool_254"]);
+    expect(runs.map((run) => Object.keys((run.input.questions as { tool: Question }).tool.criteria).length)).toEqual([151, 151]);
+    expect(picked.tools).toEqual(["portal__tool_0", "portal__tool_150"]);
     expect(picked.usage.input).toBe(1_000);
   });
 

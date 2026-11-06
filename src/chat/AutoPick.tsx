@@ -41,18 +41,18 @@ export const AutoPicked = memo(function AutoPicked({ pick }: { pick: AutoPick })
 
 /**
  * Under a message, which of the chat's MCP tools were offered to answer it ("Tools · 3 of 42"); its tooltip names them,
- * and the picker, at what cost and in how long. When the picker failed, every tool was offered; when its picks could not
- * be offered, the reply had the tools it had. Either way it says why. Memoized: the chat re-renders on every streamed token.
+ * and the picker, at what cost and in how long. When the picker failed, every tool was offered; when the tools could not
+ * be changed, the reply had the ones it had. Either way it says why. Memoized: the chat re-renders on every streamed token.
  */
 export const ToolsPicked = memo(function ToolsPicked({ note }: { note: ToolPickNote }) {
   const { picker, failed } = note;
   if (failed) {
-    const what = picker ? "The picked tools could not be offered, so the reply had the tools it had." : "Every tool was offered.";
-    return <PickChip tag="Tools" label={picker ? "kept" : `all ${note.of}`} why={`${what}\nWhy: ${failed}`} kept />;
+    const what = note.unchanged ? "The tools could not be changed, so the reply had the ones it had." : "Every tool was offered.";
+    return <PickChip tag="Tools" label={note.unchanged ? "kept" : `all ${note.of}`} why={`${what}\nWhy: ${failed}`} kept />;
   }
   const why = [
     note.tools.length ? `Offered: ${note.tools.map(stepLabel).join(", ")}.` : "No MCP tool offered: the message looked like it needs none.",
-    note.added && "A reply was running, so these were added to the tools it had.",
+    note.added && note.tools.length > 0 && "A reply was running, so these were added to the tools it had.",
     "Others load when needed.",
     picker && pickedBy(toolPickerName(picker.model), note.ms, picker),
   ]

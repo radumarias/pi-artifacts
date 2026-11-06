@@ -3,7 +3,16 @@ import { classify } from "@earendil-works/pi-ai/api/cloudflare-workers-ai-system
 import { modelKey } from "../../shared/models.ts";
 import { excerpt } from "../../shared/replies.ts";
 import { clip, errorMessage } from "../../shared/util.ts";
-import { addUsage, askClassifier, conversationState, systemOneModel, workersAIOptions, type ModelRunner, type RouteTurn } from "./route.ts";
+import {
+  addUsage,
+  askClassifier,
+  conversationState,
+  MAX_MESSAGE_CHARS,
+  systemOneModel,
+  workersAIOptions,
+  type ModelRunner,
+  type RouteTurn,
+} from "./route.ts";
 
 /**
  * The tool picker: before a message starts a run, a System One classifier on Workers AI (TypeSafe's Jev by default)
@@ -47,9 +56,8 @@ const RELATIVE_FLOOR = 0.1;
 export const NO_TOOL = "no_tool";
 /** One choice question takes at most 255 options: NO_TOOL and this many tools. More are asked in parallel. */
 const MAX_OPTIONS = 254;
-/** How much of each tool's description, and of the message, the picker reads. */
+/** How much of each tool's description the picker reads (and of the message, as much as Auto's router: MAX_MESSAGE_CHARS). */
 const MAX_DESCRIPTION_CHARS = 300;
-const MAX_MESSAGE_CHARS = 4_000;
 
 const INSTRUCTIONS = `A chat assistant builds web pages and dashboards, works with data and answers questions. Besides its own tools it can call the tools of MCP servers, listed here. Which of these tools will it call to answer the person's new message? Read the conversation for what the message refers to (a follow-up such as "now for last week" needs the tools used before). Rank the tools by how likely the assistant needs each.
 ${NO_TOOL}: the message needs none of them (a greeting, thanks, a question it can answer from what it knows or what the conversation already shows, a change to a page that needs no new data).
@@ -74,7 +82,7 @@ export function pickerId(model: ClassifierModel<"cloudflare-workers-ai-system-on
 
 /**
  * Ask `model` which of `request.tools` the message needs, through the AI binding: one choice question per
- * MAX_OPTIONS tools, all at once. Throws when a call fails or answers nothing it was asked.
+ * MAX_OPTIONS tools at most, in chunks of even size, all at once. Throws when a call fails or answers nothing it was asked.
  */
 export async function pickTools(
   ai: ModelRunner,
@@ -82,8 +90,10 @@ export async function pickTools(
   request: ToolPickRequest,
   signal: AbortSignal,
 ): Promise<ToolPick> {
+  // Even chunks: each question's probabilities add up within it, so a small last one would rank its few tools high.
+  const size = Math.ceil(request.tools.length / Math.ceil(request.tools.length / MAX_OPTIONS));
   const chunks: PickableTool[][] = [];
-  for (let i = 0; i < request.tools.length; i += MAX_OPTIONS) chunks.push(request.tools.slice(i, i + MAX_OPTIONS));
+  for (let i = 0; i < request.tools.length; i += size) chunks.push(request.tools.slice(i, i + size));
   const state = { conversation: conversationState(request.history), message: clip(request.message, MAX_MESSAGE_CHARS) };
   const options = workersAIOptions(ai);
   const results = await Promise.all(
