@@ -198,9 +198,8 @@ export const api = {
   },
   /** Where a user folder downloads as a zip named after it, with the folder itself at its root. */
   folderZipUrl: (path: string) => ZIP_ROUTE + encodePath(path),
-  /** Delete the user's own files and folders (each with everything under it); answers how many files went. */
-  deleteFiles: (files: readonly string[], folders: readonly string[]) =>
-    request<{ deleted: number }>("/api/files", send("DELETE", { files, folders })),
+  /** Delete the user's own files and folders, each folder with everything under it. */
+  deleteFiles: (files: readonly string[], folders: readonly string[]) => request<object>("/api/files", send("DELETE", { files, folders })),
   /** One request's worth of files (see uploadBatches), each with its name or its path inside a picked folder. */
   upload: (files: readonly { file: File; path: string }[]) => request<{ paths: string[] }>("/api/files", { method: "POST", body: uploadForm(files) }),
   /** Files for a chat message, stored under uploads/ in the chat owner's files; send the paths with the message. */

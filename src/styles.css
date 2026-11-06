@@ -255,20 +255,19 @@ body.resizing iframe { pointer-events: none; }
 .files-selection > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .files-selection .button, .files-selection button { padding: 3px 8px; font-size: 13px; }
 .files-selection .selection-icon { display: inline-flex; padding: 4px 6px; }
+.files-selection button.files-delete:not(:disabled) { color: var(--error); }
 .files-selection .upload-status { flex-basis: 100%; padding: 0; }
 .file-pick { flex: none; margin: 0 2px 0 6px; accent-color: var(--accent); }
 .file-folder > summary > .file-pick { margin: 0 4px 0 2px; vertical-align: -2px; }
 .files-empty { padding: 4px 8px; }
-.sidebar .file-action { display: inline-flex; flex: none; padding: 4px; margin-right: 2px; border-radius: 5px; color: var(--muted); opacity: 0; }
+.sidebar .file-action { display: inline-flex; flex: none; padding: 4px; margin-right: 2px; border: 0; border-radius: 5px; background: none; color: var(--muted); opacity: 0; cursor: pointer; }
 .file-folder > summary > .file-actions { position: absolute; right: 2px; top: 50%; display: flex; transform: translateY(-50%); }
 .file-row:hover .file-action, .file-folder > summary:hover .file-action, .file-action:focus-visible { opacity: 1; }
-.sidebar .file-action[href]:hover { color: var(--text); background: var(--border); }
-/* Too big to zip: no href, so it is inert; its title says why. */
-a.file-action:not([href]) { cursor: not-allowed; }
-a.file-action:not([href]) svg { opacity: 0.45; }
-.sidebar button.file-delete { border: 0; background: none; cursor: pointer; }
-.sidebar button.file-delete:hover { color: var(--error); background: var(--border); }
-.files-selection button.files-delete:not(:disabled) { color: var(--error); }
+.sidebar .file-action:not([aria-disabled="true"]):hover { color: var(--text); background: var(--border); }
+.sidebar .file-action.file-delete:hover { color: var(--error); }
+/* Too big to zip: inert, and its title says why. */
+.file-action[aria-disabled="true"] { cursor: not-allowed; }
+.file-action[aria-disabled="true"] svg { opacity: 0.45; }
 @media (hover: none) { .sidebar .file-action { opacity: 1; } }
 /* A drag of files over the app: one target over everything, and the preview's iframe must not take the drop. */
 .drop-target {

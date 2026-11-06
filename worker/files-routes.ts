@@ -286,26 +286,24 @@ function zipResponse(files: UserFiles, root: string, paths: readonly string[]): 
 
 /**
  * Delete some of the user's files: a JSON body of `files` and `folders` (the sidebar's picks), each folder with
- * everything under it. Answers how many files went. Only the signed-in user's own files: someone in a chat shared with
- * them never deletes the owner's (those are served through the chat, read only). readJson takes only a JSON body, which
- * another site cannot send without a CORS preflight, so it cannot delete a signed-in user's files.
+ * everything under it. Every path is checked before anything goes. Only the signed-in user's own files: someone in a
+ * chat shared with them never deletes the owner's (those are served through the chat, read only). readJson takes only
+ * a JSON body, which another site cannot send without a CORS preflight, so it cannot delete a signed-in user's files.
  */
 async function deleteFiles(request: Request, files: UserFiles): Promise<Response> {
   if (Number(request.headers.get("content-length")) > MAX_SELECTION_FORM) return json({ error: "Too many files picked." }, 413);
   const body = await readJson<{ files?: unknown; folders?: unknown }>(request);
-  const fields = (value: unknown) => (Array.isArray(value) ? value : null)?.map((path) => normalisePath(typeof path === "string" ? path : ""));
-  const picked = fields(body?.files ?? []);
-  const folders = fields(body?.folders ?? []);
-  if (!body || !picked || !folders) return json({ error: "Expected a JSON body of files and folders." }, 400);
+  if (!body) return json({ error: "Expected a JSON body of files and folders." }, 400);
+  // normalisePath refuses an empty path, so no folder stands for all the files.
+  const paths = (value: unknown = []) => (Array.isArray(value) ? value.map((path) => normalisePath(typeof path === "string" ? path : "")) : null);
+  const picked = paths(body.files);
+  const folders = paths(body.folders);
+  if (!picked || !folders) return json({ error: "Expected a JSON body of files and folders." }, 400);
   if (picked.length + folders.length === 0) return json({ error: "Pick at least one file or folder." }, 400);
   if (picked.length + folders.length > MAX_LISTED) return json({ error: "Too many files picked." }, 413);
-  // A folder inside another picked one goes with it.
-  const top = [...new Set(folders)].filter((folder, _, all) => !all.some((other) => folder.startsWith(`${other}/`)));
-  const loose = [...new Set(picked)].filter((path) => !top.some((folder) => path.startsWith(`${folder}/`)));
-  await files.delete(loose);
-  let deleted = loose.length;
-  for (const folder of top) deleted += await files.deleteFolder(folder);
-  return json({ deleted });
+  // Deleting is idempotent: a file inside a picked folder, or a folder inside another, is simply gone already.
+  await Promise.all([files.delete(picked), ...folders.map((folder) => files.deleteFolder(folder))]);
+  return json({});
 }
 
 function tooBig(): string {

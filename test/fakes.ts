@@ -15,17 +15,19 @@ export class FakeBucket {
     for (const key of keys) this.objects.set(key, "");
   }
 
-  /** Pages as R2 does: at most `limit` objects, and a cursor while more remain. */
+  /**
+   * Pages as R2 does: keys in order, at most `limit` objects, and a cursor while more remain. The cursor is where the
+   * page ended, not a count, so a page deleted before the next is listed moves nothing on.
+   */
   async list({ prefix, cursor, limit = 1000 }: { prefix: string; cursor?: string; limit?: number }) {
     this.calls.push({ op: "list", prefix });
-    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix));
-    const start = Number(cursor ?? 0);
-    const page = keys.slice(start, start + limit);
-    const truncated = start + limit < keys.length;
+    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix) && (cursor === undefined || key > cursor)).sort();
+    const page = keys.slice(0, limit);
+    const truncated = limit < keys.length;
     return {
       objects: page.map((key) => ({ key, size: new TextEncoder().encode(this.objects.get(key)!).byteLength, uploaded: new Date(0) })),
       truncated,
-      cursor: truncated ? String(start + limit) : undefined,
+      cursor: truncated ? page.at(-1) : undefined,
     };
   }
 

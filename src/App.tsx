@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
 import { ID_PATTERN, secondSeatUid, type ChatContents } from "../shared/protocol.ts";
-import { chatFileRoute } from "../shared/uploads.ts";
+import { chatFileRoute, MAX_LISTED } from "../shared/uploads.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { errorMessage } from "../shared/util.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
@@ -290,14 +290,12 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
   const openChatFile = useCallback((file: string) => chatFileBase && setPreview({ file, base: chatFileBase }), [chatFileBase]);
   const previewing = preview && "file" in preview ? preview : null;
   const closePreview = useCallback(() => setPreview(null), []);
-  // Deleted files leave the sidebar, and the preview when it shows one of them.
-  const onFilesDeleted = useCallback(
-    (gone: (path: string) => boolean) => {
-      loadFiles();
-      setPreview((shown) => (shown && "file" in shown && !shown.base && gone(shown.file) ? null : shown));
-    },
-    [loadFiles],
-  );
+  // A file deleted (from the sidebar, or with a chat) leaves the preview once a whole listing lacks it. Only when the
+  // files are read again: a file just opened is in the listing it was opened from.
+  useEffect(() => {
+    if (files.length >= MAX_LISTED) return;
+    setPreview((shown) => (shown && "file" in shown && !shown.base && !files.some((file) => file.path === shown.file) ? null : shown));
+  }, [files]);
 
   // Skills the agent proposed in a chat wait, off, for the user to review.
   const proposed = (skills ?? []).filter((s) => s.origin === "agent" && !s.enabled).length;
@@ -440,7 +438,7 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
             upload={upload}
             openFile={previewing && !previewing.base ? previewing.file : null}
             onOpenFile={openFile}
-            onDeleted={onFilesDeleted}
+            onDeleted={loadFiles}
           />
           <AccountMenu label={label} onSignOut={onSignOut} />
         </aside>

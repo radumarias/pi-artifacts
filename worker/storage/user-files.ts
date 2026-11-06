@@ -1,5 +1,6 @@
 import { MAX_LISTED, UPLOADS } from "../../shared/uploads.ts";
 import { normalisePath } from "./paths.ts";
+import { deletePrefix } from "./r2.ts";
 
 /** A part of a file, as R2 reads it: from an offset (for a length), or its last `suffix` bytes. */
 export type ByteRange = { offset: number; length?: number } | { suffix: number };
@@ -73,18 +74,10 @@ export class UserFiles {
     for (let i = 0; i < keys.length; i += 1000) await this.#bucket.delete(keys.slice(i, i + 1000));
   }
 
-  /** Delete `folder` and everything under it, however many files; answers how many went. */
-  async deleteFolder(folder: string): Promise<number> {
+  /** Delete `folder` (never all the files: #objectKey refuses an empty path) and everything under it, however many files. */
+  async deleteFolder(folder: string): Promise<void> {
     // Always end the prefix with "/": deleting "uploads/q3" must never touch "uploads/q30".
-    const prefix = `${this.#objectKey(folder)}/`;
-    let deleted = 0;
-    // A page's keys are gone once deleted, so each listing starts again from the top.
-    for (;;) {
-      const page = await this.#bucket.list({ prefix, limit: 1000 });
-      if (page.objects.length === 0) return deleted;
-      await this.#bucket.delete(page.objects.map((object: R2Object) => object.key));
-      deleted += page.objects.length;
-    }
+    await deletePrefix(this.#bucket, `${this.#objectKey(folder)}/`);
   }
 
   #objectKey(path: string): string {

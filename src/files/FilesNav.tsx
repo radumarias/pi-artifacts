@@ -6,8 +6,9 @@ import { api, type FileInfo } from "../api.ts";
 import { UnreadDot } from "../chat/ChatList.tsx";
 import { Icon, TrashIcon } from "../Icon.tsx";
 import { isBoolean, opensElsewhere, SectionHead, useStoredState } from "../layout.tsx";
-import { DeleteFiles, isDoomed, type Doomed } from "./DeleteFiles.tsx";
+import { DeleteFiles } from "./DeleteFiles.tsx";
 import { fromInput, type Picked } from "./pick.ts";
+import { inPickedFolder, isPicked, type Kind, type Picks } from "./picks.ts";
 import { fileMatcher, SEARCH_HELP } from "./search.ts";
 
 /** Where an upload is: a line for the sidebar, and whether it is still going. */
@@ -104,11 +105,9 @@ export const DownloadIcon = () => (
   </Icon>
 );
 
-type Kind = "file" | "folder";
-
 /** What is picked for download, while the panel is in select mode. */
 interface Selection {
-  picked: ReadonlyMap<string, Kind>;
+  picked: Picks;
   toggle(path: string, kind: Kind): void;
 }
 
@@ -124,7 +123,7 @@ interface Opening {
 const OpeningContext = createContext<Opening>({ open: null, onOpen: () => {} });
 
 /** Asks the user to confirm deleting some files and folders (DeleteFiles). */
-const DeletingContext = createContext<(doomed: Doomed) => void>(() => {});
+const DeletingContext = createContext<(doomed: Picks) => void>(() => {});
 
 /** A file's or folder's delete button, which asks first. In a folder's summary, its click must not open or close the folder. */
 function DeleteButton({ path, kind }: { path: string; kind: Kind }) {
@@ -138,7 +137,7 @@ function DeleteButton({ path, kind }: { path: string; kind: Kind }) {
       aria-label={`Delete ${name}`}
       onClick={(event) => {
         event.preventDefault();
-        ask(kind === "folder" ? { files: [], folders: [path] } : { files: [path], folders: [] });
+        ask(new Map([[path, kind]]));
       }}
     >
       <TrashIcon stroke={2.4} />
@@ -167,14 +166,6 @@ function FileName({ path, title }: { path: string; title: string }) {
       {baseName(path)}
     </a>
   );
-}
-
-/** Whether a folder above `path` is picked, which picks `path` too. */
-function inPickedFolder(picked: ReadonlyMap<string, Kind>, path: string): boolean {
-  for (let slash = path.indexOf("/"); slash !== -1; slash = path.indexOf("/", slash + 1)) {
-    if (picked.get(path.slice(0, slash)) === "folder") return true;
-  }
-  return false;
 }
 
 /** A file's or folder's checkbox in select mode; checked and fixed when a folder above it is picked. */
@@ -264,7 +255,7 @@ function SelectionBar({
   onDone,
 }: {
   files: readonly FileInfo[];
-  picked: ReadonlyMap<string, Kind>;
+  picked: Picks;
   error: string | null;
   onSubmit: () => void;
   onDelete: () => void;
@@ -272,7 +263,7 @@ function SelectionBar({
 }) {
   // What the zip would hold, from the sidebar's listing (the Worker checks again).
   const refusal = useMemo(() => {
-    const held = files.filter((file) => picked.has(file.path) || inPickedFolder(picked, file.path));
+    const held = files.filter((file) => isPicked(picked, file.path));
     return zipRefusal(
       held.length,
       held.reduce((sum, file) => sum + file.size, 0),
@@ -369,8 +360,8 @@ export const FilesNav = memo(function FilesNav({
   /** The file showing in the preview, marked in the tree. */
   openFile: string | null;
   onOpenFile: (path: string) => void;
-  /** Some files were deleted: those `gone` says. */
-  onDeleted: (gone: (path: string) => boolean) => void;
+  /** Some files were deleted. */
+  onDeleted: () => void;
 }) {
   const [open, setOpen] = useStoredState("layout.filesOpen", false, isBoolean);
   // The last status the user saw with the panel open: one that went wrong while it was closed is marked on its head.
@@ -382,7 +373,7 @@ export const FilesNav = memo(function FilesNav({
   // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
   const search = useDeferredValue(query).trim();
   const root = useMemo(() => tree(files, fileMatcher(search)), [files, search]);
-  const [picked, setPicked] = useState<ReadonlyMap<string, Kind> | null>(null);
+  const [picked, setPicked] = useState<Picks | null>(null);
   const [zipError, setZipError] = useState<string | null>(null);
   useEffect(() => {
     reportZipError = setZipError;
@@ -407,12 +398,7 @@ export const FilesNav = memo(function FilesNav({
   );
   const opening = useMemo<Opening>(() => ({ open: openFile, onOpen: onOpenFile }), [openFile, onOpenFile]);
   // What the delete dialog asks about, while it is open.
-  const [doomed, setDoomed] = useState<Doomed | null>(null);
-  const deleted = (gone: Doomed) => {
-    // Picks that went are no longer picked; the rest stay.
-    setPicked((before) => before && new Map([...before].filter(([path]) => !isDoomed(gone, path))));
-    onDeleted((path) => isDoomed(gone, path));
-  };
+  const [doomed, setDoomed] = useState<Picks | null>(null);
   const pick = (input: HTMLInputElement) => {
     const picked = fromInput(input.files);
     // Cleared, so picking the same files again (after changing them) uploads them again.
@@ -459,13 +445,7 @@ export const FilesNav = memo(function FilesNav({
                 ensureDownloadFrame();
                 setZipError(null);
               }}
-              onDelete={() => {
-                const all = [...picked];
-                setDoomed({
-                  files: all.filter(([, kind]) => kind === "file").map(([path]) => path),
-                  folders: all.filter(([, kind]) => kind === "folder").map(([path]) => path),
-                });
-              }}
+              onDelete={() => setDoomed(picked)}
               onDone={() => setPicked(null)}
             />
           )}
@@ -498,7 +478,18 @@ export const FilesNav = memo(function FilesNav({
               "Or drop files and folders anywhere."
             )}
           </small>
-          {doomed && <DeleteFiles doomed={doomed} files={files} onClose={() => setDoomed(null)} onDeleted={() => deleted(doomed)} />}
+          {doomed && (
+            <DeleteFiles
+              doomed={doomed}
+              files={files}
+              onClose={() => setDoomed(null)}
+              onDeleted={() => {
+                // Picks that went are no longer picked; the rest stay.
+                setPicked((before) => before && new Map([...before].filter(([path]) => !isPicked(doomed, path))));
+                onDeleted();
+              }}
+            />
+          )}
         </>
       )}
     </section>
