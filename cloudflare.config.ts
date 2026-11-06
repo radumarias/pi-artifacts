@@ -33,6 +33,13 @@ export default defineConfig({
     compatibilityFlags: ["nodejs_compat"],
     entrypoint,
     observability: { enabled: true },
+    // Served only on this custom domain (its zone must be in the account), behind the Access app of ACCESS_TEAM_DOMAIN and
+    // ACCESS_AUD below. workers.dev and Preview URLs stay off, so a deploy never reopens the Worker outside Access; both
+    // are set explicitly, since cf leaves an unset previewUrls to the account's current setting. Another account changes
+    // the domain along with those two (or drops it and sets workersDev: true).
+    domains: ["pi.oxfer.app"],
+    workersDev: false,
+    previewUrls: false,
     // The React app. Everything the Worker answers itself is listed in
     // runWorkerFirst; any other path falls back to the SPA's index.html.
     assets: {
@@ -40,9 +47,10 @@ export default defineConfig({
       runWorkerFirst: ["/api/*", "/u/*"],
     },
     env: {
-      // What new chats run on until their user picks a model (worker/models.ts lists the choices): a pi-ai Cloudflare
-      // AI Gateway specifier, or a Workers AI id such as @cf/zai-org/glm-5.3-flash, and a pi thinking level.
-      MODEL: bindings.text("anthropic/claude-opus-5.5"),
+      // New chats start on Auto (with a ROUTER_MODEL) until their user picks a model (worker/models.ts lists the
+      // choices). MODEL at THINKING_LEVEL is what a chat runs on until Auto picks: a pi-ai Cloudflare AI Gateway
+      // specifier, or a Workers AI id such as @cf/zai-org/glm-5.3-flash, and a pi thinking level.
+      MODEL: bindings.text("anthropic/claude-sonnet-5.5"),
       THINKING_LEVEL: bindings.text("high"),
       // What names a chat after its first message: a small, fast model, as a pi-ai AI Gateway specifier or a Workers AI id.
       TITLE_MODEL: bindings.text("openai/gpt-4.1-nano"),
@@ -59,8 +67,11 @@ export default defineConfig({
       // (input priced only), through AI Gateway with the OpenAI key; system-one:<model> asks a System One classifier on
       // Workers AI (typesafe/jev, @cf/cloudflare/clef-flash) the same way, through the AI binding. Workers AI runs on
       // Cloudflare's own network, with no provider key and no hop to another provider: Jev first, then gpt-oss-120b there,
-      // then Gemini Flash-Lite with the Google AI Studio key.
-      ROUTER_MODEL: bindings.text("system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
+      // then Gemini Flash-Lite with the Google AI Studio key. Empty (as with PI_OFFLINE=1, where no router can be reached):
+      // no Auto for new chats, which start on MODEL.
+      ROUTER_MODEL: bindings.text(
+        process.env.PI_OFFLINE === "1" ? "" : "system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest",
+      ),
       // The tool picker: before each message that starts a run, a System One classifier on Workers AI (by its id, as
       // CALL_HINT_MODEL; through the AI binding, no key) reads the end of the conversation and the message, and picks
       // the few MCP tools it needs; only those are offered to the model, which loads any other with tool_search
@@ -115,6 +126,14 @@ export default defineConfig({
       PAGE_AI_DAILY_USD: bindings.text("0.50"),
       // Calls to pages' models: 20 a minute per person.
       PAGE_AI: bindings.rateLimit({ namespace: "4202", simple: { limit: 20, period: 60 } }),
+      // Dictation for browsers whose own speech recognition is missing (Firefox) or cannot reach its service (Brave,
+      // Arc, a blocked network): the composer records the clip and a speech-to-text model on Workers AI, through the AI
+      // binding, writes it out (worker/dictation.ts). Empty: no such fallback; the browser's own recognition only.
+      DICTATION_MODEL: bindings.text(process.env.PI_OFFLINE === "1" ? "" : "@cf/openai/whisper-large-v3-turbo"),
+      // How many minutes of audio one person may have transcribed a day (UTC); counted in their UserDirectory.
+      DICTATION_DAILY_MINUTES: bindings.text("60"),
+      // Clips sent for transcribing: 12 a minute per person.
+      DICTATION: bindings.rateLimit({ namespace: "4203", simple: { limit: 12, period: 60 } }),
       // Headless Chrome (Browser Rendering): the agent checks each page in it before publishing (worker/artifacts/check.ts).
       // Local development runs a local Chrome, which miniflare downloads on first use.
       BROWSER: bindings.browser({ dev: { remote: false } }),

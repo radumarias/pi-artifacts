@@ -106,6 +106,7 @@ import {
   checkSetting,
   currentCatalog,
   defaultModelChoice,
+  startingSetting,
   piModels,
   loadCatalog,
   type Catalog,
@@ -234,10 +235,10 @@ export class ChatAgent extends DurableObject<Env> {
       const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction: COMPACTION };
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
-        // A new chat starts on the model its user last picked, or on Auto (which starts from the deployment's default);
-        // PiHarness then finds the root and leaves it as it is.
+        // A new chat starts on its user's last pick, else on Auto (startingSetting); PiHarness then finds the root and
+        // leaves it as it is.
         if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
-          const setting = await this.#savedModel();
+          const setting = startingSetting(await this.#savedModel(), this.env.ROUTER_MODEL);
           if (isAuto(setting)) this.ctx.storage.kv.put(AUTO_KEY, true);
           else if (setting) await pi.root(context, { agent: this.#agentChange(setting) });
         }
@@ -247,7 +248,7 @@ export class ChatAgent extends DurableObject<Env> {
       }
       return pi;
     },
-    // What a new chat starts on before its user has picked a model.
+    // What a chat runs on until someone picks a model, or Auto picks one for it.
     defaults: this.#defaults(defaultModelChoice(this.env.MODEL, this.env.THINKING_LEVEL)),
   });
   readonly members = new ChatMembers(this.ctx.storage.sql);
@@ -395,7 +396,7 @@ export class ChatAgent extends DurableObject<Env> {
     return loadCatalog(catalogSource(this.env, this.storage.models, (promise) => this.ctx.waitUntil(promise)));
   }
 
-  /** The user's last pick, checked again: the list of models can change. On a failure, the deployment's default. */
+  /** The user's last pick, checked again: the list of models can change. Null when there is none, or on a failure. */
   async #savedModel(): Promise<ModelSetting | null> {
     try {
       const saved = await this.#directory.modelChoice();
@@ -1097,7 +1098,9 @@ export class ChatAgent extends DurableObject<Env> {
     const images = attachments.filter((attachment) => attachment.image).length;
     // What the router, the skill classifier and the tool picker read of the conversation: read once for all, and only if one asks.
     const recent = calling ? memoAsync(() => this.#recentEntries()) : undefined;
-    const routing = recent && this.#auto() ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
+    // A new chat is put on Auto as it opens (startingSetting), which its first message may come before: wait for that.
+    const onAuto = recent && (this.#auto() || ((await this.harness.pi()) && this.#auto()));
+    const routing = onAuto ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
     this.#announce({
       uid: author.uid,
       name: author.name,

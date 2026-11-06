@@ -1,4 +1,5 @@
 import { exports, waitUntil } from "cloudflare:workers";
+import { DICTATION_ROUTE } from "../shared/dictation.ts";
 import { ID_PATTERN, isSecondSeatUid, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { PageCallCache } from "./artifacts/page-calls.ts";
@@ -6,6 +7,7 @@ import { pageAiRoute, pageFailed, pageStorageRoute, type PageHome } from "./arti
 import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { dataRoute } from "./data-routes.ts";
+import { dictationRoute } from "./dictation.ts";
 import { filesRoute } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
 import { chatRoute } from "./chat-routes.ts";
@@ -156,6 +158,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade" }, 426);
     return directory.fetch(request);
   }
+  // Speech to text for browsers whose own recognition is missing or cannot reach its service (worker/dictation.ts).
+  if (path === DICTATION_ROUTE && method === "POST") return dictationRoute(request, env, uid, directory);
   if (path === "/api/chats" && method === "GET") return json(await directory.listChats());
   if (path === "/api/chats" && method === "POST") return json(await directory.createChat(newId()));
   if (path === "/api/artifacts" && method === "GET") return json(await directory.listArtifacts());

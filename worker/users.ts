@@ -72,6 +72,7 @@ export class UserDirectory extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS shared_chats (id TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, owner_name TEXT NOT NULL, title TEXT NOT NULL, joined_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS page_values (artifact_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (artifact_id, key));
       CREATE TABLE IF NOT EXISTS page_ai_spend (day TEXT PRIMARY KEY, calls INTEGER NOT NULL, input INTEGER NOT NULL, output INTEGER NOT NULL, cost REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS dictation_use (day TEXT PRIMARY KEY, clips INTEGER NOT NULL, seconds REAL NOT NULL);
     `);
     // Added later: what the chat's agent is doing (ChatStatus), when something last came in that this user did not
     // write, and when they last saw the chat. activity_at > seen_at is unread. Then: when someone last tagged them in
@@ -676,6 +677,21 @@ export class UserDirectory extends DurableObject<Env> {
       .exec<ArtifactRow>("SELECT id, chat_id, latest FROM artifacts")
       .toArray()
       .filter((row) => wanted.has(row.id));
+  }
+
+  /** How many seconds of audio the Worker transcribed for this user today (UTC) (worker/dictation.ts). */
+  dictationSecondsToday(): number {
+    return this.ctx.storage.sql.exec<{ seconds: number }>("SELECT seconds FROM dictation_use WHERE day = ?", utcDay()).toArray()[0]?.seconds ?? 0;
+  }
+
+  /** Count one transcribed clip against this user. */
+  recordDictation(seconds: number): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO dictation_use (day, clips, seconds) VALUES (?, 1, ?)
+       ON CONFLICT(day) DO UPDATE SET clips = clips + 1, seconds = seconds + excluded.seconds`,
+      utcDay(),
+      seconds,
+    );
   }
 
   /** Save the user's system prompt; their chats use it from their next message on. */

@@ -331,6 +331,14 @@ export function checkSetting(catalog: Catalog, input: { model?: unknown; thinkin
 }
 
 /**
+ * What a new chat starts on: its user's last pick (`saved`), else Auto when the deployment names a router
+ * (`ROUTER_MODEL`, a comma-separated list, read as routersFrom reads it), else null, the deployment's default.
+ */
+export function startingSetting(saved: ModelSetting | null, routers: string): ModelSetting | null {
+  return saved ?? (routers.split(",").some((id) => id.trim()) ? { model: AUTO_MODEL } : null);
+}
+
+/**
  * The deployment's default (`MODEL` at `THINKING_LEVEL`), checked like a pick when AI Gateway's catalog or Workers AI
  * has the model, so a level the model rejects (Claude 5.5 takes no "off") moves to one it takes. Any other model is
  * used as configured, at medium when `THINKING_LEVEL` is not one of pi's levels.

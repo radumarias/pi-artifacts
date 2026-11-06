@@ -96,6 +96,8 @@
     "worker/agent/prompt.ts",
     "worker/artifacts/serve.ts",
     "worker/artifacts/page-calls.ts",
-    "worker/artifacts/page-features.ts"
+    "worker/artifacts/page-features.ts",
+    "worker/dictation.ts",
+    "src/chat/dictation-engine.ts"
   ]
 }

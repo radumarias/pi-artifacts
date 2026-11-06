@@ -521,7 +521,8 @@ the chat's own (pi's agent state, so a change reaches every open view of the cha
 request. Everyone in a [shared chat](#shared-chats) can change it. The latest pick is also the default for new chats
 of whoever made it (kept in their `UserDirectory`): a chat takes it when it is first opened and keeps its model from
 then on, even before its first message, until someone changes it. Before a user has picked anything, chats start on
-`MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at high effort).
+Auto (when the deployment has a `ROUTER_MODEL`), which runs on `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts`
+(Claude Sonnet 5.5 at high effort) until it picks, and keeps that when no router answers.
 
 With many providers the list is long, so the picker is a searchable menu: a search box over every model (by name, id
 or provider), then the user's favorites (the star on each row) and recent picks, then each provider's models in a
@@ -550,6 +551,25 @@ the file it writes. `pnpm prices` reads them now. A live list's own price (OpenR
 a model no source prices keeps pi-ai's, and one pi-ai does not know either counts as free (so a provider keyed after the last build has its models priced from the next build), which the picker and the
 cost panel say ("price unknown"). They are list prices: Workers AI's free daily allowance, and any discount the
 account has, are not taken off. Everyone in a shared chat sees them.
+
+## Dictation
+
+The microphone under the message box tries three ways, best first (`src/chat/dictation-engine.ts`):
+
+1. **On this device**: the browser's own speech recognition with `processLocally` (Chrome 139+), once
+   `SpeechRecognition.available()` says the language pack is installed. It works offline, and the audio never leaves
+   the device. A pack that can be downloaded starts downloading on the first press, for the next time.
+2. **The browser's service**: the same API without `processLocally`. In Chrome it sends the audio to Google's service,
+   so Chromium browsers without Google's key (Brave, Arc) and blocked networks fail it with a `network` error.
+3. **The Worker**: when that API is missing (Firefox) or fails that way while online, the composer records the clip
+   (up to 2 minutes), turns it into 16 kHz mono WAV and posts it to `POST /api/dictation`, which runs
+   `DICTATION_MODEL` (Whisper large v3 turbo on Workers AI, through the `AI` binding) and returns the text when the
+   recording stops. Each person may send 12 clips a minute (`DICTATION`) and have `DICTATION_DAILY_MINUTES` (60) of
+   audio written out a day, counted in their `UserDirectory`. An empty `DICTATION_MODEL` turns it off.
+
+| Recording for the Worker | Writing it out | Done |
+| --- | --- | --- |
+| ![Recording](docs/media/dictation/recording-dark.png) | ![Writing out what you said](docs/media/dictation/transcribing-light.png) | ![The text in the message box](docs/media/dictation/done-dark.png) |
 
 ## Layout
 
@@ -609,11 +629,13 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
 3. Create an AI Gateway named `pi-artifacts` and store an Anthropic key and an OpenAI key in it (Provider Keys,
    BYOK), or use unified billing. Keys for other providers (Google AI Studio, xAI, Mistral, DeepSeek, Groq, Cerebras,
    Cohere, OpenRouter, Hugging Face) add their models to the picker within the hour, or at once with its refresh
-   button; no redeploy is needed. `MODEL` in `cloudflare.config.ts`, what new chats start on, is a pi-ai gateway specifier
-   (`anthropic/claude-opus-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
+   button; no redeploy is needed. `MODEL` in `cloudflare.config.ts`, what new chats run on until Auto or their user picks, is a pi-ai
+   gateway specifier (`anthropic/claude-sonnet-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
 4. Put the app behind Cloudflare Access: create a self-hosted Access application for the Worker's hostname with a
    policy listing who may sign in, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` (the application's audience tag) in
-   `cloudflare.config.ts`.
+   `cloudflare.config.ts`. That hostname is `domains` there, a custom domain on a zone in your account, with
+   workers.dev and Preview URLs off so the Worker is reachable only through Access; change it to yours, or drop it and
+   set `workersDev: true` to serve on workers.dev.
 5. Generate the file-encryption master key (`openssl rand -base64 32`, at least 32 bytes) and keep a copy somewhere
    safe: losing it makes every user's files unreadable, and changing it later needs a migration (see
    [How file encryption works](#how-file-encryption-works)). Pass it as a secret:

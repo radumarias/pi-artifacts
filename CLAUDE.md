@@ -61,5 +61,6 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
 - Screenshots and other media for docs and pull requests go in `docs/media/<feature>/`, which Git LFS stores
   (`.gitattributes`). Link them from a PR as `https://github.com/radumarias/pi-artifacts/raw/<commit>/docs/media/…`:
   raw.githubusercontent.com serves only the LFS pointer.
-- Deploy with `cf deploy` from the repository root (Worker `pi-artifacts` on workers.dev; R2 bucket, Artifacts namespace and AI
-  Gateway all named `pi-artifacts`). The sandbox image build needs Docker.
+- Deploy with `cf deploy` from the repository root (Worker `pi-artifacts` on the custom domain `pi.oxfer.app`, workers.dev
+  and Preview URLs off; R2 bucket, Artifacts namespace and AI Gateway all named `pi-artifacts`). The sandbox image build
+  needs Docker.
