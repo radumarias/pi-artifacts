@@ -46,7 +46,7 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
-import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
+import { AUTO_MODEL, COMPACTION, isAuto, modelKey, SKILLS_LEDGER_PREFIX, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -55,9 +55,11 @@ import { resolveMentions } from "./agent/mentions.ts";
 import { AGENT_REACTOR, isReactable, isReaction, type Reaction, type Reactions } from "../shared/reactions.ts";
 import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
-import { skillSource } from "./agent/skills.ts";
+import { grownShown, skillClassifier, skillMessage, type SkillChoice, type SkillClassifier } from "./agent/skill-pick.ts";
+import { isActive, type SkillInfo } from "../shared/skills.ts";
+import { shownFingerprint, skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
-import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
+import { autoCandidates, contextTokens, recordRouterSpend, recordSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
@@ -144,6 +146,10 @@ const SHARED_TOLD_KEY = "sharedTold";
 const AUTO_KEY = "auto";
 /** How many of the newest transcript entries the router is shown (routeHistory keeps the people's and agent's words). */
 const ROUTE_ENTRIES = 40;
+/** The names of the skills shown in this chat so far, once SKILLS_MODEL picks them (worker/agent/skill-pick.ts). */
+const SHOWN_SKILLS_KEY = "skillsShown";
+/** How many of the newest transcript entries the skill classifier is shown with the message. */
+const SKILL_ENTRIES = 12;
 
 /**
  * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
@@ -248,8 +254,12 @@ export class ChatAgent extends DurableObject<Env> {
    */
   #mcp = { key: "", listing: "", generation: 0 };
   #mcpListings = 0;
-  /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
+  /** The skills the agent has now (shownFingerprint), so a refresh reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
+  /** The user's skills as last listed, and their version, so a refresh lists them again only on a change. */
+  #skillsListed: { version: string; skills: SkillInfo[] } | undefined;
+  /** The refresh going on, if any: refreshes run one after another, so an older one never installs over a newer one. */
+  #skillsTurn: Promise<void> = Promise.resolve();
   /** The agent's prompt's list of the user's files, so a refresh reinstalls it only on a change. */
   #filesInstalled: string | undefined;
   /** The owner's own system prompt, as last read (see refreshUserPrompt). */
@@ -578,19 +588,69 @@ export class ChatAgent extends DurableObject<Env> {
   /**
    * Install the user's enabled skills, built-in and their own. Runs before every
    * prompt, so a skill added, changed or turned off in any chat applies from the
-   * next message on. Never rejects: a failure is logged, and the agent keeps the skills it has.
+   * next message on. With SKILLS_MODEL set, the agent is shown only the skills
+   * picked for this chat: given the `message` about to start a run, the
+   * classifier is first asked which of the skills not shown yet it needs (see
+   * worker/agent/skill-pick.ts). Never rejects: a failure is logged, and the agent
+   * keeps the skills it has.
    */
-  readonly refreshSkills = singleFlight(async () => {
+  refreshSkills(message?: string): Promise<void> {
+    const turn = this.#skillsTurn.then(() => this.#refreshSkills(message));
+    this.#skillsTurn = turn;
+    return turn;
+  }
+
+  async #refreshSkills(message: string | undefined): Promise<void> {
     try {
       const directory = this.#directory;
       const version = await directory.skillsVersion();
-      if (version === this.#skillsInstalled) return;
-      this.registry.install(await skills([skillSource(await directory.listSkills(), version)]));
-      this.#skillsInstalled = version;
+      if (this.#skillsListed?.version !== version) this.#skillsListed = { version, skills: await directory.listSkills() };
+      const listed = this.#skillsListed.skills;
+      const classifier = skillClassifier(this.env.SKILLS_MODEL, this.env.AI);
+      let shown: Set<string> | undefined;
+      if (classifier) {
+        const before = this.#shownSkills();
+        const waiting = listed.filter((skill) => isActive(skill) && !before.has(skill.name));
+        if (message !== undefined && waiting.length) await this.#pickSkills(classifier, message, waiting);
+        shown = this.#shownSkills();
+      }
+      const fingerprint = shownFingerprint(version, shown);
+      if (fingerprint === this.#skillsInstalled) return;
+      this.registry.install(await skills([skillSource(listed, fingerprint, shown)]));
+      this.#skillsInstalled = fingerprint;
     } catch (error) {
       console.error("skills:", errorMessage(error));
     }
-  });
+  }
+
+  /** The names of the skills shown in this chat so far (empty before any message picked). */
+  #shownSkills(): Set<string> {
+    return new Set(this.ctx.storage.kv.get<string[]>(SHOWN_SKILLS_KEY) ?? []);
+  }
+
+  /**
+   * Ask `classifier` which of `waiting` (skills not shown yet) `message` needs, with the end of the conversation, and
+   * add those, and any it could not answer for, to the ones shown. Its calls count in pi's ledger. Never throws.
+   */
+  async #pickSkills(classifier: SkillClassifier, message: string, waiting: readonly SkillChoice[]): Promise<void> {
+    const root = await this.#root();
+    const history = await root
+      .entries({}, SKILL_ENTRIES, undefined, BACKGROUND_CONTEXT)
+      .then((page) => routeHistory(page.items))
+      .catch((error: unknown) => {
+        console.error("skills pick:", errorMessage(error));
+        return [];
+      });
+    const pick = await classifier.pick({ message, history, skills: waiting.map(({ name, description }) => ({ name, description })) });
+    if (pick.errors.length) console.error("skills pick:", pick.errors.join("; "));
+    // Read again: the kv write follows its read with no await between, so no other pick is lost.
+    this.ctx.storage.kv.put(SHOWN_SKILLS_KEY, grownShown([...this.#shownSkills()], pick));
+    if (pick.usage.totalTokens > 0 || pick.usage.cost.total > 0) {
+      await root
+        .commit((tx) => recordSpend(tx, root.id, `${SKILLS_LEDGER_PREFIX}${pick.classifier}`, pick.usage), BACKGROUND_CONTEXT)
+        .catch((error: unknown) => console.error("skills spend:", errorMessage(error)));
+    }
+  }
 
   /**
    * Read the owner's own system prompt again: runs before every prompt, so a change made in any chat, or in the
@@ -872,7 +932,7 @@ export class ChatAgent extends DurableObject<Env> {
       ),
       // A message to the people in the chat starts no run: the agent needs its tools only when it is called.
       calling && this.refreshMcpTools().catch(() => {}),
-      calling && this.refreshSkills(),
+      calling && this.refreshSkills(skillMessage(text, [...attachments.map(({ path }) => path), ...own.map(({ path }) => path)])),
       calling && this.refreshFiles(),
       calling && this.refreshUserPrompt(),
     ]);

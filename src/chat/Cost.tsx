@@ -1,6 +1,6 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
-import { AUTO_LEDGER_PREFIX, effortLabel, type ModelInfo } from "../../shared/models.ts";
+import { AUTO_LEDGER_PREFIX, effortLabel, SKILLS_LEDGER_PREFIX, type ModelInfo } from "../../shared/models.ts";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
 import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
@@ -15,12 +15,16 @@ function describeTime(time: Timing): string {
 
 /**
  * A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name;
- * Auto's router ("Auto picks · GPT OSS 120B").
+ * Auto's router ("Auto picks · GPT OSS 120B"); the classifier that picks the skills shown ("Skill picks · typesafe/jev").
  */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
   if (share.model.startsWith(AUTO_LEDGER_PREFIX)) {
     const router = share.model.slice(AUTO_LEDGER_PREFIX.length);
     return `Auto picks · ${models.get(router)?.name ?? router}`;
+  }
+  if (share.model.startsWith(SKILLS_LEDGER_PREFIX)) {
+    const classifier = share.model.slice(SKILLS_LEDGER_PREFIX.length);
+    return `Skill picks · ${models.get(classifier)?.name ?? classifier}`;
   }
   const name = models.get(share.model)?.name ?? share.model;
   return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;

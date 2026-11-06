@@ -270,7 +270,7 @@ export function modelRouter(models: Models, model: Model<Api>): Router {
 /** How ROUTER_MODEL marks a model to ask through OpenAI's Decisions API: `decisions:openai/gpt-6-luna`. */
 const DECISIONS_PREFIX = "decisions:";
 /** How ROUTER_MODEL marks a System One classifier to ask on Workers AI: `system-one:typesafe/jev`. */
-const SYSTEM_ONE_PREFIX = "system-one:";
+export const SYSTEM_ONE_PREFIX = "system-one:";
 /** How a classifier router's effort question is to be answered; the model question has the whole GUIDANCE. */
 const EFFORT_QUESTION =
   "How long the model picked in the model question should reason before it answers: none for a greeting, thanks or a quick fact; low for a small change or a short explanation; medium for building a page or dashboard, data work or code; high or more for a hard problem.";
@@ -338,10 +338,17 @@ export interface ModelRunner {
 
 /**
  * A System One classifier on Workers AI (TypeSafe's Jev, Cloudflare's Clef) as a router, through the AI binding: on
- * Cloudflare's own network, with no provider key. pi-ai posts `{ model, input }` to Workers AI's REST API; the binding
- * runs it instead, and its answer goes back in the REST API's envelope.
+ * Cloudflare's own network, with no provider key.
  */
 export function workersAIClassifierRouter(ai: ModelRunner, model: ClassifierModel<"cloudflare-workers-ai-system-one">): Router {
+  return classifierRouter(model, classifyOnWorkersAI, workersAIOptions(ai));
+}
+
+/**
+ * How pi-ai's Workers AI classify reaches the model through the AI binding: pi-ai posts `{ model, input }` to Workers
+ * AI's REST API; the binding runs it instead, and its answer goes back in the REST API's envelope.
+ */
+export function workersAIOptions(ai: ModelRunner): ClassifierOptions {
   const viaBinding = async (_url: string | URL | Request, init?: RequestInit) => {
     const { model: id, input } = JSON.parse(String(init?.body)) as { model: string; input: Record<string, unknown> };
     const signal = init?.signal ?? undefined;
@@ -361,11 +368,17 @@ export function workersAIClassifierRouter(ai: ModelRunner, model: ClassifierMode
     }
   };
   // The binding needs no key; pi-ai only wants one to send.
-  return classifierRouter(model, classifyOnWorkersAI, { apiKey: "ai-binding", fetch: viaBinding });
+  return { apiKey: "ai-binding", fetch: viaBinding };
+}
+
+/** The System One classifier on Workers AI that a setting names after `system-one:` (`typesafe/jev`); undefined for none. */
+export function systemOneModel(name: string): ClassifierModel<"cloudflare-workers-ai-system-one"> | undefined {
+  const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
+  return Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
 }
 
 /** A call that reported no usage. */
-const NO_USAGE: Usage = {
+export const NO_USAGE: Usage = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -429,8 +442,7 @@ export function routersFrom(spec: string, catalog: Catalog, use: { models: Model
       }
       if (id.startsWith(SYSTEM_ONE_PREFIX)) {
         const name = id.slice(SYSTEM_ONE_PREFIX.length);
-        const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
-        const model = Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
+        const model = systemOneModel(name);
         return model ? workersAIClassifierRouter(use.ai, model) : unavailable(name, "not a System One model on Workers AI");
       }
       const model = catalog.model(id);
@@ -452,9 +464,13 @@ function unavailable(id: string, why: string): Router {
  * the router's picker id, as pi adds a tool's spend: the cost panel then counts it, also after older messages are
  * summarized. Not under `models`, whose rows the panel splits by the efforts of the replies in the transcript.
  */
-export async function recordRouterSpend(tx: Tx, conversationId: ConversationId, router: string, usage: Usage): Promise<void> {
+export function recordRouterSpend(tx: Tx, conversationId: ConversationId, router: string, usage: Usage): Promise<void> {
+  return recordSpend(tx, conversationId, `${AUTO_LEDGER_PREFIX}${router}`, usage);
+}
+
+/** Add a call's usage to the conversation's spend ledger under `tools` as `key` (recordRouterSpend says why there). */
+export async function recordSpend(tx: Tx, conversationId: ConversationId, key: string, usage: Usage): Promise<void> {
   const totals = (await tx.doc(UsageDoc, conversationId)).tools as Record<string, Usage>;
-  const key = `${AUTO_LEDGER_PREFIX}${router}`;
   const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
   // Drafts take strict JSON: no undefined counters.
   if (!total) {
