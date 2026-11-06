@@ -277,7 +277,13 @@ function SelectionBar({
       <span title={count}>{count}</span>
       {/* Icons, as on each row: the bar has no room for two more words beside the count and Done. */}
       {only ? (
-        <a className="button selection-icon" href={api.fileUrl(only[0])} download={baseName(only[0])} title={`Download ${baseName(only[0])}`}>
+        <a
+          className="button selection-icon"
+          href={api.fileUrl(only[0])}
+          download={baseName(only[0])}
+          title={`Download ${baseName(only[0])}`}
+          aria-label={`Download ${baseName(only[0])}`}
+        >
           <DownloadIcon />
         </a>
       ) : (
@@ -360,8 +366,8 @@ export const FilesNav = memo(function FilesNav({
   /** The file showing in the preview, marked in the tree. */
   openFile: string | null;
   onOpenFile: (path: string) => void;
-  /** Some files were deleted. */
-  onDeleted: () => void;
+  /** Some files were deleted: those `gone` picks, or null when a delete failed and some may have gone. */
+  onDeleted: (gone: Picks | null) => void;
 }) {
   const [open, setOpen] = useStoredState("layout.filesOpen", false, isBoolean);
   // The last status the user saw with the panel open: one that went wrong while it was closed is marked on its head.
@@ -486,8 +492,9 @@ export const FilesNav = memo(function FilesNav({
               onDeleted={() => {
                 // Picks that went are no longer picked; the rest stay.
                 setPicked((before) => before && new Map([...before].filter(([path]) => !isPicked(doomed, path))));
-                onDeleted();
+                onDeleted(doomed);
               }}
+              onFailed={() => onDeleted(null)}
             />
           )}
         </>

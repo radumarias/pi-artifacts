@@ -16,6 +16,7 @@ import { ChatFiles } from "./files/ChatFiles.tsx";
 import { FilePreview } from "./files/FilePreview.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
+import { isPicked, type Picks } from "./files/picks.ts";
 import { isBoolean, MenuButton, ResizeHandle, SectionHead, useMediaQuery, useStoredState } from "./layout.tsx";
 import { useLatest, useSidebarSocket } from "./sidebar.ts";
 import { SkillsView } from "./skills/SkillsView.tsx";
@@ -290,8 +291,17 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
   const openChatFile = useCallback((file: string) => chatFileBase && setPreview({ file, base: chatFileBase }), [chatFileBase]);
   const previewing = preview && "file" in preview ? preview : null;
   const closePreview = useCallback(() => setPreview(null), []);
-  // A file deleted (from the sidebar, or with a chat) leaves the preview once a whole listing lacks it. Only when the
-  // files are read again: a file just opened is in the listing it was opened from.
+  // A file deleted from the sidebar leaves the preview at once, however many files the listing holds. A delete that
+  // failed (`gone` null) may still have taken some: the files, and the chat's (the owner's second seat), are read again.
+  const onFilesDeleted = useCallback(
+    (gone: Picks | null) => {
+      if (gone) setPreview((shown) => (shown && "file" in shown && !shown.base && isPicked(gone, shown.file) ? null : shown));
+      onActivity();
+    },
+    [onActivity],
+  );
+  // One deleted with a chat leaves it once a whole listing lacks it. Only when the files are read again: a file just
+  // opened is in the listing it was opened from.
   useEffect(() => {
     if (files.length >= MAX_LISTED) return;
     setPreview((shown) => (shown && "file" in shown && !shown.base && !files.some((file) => file.path === shown.file) ? null : shown));
@@ -438,7 +448,7 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
             upload={upload}
             openFile={previewing && !previewing.base ? previewing.file : null}
             onOpenFile={openFile}
-            onDeleted={loadFiles}
+            onDeleted={onFilesDeleted}
           />
           <AccountMenu label={label} onSignOut={onSignOut} />
         </aside>

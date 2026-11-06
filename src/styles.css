@@ -238,7 +238,7 @@ body.resizing iframe { pointer-events: none; }
 .file-folder > summary { position: relative; padding: 5px 56px 5px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-folder > summary:hover { background: var(--surface-2); }
 .file-folder > :not(summary) { display: block; margin-left: 12px; }
-/* A file's name (an image's opens it in a new tab) and its download button; a folder's zip download sits at its summary's end. */
+/* A file's name (an image's opens it in a new tab), its download and delete buttons; a folder's zip download and delete sit at its summary's end. */
 .files .file-row { display: flex; align-items: center; border-radius: 6px; }
 .file-row:hover { background: var(--surface-2); }
 .file-row > .file-name { flex: 1; min-width: 0; }
