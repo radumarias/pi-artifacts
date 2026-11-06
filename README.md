@@ -388,6 +388,32 @@ You can add your own instructions to the agent's built-in system prompt, which t
   sections and tools, so a member's browser never gets the owner's prompts, file list or MCP tools. That is hygiene,
   not a boundary: the agent acts as the owner and may tell anyone in the chat what it was told.
 
+## Export and import
+
+Everything you have can leave as one zip and come back, on the same deployment or another (account menu, **Export
+data** and **Import data**). The browser builds the zip a piece at a time and reads one back the same way
+(`src/data/`, routes in `worker/data-routes.ts`, format in `shared/data-export.ts`), so no request carries more than one
+piece and the zip is not bound by what one Worker request may hold.
+
+- **In it:** your own chats (each chat object's conversation, reactions and settings, `worker/chat-dump.ts`, and the
+  pages its agent saved and did not publish), your artifacts with every version, your files, your skills with the files
+  of those imported as packages, your system prompt, model pick and built-in skills turned off, and what pages saved for
+  you (`pi.use("storage")`).
+- **Not in it:** your sign-ins to MCP servers (tokens, which belong to the deployment), what pages' model calls cost you,
+  the chats others shared with you (listed by name only: they are their owners'), and the people in your shared chats
+  and their invites: their ids mean nothing on another deployment, so an imported chat has only you in it. Their
+  messages stay in its conversation, under their names. Work still running in a chat (a run, a queued message) is left
+  out too, so nothing runs on import as you without being asked.
+- **Ids:** your user id differs between deployments, so an import puts yours in place of the export's wherever a chat
+  stores it. Chats keep their ids. An artifact keeps its id unless someone else's artifact has it on this deployment;
+  then it gets one derived from your id and its old one, the same on every try, and chats that name it are changed to
+  match.
+- **Never over what is here:** a chat, artifact version, file or skill you have already is skipped, and settings are set
+  only where you have none. An import that stopped part way is run again with the same zip and goes on: a chat becomes
+  yours only once all of it is in.
+- **Limits:** a plain zip (up to 4 GB and 65,535 files); one file of at most 95 MB per import request (Cloudflare takes
+  100 MB in one).
+
 ## Shared chats
 
 A chat's owner can invite other people to build artifacts with them in the same chat. Pi Durable is multiplayer for

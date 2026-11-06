@@ -5,6 +5,7 @@ import { PageCallCache } from "./artifacts/page-calls.ts";
 import { pageAiRoute, pageFailed, pageStorageRoute, type PageHome } from "./artifacts/page-routes.ts";
 import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
+import { dataRoute } from "./data-routes.ts";
 import { filesRoute } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
 import { chatRoute } from "./chat-routes.ts";
@@ -171,6 +172,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     const saved = await directory.setSystemPrompt((await readJson<{ text?: unknown }>(request))?.text);
     return json(saved, "error" in saved ? 400 : 200);
   }
+
+  // Export and import of everything the user has (worker/data-routes.ts).
+  const data = await dataRoute(request, uid, directory, storage);
+  if (data) return data;
 
   const skills = await skillsRoute(request, directory, () => storage.skillFiles(uid));
   if (skills) return skills;

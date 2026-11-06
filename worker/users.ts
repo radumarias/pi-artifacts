@@ -1,6 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelSetting } from "../shared/models.ts";
 import { PAGE_STORAGE_LIMITS, SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type MentionNotice, type SidebarList } from "../shared/protocol.ts";
+import type { ExportedAccount, ExportedArtifact, ExportedChat, ExportedPageValues, ExportedSkill } from "../shared/data-export.ts";
 import type { SkillFileInfo } from "../shared/skill-files.ts";
 import { checkSystemPrompt, type ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
@@ -358,15 +359,17 @@ export class UserDirectory extends DurableObject<Env> {
     if (this.ctx.storage.sql.exec("UPDATE artifacts SET seen = ? WHERE id = ? AND seen < ?", version, id, version).rowsWritten) this.#changed("artifacts");
   }
 
-  recordArtifact(artifact: ArtifactSummary): void {
+  /** A version was published. `seen`: the user has it already (an import brought it), so it is not unread. */
+  recordArtifact(artifact: ArtifactSummary, seen = false): void {
     this.ctx.storage.sql.exec(
-      `INSERT INTO artifacts (id, title, chat_id, latest, updated_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET title = excluded.title, latest = excluded.latest, updated_at = excluded.updated_at`,
+      `INSERT INTO artifacts (id, title, chat_id, latest, updated_at, seen) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET title = excluded.title, latest = excluded.latest, updated_at = excluded.updated_at, seen = MAX(seen, excluded.seen)`,
       artifact.id,
       artifact.title,
       artifact.chatId,
       artifact.latest,
       artifact.updatedAt,
+      seen ? artifact.latest : 0,
     );
     this.#changed("artifacts");
   }
@@ -569,6 +572,88 @@ export class UserDirectory extends DurableObject<Env> {
       usage.output,
       usage.cost,
     );
+  }
+
+  /**
+   * What an export of this user's data takes from here (shared/data-export.ts): their settings and skills, what pages
+   * saved for them, their own chats and artifacts, and by name the chats others shared with them. Not their sign-ins
+   * to MCP servers (tokens, which belong to this deployment), nor what their pages' model calls cost.
+   */
+  exportAccount(): { account: ExportedAccount; chats: Omit<ExportedChat, "parts">[]; artifacts: ExportedArtifact[]; sharedWithMe: { title: string; ownerName: string }[] } {
+    const sql = this.ctx.storage.sql;
+    const values = new Map<string, Record<string, string | null>>();
+    for (const row of sql.exec<{ artifact_id: string; key: string; value: string | null }>("SELECT artifact_id, key, value FROM page_values ORDER BY artifact_id, key")) {
+      values.set(row.artifact_id, { ...values.get(row.artifact_id), [row.key]: row.value });
+    }
+    const skills = sql
+      .exec<SkillRow>("SELECT * FROM skills ORDER BY name")
+      .toArray()
+      .map(skillInfo)
+      .map(({ name, description, instructions, tools, origin, enabled, files }): ExportedSkill => ({ name, description, instructions, tools, origin: origin as SavedSkillOrigin, enabled, ...(files && { files }) }));
+    return {
+      account: {
+        systemPrompt: readSystemPrompt(this.ctx.storage.kv),
+        model: this.modelChoice(),
+        builtinSkillsOff: sql.exec<{ name: string }>("SELECT name FROM builtin_skills_off ORDER BY name").toArray().map((row) => row.name),
+        skills,
+        pageValues: [...values].map(([artifactId, entries]): ExportedPageValues => ({ artifactId, values: entries })),
+      },
+      chats: sql
+        .exec<{ id: string; title: string; created_at: number; updated_at: number; shared: number }>("SELECT id, title, created_at, updated_at, shared FROM chats ORDER BY created_at")
+        .toArray()
+        .map((row) => ({ id: row.id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.shared === 1 && { shared: true as const }) })),
+      artifacts: sql
+        .exec<ArtifactRow>("SELECT * FROM artifacts ORDER BY updated_at")
+        .toArray()
+        .map((row) => ({ id: row.id, title: row.title, chatId: row.chat_id, latest: row.latest })),
+      sharedWithMe: sql
+        .exec<{ title: string; owner_name: string }>("SELECT title, owner_name FROM shared_chats ORDER BY joined_at")
+        .toArray()
+        .map((row) => ({ title: row.title, ownerName: row.owner_name })),
+    };
+  }
+
+  /**
+   * An import's settings, each only where this user has none of their own yet: an import adds to what is here, never
+   * over it. Built-in skills turned off there are turned off here too. Returns what it set.
+   */
+  importSettings(input: Pick<ExportedAccount, "systemPrompt" | "model" | "builtinSkillsOff">): string[] {
+    const applied: string[] = [];
+    if (input.systemPrompt && !readSystemPrompt(this.ctx.storage.kv) && !("error" in saveSystemPrompt(this.ctx.storage.kv, input.systemPrompt))) applied.push("system prompt");
+    // The chat that reads it checks it against the models this deployment has (ChatAgent.#savedModel).
+    if (input.model && typeof input.model === "object" && !this.modelChoice()) {
+      this.setModelChoice(input.model);
+      applied.push("model");
+    }
+    let off = 0;
+    for (const name of Array.isArray(input.builtinSkillsOff) ? input.builtinSkillsOff : []) {
+      if (typeof name === "string" && builtinSkill(name)) off += this.ctx.storage.sql.exec("INSERT OR IGNORE INTO builtin_skills_off (name) VALUES (?)", name).rowsWritten;
+    }
+    if (off) {
+      applied.push("built-in skills turned off");
+      this.#changed("skills");
+    }
+    return applied;
+  }
+
+  /** Add a chat an import filled (ChatAgent.importFinish) to this user's list, read: the import is the commit point. */
+  importChat(chat: Pick<ExportedChat, "id" | "title" | "createdAt" | "updatedAt">): void {
+    const now = Date.now();
+    this.ctx.storage.sql.exec(
+      "INSERT OR IGNORE INTO chats (id, title, created_at, updated_at, seen_at) VALUES (?, ?, ?, ?, ?)",
+      chat.id,
+      chat.title.slice(0, 200) || UNNAMED_CHAT,
+      chat.createdAt || now,
+      chat.updatedAt || now,
+      now,
+    );
+    this.#changed("chats");
+  }
+
+  /** Keep what a page saved for this user, as an import brings it: only for a page that has saved nothing for them here. */
+  importPageValues(artifactId: string, values: Record<string, string | null>): boolean {
+    if (Object.keys(this.pageValues(artifactId)).length) return false;
+    return "ok" in this.writePageValues(artifactId, values, false);
   }
 
   /** Save the user's system prompt; their chats use it from their next message on. */

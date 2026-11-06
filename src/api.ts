@@ -1,3 +1,17 @@
+import type {
+  ArtifactVersionImport,
+  ChatDumpCursor,
+  ChatDumpPage,
+  ChatImportStart,
+  ExportedChat,
+  ExportedPageValues,
+  ExportedSkill,
+  ExportedSkillFiles,
+  ExportManifest,
+  ExportStart,
+  ImportPlan,
+  ImportPlanRequest,
+} from "../shared/data-export.ts";
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
@@ -7,6 +21,7 @@ import {
   SEAT_PARAM,
   SECOND_SEAT,
   SOCKET_PING,
+  type ArtifactMeta,
   type ArtifactSummary,
   type ArtifactView,
   type ChatContents,
@@ -212,4 +227,32 @@ export const api = {
   chatSocketUrl: (chatId: string) => socketUrl(chatPath(chatId, "/ws")),
   /** The sidebar's socket, which says when the chat list changed. */
   sidebarSocketUrl: () => socketUrl("/api/me/ws"),
+};
+
+/** Draft pages as an export carries them (worker/storage/drafts.ts Draft): JSON the import gives back as it came. */
+type DraftJson = Record<string, unknown>;
+
+/** Export and import of everything the user has, a piece at a time (worker/data-routes.ts, src/data/). */
+export const dataApi = {
+  exportStart: () => request<ExportStart>("/api/me/export"),
+  exportChatPart: (chatId: string, cursor?: ChatDumpCursor) =>
+    request<ChatDumpPage>(`/api/me/export/chats/${chatId}${cursor ? `?cursor=${cursor.table}.${cursor.after}` : ""}`),
+  exportDrafts: (chatId: string) => request<DraftJson[]>(`/api/me/export/chats/${chatId}/drafts`),
+  exportArtifact: (id: string) => request<ArtifactMeta>(`/api/me/export/artifacts/${id}`),
+  exportSkillFiles: (name: string) => request<ExportedSkillFiles>(`/api/me/export/skills/${name}`),
+  plan: (body: ImportPlanRequest) => request<ImportPlan>("/api/me/import/plan", post(body)),
+  importSettings: (account: Pick<ExportManifest["account"], "systemPrompt" | "model" | "builtinSkillsOff">) =>
+    request<{ applied: string[] }>("/api/me/import/account", post(account)),
+  importSkill: (skill: ExportedSkill, files: ExportedSkillFiles["files"]) => request<{ skipped?: string }>("/api/me/import/skills", post({ skill, files })),
+  /** One file at its own path; `skipped` when there is one there already. */
+  importFile: (path: string, body: Blob) => request<{ skipped?: true }>(`/api/me/import/files/${encodePath(path)}`, { method: "PUT", body }),
+  importChatBegin: (chatId: string, start: ChatImportStart) => request<object>(`/api/me/import/chats/${chatId}/begin`, post(start)),
+  /** One part, as the export holds it (a ChatDumpPart's JSON). */
+  importChatPart: (chatId: string, part: Blob) =>
+    request<object>(`/api/me/import/chats/${chatId}/rows`, { method: "POST", headers: { "content-type": "application/json" }, body: part }),
+  importChatDrafts: (chatId: string, drafts: DraftJson[]) => request<object>(`/api/me/import/chats/${chatId}/drafts`, post(drafts)),
+  importChatFinish: (chatId: string, chat: Pick<ExportedChat, "title" | "createdAt" | "updatedAt">) =>
+    request<object>(`/api/me/import/chats/${chatId}/finish`, post(chat)),
+  importArtifactVersion: (id: string, version: ArtifactVersionImport) => request<{ latest: number }>(`/api/me/import/artifacts/${id}/versions`, post(version)),
+  importPageValues: (values: ExportedPageValues[]) => request<{ imported: number }>("/api/me/import/page-values", post(values)),
 };

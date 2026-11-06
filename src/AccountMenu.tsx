@@ -1,16 +1,18 @@
 import { useState } from "react";
 import { api } from "./api.ts";
+import { DataDialog, type DataMode } from "./DataDialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { useDismiss } from "./layout.tsx";
 import { SystemPromptDialog, SystemPromptIcon } from "./SystemPrompt.tsx";
 
 /**
  * The sidebar footer: who is signed in, with an initial in a circle, as a button that opens a menu above it. The menu
- * holds the user's own system prompt and Sign out. A long email ends in an ellipsis; its full text is in the button's tooltip.
+ * holds the user's own system prompt, export and import of all their data, and Sign out. A long email ends in an ellipsis; its full text is in the button's tooltip.
  */
 export function AccountMenu({ label, onSignOut }: { label: string; onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [data, setData] = useState<DataMode | null>(null);
   const box = useDismiss<HTMLElement>(open, setOpen);
   return (
     <footer className="account" ref={box}>
@@ -47,6 +49,30 @@ export function AccountMenu({ label, onSignOut }: { label: string; onSignOut: ()
             type="button"
             onClick={() => {
               setOpen(false);
+              setData("export");
+            }}
+          >
+            <Icon size={18}>
+              <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+            </Icon>
+            Export data
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setData("import");
+            }}
+          >
+            <Icon size={18}>
+              <path d="M12 15V3M7 8l5-5 5 5M5 21h14" />
+            </Icon>
+            Import data
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
               onSignOut();
             }}
           >
@@ -57,6 +83,7 @@ export function AccountMenu({ label, onSignOut }: { label: string; onSignOut: ()
           </button>
         </div>
       )}
+      {data && <DataDialog mode={data} onClose={() => setData(null)} />}
       {editing && (
         <SystemPromptDialog
           title="System prompt"

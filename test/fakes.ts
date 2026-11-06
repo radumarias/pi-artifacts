@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
+import type { DumpSql } from "../worker/chat-dump.ts";
 import type { Sql } from "../worker/members.ts";
 
 /** A FILES_MASTER_KEY for tests. */
@@ -49,6 +50,11 @@ export class FakeBucket {
     this.objects.set(key, typeof body === "string" ? body : body instanceof Uint8Array ? new TextDecoder().decode(body) : "");
   }
 
+  async head(key: string) {
+    this.calls.push({ op: "head", key });
+    return this.objects.has(key) ? { key, size: new TextEncoder().encode(this.objects.get(key)!).byteLength } : null;
+  }
+
   /** One key or several, as R2 takes them. */
   async delete(keys: string | string[]) {
     for (const key of [keys].flat()) {
@@ -69,11 +75,13 @@ export async function listen(server: Server): Promise<string> {
 }
 
 /** A Durable Object's SQL API over an in-memory node:sqlite database. */
-export function memorySql(): Sql & { db: DatabaseSync } {
+export function memorySql(): Sql & DumpSql & { db: DatabaseSync } {
   const db = new DatabaseSync(":memory:");
   return {
     db,
-    exec(query, ...bindings) {
+    exec(query: string, ...given: (string | number | null | ArrayBuffer)[]) {
+      // A Durable Object takes bytes as an ArrayBuffer; node:sqlite as a Uint8Array.
+      const bindings = given.map((value) => (value instanceof ArrayBuffer ? new Uint8Array(value) : value));
       if (bindings.length === 0 && query.trim().split(";").filter((part) => part.trim()).length > 1) {
         db.exec(query);
         return { toArray: () => [], rowsWritten: 0 };

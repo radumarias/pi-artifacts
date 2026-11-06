@@ -57,6 +57,11 @@ export class UserFiles {
     return this.#bucket.get(this.#objectKey(path), range ? { range, ssecKey: this.#key } : { ssecKey: this.#key });
   }
 
+  /** Whether there is a file at `path`. */
+  async has(path: string): Promise<boolean> {
+    return (await this.#bucket.head(this.#objectKey(path))) !== null;
+  }
+
   /** Returns the path as stored: normalised, so it may differ from the one passed in. */
   async put(path: string, body: ReadableStream | ArrayBuffer | string, contentType?: string): Promise<string> {
     const key = this.#objectKey(path);

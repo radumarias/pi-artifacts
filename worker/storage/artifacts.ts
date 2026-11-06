@@ -1,4 +1,4 @@
-import { isOwnedBy, type ArtifactManifest, type ArtifactMeta, type CloneAccess } from "../../shared/protocol.ts";
+import { isOwnedBy, type ArtifactManifest, type ArtifactMeta, type ArtifactVersion, type CloneAccess } from "../../shared/protocol.ts";
 import { randomHex } from "../../shared/util.ts";
 import { commitAndPush, tokenSecret, type GitHttp } from "./git.ts";
 import { deletePrefix } from "./r2.ts";
@@ -131,6 +131,41 @@ export class ArtifactStore {
   }
 
   /**
+   * Add one version an import brings, as it was published (its time, manifest and message), to artifact `id` of the
+   * user's chat `chatId`: versions come in order, the first making the repo. A version that is here already is skipped,
+   * so an import that stopped part way goes on. Throws an ArtifactImportError for an id that is another chat's here, or a
+   * version out of order.
+   */
+  async importVersion(input: { id: string; ownerUid: string; chatId: string; title: string; createdAt: number; version: ArtifactVersion; html: string }): Promise<ArtifactMeta> {
+    const { id, version } = input;
+    const existing = await this.#readRepoMeta(id);
+    if (existing && !isOwnedBy(existing, input.ownerUid, input.chatId)) throw new ArtifactImportError(`Artifact ${id} belongs to another chat here.`);
+    if (existing && existing.latest >= version.version) return existing;
+    if ((existing?.latest ?? 0) + 1 !== version.version) throw new ArtifactImportError(`Artifact ${id} needs version ${(existing?.latest ?? 0) + 1} before ${version.version}.`);
+    let createdToken: string | undefined;
+    if (!existing) {
+      // Not someone else's either, in the read cache only (published before repos): that would be served as this one.
+      const cached = await this.#cache.get(metaKey(id));
+      if (cached && !isOwnedBy((await cached.json()) as ArtifactMeta, input.ownerUid, input.chatId)) throw new ArtifactImportError(`Artifact ${id} belongs to another chat here.`);
+      // A repo without artifact.json holds nothing yet (an import that stopped before its first push): start it again.
+      await this.#repos.delete(repoName(id)).catch(() => false);
+      createdToken = (await this.#repos.create(repoName(id), { description: input.title, setDefaultBranch: BRANCH })).token;
+    }
+    const before = existing ?? { id, title: input.title, ownerUid: input.ownerUid, chatId: input.chatId, createdAt: input.createdAt, updatedAt: input.createdAt, latest: 0, versions: [] };
+    const { version: n, publishedAt, manifest, message } = version;
+    const meta: ArtifactMeta = {
+      ...before,
+      title: input.title,
+      updatedAt: publishedAt,
+      latest: n,
+      versions: [...before.versions, { version: n, publishedAt, manifest, ...(message && { message: message.slice(0, 200) }) }],
+    };
+    await this.#commit(meta, input.html, publishedAt, createdToken);
+    await Promise.all([this.#cacheHtml(id, n, input.html), this.#cacheMeta(meta)]);
+    return meta;
+  }
+
+  /**
    * Commit one version (index.html and artifact.json as of that version) with
    * a write token minted for this push only. `createdToken` is the write token
    * create() hands back, valid for a day: it is revoked here too, unused.
@@ -221,3 +256,6 @@ export class ArtifactStore {
     await this.#cache.put(htmlKey(id, version), html, { httpMetadata: { contentType: "text/html; charset=utf-8" } }).catch(() => {});
   }
 }
+
+/** A version an import brings that cannot go where it says. */
+export class ArtifactImportError extends Error {}

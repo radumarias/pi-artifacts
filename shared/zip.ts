@@ -1,10 +1,26 @@
-import { crc32 } from "node:zlib";
-
 /** One file of a zip: its name inside the archive, and how to read it. `open` resolves null for a file that is not there (gone since it was listed). */
 export interface ZipEntry {
   name: string;
   open(): Promise<{ size: number; modified: Date; body: ReadableStream<Uint8Array> } | null>;
 }
+
+/** A running CRC-32 (as node:zlib's crc32 takes it): `chunk` added to the CRC of the bytes before it. */
+export type Crc32 = (chunk: Uint8Array, previous: number) => number;
+
+/** CRC-32's table, made on first use. */
+let crcTable: Uint32Array | undefined;
+
+/** CRC-32 in plain JavaScript, for the browser; the Worker passes node:zlib's, which is faster. */
+export const crc32: Crc32 = (chunk, previous) => {
+  const table = (crcTable ??= Uint32Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  }));
+  let crc = ~previous;
+  for (let i = 0; i < chunk.length; i++) crc = table[(crc ^ chunk[i]) & 0xff] ^ (crc >>> 8);
+  return ~crc >>> 0;
+};
 
 // Past these a zip needs ZIP64, which this writer leaves out: callers keep well under them.
 const MAX_BYTES = 0xffff_ffff;
@@ -26,10 +42,10 @@ const EXTRA_LENGTH = 9;
  * time to a CRC); the next file is opened while one streams, so a folder of
  * small files does not wait a round trip per file. Fails the stream when the
  * files would weigh more than `maxBytes` (no cap unless given) or the archive outgrow plain zip, or
- * a file is not the size it said.
+ * a file is not the size it said. `crc` computes the CRC-32s (plain JavaScript unless given).
  */
-export function zipStream(entries: readonly ZipEntry[], { maxBytes = Infinity } = {}): ReadableStream<Uint8Array> {
-  const chunks = zipChunks(entries, maxBytes);
+export function zipStream(entries: readonly ZipEntry[], { maxBytes = Infinity, crc = crc32 }: { maxBytes?: number; crc?: Crc32 } = {}): ReadableStream<Uint8Array> {
+  const chunks = zipChunks(entries, maxBytes, crc);
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       const { value, done } = await chunks.next();
@@ -42,7 +58,7 @@ export function zipStream(entries: readonly ZipEntry[], { maxBytes = Infinity } 
   });
 }
 
-async function* zipChunks(entries: readonly ZipEntry[], maxBytes: number): AsyncGenerator<Uint8Array, void> {
+async function* zipChunks(entries: readonly ZipEntry[], maxBytes: number, crc32: Crc32): AsyncGenerator<Uint8Array, void> {
   const encoder = new TextEncoder();
   const central: Uint8Array[] = [];
   let offset = 0;

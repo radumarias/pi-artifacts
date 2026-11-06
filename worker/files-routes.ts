@@ -1,3 +1,4 @@
+import { crc32 } from "node:zlib";
 import { baseName } from "../shared/attachments.ts";
 import {
   commonFolder,
@@ -22,7 +23,7 @@ import { PAGE_HEADERS, PAGE_POLICY } from "./artifacts/serve.ts";
 import { json, readJson } from "./http.ts";
 import { normalisePath, PathError } from "./storage/paths.ts";
 import type { ByteRange, FileEntry, UserFiles } from "./storage/user-files.ts";
-import { zipStream } from "./zip.ts";
+import { zipStream } from "../shared/zip.ts";
 
 /** Room for the multipart boundaries and headers around the files themselves. */
 const FORM_OVERHEAD = 1024 * 1024;
@@ -282,7 +283,7 @@ function zipResponse(files: UserFiles, root: string, paths: readonly string[]): 
         return object && { size: object.size, modified: object.uploaded, body: object.body };
       },
     })),
-    { maxBytes: MAX_ZIP_BYTES },
+    { maxBytes: MAX_ZIP_BYTES, crc: crc32 },
   );
   return new Response(zip, {
     headers: { ...SERVED_HEADERS, "content-type": "application/zip", "content-disposition": `attachment; filename="${name}.zip"` },

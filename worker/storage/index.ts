@@ -7,7 +7,7 @@ import { SkillFiles } from "./skill-files.ts";
 import { UserFiles } from "./user-files.ts";
 
 export { newId } from "./artifacts.ts";
-export type { ArtifactStore } from "./artifacts.ts";
+export { ArtifactImportError, type ArtifactStore } from "./artifacts.ts";
 export { draftId, MAX_DRAFTS, passed, type ChatDrafts, type Draft, type DraftSummary, type SkillSets } from "./drafts.ts";
 export type { FileEntry, UserFiles } from "./user-files.ts";
 export type { SkillFiles } from "./skill-files.ts";

@@ -2,7 +2,7 @@ import { MAX_SKILL_FILE_BYTES, MAX_SKILL_FILES, MAX_SKILL_PACKAGE_BYTES } from "
 import { SkillError } from "../../shared/skills.ts";
 import { isHidden } from "../../shared/uploads.ts";
 import { literalPath } from "../storage/paths.ts";
-import { unzip, UnzipError } from "../unzip.ts";
+import { unzip, UnzipError } from "../../shared/unzip.ts";
 
 /** A skill package read out of its zip: the SKILL.md, the files beside it (marked when not UTF-8 text), and what was left out and why. */
 export interface SkillPackage {

@@ -9,7 +9,7 @@ import { commonFolder, MAX_ZIP_FILES, previewKind, previewType, viewType, ZIP_RO
 import { filesRoute, storeUpload } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { UserFiles } from "../worker/storage/user-files.ts";
-import { dosDateTime, zipStream } from "../worker/zip.ts";
+import { dosDateTime, zipStream } from "../shared/zip.ts";
 import { FakeBucket, MASTER_KEY as MASTER } from "./fakes.ts";
 
 /** The files of a zip, read from its central directory, each checked against its local header and CRC. */
