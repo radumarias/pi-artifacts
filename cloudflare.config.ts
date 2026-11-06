@@ -40,9 +40,10 @@ export default defineConfig({
       runWorkerFirst: ["/api/*", "/u/*"],
     },
     env: {
-      // What new chats run on until their user picks a model (worker/models.ts lists the choices): a pi-ai Cloudflare
+      // New chats start on Auto until their user picks a model (worker/models.ts lists the choices). MODEL at
+      // THINKING_LEVEL is what a chat runs on until Auto picks, and keeps when no router answers: a pi-ai Cloudflare
       // AI Gateway specifier, or a Workers AI id such as @cf/zai-org/glm-5.3-flash, and a pi thinking level.
-      MODEL: bindings.text("anthropic/claude-opus-5.5"),
+      MODEL: bindings.text("anthropic/claude-sonnet-5.5"),
       THINKING_LEVEL: bindings.text("high"),
       // What names a chat after its first message: a small, fast model, as a pi-ai AI Gateway specifier or a Workers AI id.
       TITLE_MODEL: bindings.text("openai/gpt-4.1-nano"),

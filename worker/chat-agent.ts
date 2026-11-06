@@ -224,12 +224,12 @@ export class ChatAgent extends DurableObject<Env> {
       const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction: COMPACTION };
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
-        // A new chat starts on the model its user last picked, or on Auto (which starts from the deployment's default);
-        // PiHarness then finds the root and leaves it as it is.
+        // A new chat starts on the model its user last picked, or on Auto (which starts from the deployment's default)
+        // when they picked Auto or nothing yet; PiHarness then finds the root and leaves it as it is.
         if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
           const setting = await this.#savedModel();
-          if (isAuto(setting)) this.ctx.storage.kv.put(AUTO_KEY, true);
-          else if (setting) await pi.root(context, { agent: this.#agentChange(setting) });
+          if (!setting || isAuto(setting)) this.ctx.storage.kv.put(AUTO_KEY, true);
+          else await pi.root(context, { agent: this.#agentChange(setting) });
         }
       } catch (error) {
         await pi.close(context).catch(() => {});
@@ -237,7 +237,7 @@ export class ChatAgent extends DurableObject<Env> {
       }
       return pi;
     },
-    // What a new chat starts on before its user has picked a model.
+    // What a chat runs on until someone picks a model, or Auto picks one for it.
     defaults: this.#defaults(defaultModelChoice(this.env.MODEL, this.env.THINKING_LEVEL)),
   });
   readonly members = new ChatMembers(this.ctx.storage.sql);
@@ -385,7 +385,7 @@ export class ChatAgent extends DurableObject<Env> {
     return loadCatalog(catalogSource(this.env, this.storage.models, (promise) => this.ctx.waitUntil(promise)));
   }
 
-  /** The user's last pick, checked again: the list of models can change. On a failure, the deployment's default. */
+  /** The user's last pick, checked again: the list of models can change. Null when there is none, or on a failure. */
   async #savedModel(): Promise<ModelSetting | null> {
     try {
       const saved = await this.#directory.modelChoice();

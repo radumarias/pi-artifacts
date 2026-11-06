@@ -495,7 +495,8 @@ the chat's own (pi's agent state, so a change reaches every open view of the cha
 request. Everyone in a [shared chat](#shared-chats) can change it. The latest pick is also the default for new chats
 of whoever made it (kept in their `UserDirectory`): a chat takes it when it is first opened and keeps its model from
 then on, even before its first message, until someone changes it. Before a user has picked anything, chats start on
-`MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Opus 5.5 at high effort).
+Auto, which runs on `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Sonnet 5.5 at high effort) until it
+picks, and keeps that when no router answers.
 
 With many providers the list is long, so the picker is a searchable menu: a search box over every model (by name, id
 or provider), then the user's favorites (the star on each row) and recent picks, then each provider's models in a
@@ -583,8 +584,8 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
 3. Create an AI Gateway named `pi-artifacts` and store an Anthropic key and an OpenAI key in it (Provider Keys,
    BYOK), or use unified billing. Keys for other providers (Google AI Studio, xAI, Mistral, DeepSeek, Groq, Cerebras,
    Cohere, OpenRouter, Hugging Face) add their models to the picker within the hour, or at once with its refresh
-   button; no redeploy is needed. `MODEL` in `cloudflare.config.ts`, what new chats start on, is a pi-ai gateway specifier
-   (`anthropic/claude-opus-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
+   button; no redeploy is needed. `MODEL` in `cloudflare.config.ts`, what new chats run on until Auto or their user picks, is a pi-ai
+   gateway specifier (`anthropic/claude-sonnet-5.5`); a Workers AI id such as `@cf/zai-org/glm-5.3-flash` needs no key. See [Models](#models).
 4. Put the app behind Cloudflare Access: create a self-hosted Access application for the Worker's hostname with a
    policy listing who may sign in, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` (the application's audience tag) in
    `cloudflare.config.ts`.
