@@ -252,6 +252,11 @@ describe("routing", () => {
     });
   });
 
+  it("gives up in time on a router that does not stop when asked to", async () => {
+    const deaf: Router = { id: "deaf", ask: () => new Promise(() => {}) };
+    await expect(route([deaf], request(), 50)).rejects.toThrow(/^deaf: /);
+  });
+
   it("does not ask without routers or candidates", async () => {
     const { list } = routers();
     await expect(route([], request())).rejects.toThrow("no router model");

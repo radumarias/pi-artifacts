@@ -472,8 +472,8 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /**
-   * Auto's pick for a message about to start a run: the deployment's router (ROUTER_MODEL, the first the picker lists
-   * that answers) reads the end of the conversation and the message (and how many images and other files it attaches),
+   * Auto's pick for a message about to start a run: the deployment's router (ROUTER_MODEL: of those the picker lists,
+   * the first to pick) reads the end of the conversation and the message (and how many images and other files it attaches),
    * and picks one of AUTO_MODELS and an effort. The router call counts in pi's ledger like any model call. While a
    * reply is running (as pi's own queue says: the sidebars' status lags behind it) the router is not asked. Undefined
    * only when the conversation could not be read. Never throws: when no router picks in time (ROUTE_MS), or one picks a

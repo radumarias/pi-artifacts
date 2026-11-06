@@ -28,8 +28,11 @@ export function bindingClassifierOptions(ai: ModelRunner): Pick<ClassifierOption
     const { model, input } = JSON.parse(String(init?.body)) as { model: string; input: object };
     const signal = init?.signal ?? undefined;
     const answer = await abortable(ai.run(model, input, { signal }), signal);
-    // A Response or a stream would go to pi-ai as `{}`: its JSON is read instead.
-    const body = answer instanceof Response ? await answer.json() : answer instanceof ReadableStream ? await new Response(answer).json() : answer;
+    // A failed Response goes to pi-ai as it is: pi-ai reports its status and text.
+    if (answer instanceof Response && !answer.ok) return answer;
+    // A Response or a stream would go to pi-ai as `{}`: its JSON is read instead, within the call's signal too.
+    const read = answer instanceof Response ? answer.json() : answer instanceof ReadableStream ? new Response(answer).json() : undefined;
+    const body = read ? await abortable(read, signal) : answer;
     return Response.json(restEnvelope(body));
   };
   // The binding needs no key; pi-ai only wants one to send.

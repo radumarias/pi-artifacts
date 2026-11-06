@@ -27,4 +27,10 @@ describe("a classifier's answer from the AI binding", () => {
       expect(await response.json()).toEqual({ success: true, result: output });
     }
   });
+
+  it("hands a failed Response to pi-ai as it is", async () => {
+    const failed = new Response("upstream down", { status: 503 });
+    const { fetch } = bindingClassifierOptions({ run: async () => failed });
+    expect(await fetch!("https://api.cloudflare.com/run", { method: "POST", body: JSON.stringify({ model: "typesafe/jev", input: {} }) })).toBe(failed);
+  });
 });

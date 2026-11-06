@@ -18,7 +18,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { textOf } from "../../shared/canonical.ts";
 import { COMPACTION, modelKey, pricePerMillion, type AutoCandidate, type ModelInfo } from "../../shared/models.ts";
 import { CHAT_MESSAGE_KIND, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
-import { clip, errorMessage, isObject, jsonIn, plural } from "../../shared/util.ts";
+import { abortable, clip, errorMessage, isObject, jsonIn, plural } from "../../shared/util.ts";
 import { gatewayFetch, type GatewayOptions } from "../gateway-models.ts";
 import { bindingClassifierOptions, systemOneModel, type ModelRunner } from "./workers-ai.ts";
 import { DEFAULT_CONTEXT_WINDOW, thinkingLevelOf, type Catalog } from "../models.ts";
@@ -378,7 +378,8 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
           const i = next++;
           const router = routers[i];
           asking++;
-          router.ask(request, signal).then(
+          // The deadline holds even for a router that does not stop on the signal.
+          abortable(router.ask(request, signal), signal).then(
             ({ pick, usage }) => {
               picked = true;
               resolve({ pick, router: routerSpend(router.id, usage), usage });
