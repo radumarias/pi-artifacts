@@ -158,7 +158,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     onArtifact(latest, loading);
   }, [state.entries, onArtifact]);
 
-  // Something to send: what Send and Enter take, and what turns Stop into Send while the agent works.
+  // Something to send: what Send and Enter take, and what brings Send in beside Stop while the agent works.
   const hasMessage = /\S/.test(draft) || attachments.pending.length > 0;
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -364,11 +364,17 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                     agent waits its turn in the queue, and stopping needs no clearing of the box. */}
                 {state.busy && (
                   // Stop lands where Send was when a run starts, or when sending empties the box and takes Send away:
-                  // a double click's second click (detail 2) is not a Stop.
+                  // a double click's second click (detail 2) is not a Stop. It goes once the run ends, so the cursor goes
+                  // back to the input, as after Send, rather than to nowhere.
                   <button
                     type="button"
                     className="icon-button composer-stop"
-                    onClick={(e) => e.detail <= 1 && abort()}
+                    disabled={!connected}
+                    onClick={(e) => {
+                      if (e.detail > 1) return;
+                      abort();
+                      input.current?.focus();
+                    }}
                     title="Stop"
                     aria-label="Stop"
                   >
