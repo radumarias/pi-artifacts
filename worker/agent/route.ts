@@ -12,15 +12,15 @@ import {
 } from "@earendil-works/pi-ai";
 import { classify as classifyOnWorkersAI } from "@earendil-works/pi-ai/api/cloudflare-workers-ai-system-one";
 import { classify as classifyWithDecisions } from "@earendil-works/pi-ai/api/openai-decisions";
-import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { UsageDoc, type ConversationId, type EntryRecord, type Tx } from "@earendil-works/pi-durable";
+import type { EntryRecord } from "@earendil-works/pi-durable";
 import { textOf } from "../../shared/canonical.ts";
 import { COMPACTION, modelKey, pricePerMillion, type AutoCandidate, type ModelInfo } from "../../shared/models.ts";
 import { CHAT_MESSAGE_KIND, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
 import { clip, errorMessage, isObject, plural } from "../../shared/util.ts";
 import { gatewayFetch, type GatewayOptions } from "../gateway-models.ts";
+import { bindingClassifierOptions, systemOneModel, type ModelRunner } from "./workers-ai.ts";
 import { DEFAULT_CONTEXT_WINDOW, thinkingLevelOf, type Catalog } from "../models.ts";
 
 /**
@@ -331,52 +331,12 @@ export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<
   return classifierRouter(model, classifyWithDecisions, { apiKey: "ai-gateway", fetch: viaGateway });
 }
 
-/** What runs a Workers AI model: the AI binding. */
-export interface ModelRunner {
-  run(model: string, input: object, options?: { signal?: AbortSignal }): Promise<unknown>;
-}
-
 /**
  * A System One classifier on Workers AI (TypeSafe's Jev, Cloudflare's Clef) as a router, through the AI binding: on
  * Cloudflare's own network, with no provider key.
  */
 export function workersAIClassifierRouter(ai: ModelRunner, model: ClassifierModel<"cloudflare-workers-ai-system-one">): Router {
-  return classifierRouter(model, classifyOnWorkersAI, workersAIOptions(ai));
-}
-
-/**
- * How pi-ai's Workers AI classify reaches the model through the AI binding: pi-ai posts `{ model, input }` to Workers
- * AI's REST API; the binding runs it instead, and its answer goes back in the REST API's envelope.
- */
-export function workersAIOptions(ai: ModelRunner): ClassifierOptions {
-  const viaBinding = async (_url: string | URL | Request, init?: RequestInit) => {
-    const { model: id, input } = JSON.parse(String(init?.body)) as { model: string; input: Record<string, unknown> };
-    const signal = init?.signal ?? undefined;
-    signal?.throwIfAborted();
-    // The binding is handed the signal, so a call past its time stops (and stops billing); the race covers a binding
-    // that does not stop on it.
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<never>((_, reject) => {
-      onAbort = () => reject(signal!.reason);
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      const result = await Promise.race([ai.run(id, input, { signal }), aborted]);
-      return Response.json({ success: true, result });
-    } finally {
-      signal?.removeEventListener("abort", onAbort!);
-    }
-  };
-  // The binding needs no key; pi-ai only wants one to send.
-  return { apiKey: "ai-binding", fetch: viaBinding };
-}
-
-/** The System One classifier on Workers AI a setting names (`system-one:typesafe/jev`); undefined for none. */
-export function systemOneModel(setting: string): ClassifierModel<"cloudflare-workers-ai-system-one"> | undefined {
-  if (!setting.startsWith(SYSTEM_ONE_PREFIX)) return undefined;
-  const name = setting.slice(SYSTEM_ONE_PREFIX.length);
-  const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
-  return Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
+  return classifierRouter(model, classifyOnWorkersAI, bindingClassifierOptions(ai));
 }
 
 /** A call that reported no usage. */
@@ -443,8 +403,9 @@ export function routersFrom(spec: string, catalog: Catalog, use: { models: Model
         return model ? decisionsRouter(use.gateway, model) : unavailable(name, "not an OpenAI Decisions model");
       }
       if (id.startsWith(SYSTEM_ONE_PREFIX)) {
-        const model = systemOneModel(id);
-        return model ? workersAIClassifierRouter(use.ai, model) : unavailable(id.slice(SYSTEM_ONE_PREFIX.length), "not a System One model on Workers AI");
+        const name = id.slice(SYSTEM_ONE_PREFIX.length);
+        const model = systemOneModel(name);
+        return model ? workersAIClassifierRouter(use.ai, model) : unavailable(name, "not a System One model on Workers AI");
       }
       const model = catalog.model(id);
       return model ? modelRouter(use.models, model) : unavailable(id, "not in the picker");
@@ -458,27 +419,4 @@ function unavailable(id: string, why: string): Router {
     unavailable: true,
     ask: () => Promise.reject(new Error(why)),
   };
-}
-
-/**
- * Add a call's usage to the conversation's spend ledger (pi's `pi.usage`) under `tools` as `key`, as pi adds a tool's
- * spend: Auto's router under AUTO_LEDGER_PREFIX and its picker id, the skill classifier under SKILLS_LEDGER_PREFIX. The
- * cost panel then counts it, also after older messages are summarized. Not under `models`, whose rows the panel splits by
- * the efforts of the replies in the transcript.
- */
-export async function recordSpend(tx: Tx, conversationId: ConversationId, key: string, usage: Usage): Promise<void> {
-  const totals = (await tx.doc(UsageDoc, conversationId)).tools as Record<string, Usage>;
-  const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
-  // Drafts take strict JSON: no undefined counters.
-  if (!total) totals[key] = JSON.parse(JSON.stringify(usage)) as Usage;
-  else addUsage(total, usage);
-}
-
-/** Add `usage` to `total`, in place, counter by counter, as pi adds them. */
-export function addUsage(total: Usage, usage: Usage): Usage {
-  for (const counter of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[counter] += usage[counter];
-  // Optional counters, as pi adds them: once either side reports one.
-  for (const counter of ["cacheWrite1h", "reasoning"] as const) if (usage[counter] !== undefined) total[counter] = (total[counter] ?? 0) + usage[counter];
-  for (const counter of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[counter] += usage.cost[counter];
-  return total;
 }

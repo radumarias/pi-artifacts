@@ -34,17 +34,18 @@ const request = (over: Partial<SkillPickRequest> = {}): SkillPickRequest => ({
 });
 
 describe("the skill classifier", () => {
-  it("is the System One model SKILLS_MODEL names, or none, so every skill is shown", () => {
+  it("is the System One model SKILLS_MODEL names by its id, or none, so every skill is shown", () => {
     const { ai } = binding(() => ({}));
-    expect(skillClassifier("system-one:typesafe/jev", ai)?.id).toBe("cloudflare-workers-ai/typesafe/jev");
+    expect(skillClassifier("typesafe/jev", ai)?.id).toBe("cloudflare-workers-ai/typesafe/jev");
     expect(skillClassifier("", ai)).toBeUndefined();
-    expect(skillClassifier("system-one:nobody/unknown", ai)).toBeUndefined();
-    expect(skillClassifier("typesafe/jev", ai)).toBeUndefined();
+    expect(skillClassifier("nobody/unknown", ai)).toBeUndefined();
+    // By its id alone, as CALL_HINT_MODEL names it: ROUTER_MODEL's marker is not part of it.
+    expect(skillClassifier("system-one:typesafe/jev", ai)).toBeUndefined();
   });
 
   it("asks Jev one yes-or-no question per skill, with the message and the conversation, and keeps the likely ones", async () => {
     const { ai, runs } = binding(answers((name) => (name === "analyze-files" ? 0.92 : name === "explore-mcp-server" ? SKILL_THRESHOLD : 0.05)));
-    const pick = await skillClassifier("system-one:typesafe/jev", ai)!.pick(request());
+    const pick = await skillClassifier("typesafe/jev", ai)!.pick(request());
     expect(pick.add).toEqual(["analyze-files", "explore-mcp-server"]);
     expect(pick.errors).toEqual([]);
     expect(pick.usage.input).toBe(500);
@@ -60,7 +61,7 @@ describe("the skill classifier", () => {
   it("asks about many skills in calls of SKILLS_PER_CALL at once, and adds up what they cost", async () => {
     const many = Array.from({ length: SKILLS_PER_CALL + 3 }, (_, i) => ({ name: `skill-${i}`, description: `Skill ${i}.` }));
     const { ai, runs } = binding(answers((name) => (name === "skill-17" ? 0.8 : 0)));
-    const pick = await skillClassifier("system-one:typesafe/jev", ai)!.pick(request({ skills: many }));
+    const pick = await skillClassifier("typesafe/jev", ai)!.pick(request({ skills: many }));
     expect(runs.map((run) => Object.keys(run.input.questions as object).length)).toEqual([SKILLS_PER_CALL, 3]);
     expect(pick.add).toEqual(["skill-17"]);
     expect(pick.usage.input).toBe(1_000);
@@ -70,16 +71,16 @@ describe("the skill classifier", () => {
     const failing = binding(() => {
       throw new Error("model not found");
     });
-    const failed = await skillClassifier("system-one:typesafe/jev", failing.ai)!.pick(request());
+    const failed = await skillClassifier("typesafe/jev", failing.ai)!.pick(request());
     expect(failed.add).toEqual(skills.map(({ name }) => name));
     expect(failed.errors[0]).toMatch(/model not found/);
 
     const slow = { run: () => new Promise<never>(() => {}) };
-    const late = await skillClassifier("system-one:typesafe/jev", slow)!.pick(request(), 30);
+    const late = await skillClassifier("typesafe/jev", slow)!.pick(request(), 30);
     expect(late.add).toHaveLength(skills.length);
 
     const odd = binding(() => ({ answers: {} }));
-    expect((await skillClassifier("system-one:typesafe/jev", odd.ai)!.pick(request())).add).toHaveLength(skills.length);
+    expect((await skillClassifier("typesafe/jev", odd.ai)!.pick(request())).add).toHaveLength(skills.length);
   });
 });
 

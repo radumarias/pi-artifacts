@@ -3,7 +3,9 @@ import { classify } from "@earendil-works/pi-ai/api/cloudflare-workers-ai-system
 import { baseName } from "../../shared/attachments.ts";
 import { modelKey } from "../../shared/models.ts";
 import { clip, errorMessage } from "../../shared/util.ts";
-import { addUsage, MAX_ERROR_CHARS, MAX_MESSAGE_CHARS, NO_USAGE, systemOneModel, workersAIOptions, type ModelRunner, type RouteTurn } from "./route.ts";
+import { addUsage } from "./ledger.ts";
+import { MAX_ERROR_CHARS, MAX_MESSAGE_CHARS, NO_USAGE, type RouteTurn } from "./route.ts";
+import { bindingClassifierOptions, systemOneModel, type ModelRunner } from "./workers-ai.ts";
 
 /**
  * Which skills the agent is shown. Every skill's name and description goes into the system prompt, so the more skills
@@ -67,11 +69,14 @@ function question(skill: SkillChoice): ClassifierBoolQuestion {
   };
 }
 
-/** The classifier SKILLS_MODEL names (`system-one:typesafe/jev`), run by `ai`; undefined when it names none, so every skill is shown. */
+/**
+ * The classifier SKILLS_MODEL names (a System One model on Workers AI, by its id: `typesafe/jev`), run by `ai`; undefined
+ * when it names none, so every skill is shown.
+ */
 export function skillClassifier(setting: string, ai: ModelRunner): SkillClassifier | undefined {
   const model = systemOneModel(setting.trim());
   if (!model) return undefined;
-  const options = workersAIOptions(ai);
+  const options = bindingClassifierOptions(ai);
   return {
     id: modelKey(model.provider, model.id),
     async pick(request, timeoutMs = SKILL_PICK_MS) {

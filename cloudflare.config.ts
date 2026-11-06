@@ -46,6 +46,10 @@ export default defineConfig({
       THINKING_LEVEL: bindings.text("high"),
       // What names a chat after its first message: a small, fast model, as a pi-ai AI Gateway specifier or a Workers AI id.
       TITLE_MODEL: bindings.text("openai/gpt-4.1-nano"),
+      // In a shared chat, a message that does not call the agent ("@pi") may still be meant for it ("pi, can you…"):
+      // this System One classifier on Workers AI (worker/agent/call-hint.ts) says how likely, through the AI binding (no
+      // provider key), and the author is offered to call the agent on it. Empty turns it off.
+      CALL_HINT_MODEL: bindings.text("typesafe/jev"),
       // Auto, in the model picker: before each message that starts a run, a router model reads the end of the
       // conversation and the message, and picks one of AUTO_MODELS and an effort to answer it (worker/agent/route.ts).
       // ROUTER_MODEL: the router, a small, fast model; a comma-separated list is tried in order (the first the picker
@@ -57,9 +61,9 @@ export default defineConfig({
       // then Gemini Flash-Lite with the Google AI Studio key.
       ROUTER_MODEL: bindings.text("system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
       // Which skills the agent is shown: before each message that starts a run, this System One classifier on Workers AI
-      // (system-one:<model>, through the AI binding) says which of the user's skills not shown in the chat yet the message
+      // (by its id, as CALL_HINT_MODEL; through the AI binding) says which of the user's skills not shown in the chat yet the message
       // needs; only those join the ones shown (worker/agent/skill-pick.ts). Empty: every enabled skill, always.
-      SKILLS_MODEL: bindings.text("system-one:typesafe/jev"),
+      SKILLS_MODEL: bindings.text("typesafe/jev"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
       // picker does not list (no key in AI Gateway for their provider) are left out.
       AUTO_MODELS: bindings.json([

@@ -10,7 +10,6 @@ import {
   decisionsRouter,
   modelRouter,
   parsePick,
-  recordSpend,
   route,
   routeHistory,
   routePrompt,
@@ -18,6 +17,7 @@ import {
   workersAIClassifierRouter,
   type RouteRequest,
 } from "../worker/agent/route.ts";
+import { recordSpend } from "../worker/agent/ledger.ts";
 import { baseCatalog } from "../worker/models.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
