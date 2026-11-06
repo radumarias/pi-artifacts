@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type ClassifierModel, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
+import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { ConversationId, EntryRecord, Tx } from "@earendil-works/pi-durable";
@@ -14,6 +15,7 @@ import {
   routeHistory,
   routePrompt,
   routersFrom,
+  workersAIClassifierRouter,
   type RouteRequest,
 } from "../worker/agent/route.ts";
 import { baseCatalog } from "../worker/models.ts";
@@ -253,13 +255,63 @@ describe("the Decisions router", () => {
     await expect(route([decisionsRouter(options, luna)], request())).rejects.toThrow(/^openai\/gpt-6-luna: .*404/);
   });
 
-  it("is named in ROUTER_MODEL by decisions: and an OpenAI model, in order with the others; one neither names says so", async () => {
-    const found = routersFrom("decisions:openai/gpt-6-luna, openai/gpt-4o, nobody/unlisted, decisions:nobody/unlisted", baseCatalog(), {
-      models: createModels(),
-      gateway: gateway(() => new Response()).options,
+  it("is named in ROUTER_MODEL by decisions: or system-one:, in order with the others; one none names says so", async () => {
+    const spec = "decisions:openai/gpt-6-luna, system-one:typesafe/jev, openai/gpt-4o, nobody/unlisted, decisions:nobody/unlisted, system-one:nobody/unlisted";
+    const found = routersFrom(spec, baseCatalog(), { models: createModels(), gateway: gateway(() => new Response()).options, ai: { run: async () => ({}) } });
+    expect(found.map((router) => router.id)).toEqual([
+      "openai/gpt-6-luna",
+      "cloudflare-workers-ai/typesafe/jev",
+      "openai/gpt-4o",
+      "nobody/unlisted",
+      "nobody/unlisted",
+      "nobody/unlisted",
+    ]);
+    await expect(route(found.slice(3), request())).rejects.toThrow(
+      "nobody/unlisted: not in the picker; nobody/unlisted: not an OpenAI Decisions model; nobody/unlisted: not a System One model on Workers AI",
+    );
+  });
+});
+
+describe("a System One classifier on Workers AI as a router", () => {
+  const jev = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS["typesafe/jev"] as ClassifierModel<"cloudflare-workers-ai-system-one">;
+  const choice = (value: string) => ({ type: "choice", choice: value, confidence: 0.9, probabilities: { [value]: 0.9 } });
+  /** The AI binding, answering each run with `reply`. */
+  const binding = (reply: (model: string) => unknown) => {
+    const runs: { model: string; input: Record<string, unknown> }[] = [];
+    const ai = {
+      run: async (model: string, input: object) => {
+        runs.push({ model, input: input as Record<string, unknown> });
+        return reply(model);
+      },
+    };
+    return { ai, runs };
+  };
+
+  it("asks Jev through the AI binding, for the model and the effort, and takes its choice", async () => {
+    const { ai, runs } = binding(() => ({
+      model: "jev-1.14.0",
+      answers: { model: choice("anthropic/claude-haiku-5.5"), effort: choice("low") },
+      usage: { input_tokens: 1_000 },
+    }));
+    const routed = await route([workersAIClassifierRouter(ai, jev)], request());
+    expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low" });
+    expect(routed.router).toEqual({ model: "cloudflare-workers-ai/typesafe/jev", cost: expect.closeTo(0.000042, 12), input: 1_000, output: 0 });
+    expect(runs[0].model).toBe("typesafe/jev");
+    const questions = runs[0].input.questions as Record<string, { type: string; criteria: Record<string, string> }>;
+    expect(Object.keys(questions)).toEqual(["model", "effort"]);
+    expect(Object.keys(questions.model.criteria)).toEqual(request().candidates.map((candidate) => candidate.id));
+    expect((runs[0].input.state as { message: string }).message).toBe(request().message);
+  });
+
+  it("fails, so the next router is asked, when the binding throws, takes too long, or the answer is not a candidate", async () => {
+    const failing = binding(() => {
+      throw new Error("model not found");
     });
-    expect(found.map((router) => router.id)).toEqual(["openai/gpt-6-luna", "openai/gpt-4o", "nobody/unlisted", "nobody/unlisted"]);
-    await expect(route(found.slice(2), request())).rejects.toThrow("nobody/unlisted: not in the picker; nobody/unlisted: not an OpenAI Decisions model");
+    await expect(route([workersAIClassifierRouter(failing.ai, jev)], request())).rejects.toThrow(/typesafe\/jev: .*model not found/);
+    const slow = { run: () => new Promise<never>(() => {}) };
+    await expect(route([workersAIClassifierRouter(slow, jev)], request(), 50)).rejects.toThrow(/typesafe\/jev: /);
+    const odd = binding(() => ({ answers: { model: choice("openai/gpt-9"), effort: choice("low") } }));
+    await expect(route([workersAIClassifierRouter(odd.ai, jev)], request())).rejects.toThrow("no listed model");
   });
 });
 

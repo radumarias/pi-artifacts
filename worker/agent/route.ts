@@ -1,5 +1,18 @@
-import { clampThinkingLevel, type Api, type ClassifierModel, type Model, type Models, type ModelThinkingLevel, type Usage } from "@earendil-works/pi-ai";
-import { classify } from "@earendil-works/pi-ai/api/openai-decisions";
+import {
+  clampThinkingLevel,
+  type Api,
+  type ClassifierApi,
+  type ClassifierFunction,
+  type ClassifierModel,
+  type ClassifierOptions,
+  type Model,
+  type Models,
+  type ModelThinkingLevel,
+  type Usage,
+} from "@earendil-works/pi-ai";
+import { classify as classifyOnWorkersAI } from "@earendil-works/pi-ai/api/cloudflare-workers-ai-system-one";
+import { classify as classifyWithDecisions } from "@earendil-works/pi-ai/api/openai-decisions";
+import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { UsageDoc, type ConversationId, type EntryRecord, type Tx } from "@earendil-works/pi-durable";
@@ -14,8 +27,9 @@ import { DEFAULT_CONTEXT_WINDOW, thinkingLevelOf, type Catalog } from "../models
  * Auto: before a message starts a run, a small, fast model (the router) reads the end of the conversation and the
  * message, and picks which of the deployment's models answers it, at which effort. One call, no tools, a JSON reply.
  * The chat agent then runs on the pick (worker/chat-agent.ts); when the router fails, it keeps the model it ran on.
- * A router is a model the picker lists, asked for a JSON reply (modelRouter), or OpenAI's Decisions API, which answers
- * choice questions without writing any text (decisionsRouter).
+ * A router is a model the picker lists, asked for a JSON reply (modelRouter), or a classifier, which answers choice
+ * questions without writing any text: OpenAI's Decisions API (decisionsRouter), or a System One model on Workers AI, such
+ * as TypeSafe's Jev (workersAIClassifierRouter).
  */
 
 /** A model Auto may pick: as the picker lists it, with what the deployment says it is best at. */
@@ -219,7 +233,7 @@ function pickOf(candidates: readonly Candidate[], model: unknown, effort: unknow
   return { model: listed.id, ...(thinkingLevel && { thinkingLevel }), ...(why && { reason: why }) };
 }
 
-/** One way to pick: a model the picker lists (modelRouter), or OpenAI's Decisions API (decisionsRouter). */
+/** One way to pick: a model the picker lists (modelRouter), or a classifier (decisionsRouter, workersAIClassifierRouter). */
 export interface Router {
   /** The picker's id of the model that picks: the ledger's key and the pick's tooltip name it. */
   id: string;
@@ -255,23 +269,18 @@ export function modelRouter(models: Models, model: Model<Api>): Router {
 
 /** How ROUTER_MODEL marks a model to ask through OpenAI's Decisions API: `decisions:openai/gpt-6-luna`. */
 const DECISIONS_PREFIX = "decisions:";
-/** How the Decisions router's effort question is to be answered; the model question has the whole GUIDANCE. */
+/** How ROUTER_MODEL marks a System One classifier to ask on Workers AI: `system-one:typesafe/jev`. */
+const SYSTEM_ONE_PREFIX = "system-one:";
+/** How a classifier router's effort question is to be answered; the model question has the whole GUIDANCE. */
 const EFFORT_QUESTION =
   "How long the model picked in the model question should reason before it answers: none for a greeting, thanks or a quick fact; low for a small change or a short explanation; medium for building a page or dashboard, data work or code; high or more for a hard problem.";
 
 /**
- * OpenAI's Decisions API (POST /v1/decisions, pi-ai's classify) as a router, through AI Gateway with the deployment's
- * OpenAI key: two choice questions, the model (among the candidates, each described in its choice) and the effort,
- * answered without any text written, so it is fast and charges only for input. It gives no reason.
+ * A classifier as a router: two choice questions, the model (among the candidates, each described in its choice) and
+ * the effort, answered without any text written, so it is fast and charges only for input. It gives no reason.
+ * `options`: how `classify` reaches the model.
  */
-export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<"openai-decisions">): Router {
-  // pi-ai posts to api.openai.com with a bearer key; AI Gateway takes the request instead, with the deployment's key.
-  const viaGateway = (url: string | URL | Request, init?: RequestInit) => {
-    const headers = Object.fromEntries(new Headers(init?.headers).entries());
-    delete headers.authorization;
-    const { pathname, search } = new URL(url instanceof Request ? url.url : String(url));
-    return gatewayFetch(gateway, "openai", `${pathname.slice(1)}${search}`, { ...init, headers });
-  };
+function classifierRouter<A extends ClassifierApi>(model: ClassifierModel<A>, classify: ClassifierFunction, options: ClassifierOptions): Router {
   return {
     id: modelKey(model.provider, model.id),
     async ask(request, signal) {
@@ -295,8 +304,7 @@ export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<
             effort: { type: "choice", instructions: EFFORT_QUESTION, criteria: Object.fromEntries(efforts.map((effort) => [effort, ""])) },
           },
         },
-        // The key is AI Gateway's; pi-ai only wants one to send.
-        { apiKey: "ai-gateway", fetch: viaGateway, signal, maxRetries: 0 },
+        { ...options, signal, maxRetries: 0 },
       );
       if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `stopped: ${result.stopReason}`);
       const { model: chosen, effort } = result.answers;
@@ -305,6 +313,45 @@ export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<
       return { pick, usage: result.usage ?? NO_USAGE };
     },
   };
+}
+
+/**
+ * OpenAI's Decisions API (POST /v1/decisions, pi-ai's classify) as a router, through AI Gateway with the deployment's
+ * OpenAI key.
+ */
+export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<"openai-decisions">): Router {
+  // pi-ai posts to api.openai.com with a bearer key; AI Gateway takes the request instead, with the deployment's key.
+  const viaGateway = (url: string | URL | Request, init?: RequestInit) => {
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
+    delete headers.authorization;
+    const { pathname, search } = new URL(url instanceof Request ? url.url : String(url));
+    return gatewayFetch(gateway, "openai", `${pathname.slice(1)}${search}`, { ...init, headers });
+  };
+  // The key is AI Gateway's; pi-ai only wants one to send.
+  return classifierRouter(model, classifyWithDecisions, { apiKey: "ai-gateway", fetch: viaGateway });
+}
+
+/** What runs a Workers AI model: the AI binding. */
+export interface ModelRunner {
+  run(model: string, input: object): Promise<unknown>;
+}
+
+/**
+ * A System One classifier on Workers AI (TypeSafe's Jev, Cloudflare's Clef) as a router, through the AI binding: on
+ * Cloudflare's own network, with no provider key. pi-ai posts `{ model, input }` to Workers AI's REST API; the binding
+ * runs it instead, and its answer goes back in the REST API's envelope.
+ */
+export function workersAIClassifierRouter(ai: ModelRunner, model: ClassifierModel<"cloudflare-workers-ai-system-one">): Router {
+  const viaBinding = async (_url: string | URL | Request, init?: RequestInit) => {
+    const { model: id, input } = JSON.parse(String(init?.body)) as { model: string; input: Record<string, unknown> };
+    const signal = init?.signal ?? undefined;
+    signal?.throwIfAborted();
+    const aborted = new Promise<never>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    const result = await Promise.race([ai.run(id, input), aborted]);
+    return Response.json({ success: true, result });
+  };
+  // The binding needs no key; pi-ai only wants one to send.
+  return classifierRouter(model, classifyOnWorkersAI, { apiKey: "ai-binding", fetch: viaBinding });
 }
 
 /** A call that reported no usage. */
@@ -353,10 +400,11 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
 }
 
 /**
- * The routers a deployment's ROUTER_MODEL names, in its order: each a model the picker lists, asked for a JSON reply, or,
- * marked `decisions:`, an OpenAI model asked through the Decisions API. One neither names fails when asked, saying so.
+ * The routers a deployment's ROUTER_MODEL names, in its order: each a model the picker lists, asked for a JSON reply;
+ * marked `decisions:`, an OpenAI model asked through the Decisions API; or marked `system-one:`, a System One classifier
+ * on Workers AI. One none of these names fails when asked, saying so.
  */
-export function routersFrom(spec: string, catalog: Catalog, use: { models: Models; gateway: GatewayOptions }): Router[] {
+export function routersFrom(spec: string, catalog: Catalog, use: { models: Models; gateway: GatewayOptions; ai: ModelRunner }): Router[] {
   return spec
     .split(",")
     .map((entry) => entry.trim())
@@ -368,6 +416,12 @@ export function routersFrom(spec: string, catalog: Catalog, use: { models: Model
         const key = name.startsWith("openai/") ? name.slice("openai/".length) : undefined;
         const model = key !== undefined && Object.hasOwn(classifiers, key) ? classifiers[key] : undefined;
         return model ? decisionsRouter(use.gateway, model) : unavailable(name, "not an OpenAI Decisions model");
+      }
+      if (id.startsWith(SYSTEM_ONE_PREFIX)) {
+        const name = id.slice(SYSTEM_ONE_PREFIX.length);
+        const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
+        const model = Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
+        return model ? workersAIClassifierRouter(use.ai, model) : unavailable(name, "not a System One model on Workers AI");
       }
       const model = catalog.model(id);
       return model ? modelRouter(use.models, model) : unavailable(id, "not in the picker");

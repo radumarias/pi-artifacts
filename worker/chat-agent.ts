@@ -461,7 +461,7 @@ export class ChatAgent extends DurableObject<Env> {
       const candidates = autoCandidates(catalog.models, this.env.AUTO_MODELS as AutoCandidate[], { images: images > 0, contextTokens: tokens });
       const request = { message, history: routeHistory(page.items), images, files, contextTokens: tokens, current: this.#modelOf(agent), candidates };
       const gateway = catalogSource(this.env, this.storage.models);
-      const routed = await route(routersFrom(this.env.ROUTER_MODEL, catalog, { models: this.#oneShotModels, gateway }), request);
+      const routed = await route(routersFrom(this.env.ROUTER_MODEL, catalog, { models: this.#oneShotModels, gateway, ai: this.env.AI }), request);
       // Paid for whether or not the pick is used. Only a record: a failure is logged.
       await root
         .commit((tx) => recordRouterSpend(tx, root.id, routed.router.model, routed.usage), BACKGROUND_CONTEXT)
