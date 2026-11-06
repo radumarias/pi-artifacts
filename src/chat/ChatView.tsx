@@ -158,7 +158,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     onArtifact(latest, loading);
   }, [state.entries, onArtifact]);
 
-  // Something to send: what Send and Enter take, and what turns Stop into Send while the agent works.
+  // Something to send: what Send and Enter take, and what brings Send in beside Stop while the agent works.
   const hasMessage = /\S/.test(draft) || attachments.pending.length > 0;
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -360,17 +360,30 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   }
                   rows={1}
                 />
-                {/* While the agent works the button stops it, until something is typed or attached: then it sends, and a
-                    message for the agent waits its turn in the queue. Emptying the box brings Stop back. */}
-                {state.busy && !hasMessage ? (
-                  // Sending empties the box, so Stop takes Send's place under the pointer: a double click's second
-                  // click (detail 2 on the same button) is not a Stop.
-                  <button type="button" className="icon-button" onClick={(e) => e.detail <= 1 && abort()} title="Stop" aria-label="Stop">
+                {/* While the agent works Stop is here. Once something is typed or attached, Send joins it: a message for the
+                    agent waits its turn in the queue, and stopping needs no clearing of the box. */}
+                {state.busy && (
+                  // Stop lands where Send was when a run starts, or when sending empties the box and takes Send away:
+                  // a double click's second click (detail 2) is not a Stop. It goes once the run ends, so the cursor goes
+                  // back to the input, as after Send, rather than to nowhere.
+                  <button
+                    type="button"
+                    className="icon-button composer-stop"
+                    disabled={!connected}
+                    onClick={(e) => {
+                      if (e.detail > 1) return;
+                      abort();
+                      input.current?.focus();
+                    }}
+                    title="Stop"
+                    aria-label="Stop"
+                  >
                     <Icon>
-                      <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" stroke="none" />
+                      <rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none" />
                     </Icon>
                   </button>
-                ) : (
+                )}
+                {(!state.busy || hasMessage) && (
                   <button
                     type="submit"
                     className="icon-button primary"
