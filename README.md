@@ -614,7 +614,8 @@ referrer is there, `from` counts only on the referrer's own site, so a link post
   can publish new versions, and only their owner can clone their repo. See
   [Versions in Git](#versions-in-git).
 - **What a page saves** belongs to the viewer who saved it; only the page's author's values are read by others, as
-  defaults. A page's model calls run as the viewer and count against their allowance, never the author's.
+  defaults, and only by those who may load everything the page calls (a page calling a server that signs in each
+  user shares them only with the people in its chat), since a page may have saved what it loaded. A page's model calls run as the viewer and count against their allowance, never the author's.
 - **Shared chats** open only to their owner and the people the owner invited, and everyone in one works through the
   owner's agent and connections. See [Shared chats](#shared-chats).
 

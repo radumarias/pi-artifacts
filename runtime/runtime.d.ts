@@ -52,7 +52,8 @@ interface Pi {
  * What the page saves for the person viewing it, kept on the server, so it follows them to any browser: layouts,
  * filters, collapsed sections, settings. Each viewer has their own values for the page. The page's author's values are
  * everyone's starting point: what the author arranges is the default layout, and a viewer's own changes go over it.
- * Everyone who opens the page reads the author's values, so never save data from MCP calls or anything private.
+ * Everyone who opens the page reads the author's values (only people in the author's chat, when the page calls a
+ * server that signs in each user), so never save data from MCP calls or anything private.
  *
  * Values load once, when `use("storage")` resolves; from then on reads and writes are synchronous, like localStorage,
  * and writes are saved in the background half a second after the last one. Await it before the first read that

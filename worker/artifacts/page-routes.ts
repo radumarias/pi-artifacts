@@ -19,16 +19,31 @@ export function pageFailed(error: PageError, status: number): Response {
   return json({ ok: false, error } satisfies PageStorageResponse & PageAiResponse, status);
 }
 
-/** The author's values for a page: everyone else's defaults. */
-const authorValues = (artifactId: string, ownerUid: string) => exports.UserDirectory.getByName(ownerUid).pageValues(artifactId);
+/** Where a page lives: its owner, and the name of the chat object that published it. */
+export interface PageHome {
+  ownerUid: string;
+  chat: string;
+}
 
-export async function pageStorageRoute(request: Request, env: Env, uid: string, artifactId: string, ownerUid: string): Promise<Response> {
+/**
+ * The author's values for a page: everyone else's defaults, for those who may see what the page loads (a page may
+ * have saved it); none for the others.
+ */
+async function authorValues(artifactId: string, home: PageHome, uid: string): Promise<Record<string, string | null>> {
+  const [allowed, values] = await Promise.all([
+    exports.ChatAgent.getByName(home.chat).mayReadPageDefaults(artifactId, uid),
+    exports.UserDirectory.getByName(home.ownerUid).pageValues(artifactId),
+  ]);
+  return allowed ? values : {};
+}
+
+export async function pageStorageRoute(request: Request, env: Env, uid: string, artifactId: string, home: PageHome): Promise<Response> {
   const body = await readJson<{ op?: unknown; changes?: unknown }>(request);
   if (!body || !["load", "write", "reset"].includes(body.op as string)) return pageFailed({ code: "bad_request", message: "Expected {op: load, write or reset}." }, 400);
-  const isAuthor = uid === ownerUid;
+  const isAuthor = uid === home.ownerUid;
   const directory = exports.UserDirectory.getByName(uid);
   const values = async (own: Promise<Record<string, string | null>>): Promise<Response> => {
-    const [mine, defaults] = await Promise.all([own, isAuthor ? {} : authorValues(artifactId, ownerUid)]);
+    const [mine, defaults] = await Promise.all([own, isAuthor ? {} : authorValues(artifactId, home, uid)]);
     return json({ ok: true, values: mergeValues(defaults, mine), isAuthor } satisfies PageStorageResponse & PageValues);
   };
   if (body.op === "load") return values(directory.pageValues(artifactId));

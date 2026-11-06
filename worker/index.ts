@@ -2,7 +2,7 @@ import { exports, waitUntil } from "cloudflare:workers";
 import { ID_PATTERN, isSecondSeatUid, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { PageCallCache } from "./artifacts/page-calls.ts";
-import { pageAiRoute, pageFailed, pageStorageRoute } from "./artifacts/page-routes.ts";
+import { pageAiRoute, pageFailed, pageStorageRoute, type PageHome } from "./artifacts/page-routes.ts";
 import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { filesRoute } from "./files-routes.ts";
@@ -18,21 +18,15 @@ export { ChatAgent } from "./chat-agent.ts";
 export { Sandbox } from "./sandbox.ts";
 export { UserDirectory } from "./users.ts";
 
-/** Where an artifact lives: its owner, and the name of the chat object that published it. */
-interface ArtifactHome {
-  ownerUid: string;
-  chat: string;
-}
-
 /**
  * Where each artifact lives. That never changes once an artifact exists, so a
  * page's live calls, the hottest path, skip the R2 read after the first one in
  * this isolate.
  */
-const artifactHomes = new Map<string, ArtifactHome>();
+const artifactHomes = new Map<string, PageHome>();
 const MAX_ARTIFACT_HOMES = 5_000;
 
-async function artifactHome(storage: Storage, id: string): Promise<ArtifactHome | undefined> {
+async function artifactHome(storage: Storage, id: string): Promise<PageHome | undefined> {
   let home = artifactHomes.get(id);
   if (!home) {
     const meta = await storage.artifacts.readMeta(id);
@@ -113,7 +107,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if ((artifact[2] === "/storage" || artifact[2] === "/ai") && method === "POST") {
       const home = await artifactHome(storage, id);
       if (!home) return pageFailed({ code: "bad_request", message: "No such artifact." }, 404);
-      return artifact[2] === "/storage" ? pageStorageRoute(request, env, uid, id, home.ownerUid) : pageAiRoute(request, env, storage, uid);
+      return artifact[2] === "/storage" ? pageStorageRoute(request, env, uid, id, home) : pageAiRoute(request, env, storage, uid);
     }
     // A page's tool list and live calls go to the chat that published it.
     if ((artifact[2] === "/tools" && method === "GET") || (artifact[2] === "/mcp" && method === "POST")) {

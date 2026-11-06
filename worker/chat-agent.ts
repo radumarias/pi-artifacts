@@ -1868,6 +1868,18 @@ export class ChatAgent extends DurableObject<Env> {
     return this.hub.server(server)?.auth === "oauth";
   }
 
+  /**
+   * Whether `viewer` may read what the author's views of a page saved (the defaults pi.use("storage") serves). A page
+   * may save what it loaded, so its saved values follow the rule for its data: an artifact with a version that calls a
+   * server only the chat's people may load (#mayLoad) shares its author's values only with them.
+   */
+  async mayReadPageDefaults(artifactId: string, viewer: string): Promise<boolean> {
+    if (this.isInChat(viewer)) return true;
+    const meta = await this.storage.artifacts.readMeta(artifactId);
+    if (!meta || !isOwnedBy(meta, this.uid, this.chatId)) return false;
+    return meta.versions.every((version) => (version.manifest.mcp?.servers ?? []).every((entry) => this.#mayLoad(entry.server, viewer)));
+  }
+
   /** Versions never change once published, so their manifests cache for the object's lifetime. */
   async #manifest(artifactId: string, version: number): Promise<ArtifactManifest | undefined> {
     const key = `${artifactId}:${version}`;
