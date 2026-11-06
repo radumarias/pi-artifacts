@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type ClassifierModel, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
 import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
@@ -9,12 +9,14 @@ import {
   contextTokens,
   decisionsRouter,
   modelRouter,
+  NO_USAGE,
   parsePick,
   route,
   routeHistory,
   routePrompt,
   routersFrom,
   workersAIClassifierRouter,
+  type Router,
   type RouteRequest,
 } from "../worker/agent/route.ts";
 import { recordSpend } from "../worker/agent/ledger.ts";
@@ -196,6 +198,56 @@ describe("routing", () => {
       });
     const { list } = routers(slow, slow);
     await expect(route(list, request(), 50)).rejects.toThrow(/first: .*second: out of time|first: .*second: /);
+  });
+
+  describe("a slow router", () => {
+    afterEach(() => vi.useRealTimers());
+    /** A router that picks `model` after `ms`, or fails when stopped; `stopped` says whether it was. */
+    const timed = (id: string, ms: number, model = "openai/gpt-4o") => {
+      const state = { asked: false, stopped: false };
+      const router: Router = {
+        id,
+        ask: (_request, signal) =>
+          new Promise((resolve, reject) => {
+            state.asked = true;
+            const timer = setTimeout(() => resolve({ pick: { model }, usage: NO_USAGE }), ms);
+            signal.addEventListener("abort", () => {
+              clearTimeout(timer);
+              state.stopped = true;
+              reject(new Error("Request aborted"));
+            });
+          }),
+      };
+      return { router, state };
+    };
+
+    it("keeps going while the next one is asked beside it, and the first pick wins", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const first = timed("first", 1_800, "anthropic/claude-haiku-5.5");
+      const second = timed("second", 2_000);
+      const routed = route([first.router, second.router], request());
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(second.state.asked).toBe(false);
+      await vi.advanceTimersByTimeAsync(301);
+      expect((await routed).pick.model).toBe("anthropic/claude-haiku-5.5");
+      // The one still asking is stopped.
+      expect(second.state).toEqual({ asked: true, stopped: true });
+    });
+
+    it("leaves the next one the time that is left, and one that fails has the next asked at once", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const hung = timed("hung", 60_000);
+      const fast = timed("fast", 100);
+      const routed = route([hung.router, fast.router], request());
+      await vi.advanceTimersByTimeAsync(1_600);
+      expect((await routed).router.model).toBe("fast");
+      expect(hung.state.stopped).toBe(true);
+      const failing: Router = { id: "failing", ask: () => Promise.reject(new Error("no credits")) };
+      const next = timed("next", 10);
+      const quick = route([failing, next.router], request());
+      await vi.advanceTimersByTimeAsync(10);
+      expect((await quick).router.model).toBe("next");
+    });
   });
 
   it("does not ask without routers or candidates", async () => {
