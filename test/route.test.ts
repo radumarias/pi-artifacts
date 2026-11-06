@@ -277,10 +277,10 @@ describe("a System One classifier on Workers AI as a router", () => {
   const choice = (value: string) => ({ type: "choice", choice: value, confidence: 0.9, probabilities: { [value]: 0.9 } });
   /** The AI binding, answering each run with `reply`. */
   const binding = (reply: (model: string) => unknown) => {
-    const runs: { model: string; input: Record<string, unknown> }[] = [];
+    const runs: { model: string; input: Record<string, unknown>; signal?: AbortSignal }[] = [];
     const ai = {
-      run: async (model: string, input: object) => {
-        runs.push({ model, input: input as Record<string, unknown> });
+      run: async (model: string, input: object, options?: { signal?: AbortSignal }) => {
+        runs.push({ model, input: input as Record<string, unknown>, signal: options?.signal });
         return reply(model);
       },
     };
@@ -301,6 +301,16 @@ describe("a System One classifier on Workers AI as a router", () => {
     expect(Object.keys(questions)).toEqual(["model", "effort"]);
     expect(Object.keys(questions.model.criteria)).toEqual(request().candidates.map((candidate) => candidate.id));
     expect((runs[0].input.state as { message: string }).message).toBe(request().message);
+    expect(runs[0].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("takes a third-party model's answer in its run record", async () => {
+    const { ai } = binding(() => ({
+      state: "Completed",
+      result: { answers: { model: choice("anthropic/claude-haiku-5.5"), effort: choice("low") }, usage: { input_tokens: 1_000 } },
+    }));
+    const routed = await route([workersAIClassifierRouter(ai, jev)], request());
+    expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low" });
   });
 
   it("fails, so the next router is asked, when the binding throws, takes too long, or the answer is not a candidate", async () => {

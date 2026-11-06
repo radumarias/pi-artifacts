@@ -333,7 +333,7 @@ export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<
 
 /** What runs a Workers AI model: the AI binding. */
 export interface ModelRunner {
-  run(model: string, input: object): Promise<unknown>;
+  run(model: string, input: object, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 /**
@@ -346,9 +346,19 @@ export function workersAIClassifierRouter(ai: ModelRunner, model: ClassifierMode
     const { model: id, input } = JSON.parse(String(init?.body)) as { model: string; input: Record<string, unknown> };
     const signal = init?.signal ?? undefined;
     signal?.throwIfAborted();
-    const aborted = new Promise<never>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
-    const result = await Promise.race([ai.run(id, input), aborted]);
-    return Response.json({ success: true, result });
+    // The binding is handed the signal, so a call past its time stops (and stops billing); the race covers a binding
+    // that does not stop on it.
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal!.reason);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      const result = await Promise.race([ai.run(id, input, { signal }), aborted]);
+      return Response.json({ success: true, result });
+    } finally {
+      signal?.removeEventListener("abort", onAbort!);
+    }
   };
   // The binding needs no key; pi-ai only wants one to send.
   return classifierRouter(model, classifyOnWorkersAI, { apiKey: "ai-binding", fetch: viaBinding });
