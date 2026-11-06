@@ -365,7 +365,13 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                 {state.busy && (
                   // Sending empties the box and takes Send away, so Stop slides under the pointer: a double click's
                   // second click (detail 2) is not a Stop.
-                  <button type="button" className="icon-button composer-stop" onClick={(e) => e.detail <= 1 && abort()} title="Stop" aria-label="Stop">
+                  <button
+                    type="button"
+                    className="icon-button composer-stop"
+                    onClick={(e) => e.detail <= 1 && abort()}
+                    title="Stop"
+                    aria-label="Stop"
+                  >
                     <Icon>
                       <rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none" />
                     </Icon>
