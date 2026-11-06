@@ -6,7 +6,7 @@ import { BrowserUnavailable, CheckTimedOut } from "../artifacts/browser.ts";
 import { timedOutReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
 import { reviewLook, type Look, type Reviewed } from "../artifacts/look.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
-import { withReview, type PageReview, type PageReviewer } from "../artifacts/review.ts";
+import { ReviewStopped, withReview, type PageReview, type PageReviewer } from "../artifacts/review.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { ArtifactStore } from "../storage/artifacts.ts";
 import { draftId, passed, type ChatDrafts, type Draft, type DraftCheck, type DraftSummary, type SkillSets } from "../storage/drafts.ts";
@@ -245,27 +245,39 @@ export interface CheckedDraft {
 export async function checkDraft(
   scope: PublishScope,
   id: string,
-  options: Pick<CheckInput, "tests" | "viewport">,
+  { review: reviewIt = true, ...options }: Pick<CheckInput, "tests" | "viewport"> & { review?: boolean },
   signal?: AbortSignal,
 ): Promise<CheckedDraft> {
   const drafts = await scope.drafts();
   const draft = await draftNamed(drafts, id, "Not checked.");
   const { html, pageLine } = await pageToRun(scope, draft, "Not checked.");
-  // Stops the review when the check fails: it is no longer waited for, and a review costs.
+  // Stops the review when the check fails or could not run: it is no longer waited for, and a review costs.
   const stop = new AbortController();
   const both = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
-  // The page as written, without the skill files it names: those are the skill's, not the page's code.
-  const reviewing = draft.reviewed ? undefined : scope.review?.().then((review) => review?.(draft.html, both));
+  // The page as written, without the skill files it names: those are the skill's, not the page's code. A review
+  // stopped here comes to none; stopped from outside, the check throws why.
+  const reviewing =
+    !reviewIt || draft.reviewed
+      ? undefined
+      : scope
+          .review?.()
+          .then((review) => review?.(draft.html, both))
+          .catch((error: unknown) => {
+            if (signal?.aborted || !stop.signal.aborted) throw error instanceof ReviewStopped ? error.reason : error;
+            return undefined;
+          });
   // The look follows the browser check while the review runs: the check takes as long as the slower of the two.
   const looking = checkInBrowser(scope, { html, manifest: draft.manifest, ...options, ...(html !== draft.html && { pageLine }) }, signal).then(
-    async ({ report, unchecked }): Promise<Partial<Reviewed> & { unchecked?: string }> =>
-      report && scope.look ? await reviewLook(scope.look, report, { stoppedBefore: draft.lookStopped, signal }) : { report, unchecked },
+    async ({ report, unchecked }): Promise<Partial<Reviewed> & { unchecked?: string }> => {
+      // A page no browser checked gets its review with its first check that runs: this one's would be thrown away.
+      if (!report) stop.abort();
+      return report && scope.look ? await reviewLook(scope.look, report, { stoppedBefore: draft.lookStopped, signal }) : { report, unchecked };
+    },
   );
   const [looked, review] = await Promise.all([looking, reviewing]).catch((error: unknown) => {
     stop.abort();
     throw error;
   });
-  // A page no browser checked gets its review with its first check that runs.
   const used = looked.report && review;
   const report = used ? withReview(looked.report!, used) : looked.report;
   const check = draftCheck(report);
@@ -391,7 +403,8 @@ async function artifactFor(scope: PublishScope, target: PublishTarget, writtenFo
 export async function publishDraft(scope: PublishScope, input: PublishInput, signal?: AbortSignal): Promise<Published> {
   const drafts = await scope.drafts();
   let draft = await draftNamed(drafts, input.draftId, "Not published.");
-  if (draft.errors === null && scope.publishUnchecked) draft = (await checkDraft(scope, draft.id, {}, signal)).draft;
+  // Without the code review: its findings would stop the publish unseen, and the draft would then be reviewed already.
+  if (draft.errors === null && scope.publishUnchecked) draft = (await checkDraft(scope, draft.id, { review: false }, signal)).draft;
   const unchecked = draft.errors === null;
   if (draft.errors)
     throw new Error(

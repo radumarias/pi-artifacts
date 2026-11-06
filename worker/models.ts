@@ -501,11 +501,6 @@ async function retry(source: CatalogSource, discovery: Discovery, catalog: Catal
   }
 }
 
-/**
- * The models a chat can pick: the providers' lists as last asked (kept in R2 for every isolate), and Workers AI's. The
- * first call with no discovery anywhere asks the providers and waits; later, a discovery older than FRESH_MS is renewed
- * in the background while the old one serves. `refresh` asks again now, unless the last ask was under a minute ago.
- */
 /** The models a comma-separated list of the picker's ids names (PAGE_AI_MODEL, REVIEW_MODEL), in order: those `catalog` has. */
 export function modelsNamed(list: string, catalog: Catalog): Model<Api>[] {
   return list
@@ -515,6 +510,11 @@ export function modelsNamed(list: string, catalog: Catalog): Model<Api>[] {
     .flatMap((id) => catalog.model(id) ?? []);
 }
 
+/**
+ * The models a chat can pick: the providers' lists as last asked (kept in R2 for every isolate), and Workers AI's. The
+ * first call with no discovery anywhere asks the providers and waits; later, a discovery older than FRESH_MS is renewed
+ * in the background while the old one serves. `refresh` asks again now, unless the last ask was under a minute ago.
+ */
 export async function loadCatalog(source: CatalogSource, { refresh = false } = {}): Promise<Catalog> {
   if (held && !refresh && Date.now() - held.readAt < REREAD_MS) return held.catalog;
   const discovery = await readCached(source.cache);

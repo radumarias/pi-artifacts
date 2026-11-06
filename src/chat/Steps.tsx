@@ -183,6 +183,12 @@ function reviewOf(result: ToolResultMessage | undefined): ReviewedDetails | unde
   return (result?.details as Partial<CheckedResultDetails> | undefined)?.review;
 }
 
+/** Whether a page check's result carries a code review that finished: one that did not is said on its own step only. */
+function reviewDone(result: ToolResultMessage | undefined): boolean {
+  const review = reviewOf(result);
+  return review !== undefined && !review.failed;
+}
+
 /**
  * A run's summary in a line: what its calls did, by kind in the order they first came ("Queried sales 5 times, ran 3
  * commands"), a check's code review (from `results`) after the check. Thoughts count only in a run of nothing else.
@@ -193,7 +199,7 @@ export function runSummary(items: readonly StepItem[], results?: ReadonlyMap<str
   for (const item of items) {
     if (item.kind !== "tool") continue;
     count(kindOf(item.call));
-    if (reviewOf(results?.get(item.call.id))) count("review");
+    if (reviewDone(results?.get(item.call.id))) count("review");
   }
   const line = kinds.size ? [...kinds].map(([kind, n]) => said(kind, n)).join(", ") : plural(items.length, "thought");
   return line.charAt(0).toUpperCase() + line.slice(1);
@@ -556,7 +562,7 @@ export function StepRun({ items }: { items: readonly StepItem[] }) {
   // Which of the run's checks had a code review: the results change with every entry, this only when one of the run's
   // lands. With the items, which stay the same until the run grows, the line is worked out once for a finished run, and
   // not for a step alone.
-  const reviewed = items.map((item) => (item.kind === "tool" && reviewOf(results.get(item.call.id)) ? 1 : 0)).join("");
+  const reviewed = items.map((item) => (item.kind === "tool" && reviewDone(results.get(item.call.id)) ? 1 : 0)).join("");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const label = useMemo(() => (items.length === 1 ? "" : runSummary(items, results)), [items, reviewed]);
   if (items.length === 1) return <OneStep item={items[0]} />;

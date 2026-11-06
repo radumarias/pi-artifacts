@@ -113,6 +113,18 @@ describe("modelReviewer", () => {
     expect(await modelReviewer(odd as never, [model("a")])("<p>")).toMatchObject({ findings: [], failed: expect.stringContaining("no findings list") });
   });
 
+  it("asks the next model when one answers without a findings list", async () => {
+    const asked: string[] = [];
+    const models = {
+      completeSimple: async (m: Model<Api>) => (asked.push(m.id), reply(m.id === "first" ? '{"verdict": "fine"}' : '{"findings": []}')),
+    };
+    const review = await modelReviewer(models as never, [model("first"), model("second")])("<p>");
+    expect(asked).toEqual(["first", "second"]);
+    expect(review).toMatchObject({ by: "test/second", findings: [] });
+    expect(review.failed).toBeUndefined();
+    expect(review.usage.input).toBe(2000);
+  });
+
   it("throws once the check is stopped", async () => {
     const stop = new AbortController();
     const models = {
@@ -200,6 +212,37 @@ describe("a check with a code review", () => {
     expect(await drafts.get(id)).toMatchObject({ reviewed: true });
     await checkDraft(scope, id, {});
     expect(reviewed).toHaveLength(1);
+  });
+
+  it("publishes without a review where a page no browser checked is checked by its publish", async () => {
+    const { scope, reviewed, versions } = chat(() => ({ findings: [xss] }));
+    scope.publishUnchecked = true;
+    const { id } = await writeDraft(scope, { html: unsafe });
+    await publishDraft(scope, { title: "Out", draftId: id });
+    expect(versions).toEqual([unsafe]);
+    expect(reviewed).toEqual([]);
+  });
+
+  it("stops the review of a page no browser could check, and reviews it on its first check that runs", async () => {
+    const { BrowserUnavailable } = await import("../worker/artifacts/browser.ts");
+    const { scope, drafts } = chat(() => ({ findings: [xss] }));
+    let stopped = false;
+    let browser = false;
+    scope.checkPage = async () => {
+      if (!browser) throw new BrowserUnavailable("no browser");
+      return report();
+    };
+    scope.review = async () => (_html, signal) =>
+      new Promise((resolve, reject) => {
+        if (browser) return resolve({ findings: [xss], usage, ms: 1 });
+        signal?.addEventListener("abort", () => ((stopped = true), reject(new Error("stopped"))));
+      });
+    const { id } = await writeDraft(scope, { html: unsafe });
+    expect(await checkDraft(scope, id, {})).toMatchObject({ unchecked: "no browser", review: undefined });
+    expect(stopped).toBe(true);
+    expect((await drafts.get(id))?.reviewed).toBeUndefined();
+    browser = true;
+    expect((await checkDraft(scope, id, {})).draft).toMatchObject({ errors: 1, reviewed: true });
   });
 
   it("checks without a review when the deployment has no reviewer", async () => {

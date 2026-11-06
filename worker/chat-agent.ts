@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Api, Model, Models, UserMessage } from "@earendil-works/pi-ai";
+import type { Api, Model, Models, Usage, UserMessage } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentChange, type AgentState, type Submission, type Conversation, type Cursor, type EntryId, type EntryRecord, type Extension, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { PiHarness, skills } from "agents/harness/pi";
@@ -91,7 +91,7 @@ import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget,
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
 import { lookFrom } from "./artifacts/look.ts";
-import { modelReviewer, type PageReviewer } from "./artifacts/review.ts";
+import { modelReviewer, ReviewStopped, type PageReviewer } from "./artifacts/review.ts";
 import type { ChatAnswer } from "./artifacts/page-calls.ts";
 import { chatOutFolder, chatTraces, type ChatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
@@ -789,17 +789,23 @@ export class ChatAgent extends DurableObject<Env> {
       return undefined;
     }
     const review = modelReviewer(this.#oneShotModels, candidates);
+    const spent = (usage: Usage, by: string | undefined) => {
+      if (usage.totalTokens === 0 && usage.cost.total === 0) return;
+      // A review that failed, or was stopped, after a billed attempt counts under the first model asked.
+      const model = by ?? modelKey(candidates[0].provider, candidates[0].id);
+      void this.#root()
+        .then((root) => root.commit((tx) => recordSpend(tx, root.id, `${REVIEW_LEDGER_PREFIX}${model}`, usage), BACKGROUND_CONTEXT))
+        .catch((error: unknown) => console.error("page review spend:", errorMessage(error)));
+    };
     return async (html, signal) => {
-      const reviewed = await review(html, signal);
-      const { usage } = reviewed;
-      if (usage.totalTokens > 0 || usage.cost.total > 0) {
-        // A review that failed after a billed attempt counts under the first model asked.
-        const model = reviewed.by ?? modelKey(candidates[0].provider, candidates[0].id);
-        void this.#root()
-          .then((root) => root.commit((tx) => recordSpend(tx, root.id, `${REVIEW_LEDGER_PREFIX}${model}`, usage), BACKGROUND_CONTEXT))
-          .catch((error: unknown) => console.error("page review spend:", errorMessage(error)));
+      try {
+        const reviewed = await review(html, signal);
+        spent(reviewed.usage, reviewed.by);
+        return reviewed;
+      } catch (error) {
+        if (error instanceof ReviewStopped) spent(error.usage, undefined);
+        throw error;
       }
-      return reviewed;
     };
   }
 
@@ -1841,7 +1847,8 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async devPublish({ html, mcp, ...target }: PublishTarget & { html: string; mcp?: WriteInput["mcp"] }) {
     const { id } = await writeDraft(this.scope, { html, mcp });
-    const { report, unchecked } = await checkDraft(this.scope, id, {});
+    // Without the code review: a model's findings would make this publish fail at random.
+    const { report, unchecked } = await checkDraft(this.scope, id, { review: false });
     if (report?.errors.length) throw new Error(`The check found errors:\n${report.errors.join("\n")}`);
     if (!report && !this.scope.publishUnchecked) throw new Error(`Not checked, so not published: ${unchecked}`);
     const { meta } = await publishDraft(this.scope, { ...target, draftId: id });

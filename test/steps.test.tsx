@@ -377,5 +377,7 @@ describe("code review step", () => {
     const results = stepResults(checked({ check, review })).results;
     expect(runSummary([item], results)).toBe("Checked the page, reviewed the code");
     expect(runSummary([item])).toBe("Checked the page");
+    const failed = stepResults(checked({ check, review: { findings: [], cost: 0, ms: 45_000, failed: "no answer in 45 s" } })).results;
+    expect(runSummary([item], failed)).toBe("Checked the page");
   });
 });

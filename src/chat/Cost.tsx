@@ -32,6 +32,12 @@ const PICKERS = [
   [REVIEW_LEDGER_PREFIX, "Page code reviews"],
 ] as const;
 
+/** A ledger key's picker (its label, PICKERS) and model: the key itself, and no label, for a model's or a tool's own row. */
+function ledgerModel(key: string): { label?: string; model: string } {
+  const picker = PICKERS.find(([prefix]) => key.startsWith(prefix));
+  return picker ? { label: picker[1], model: key.slice(picker[0].length) } : { model: key };
+}
+
 /**
  * A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name;
  * Auto's router ("Auto picks · GPT OSS 120B"); the classifier that picks the skills shown ("Skill picks ·
@@ -39,12 +45,6 @@ const PICKERS = [
  * typesafe/jev"); the tool picker ("Tool picks · cloudflare-workers-ai/typesafe/jev"); the review of pages' code ("Page
  * code reviews · GPT OSS 120B").
  */
-/** A ledger key's picker (its label, PICKERS) and model: the key itself, and no label, for a model's or a tool's own row. */
-function ledgerModel(key: string): { label?: string; model: string } {
-  const picker = PICKERS.find(([prefix]) => key.startsWith(prefix));
-  return picker ? { label: picker[1], model: key.slice(picker[0].length) } : { model: key };
-}
-
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
   const { label, model } = ledgerModel(share.model);
   if (label) return `${label} · ${models.get(model)?.name ?? model}`;

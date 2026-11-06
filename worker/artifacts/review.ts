@@ -2,6 +2,7 @@ import type { Api, Model, Models, Usage } from "@earendil-works/pi-ai";
 import { modelKey } from "../../shared/models.ts";
 import type { ReviewFinding, ReviewFindingKind } from "../../shared/protocol.ts";
 import { clip, errorMessage, isObject } from "../../shared/util.ts";
+import { addUsage } from "../agent/ledger.ts";
 import { NO_USAGE } from "../agent/route.ts";
 import type { CheckReport } from "./check.ts";
 import { askPageModel } from "./page-features.ts";
@@ -61,7 +62,7 @@ export interface PageReview {
   failed?: string;
 }
 
-/** Review a page's source; `signal` stops it. Never throws but when stopped: a failure says why in `failed`. */
+/** Review a page's source; `signal` stops it. Never throws but when stopped (ReviewStopped): a failure says why in `failed`. */
 export type PageReviewer = (html: string, signal?: AbortSignal) => Promise<PageReview>;
 
 /** The page as the model reads it: each line with its number, a long line cut, and the page cut at MAX_PAGE_CHARS. */
@@ -98,29 +99,48 @@ export function findingsIn(answer: unknown): ReviewFinding[] {
   return findings.sort((a, b) => Number(b.severity === "fix") - Number(a.severity === "fix")).slice(0, MAX_FINDINGS);
 }
 
-/** The reviewer that asks the first of `candidates` that answers (as pages' models are asked, page-features.ts). */
+/** A review stopped from outside (the check failed, or was stopped): why (`reason`), and what its calls cost all the same. */
+export class ReviewStopped extends Error {
+  constructor(
+    readonly reason: unknown,
+    readonly usage: Usage,
+  ) {
+    super(errorMessage(reason));
+  }
+}
+
+/**
+ * The reviewer that asks the first of `candidates` that answers with findings (as pages' models are asked,
+ * page-features.ts): one that fails, or answers without a findings list, passes the page to the next one.
+ */
 export function modelReviewer(models: Pick<Models, "completeSimple">, candidates: readonly Model<Api>[], timeoutMs = REVIEW_MS): PageReviewer {
   return async (html, signal) => {
     const started = Date.now();
     const timeout = AbortSignal.timeout(timeoutMs);
+    const both = signal ? AbortSignal.any([signal, timeout]) : timeout;
     const request = {
       system: INSTRUCTIONS,
       messages: [{ role: "user" as const, content: `<page>\n${numberedPage(html)}\n</page>` }],
       maxTokens: MAX_ANSWER_TOKENS,
       json: true as const,
     };
-    let usage = structuredClone(NO_USAGE);
-    try {
-      const answer = await askPageModel(models, candidates, request, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, attemptMs: ATTEMPT_MS });
-      usage = answer.usage;
-      if (signal?.aborted) throw signal.reason ?? new Error("Stopped.");
-      if (!answer.ok) throw new Error(timeout.aborted ? `no answer in ${timeoutMs / 1000} s` : answer.error.message);
-      return { findings: findingsIn(answer.json), by: modelKey(answer.model.provider, answer.model.id), usage, ms: Date.now() - started };
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      console.warn("page review:", errorMessage(error));
-      return { findings: [], usage, ms: Date.now() - started, failed: errorMessage(error) };
+    const usage = structuredClone(NO_USAGE);
+    const failures: string[] = [];
+    for (const model of candidates) {
+      const answer = await askPageModel(models, [model], request, { signal: both, attemptMs: ATTEMPT_MS });
+      addUsage(usage, answer.usage);
+      if (signal?.aborted) throw new ReviewStopped(signal.reason ?? new Error("Stopped."), usage);
+      if (timeout.aborted) break;
+      try {
+        if (!answer.ok) throw new Error(answer.error.message);
+        return { findings: findingsIn(answer.json), by: modelKey(model.provider, model.id), usage, ms: Date.now() - started };
+      } catch (error) {
+        failures.push(`${model.id}: ${errorMessage(error)}`);
+      }
     }
+    const failed = timeout.aborted ? `no answer in ${timeoutMs / 1000} s` : failures.join("; ") || "no model to ask";
+    console.warn("page review:", failed);
+    return { findings: [], usage, ms: Date.now() - started, failed };
   };
 }
 
