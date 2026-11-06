@@ -180,6 +180,33 @@ await mcp.invalidate("CoinGecko");                                    // refetch
 
 [`examples/crypto-dashboard.html`](examples/crypto-dashboard.html) is a complete page written against it.
 
+### Saved layouts and typed edits
+
+A page can also keep what each viewer changes, and ask a small model about what they type into it:
+
+```js
+const store = await pi.use("storage");      // this viewer's values over the author's; sync reads after this
+const layout = JSON.parse(store.getItem("layout") ?? "null") ?? DEFAULT;
+store.setItem("layout", JSON.stringify(next));   // saved in the background
+await store.reset();                         // back to the author's layout
+
+const ai = await pi.use("ai");
+const { json } = await ai.complete({ system: "Cards: … Reply with {order, hidden}.", messages: [{ role: "user", content: typed }], json: true });
+```
+
+- **Storage** is kept per viewer and page in the viewer's `UserDirectory` (`page_values`). The author's own values are
+  everyone's defaults: a viewer sees the author's layout until they change it, and a key they remove stays removed for
+  them. Nobody but the author changes the defaults, and everyone who opens the page reads them, so pages must not save
+  data from MCP calls there. The frame's opaque origin has no `localStorage`; the runtime puts the same store in its
+  place, so libraries that save their state there keep it. Limits: 500 keys and 500 000 characters per viewer and page.
+- **The model** (`PAGE_AI_MODEL`, by default gpt-oss-120b on Workers AI, then Gemini Flash-Lite) answers one request
+  at a time, with no tools. The person typing pays: each call counts against their own daily allowance
+  (`PAGE_AI_DAILY_USD`, kept in their `UserDirectory`), 20 calls a minute at most (`PAGE_AI`).
+
+| The author's layout, everyone's default | Another viewer's own order, over it |
+| --- | --- |
+| ![The author moved Active users first and hid Churn](docs/media/page-storage/author-layout.png) | ![Another viewer moved Costs first; the author's layout is unchanged](docs/media/page-storage/viewer-layout.png) |
+
 ## Checking a page before it is published
 
 The agent checks every page in a headless browser (Cloudflare Browser Rendering, the `BROWSER` binding) before it
@@ -586,6 +613,8 @@ referrer is there, `from` counts only on the referrer's own site, so a link post
 - **Artifacts** are shared by link with anyone Access lets in, and are not encrypted per user. Only their owner's chat
   can publish new versions, and only their owner can clone their repo. See
   [Versions in Git](#versions-in-git).
+- **What a page saves** belongs to the viewer who saved it; only the page's author's values are read by others, as
+  defaults. A page's model calls run as the viewer and count against their allowance, never the author's.
 - **Shared chats** open only to their owner and the people the owner invited, and everyone in one works through the
   owner's agent and connections. See [Shared chats](#shared-chats).
 

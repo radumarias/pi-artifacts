@@ -139,6 +139,28 @@ pi.use("mcp").then((mcp) => {
     expect(describeReport(report)).toMatch(/^Live calls:\n- Demo\/quotes: 1 ok\n\nTests:\n- passed: rows \(2 rows\)\n- passed: title\n\nVisible text:\nQuotes/);
   }, 30_000);
 
+  it("gives a page saved values and localStorage in its opaque origin, and a model that is not there", async () => {
+    const report = await check(
+      `<!doctype html><html><body><p id="out">waiting</p><script>
+(async () => {
+  const store = await pi.use("storage");
+  store.setItem("layout", JSON.stringify({ order: ["b", "a"] }));
+  localStorage.setItem("theme", "dark");
+  sessionStorage.setItem("tab", "2");
+  await store.flush();
+  const ai = await pi.use("ai");
+  const code = await ai.complete("move b first").then(() => "answered", (error) => error.code);
+  let quota = "none";
+  try { store.setItem("x", "y".repeat(100001)); } catch (error) { quota = error.name; }
+  document.getElementById("out").textContent = [store.getItem("theme"), localStorage.getItem("layout"), store.keys().join(","), store.isAuthor, sessionStorage.getItem("tab"), code, quota].join(" | ");
+})();
+</script></body></html>`,
+      { manifest: {} },
+    );
+    expect(report.errors).toEqual([]);
+    expect(report.text).toBe('dark | {"order":["b","a"]} | layout,theme | true | 2 | unavailable | QuotaExceededError');
+  }, 30_000);
+
   it("reports an uncaught exception with the page's own line", async () => {
     const report = await check("<!doctype html><html><head></head><body>\n<p>Map</p>\n<script>\nconst L = {};\nL.map('map');\n</script></body></html>", {
       manifest: {},

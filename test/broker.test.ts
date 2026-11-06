@@ -220,3 +220,40 @@ describe("ArtifactBroker calls", () => {
     expect(replies.find((m) => m.id === 2).error.code).toBe("not_in_manifest");
   });
 });
+
+describe("ArtifactBroker saved values and model", () => {
+  it("passes storage and model calls to the Worker and answers with what came back", async () => {
+    const sent: unknown[] = [];
+    const posted: any[] = [];
+    const broker = new ArtifactBroker({
+      artifactId: "abc12345",
+      version: 1,
+      cacheNamespace: "ann",
+      transport: async () => ({ ok: false, error: { code: "upstream_error", message: "unused" } }),
+      describe: async () => [],
+      manifest: {},
+      pageStorage: async (request) => (sent.push(request), { ok: true, values: { layout: "[]" }, isAuthor: false }),
+      pageAi: async (request) => (sent.push(request), { ok: false, error: { code: "limit_reached", message: "used up" } }),
+    });
+    const port = { onmessage: null as ((e: { data: unknown }) => void) | null, postMessage: (m: unknown) => posted.push(m), close() {} };
+    broker.connect(port as unknown as MessagePort);
+    port.onmessage!({ data: { type: "request", id: 1, method: "storage", params: { op: "load" } } });
+    port.onmessage!({ data: { type: "request", id: 2, method: "ai", params: { messages: [{ role: "user", content: "hi" }] } } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual([{ op: "load" }, { messages: [{ role: "user", content: "hi" }] }]);
+    expect(posted).toEqual([
+      { type: "reply", id: 1, ok: true, value: { values: { layout: "[]" }, isAuthor: false } },
+      { type: "reply", id: 2, ok: false, error: { code: "limit_reached", message: "used up" } },
+    ]);
+  });
+
+  it("answers unavailable without a Worker to send them to", async () => {
+    const posted: any[] = [];
+    const broker = new ArtifactBroker({ artifactId: "abc12345", version: 1, cacheNamespace: "ann", transport: async () => fresh(0), describe: async () => [], manifest: {} });
+    const port = { onmessage: null as ((e: { data: unknown }) => void) | null, postMessage: (m: unknown) => posted.push(m), close() {} };
+    broker.connect(port as unknown as MessagePort);
+    port.onmessage!({ data: { type: "request", id: 1, method: "storage", params: { op: "load" } } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(posted[0]).toMatchObject({ id: 1, ok: false, error: { code: "unavailable" } });
+  });
+});

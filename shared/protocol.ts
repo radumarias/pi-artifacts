@@ -65,6 +65,46 @@ export function clampStaleMs(staleMs: unknown): number {
   return Math.min(Math.max(Number(staleMs) || 0, 0), MAX_STALE_MS);
 }
 
+/** What went wrong with a page's saved values or model call. */
+export type PageErrorCode = "bad_request" | "too_large" | "rate_limited" | "limit_reached" | "unavailable" | "bad_output";
+
+export interface PageError {
+  code: PageErrorCode;
+  message: string;
+  retryAfterMs?: number;
+}
+
+/**
+ * A page's saved values (pi.use("storage")), as POST /api/artifacts/:id/storage takes them: load them, write changes
+ * (null removes a key), or drop the viewer's own.
+ */
+export type PageStorageRequest = { op: "load" } | { op: "write"; changes: Record<string, string | null> } | { op: "reset" };
+
+/** The values a page sees: the viewer's own over the author's. `isAuthor`: the viewer's values are everyone's defaults. */
+export interface PageValues {
+  values: Record<string, string>;
+  isAuthor: boolean;
+}
+
+export type PageStorageResponse = ({ ok: true } & Partial<PageValues>) | { ok: false; error: PageError };
+
+/** How much one viewer may save for one page. The runtime (runtime/pi-runtime.js) holds the same numbers. */
+export const PAGE_STORAGE_LIMITS = { keyChars: 256, valueChars: 100_000, totalChars: 500_000, keys: 500 } as const;
+
+/** One call to a page's model (pi.use("ai")), as POST /api/artifacts/:id/ai takes it. */
+export interface PageAiRequest {
+  system?: string;
+  messages: { role: "user" | "assistant"; content: string }[];
+  maxTokens?: number;
+  /** Answer with JSON: the reply is parsed (a fenced block too), and one that is not JSON is `bad_output`. */
+  json?: boolean;
+}
+
+export type PageAiResponse = { ok: true; text: string; json?: unknown } | { ok: false; error: PageError };
+
+/** How large a page's model call may be. */
+export const PAGE_AI_LIMITS = { messages: 40, chars: 40_000, systemChars: 8_000, maxTokens: 2_000, defaultMaxTokens: 1_000 } as const;
+
 export interface ToolInfo {
   name: string;
   description: string;

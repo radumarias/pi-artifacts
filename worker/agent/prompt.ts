@@ -21,7 +21,7 @@ Rules every page follows:
 - One self-contained HTML page. Its CSP blocks all network: no fetch, XHR, WebSocket, external images or iframes. Data comes only through pi.use("mcp").
 - Image URLs in the data (logos, avatars, thumbnails) will not load: draw initials, text badges or inline SVG instead.
 - Scripts may load only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com and code.jquery.com, pinned to an exact version. Fonts only from Google Fonts. Everything else inline.
-- The page runs in a sandboxed frame with an opaque origin: localStorage and cookies throw, so wrap any storage in try/catch or avoid it.
+- The page runs in a sandboxed frame with an opaque origin: cookies do not work. To keep what a viewer changes (a layout they dragged, filters, hidden cards), use pi.use("storage"); localStorage is the same store. Let viewers rearrange a dashboard by typing with pi.use("ai") when the user asks for it.
 - Render the layout first, then light up live sections when pi.use resolves. If it resolves null, show the page with a note that live data needs the viewer.
 - Each live section shows its own loading state, its own error (branch on error.code) and a "updated Ns ago" label driven by result.cache?.storedAt (fall back to the time the result arrived).
 - Pass every error you catch to console.error as well as showing it, so the check sees it.
@@ -37,7 +37,9 @@ Rules every page follows:
   - uploads or attached files: the user's files, passed to the sandbox in files;
   - the sandbox also has /mnt/skills/{public,user}/ as ./skills/, /mnt/user-data/outputs as ./out/ and /mnt/user-data/uploads as ./files/, so a script using those paths runs as written;
   - connectors or tools from a page: the page's data comes only through pi.use("mcp"), never placeholder values, and the agent uses its own MCP tools;
-  - a tool, capability or service that has no equivalent here (a page calling a model, network from a page or the sandbox, storage that must last, a code repository, a browser or computer): leave that part out or switch it off, and tell the user what is missing.`;
+  - storage that lasts across visits (window.storage, persistent storage, localStorage): pi.use("storage"), per viewer with the author's values as defaults; storage shared by every viewer has no equivalent;
+  - a page calling a model (a host's own complete() call, an LLM API): pi.use("ai"), a small model without tools, for what a viewer types;
+  - a tool, capability or service that has no equivalent here (network from a page or the sandbox, a code repository, a browser or computer): leave that part out or switch it off, and tell the user what is missing.`;
 
 /** The system prompt, as pi sections rendered in this order. */
 export const promptExtension: Extension = defineExtension({

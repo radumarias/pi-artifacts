@@ -137,7 +137,7 @@ const CAPTURE =
 const HARNESS = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;background:#fff}iframe{display:block;border:0;width:100%;height:100%}</style></head><body><script>
 const state = { log: [], calls: [], pending: 0, started: Date.now(), active: Date.now(), loaded: false };
 window.__check = state;
-let frame, manifest, connected = false;
+let frame, manifest, connected = false, saved = {};
 const touch = () => { state.active = Date.now(); };
 async function bridge(request) {
   state.pending++;
@@ -171,6 +171,13 @@ function serve(port) {
         reply(r, r.ok && r.tool);
       } else if (m.method === "invalidate") {
         reply({ ok: true });
+      } else if (m.method === "storage") {
+        // Saved values start empty, as for a new viewer, and last as long as the check.
+        if (p.op === "reset") saved = {};
+        if (p.op === "write") for (const [k, v] of Object.entries(p.changes || {})) v === null ? delete saved[k] : (saved[k] = v);
+        reply({ ok: true }, p.op === "write" ? {} : { values: { ...saved }, isAuthor: true });
+      } else if (m.method === "ai") {
+        reply({ ok: false, error: { code: "unavailable", message: "The check has no model; it answers when someone types into the published page." } });
       } else {
         reply({ ok: false, error: { code: "bad_request", message: "Unknown method " + m.method } });
       }

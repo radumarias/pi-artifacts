@@ -13,6 +13,9 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
 - `pnpm test` (hub, broker, Access tokens, storage rules; `LIVE=1` also hits CoinGecko), `pnpm typecheck`,
   `AUTH_MODE=demo pnpm dev`. Without a Cloudflare login or Docker: `AUTH_MODE=demo PI_OFFLINE=1 PI_NO_DOCKER=1 pnpm dev`. Everything but the model and the sandbox (`run_python`, `run_bash`) then works, and
   `POST /api/dev/chats/:id/publish` (with `DEV_TOOLS=true` in the environment) publishes a page without the model.
+- Pages also get `pi.use("storage")` (values per viewer, the author's as defaults, in `UserDirectory`; it replaces the
+  frame's missing `localStorage`) and `pi.use("ai")` (one model answer, no tools, paid from the typing viewer's daily
+  allowance): `worker/artifacts/page-routes.ts`, `page-features.ts`. Both run as the viewer, never the author.
 - `runtime/runtime.d.ts` is load-bearing twice: it documents the page API and is inlined into the agent's system
   prompt. Change it together with `runtime/pi-runtime.js`, `src/artifact/broker.ts`, `shared/protocol.ts` and the
   check's harness, which plays the viewer's part in short (`HARNESS` in `worker/artifacts/check.ts`).

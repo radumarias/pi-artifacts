@@ -2,6 +2,7 @@ import { exports, waitUntil } from "cloudflare:workers";
 import { ID_PATTERN, isSecondSeatUid, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { PageCallCache } from "./artifacts/page-calls.ts";
+import { pageAiRoute, pageStorageRoute } from "./artifacts/page-routes.ts";
 import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { filesRoute } from "./files-routes.ts";
@@ -17,24 +18,30 @@ export { ChatAgent } from "./chat-agent.ts";
 export { Sandbox } from "./sandbox.ts";
 export { UserDirectory } from "./users.ts";
 
-/**
- * Which chat each artifact lives in. That never changes once an artifact
- * exists, so a page's live calls, the hottest path, skip the R2 read after
- * the first one in this isolate.
- */
-const artifactChats = new Map<string, string>();
-const MAX_ARTIFACT_CHATS = 5_000;
+/** Where an artifact lives: its owner, and the name of the chat object that published it. */
+interface ArtifactHome {
+  ownerUid: string;
+  chat: string;
+}
 
-async function artifactChat(storage: Storage, id: string): Promise<string | undefined> {
-  let name = artifactChats.get(id);
-  if (!name) {
+/**
+ * Where each artifact lives. That never changes once an artifact exists, so a
+ * page's live calls, the hottest path, skip the R2 read after the first one in
+ * this isolate.
+ */
+const artifactHomes = new Map<string, ArtifactHome>();
+const MAX_ARTIFACT_HOMES = 5_000;
+
+async function artifactHome(storage: Storage, id: string): Promise<ArtifactHome | undefined> {
+  let home = artifactHomes.get(id);
+  if (!home) {
     const meta = await storage.artifacts.readMeta(id);
     if (!meta) return undefined;
-    name = chatAgentName(meta.ownerUid, meta.chatId);
-    if (artifactChats.size >= MAX_ARTIFACT_CHATS) artifactChats.delete(artifactChats.keys().next().value!);
-    artifactChats.set(id, name);
+    home = { ownerUid: meta.ownerUid, chat: chatAgentName(meta.ownerUid, meta.chatId) };
+    if (artifactHomes.size >= MAX_ARTIFACT_HOMES) artifactHomes.delete(artifactHomes.keys().next().value!);
+    artifactHomes.set(id, home);
   }
-  return name;
+  return home;
 }
 
 /** Pages' live reads, shared by every viewer of a chat's pages this isolate serves (worker/artifacts/page-calls.ts). */
@@ -91,8 +98,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)(\/source)?$/);
   if (page && method === "GET") return artifactPage(request, storage, page[1], Number(page[2]), !!page[3]);
 
-  // Artifact metadata and the MCP proxy.
-  const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone|\/seen)?$/);
+  // Artifact metadata, the MCP proxy, and what a page saves and asks its model.
+  const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone|\/seen|\/storage|\/ai)?$/);
   if (artifact && ID_PATTERN.test(artifact[1])) {
     const id = artifact[1];
     // The owner opened a version of one of their artifacts: only their own sidebar entry changes.
@@ -102,9 +109,15 @@ async function route(request: Request, env: Env): Promise<Response> {
       await exports.UserDirectory.getByName(uid).markArtifactSeen(id, version as number);
       return json({});
     }
+    // A page's saved values and its model run as the viewer (worker/artifacts/page-routes.ts).
+    if ((artifact[2] === "/storage" || artifact[2] === "/ai") && method === "POST") {
+      const home = await artifactHome(storage, id);
+      if (!home) return json({ ok: false, error: { code: "bad_request", message: "No such artifact." } }, 404);
+      return artifact[2] === "/storage" ? pageStorageRoute(request, env, uid, { id, ownerUid: home.ownerUid }) : pageAiRoute(request, env, storage, uid);
+    }
     // A page's tool list and live calls go to the chat that published it.
     if ((artifact[2] === "/tools" && method === "GET") || (artifact[2] === "/mcp" && method === "POST")) {
-      const name = await artifactChat(storage, id);
+      const name = (await artifactHome(storage, id))?.chat;
       if (!name) return json({ error: "No such artifact" }, 404);
       const chat = exports.ChatAgent.getByName(name);
       if (artifact[2] === "/tools") {

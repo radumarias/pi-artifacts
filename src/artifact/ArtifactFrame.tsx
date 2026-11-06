@@ -38,6 +38,8 @@ export function ArtifactFrame({ artifactId, version, manifest, uid, title, cover
       artifactId,
       version,
       transport: (call) => api.proxy(artifactId, call),
+      pageStorage: (request) => api.pageStorage(artifactId, request),
+      pageAi: (request) => api.pageAi(artifactId, request),
       describe: () => api.artifactTools(artifactId, version),
       manifest,
       cacheNamespace: uid,

@@ -95,6 +95,7 @@
     "worker/agent/publish.ts",
     "worker/agent/prompt.ts",
     "worker/artifacts/serve.ts",
-    "worker/artifacts/page-calls.ts"
+    "worker/artifacts/page-calls.ts",
+    "worker/artifacts/page-features.ts"
   ]
 }

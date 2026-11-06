@@ -15,6 +15,20 @@
  *     }, { refetchInterval: 30_000 });
  *
  *     const coins = await mcp.CoinGecko.search_docs({ query: "markets" }); // one-off, resolves to the payload
+ *
+ * A page can also keep what each viewer changes (pi.use("storage"): a layout they dragged, filters, hidden cards) and
+ * ask a small model about something the viewer typed (pi.use("ai")):
+ *
+ *     const store = await pi.use("storage");     // values load once; read and write synchronously after
+ *     const layout = JSON.parse(store?.getItem("layout") ?? "null") ?? DEFAULT_LAYOUT;
+ *     mount(layout, (next) => store?.setItem("layout", JSON.stringify(next)));
+ *
+ *     const ai = await pi.use("ai");
+ *     const { json } = await ai.complete({
+ *       system: "You rearrange a dashboard. Cards: " + JSON.stringify(cards) + ". Reply with {order: string[], hidden: string[]}.",
+ *       messages: [{ role: "user", content: typedText }],
+ *       json: true,
+ *     });
  */
 
 interface Window {
@@ -27,9 +41,74 @@ interface Pi {
    * The capability's namespace, or `null` when this view cannot run it (the
    * page was opened outside a viewer, or the viewer never connected within
    * 10 s). Resolves after your script's first run: render first, then light
-   * up live sections. Memoized. Any name other than "mcp" resolves `null`.
+   * up live sections. Memoized. Any other name resolves `null`.
    */
   use(name: "mcp"): Promise<PiMcp | null>;
+  use(name: "storage"): Promise<PiStorage | null>;
+  use(name: "ai"): Promise<PiAi | null>;
+}
+
+/**
+ * What the page saves for the person viewing it, kept on the server, so it follows them to any browser: layouts,
+ * filters, collapsed sections, settings. Each viewer has their own values for the page. The page's author's values are
+ * everyone's starting point: what the author arranges is the default layout, and a viewer's own changes go over it.
+ * Everyone who opens the page reads the author's values, so never save data from MCP calls or anything private.
+ *
+ * Values load once, when `use("storage")` resolves; from then on reads and writes are synchronous, like localStorage,
+ * and writes are saved in the background half a second after the last one. Await it before the first read that
+ * decides the layout. Strings only: JSON.stringify objects. Limits: keys up to 256 characters, a value up to 100 000,
+ * 500 keys and 500 000 characters per viewer and page; going over throws a QuotaExceededError.
+ *
+ * `window.localStorage` is this same store (the frame's opaque origin has no localStorage of its own), so a library
+ * that saves its state there keeps it; it reads empty until `use("storage")` resolved. sessionStorage lives as long
+ * as the page.
+ */
+interface PiStorage extends Storage {
+  /** The keys saved. */
+  keys(): string[];
+  /** The viewer is the page's author: what they save is everyone's default. Say so near a "Reset layout" control. */
+  readonly isAuthor: boolean;
+  /** Save the pending writes now. Rejects with a PiPageError when they were not saved. */
+  flush(): Promise<void>;
+  /**
+   * Drop the viewer's own values and go back to the author's (for the author: drop the defaults for everyone), then
+   * re-render from the values it resolves with. Use it for "Reset layout".
+   */
+  reset(): Promise<void>;
+}
+
+/**
+ * A small, fast model for what the viewer types into the page: "move revenue to the top", "only show EU", "explain
+ * this spike". One answer per call, no tools, no web, nothing remembered between calls: send what it needs to know
+ * (the page's current layout, the visible numbers) in `system` or the messages, and keep earlier turns yourself.
+ * The viewer who types pays for it, within a daily allowance. Call it only for something a viewer asked, never on
+ * load or on a timer. Show a busy state while it runs (a few seconds), and its errors.
+ */
+interface PiAi {
+  /**
+   * A prompt string is one user message. With `json: true` the model is told to answer with JSON only and `json` is
+   * the parsed value (a reply that is not JSON rejects with `bad_output`): validate it before applying it.
+   * `maxTokens` defaults to 1 000, at most 2 000.
+   */
+  complete(
+    request: string | { system?: string; messages: { role: "user" | "assistant"; content: string }[]; maxTokens?: number; json?: boolean },
+    options?: { signal?: AbortSignal },
+  ): Promise<{ text: string; json?: unknown }>;
+}
+
+type PiPageErrorCode =
+  | "bad_request" //   a malformed call: a page bug
+  | "too_large" //     over the storage limits
+  | "rate_limited" //  too many calls; wait `retryAfterMs`
+  | "limit_reached" // the viewer used today's model allowance; it renews at midnight UTC
+  | "unavailable" //   no model answered, or this view has none (the check, a page outside a viewer)
+  | "bad_output" //    asked for JSON, the model answered something else
+  | "cancelled"; //    the call's AbortSignal fired
+
+/** Storage and model rejections are Errors carrying `code` (and `retryAfterMs` on rate_limited). Branch on `code`. */
+interface PiPageError extends Error {
+  code: PiPageErrorCode;
+  retryAfterMs?: number;
 }
 
 type PiMcpErrorCode =

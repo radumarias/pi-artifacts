@@ -104,6 +104,16 @@ export default defineConfig({
       // Live calls from published pages: 120 a minute per viewer and chat, counted by Cloudflare across the Worker's
       // isolates. The namespace is any number unique within the account.
       PAGE_CALLS: bindings.rateLimit({ namespace: "4201", simple: { limit: 120, period: 60 } }),
+      // What saved pages' model calls (pi.use("ai"): a viewer typing "put revenue first" into a dashboard) run on: a
+      // comma-separated list of the picker's model ids, tried in order (worker/artifacts/page-ai.ts). gpt-oss-120b on
+      // Workers AI needs no provider key; Gemini Flash-Lite, with the Google AI Studio key, answers when it fails.
+      // Empty: pages have no model.
+      PAGE_AI_MODEL: bindings.text("@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
+      // What one person's calls to pages' models may cost a day (UTC), in dollars: the person typing pays, not the
+      // page's author. Counted in their UserDirectory.
+      PAGE_AI_DAILY_USD: bindings.text("0.50"),
+      // Calls to pages' models: 20 a minute per person.
+      PAGE_AI: bindings.rateLimit({ namespace: "4202", simple: { limit: 20, period: 60 } }),
       // Headless Chrome (Browser Rendering): the agent checks each page in it before publishing (worker/artifacts/check.ts).
       // Local development runs a local Chrome, which miniflare downloads on first use.
       BROWSER: bindings.browser({ dev: { remote: false } }),

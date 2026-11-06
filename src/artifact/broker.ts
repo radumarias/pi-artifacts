@@ -1,6 +1,19 @@
 import { callIdentity, stripCache, withCache } from "../../shared/canonical.ts";
 import { errorMessage, memoAsync } from "../../shared/util.ts";
-import { isReadOnly, MIN_REFETCH_MS, type ArtifactManifest, type CallToolResult, type McpError, type DeclaredTool, type ProxyRequest, type ProxyResponse } from "../../shared/protocol.ts";
+import {
+  isReadOnly,
+  MIN_REFETCH_MS,
+  type ArtifactManifest,
+  type CallToolResult,
+  type DeclaredTool,
+  type McpError,
+  type PageAiRequest,
+  type PageAiResponse,
+  type PageStorageRequest,
+  type PageStorageResponse,
+  type ProxyRequest,
+  type ProxyResponse,
+} from "../../shared/protocol.ts";
 
 /** Sends one proxied call to the Worker. Swappable in tests. */
 export type Transport = (request: ProxyRequest) => Promise<ProxyResponse>;
@@ -9,6 +22,9 @@ export interface BrokerOptions {
   artifactId: string;
   version: number;
   transport: Transport;
+  /** The page's saved values (pi.use("storage")) and its model calls (pi.use("ai")), sent to the Worker as they are. */
+  pageStorage?: (request: PageStorageRequest) => Promise<PageStorageResponse>;
+  pageAi?: (request: PageAiRequest) => Promise<PageAiResponse>;
   /** The version's tools this viewer may call; a declared server the viewer may not load is left out. */
   describe: () => Promise<DeclaredTool[]>;
   /** What the version declared: tells a tool withheld from this viewer or not listed (not_granted) from one never declared. */
@@ -79,6 +95,8 @@ export class ArtifactBroker {
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (timer) => clearTimeout(timer as number),
       storage: null,
+      pageStorage: unavailable,
+      pageAi: unavailable,
       ...options,
     };
     this.#tools = memoAsync(() => this.#o.describe());
@@ -147,6 +165,11 @@ export class ArtifactBroker {
             : reply(false, { code: "not_in_manifest", server: params.server, message: `${params.server}/${params.tool} is not declared by this page.` });
         }
         reply(true, { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations });
+      } else if (method === "storage" || method === "ai") {
+        // The Worker checks what the page sends; these go on as they are, answered with what came back.
+        const { ok, ...rest } = await (method === "storage" ? this.#o.pageStorage(params) : this.#o.pageAi(params));
+        if (ok) reply(true, rest);
+        else reply(false, (rest as { error: unknown }).error);
       } else {
         reply(false, { code: "bad_request", message: `Unknown method ${method}` });
       }
@@ -389,6 +412,11 @@ export class ArtifactBroker {
       this.#o.storage?.removeItem(this.#storagePrefix() + key);
     } catch {}
   }
+}
+
+/** What a viewer without saved values or a model answers. */
+async function unavailable(): Promise<{ ok: false; error: { code: "unavailable"; message: string } }> {
+  return { ok: false, error: { code: "unavailable", message: "Not available in this view." } };
 }
 
 /** The smallest of the numbers given, or undefined when none is. */
