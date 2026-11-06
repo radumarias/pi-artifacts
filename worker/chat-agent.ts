@@ -104,6 +104,7 @@ import {
   checkSetting,
   currentCatalog,
   defaultModelChoice,
+  startingSetting,
   piModels,
   loadCatalog,
   type Catalog,
@@ -224,12 +225,12 @@ export class ChatAgent extends DurableObject<Env> {
       const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction: COMPACTION };
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
-        // A new chat starts on the model its user last picked, or on Auto (which starts from the deployment's default)
-        // when they picked Auto or nothing yet; PiHarness then finds the root and leaves it as it is.
+        // A new chat starts on its user's last pick, else on Auto (startingSetting); PiHarness then finds the root and
+        // leaves it as it is.
         if (!(await pi.conversation(ROOT_CONVERSATION_ID, context))) {
-          const setting = await this.#savedModel();
-          if (!setting || isAuto(setting)) this.ctx.storage.kv.put(AUTO_KEY, true);
-          else await pi.root(context, { agent: this.#agentChange(setting) });
+          const setting = startingSetting(await this.#savedModel(), this.env.ROUTER_MODEL);
+          if (isAuto(setting)) this.ctx.storage.kv.put(AUTO_KEY, true);
+          else if (setting) await pi.root(context, { agent: this.#agentChange(setting) });
         }
       } catch (error) {
         await pi.close(context).catch(() => {});

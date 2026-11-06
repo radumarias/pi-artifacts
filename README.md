@@ -495,8 +495,8 @@ the chat's own (pi's agent state, so a change reaches every open view of the cha
 request. Everyone in a [shared chat](#shared-chats) can change it. The latest pick is also the default for new chats
 of whoever made it (kept in their `UserDirectory`): a chat takes it when it is first opened and keeps its model from
 then on, even before its first message, until someone changes it. Before a user has picked anything, chats start on
-Auto, which runs on `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts` (Claude Sonnet 5.5 at high effort) until it
-picks, and keeps that when no router answers.
+Auto (when the deployment has a `ROUTER_MODEL`), which runs on `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts`
+(Claude Sonnet 5.5 at high effort) until it picks, and keeps that when no router answers.
 
 With many providers the list is long, so the picker is a searchable menu: a search box over every model (by name, id
 or provider), then the user's favorites (the star on each row) and recent picks, then each provider's models in a

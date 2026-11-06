@@ -3,9 +3,9 @@ import { fauxAssistantMessage, fauxProvider, type AssistantMessage } from "@eare
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createAI } from "agents/models/pi-ai";
 import { discoverModels, type Discovery } from "../worker/gateway-models.ts";
-import { baseCatalog, catalogFrom, defaultModelChoice, forgetCatalog, listedProviders, loadCatalog, PRICES, withEffortRecorded } from "../worker/models.ts";
+import { baseCatalog, catalogFrom, defaultModelChoice, forgetCatalog, listedProviders, loadCatalog, PRICES, startingSetting, withEffortRecorded } from "../worker/models.ts";
 import { ModelCache } from "../worker/storage/model-cache.ts";
-import { modelKeyOfLedger } from "../shared/models.ts";
+import { AUTO_MODEL, modelKeyOfLedger } from "../shared/models.ts";
 import { FakeBucket } from "./fakes.ts";
 
 // The catalog before any provider was asked, as the Worker builds it from pi-ai.
@@ -74,9 +74,18 @@ describe("default model", () => {
   it("checks the deployment's default like a pick when listed, and keeps an unlisted one as configured", () => {
     expect(defaultModelChoice("anthropic/claude-opus-5.5", "off")).toEqual({ model: "anthropic/claude-opus-5.5", thinkingLevel: "low" });
     expect(defaultModelChoice("anthropic/claude-opus-5.5", "high")).toEqual({ model: "anthropic/claude-opus-5.5", thinkingLevel: "high" });
-    expect(defaultModelChoice("anthropic/claude-sonnet-5.5", "high")).toEqual({ model: "anthropic/claude-sonnet-5.5", thinkingLevel: "high" });
+    // The deployment's default (MODEL) is one AI Gateway's catalog lists, so it is checked like a pick.
+    expect(baseCatalog().check({ model: "anthropic/claude-sonnet-5.5", thinkingLevel: "high" })).toEqual({ model: "anthropic/claude-sonnet-5.5", thinkingLevel: "high" });
     expect(defaultModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "high")).toEqual({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", thinkingLevel: "high" });
     expect(defaultModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "hgih").thinkingLevel).toBe("medium");
+  });
+
+  it("starts a new chat on its user's last pick, else on Auto when the deployment has a router", () => {
+    const picked = { model: "anthropic/claude-haiku-5.5", thinkingLevel: "low" as const };
+    expect(startingSetting(picked, "system-one:typesafe/jev")).toEqual(picked);
+    expect(startingSetting({ model: AUTO_MODEL }, "")).toEqual({ model: AUTO_MODEL });
+    expect(startingSetting(null, "system-one:typesafe/jev")).toEqual({ model: AUTO_MODEL });
+    expect(startingSetting(null, " ")).toBeNull();
   });
 });
 
