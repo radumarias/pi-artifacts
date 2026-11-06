@@ -17,7 +17,7 @@ import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { UsageDoc, type ConversationId, type EntryRecord, type Tx } from "@earendil-works/pi-durable";
 import { textOf } from "../../shared/canonical.ts";
-import { AUTO_LEDGER_PREFIX, COMPACTION, modelKey, pricePerMillion, type AutoCandidate, type ModelInfo } from "../../shared/models.ts";
+import { COMPACTION, modelKey, pricePerMillion, type AutoCandidate, type ModelInfo } from "../../shared/models.ts";
 import { CHAT_MESSAGE_KIND, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
 import { clip, errorMessage, isObject, plural } from "../../shared/util.ts";
 import { gatewayFetch, type GatewayOptions } from "../gateway-models.ts";
@@ -67,7 +67,7 @@ export const ROUTE_MS = 5_000;
 /** How long one router may take when another is left to ask: a hung first router leaves the next one time to answer. */
 const TRY_MS = 2_000;
 /** How much of each router's error a failed pick keeps. */
-const MAX_ERROR_CHARS = 120;
+export const MAX_ERROR_CHARS = 120;
 /** And of all of them: what a message's failed pick keeps, for everyone in the chat to read. */
 const MAX_ERRORS_CHARS = 400;
 /** Enough for a reasoning router's few thoughts and the JSON line. */
@@ -76,7 +76,7 @@ const MAX_ROUTER_TOKENS = 1_024;
 const MAX_TURNS = 12;
 const MAX_TURN_CHARS = 600;
 const MAX_HISTORY_CHARS = 6_000;
-const MAX_MESSAGE_CHARS = 4_000;
+export const MAX_MESSAGE_CHARS = 4_000;
 const MAX_REASON_CHARS = 120;
 
 /**
@@ -270,7 +270,7 @@ export function modelRouter(models: Models, model: Model<Api>): Router {
 /** How ROUTER_MODEL marks a model to ask through OpenAI's Decisions API: `decisions:openai/gpt-6-luna`. */
 const DECISIONS_PREFIX = "decisions:";
 /** How ROUTER_MODEL marks a System One classifier to ask on Workers AI: `system-one:typesafe/jev`. */
-export const SYSTEM_ONE_PREFIX = "system-one:";
+const SYSTEM_ONE_PREFIX = "system-one:";
 /** How a classifier router's effort question is to be answered; the model question has the whole GUIDANCE. */
 const EFFORT_QUESTION =
   "How long the model picked in the model question should reason before it answers: none for a greeting, thanks or a quick fact; low for a small change or a short explanation; medium for building a page or dashboard, data work or code; high or more for a hard problem.";
@@ -371,8 +371,10 @@ export function workersAIOptions(ai: ModelRunner): ClassifierOptions {
   return { apiKey: "ai-binding", fetch: viaBinding };
 }
 
-/** The System One classifier on Workers AI that a setting names after `system-one:` (`typesafe/jev`); undefined for none. */
-export function systemOneModel(name: string): ClassifierModel<"cloudflare-workers-ai-system-one"> | undefined {
+/** The System One classifier on Workers AI a setting names (`system-one:typesafe/jev`); undefined for none. */
+export function systemOneModel(setting: string): ClassifierModel<"cloudflare-workers-ai-system-one"> | undefined {
+  if (!setting.startsWith(SYSTEM_ONE_PREFIX)) return undefined;
+  const name = setting.slice(SYSTEM_ONE_PREFIX.length);
   const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
   return Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
 }
@@ -441,9 +443,8 @@ export function routersFrom(spec: string, catalog: Catalog, use: { models: Model
         return model ? decisionsRouter(use.gateway, model) : unavailable(name, "not an OpenAI Decisions model");
       }
       if (id.startsWith(SYSTEM_ONE_PREFIX)) {
-        const name = id.slice(SYSTEM_ONE_PREFIX.length);
-        const model = systemOneModel(name);
-        return model ? workersAIClassifierRouter(use.ai, model) : unavailable(name, "not a System One model on Workers AI");
+        const model = systemOneModel(id);
+        return model ? workersAIClassifierRouter(use.ai, model) : unavailable(id.slice(SYSTEM_ONE_PREFIX.length), "not a System One model on Workers AI");
       }
       const model = catalog.model(id);
       return model ? modelRouter(use.models, model) : unavailable(id, "not in the picker");
@@ -460,25 +461,24 @@ function unavailable(id: string, why: string): Router {
 }
 
 /**
- * Add a router call's usage to the conversation's spend ledger (pi's `pi.usage`), under `tools` as AUTO_LEDGER_PREFIX and
- * the router's picker id, as pi adds a tool's spend: the cost panel then counts it, also after older messages are
- * summarized. Not under `models`, whose rows the panel splits by the efforts of the replies in the transcript.
+ * Add a call's usage to the conversation's spend ledger (pi's `pi.usage`) under `tools` as `key`, as pi adds a tool's
+ * spend: Auto's router under AUTO_LEDGER_PREFIX and its picker id, the skill classifier under SKILLS_LEDGER_PREFIX. The
+ * cost panel then counts it, also after older messages are summarized. Not under `models`, whose rows the panel splits by
+ * the efforts of the replies in the transcript.
  */
-export function recordRouterSpend(tx: Tx, conversationId: ConversationId, router: string, usage: Usage): Promise<void> {
-  return recordSpend(tx, conversationId, `${AUTO_LEDGER_PREFIX}${router}`, usage);
-}
-
-/** Add a call's usage to the conversation's spend ledger under `tools` as `key` (recordRouterSpend says why there). */
 export async function recordSpend(tx: Tx, conversationId: ConversationId, key: string, usage: Usage): Promise<void> {
   const totals = (await tx.doc(UsageDoc, conversationId)).tools as Record<string, Usage>;
   const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
   // Drafts take strict JSON: no undefined counters.
-  if (!total) {
-    totals[key] = JSON.parse(JSON.stringify(usage)) as Usage;
-    return;
-  }
+  if (!total) totals[key] = JSON.parse(JSON.stringify(usage)) as Usage;
+  else addUsage(total, usage);
+}
+
+/** Add `usage` to `total`, in place, counter by counter, as pi adds them. */
+export function addUsage(total: Usage, usage: Usage): Usage {
   for (const counter of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[counter] += usage[counter];
   // Optional counters, as pi adds them: once either side reports one.
   for (const counter of ["cacheWrite1h", "reasoning"] as const) if (usage[counter] !== undefined) total[counter] = (total[counter] ?? 0) + usage[counter];
   for (const counter of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[counter] += usage.cost[counter];
+  return total;
 }

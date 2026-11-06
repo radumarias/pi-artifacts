@@ -6,17 +6,18 @@ import { isActive, type SkillInfo, type SkillInput } from "../../shared/skills.t
  * lists their descriptions in the system prompt and adds `activate_skill`.
  * Where a built-in and a user skill share a name, the user's (when on) wins.
  * `shown`, when given, keeps only the skills of those names (the ones picked for
- * the chat, worker/agent/skill-pick.ts). `fingerprint` is what the chat installed
- * (shownFingerprint), so it reinstalls only when that changes.
+ * the chat, worker/agent/skill-pick.ts). `version` is the user's skills version
+ * (UserDirectory.skillsVersion); the fingerprint adds the names listed, so the
+ * chat reinstalls only when either changes.
  */
-export function skillSource(skills: readonly SkillInfo[], fingerprint: string, shown?: ReadonlySet<string>): SkillSource {
+export function skillSource(skills: readonly SkillInfo[], version: string, shown?: ReadonlySet<string>): SkillSource {
   // The agent activates by name alone: a built-in skill the user replaced with their own is left out.
   const enabled = skills.filter((skill) => isActive(skill) && (!shown || shown.has(skill.name)));
   const byName = new Map(enabled.map((skill) => [skill.name, skill]));
   const descriptor = (skill: SkillInfo) => ({ name: skill.name, description: skill.description, sourceId: "pi-artifacts", version: skill.updatedAt ? String(skill.updatedAt) : undefined });
   return {
     id: "pi-artifacts",
-    fingerprint,
+    fingerprint: shown ? `${version}|${enabled.map(({ name }) => name).sort().join(",")}` : version,
     list: async () => enabled.map(descriptor),
     load: async (name): Promise<SkillContent | null> => {
       const skill = byName.get(name);
@@ -31,10 +32,3 @@ export function skillBody(skill: SkillInput): string {
   return `${skill.instructions}\n\nTools this skill works with: ${skill.tools.join(", ")}. Prefer these; a tool not in this chat is unavailable, so say so instead of guessing.`;
 }
 
-/**
- * What a chat installs, as one string: the user's skills version (UserDirectory.skillsVersion) and, when skills are
- * picked, the names shown.
- */
-export function shownFingerprint(version: string, shown?: ReadonlySet<string>): string {
-  return shown ? `${version}|${[...shown].sort().join(",")}` : version;
-}
