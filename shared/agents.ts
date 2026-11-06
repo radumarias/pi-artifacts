@@ -137,21 +137,37 @@ function fail(message: string): never {
   throw new AgentError(message);
 }
 
-function str(value: unknown, field: string, max: number, { required = true } = {}): string | undefined {
+/**
+ * A text field, trimmed. `field` words its messages: what a missing one needs ("An agent needs a job line") and whose
+ * it is ("An agent's job line").
+ */
+function str(value: unknown, field: { needs: string; its: string }, max: number, { required = true } = {}): string | undefined {
   if (value === undefined || value === null || value === "") {
-    if (required) fail(`An agent needs ${field}.`);
+    if (required) fail(`${field.needs}.`);
     return undefined;
   }
-  if (typeof value !== "string") fail(`An agent's ${field} must be text.`);
+  if (typeof value !== "string") fail(`${field.its} must be text.`);
   const trimmed = value.trim();
-  if (!trimmed && required) fail(`An agent needs ${field}.`);
-  if (trimmed.length > max) fail(`An agent's ${field} is at most ${max} characters.`);
+  if (!trimmed && required) fail(`${field.needs}.`);
+  if (trimmed.length > max) fail(`${field.its} is at most ${max} characters.`);
   return trimmed || undefined;
+}
+
+/** A field of `owner` ("An agent", "A look step"), named with its article for `needs`: ("a", "job line"). */
+function field(owner: string, article: string, name: string): { needs: string; its: string } {
+  return { needs: `${owner} needs ${article ? `${article} ` : ""}${name}`, its: `${owner}'s ${name}` };
+}
+
+/** How many characters a person sees in `text`: an emoji or a flag is one. */
+function graphemes(text: string): number {
+  if (typeof Intl !== "undefined" && "Segmenter" in Intl) return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].length;
+  return [...text].length;
 }
 
 function names(value: unknown, field: string): string[] | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim() || item.length > 200)) fail(`An agent's ${field} must be a list of names.`);
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim() || item.length > 200))
+    fail(`An agent's ${field} must be a list of names.`);
   if (value.length > MAX_AGENT_SERVERS) fail(`An agent lists at most ${MAX_AGENT_SERVERS} ${field}.`);
   return [...new Set((value as string[]).map((item) => item.trim()))];
 }
@@ -178,8 +194,8 @@ export function isTimeZone(tz: unknown): tz is string {
 
 function checkLook(value: unknown, what: string): LookStep {
   if (!isObject(value)) fail(`${what} must be a read: {server, tool, input}.`);
-  const server = str(value.server, `${what}'s server`, 200)!;
-  const tool = str(value.tool, `${what}'s tool`, 200)!;
+  const server = str(value.server, field(what, "a", "server"), 200)!;
+  const tool = str(value.tool, field(what, "a", "tool"), 200)!;
   const input = value.input === undefined ? {} : value.input;
   if (!isObject(input)) fail(`${what}'s input must be an object.`);
   // Plain JSON, kept small: it is stored with the definition and read back as JSON anyway.
@@ -192,64 +208,74 @@ function checkTrigger(value: unknown): AgentTrigger | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isObject(value)) fail("An agent's trigger must be an object.");
   if (value.kind === "schedule") {
-    if (!isTimeZone(value.tz)) fail("A schedule needs a time zone, such as \"Europe/Bucharest\".");
+    if (!isTimeZone(value.tz)) fail('A schedule needs a time zone, such as "Europe/Bucharest".');
     const days = value.days;
-    if (days !== undefined && (!Array.isArray(days) || !days.length || days.some((day) => !(WEEKDAYS as readonly unknown[]).includes(day)))) {
+    if (days != null && (!Array.isArray(days) || !days.length || days.some((day) => !(WEEKDAYS as readonly unknown[]).includes(day)))) {
       fail(`A schedule's days are some of ${WEEKDAYS.join(", ")}.`);
     }
-    return { kind: "schedule", at: checkTime(value.at), tz: value.tz, ...(days !== undefined && { days: [...new Set(days as Weekday[])] }) };
+    return { kind: "schedule", at: checkTime(value.at), tz: value.tz, ...(days != null && { days: [...new Set(days as Weekday[])] }) };
   }
   if (value.kind === "watch") {
     const every = value.everyMinutes;
     if (typeof every !== "number" || !Number.isInteger(every) || every < MIN_WATCH_MINUTES || every > MAX_WATCH_MINUTES) {
       fail(`A watch checks every ${MIN_WATCH_MINUTES} to ${MAX_WATCH_MINUTES} minutes.`);
     }
-    return { kind: "watch", step: checkLook(value.step, "A watch's step"), everyMinutes: every, when: str(value.when, "a watch's condition", 500)! };
+    return {
+      kind: "watch",
+      step: checkLook(value.step, "A watch's step"),
+      everyMinutes: every,
+      when: str(value.when, field("A watch", "a", "condition"), 500)!,
+    };
   }
   fail('An agent\'s trigger is a "schedule" or a "watch".');
 }
 
-function checkSteps(value: unknown, depth = 0): AgentStep[] {
+/** A workflow's steps, counting those inside an if's branches toward MAX_WORKFLOW_STEPS. */
+function checkSteps(value: unknown, depth = 0, count = { steps: 0 }): AgentStep[] {
   if (!Array.isArray(value)) fail("A workflow is a list of steps.");
-  if (value.length > MAX_WORKFLOW_STEPS) fail(`A workflow has at most ${MAX_WORKFLOW_STEPS} steps.`);
   if (depth > 3) fail("A workflow nests at most three ifs deep.");
+  count.steps += value.length;
+  if (count.steps > MAX_WORKFLOW_STEPS) fail(`A workflow has at most ${MAX_WORKFLOW_STEPS} steps.`);
   return value.map((step): AgentStep => {
     if (!isObject(step) || !(STEP_KINDS as readonly unknown[]).includes(step.kind)) fail(`Each workflow step is one of ${STEP_KINDS.join(", ")}.`);
     switch (step.kind) {
       case "look":
         return checkLook(step, "A look step");
-      case "work":
-        return {
-          kind: "work",
-          prompt: str(step.prompt, "a work step's prompt", 4_000)!,
-          ...(step.skill !== undefined && { skill: str(step.skill, "a work step's skill", 64)! }),
-          ...(step.model !== undefined && { model: str(step.model, "a work step's model", 200)! }),
-        };
+      case "work": {
+        const skill = str(step.skill, field("A work step", "a", "skill"), 64, { required: false });
+        const model = str(step.model, field("A work step", "a", "model"), 200, { required: false });
+        return { kind: "work", prompt: str(step.prompt, field("A work step", "a", "prompt"), 4_000)!, ...(skill && { skill }), ...(model && { model }) };
+      }
       case "onlyIf":
-        return { kind: "onlyIf", condition: str(step.condition, "a condition", 500)! };
+        return { kind: "onlyIf", condition: str(step.condition, field("An onlyIf step", "a", "condition"), 500)! };
       case "if":
         return {
           kind: "if",
-          condition: str(step.condition, "a condition", 500)!,
-          then: checkSteps(step.then, depth + 1),
-          ...(step.else !== undefined && { else: checkSteps(step.else, depth + 1) }),
+          condition: str(step.condition, field("An if step", "a", "condition"), 500)!,
+          then: checkSteps(step.then, depth + 1, count),
+          ...(step.else != null && { else: checkSteps(step.else, depth + 1, count) }),
         };
       case "do": {
         const { server, tool, input } = checkLook({ ...step, kind: "look" }, "A do step");
         return { kind: "do", server, tool, input };
       }
       case "tell": {
-        const to = names(step.to, "recipients") ?? fail("A tell step names who it tells.");
+        const to = names(step.to, "recipients");
+        if (!to?.length) fail("A tell step names who it tells.");
         const via = step.via;
         if (via === "chat" || via === "notify") return { kind: "tell", to, via };
         if (!isObject(via)) fail('A tell step goes "chat", "notify" or through {server, tool}.');
-        return { kind: "tell", to, via: { server: str(via.server, "a tell step's server", 200)!, tool: str(via.tool, "a tell step's tool", 200)! } };
+        return {
+          kind: "tell",
+          to,
+          via: { server: str(via.server, field("A tell step", "a", "server"), 200)!, tool: str(via.tool, field("A tell step", "a", "tool"), 200)! },
+        };
       }
       case "page":
         if (step.edit !== "findings" && step.edit !== "rebuild") fail('A page step edits "findings" or does a "rebuild".');
-        return { kind: "page", artifactId: str(step.artifactId, "a page step's artifact", 64)!, edit: step.edit };
+        return { kind: "page", artifactId: str(step.artifactId, field("A page step", "an", "artifact"), 64)!, edit: step.edit };
       default:
-        return { kind: "handOver", agent: str(step.agent, "the agent a hand-over goes to", 64)! };
+        return { kind: "handOver", agent: str(step.agent, field("A hand-over", "an", "agent to go to"), 64)! };
     }
   });
 }
@@ -257,30 +283,36 @@ function checkSteps(value: unknown, depth = 0): AgentStep[] {
 /** An agent's fields checked and trimmed. Throws an AgentError with what to fix. */
 export function checkAgent(input: unknown): AgentInput {
   if (!isObject(input)) fail("Expected an agent as an object.");
-  const name = str(input.name, "a name", 24)!.toLowerCase();
-  if (!AGENT_NAME_PATTERN.test(name)) fail("An agent's name is 2 to 24 lowercase letters, digits or hyphens, starting with a letter, as in \"research\".");
+  const name = str(input.name, field("An agent", "a", "name"), 24)!.toLowerCase();
+  if (!AGENT_NAME_PATTERN.test(name)) fail('An agent\'s name is 2 to 24 lowercase letters, digits or hyphens, starting with a letter, as in "research".');
   if (RESERVED_AGENT_NAMES.has(name)) fail(`"${name}" is taken by the app; pick another name.`);
-  const avatar = str(input.avatar, "avatar", MAX_AGENT_AVATAR, { required: false });
-  const color = input.color;
+  // Up to MAX_AGENT_AVATAR characters as people see them (an emoji or a flag is one), and a few code units each.
+  const avatar = str(input.avatar, field("An agent", "an", "avatar"), MAX_AGENT_AVATAR * 8, { required: false });
+  if (avatar && graphemes(avatar) > MAX_AGENT_AVATAR) fail(`An agent's avatar is at most ${MAX_AGENT_AVATAR} characters.`);
+  // null is none, as a client clearing a field sends it.
+  const color = input.color ?? undefined;
   if (color !== undefined && !(AGENT_COLORS as readonly unknown[]).includes(color)) fail(`An agent's colour is one of ${AGENT_COLORS.join(", ")}.`);
-  const effort = input.effort;
+  const effort = input.effort ?? undefined;
   if (effort !== undefined && !EFFORTS.includes(effort as ModelThinkingLevel)) fail(`An agent's effort is one of ${EFFORTS.join(", ")}.`);
-  const autonomy = input.autonomy;
+  const autonomy = input.autonomy ?? undefined;
   if (autonomy !== undefined && autonomy !== 1 && autonomy !== 2 && autonomy !== 3 && autonomy !== 4) fail("An agent's autonomy is 1 (inform) to 4 (run).");
-  const model = str(input.model, "model", 200, { required: false });
+  const model = str(input.model, field("An agent", "a", "model"), 200, { required: false });
   const servers = names(input.servers, "servers");
   const sharedServers = names(input.sharedServers, "servers for shared chats");
   if (servers && sharedServers?.some((server) => !servers.includes(server))) fail("An agent shares only servers it may use itself.");
   const trigger = checkTrigger(input.trigger);
-  const scope = input.scope === undefined || input.scope === null ? undefined : { list: checkLook(isObject(input.scope) ? input.scope.list : undefined, "A scope's list"), each: true as const };
+  const scope =
+    input.scope === undefined || input.scope === null
+      ? undefined
+      : { list: checkLook(isObject(input.scope) ? input.scope.list : undefined, "A scope's list"), each: true as const };
   const workflow = input.workflow === undefined || input.workflow === null ? undefined : checkSteps(input.workflow);
   const assumed = names(input.assumed, "assumed fields");
   return {
     name,
     ...(avatar && { avatar }),
     ...(color !== undefined && { color: color as AgentColor }),
-    job: str(input.job, "a job line", MAX_AGENT_JOB)!,
-    instructions: str(input.instructions, "instructions", MAX_AGENT_INSTRUCTIONS)!,
+    job: str(input.job, field("An agent", "a", "job line"), MAX_AGENT_JOB)!,
+    instructions: str(input.instructions, field("An agent", "", "instructions"), MAX_AGENT_INSTRUCTIONS)!,
     ...(model && { model }),
     ...(effort !== undefined && { effort: effort as ModelThinkingLevel }),
     ...(servers && { servers }),
@@ -350,6 +382,8 @@ export type ChatAgentReplyData = {
   answers?: number;
   /** Artifacts it published in this turn, for the app to show their cards. */
   published?: { artifactId: string; title: string; version: number }[];
+  /** Files it saved in this turn (paths in its owner's files): the chat's files, as pi's are. */
+  saved?: string[];
 };
 
 export type AgentTurnStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -424,7 +458,13 @@ export function splitAgentCalls(text: string, names: readonly string[]): { text:
 
 /** How an agent is labelled in the lines its sessions read: "[research · agent]", "[Ana · person · your owner]". */
 export function speakerLabel(speaker: { name: string; kind: "person" | "agent"; owner?: boolean }): string {
-  return `[${speaker.name} · ${speaker.kind}${speaker.owner ? " · your owner" : ""}]`;
+  // A name cannot close the label or add a part to it ("Ana · person · your owner" as a display name).
+  const name =
+    speaker.name
+      .replace(/[[\]·\r\n]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "someone";
+  return `[${name} · ${speaker.kind}${speaker.owner ? " · your owner" : ""}]`;
 }
 
 /** The tool the model proposes an agent with (saved off, for its owner to review). */

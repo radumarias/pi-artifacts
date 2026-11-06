@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Api, Model, Models, Usage, UserMessage } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentChange, type AgentState, type Submission, type Conversation, type Cursor, type EntryId, type EntryRecord, type Extension, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
-import { PiHarness, skills } from "agents/harness/pi";
+import { PiHarness, ROOT_SESSION, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { DurableObject, exports } from "cloudflare:workers";
 import {
@@ -120,11 +120,30 @@ import {
 import { withFailuresReported } from "./model-health.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, SYSTEM_PROMPT_KEY, type Tag } from "./users.ts";
-import { CHAT_AGENT_KIND, CHAT_TURN_KIND, speakerLabel, type AgentDefinition, type AgentTurnView, type ChatAgentReplyData, type ChatAgents, type ChatAgentView, type ChatTurnData } from "../shared/agents.ts";
+import {
+  CHAT_AGENT_KIND,
+  CHAT_TURN_KIND,
+  type AgentDefinition,
+  type AgentTurnView,
+  type ChatAgentReplyData,
+  type ChatAgents,
+  type ChatAgentView,
+  type ChatTurnData,
+} from "../shared/agents.ts";
 import { AgentTurns, type TurnHost } from "./agents/controller.ts";
 import { ChatRoster, type AgentTurn, type RosterEntry } from "./agents/roster.ts";
 import { agentsExtension } from "./agents/tools.ts";
-import { agentInstructions, askOf, assistantText, deniedTools, messageAskKey, speakersFor, turnInput, type McpToolInfo } from "./agents/turns.ts";
+import {
+  agentInstructions,
+  allowedTools,
+  askOf,
+  assistantText,
+  MAX_ASK_CHARS,
+  messageAskKey,
+  speakersFor,
+  turnInput,
+  type McpToolInfo,
+} from "./agents/turns.ts";
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
@@ -193,8 +212,8 @@ const IMPORTING_KEY = "importing";
 /** Set once an import stored every part: until its owner's list has the chat, the same import may start it again. */
 const IMPORTED_KEY = "imported";
 /**
- * Set while pi answers a turn another agent handed it: the chain that turn is in, so the agents pi names in turn stay
- * within its hand-offs. Cleared when a person calls pi.
+ * The chain of hand-offs pi's latest input is in, when another agent handed it that turn: set as the input is placed in
+ * pi's log (#piHandOffs), cleared as a person's is, so the agents pi names in its answer stay within the chain's cap.
  */
 const PI_CHAIN_KEY = "piChain";
 
@@ -386,7 +405,12 @@ export class ChatAgent extends DurableObject<Env> {
       react: (emoji) => this.#agentReact(emoji),
     });
     this.registry.install(promptExtension);
-    this.registry.install(peopleExtension(() => this.people(), () => this.roster.list().filter((entry) => !entry.off)));
+    this.registry.install(
+      peopleExtension(
+        () => this.people(),
+        () => this.roster.list().filter((entry) => !entry.off),
+      ),
+    );
     this.registry.install(artifactExtension(scope));
     this.registry.install(filesExtension(scope));
     this.registry.install(skillsExtension(scope));
@@ -1024,7 +1048,11 @@ export class ChatAgent extends DurableObject<Env> {
     // Everything the extension is built from: a server's new tool list, or a new reason it is unavailable, reinstalls it.
     const installed = JSON.stringify([deferred, [...catalog], [...unavailable]]);
     if (installed !== this.#mcp.key) {
-      const { extension, listing, toolInfo } = mcpExtension(this.hub, catalog, unavailable, () => this.discoverMcp(), { deferred });
+      const { extension, listing, toolInfo } = mcpExtension(this.hub, catalog, unavailable, () => this.discoverMcp(), {
+        deferred,
+        // pi's own session calls any; an agent's only what its turn was set up with.
+        mayCall: (session, tool) => session === ROOT_SESSION || this.roster.mayCall(session, tool),
+      });
       this.registry.install(extension);
       this.#mcpTools = toolInfo;
       if (deferred) this.registry.install(this.#toolSearch);
@@ -1321,8 +1349,6 @@ export class ChatAgent extends DurableObject<Env> {
     // lets go after SETTLE_MS, which they can outlast. Only a view: the prompt goes on without it.
     await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
     this.scope.failedChecks.reset();
-    // A person called pi: what it names next starts a chain of its own.
-    this.ctx.storage.kv.delete(PI_CHAIN_KEY);
     try {
       await this.harness.submit(content, { entry: { kind: CHAT_MESSAGE_KIND, data } });
     } catch (error) {
@@ -1990,23 +2016,43 @@ export class ChatAgent extends DurableObject<Env> {
   agentsFor(uid: string): ChatAgents | ChatRefusal {
     if (!this.isInChat(uid)) return refuse(403, "You are not in this chat.");
     const agents = this.agentViews();
-    const view = ({ root: _root, ask: _ask, askKey: _key, ...turn }: AgentTurn): AgentTurnView => turn;
+    const view = ({ root: _root, ask: _ask, askKey: _key, submitted: _submitted, ...turn }: AgentTurn): AgentTurnView => turn;
     return { agents, turns: Object.fromEntries(agents.map((agent) => [agent.id, this.roster.recentTurns(agent.id).map(view)])) };
   }
 
   /**
-   * pi's final answers in a batch of its events: the agents of the roster they name get turns, within the chain pi's own
-   * turn was in (PI_CHAIN_KEY) when another agent handed it that turn.
+   * pi's final answers in a batch of its events: the agents of the roster they name get turns, within the chain pi's
+   * input was in (PI_CHAIN_KEY). Its inputs are placed in its log in order, so the latest one placed says whose turn
+   * pi's next answer is: a turn another agent handed it (chat.turn, its chain) or a person's message (a chain of its own).
    */
   #piHandOffs(batch: readonly AgentEvent[]): void {
-    if (!this.roster.hasAny()) return;
     for (const event of batch) {
-      if (event.type !== "message_end" || event.entry.kind !== "pi.assistant") continue;
-      const message = event.entry.model?.[0];
+      if (event.type !== "message_end") continue;
+      const { entry } = event;
+      if (entry.kind === CHAT_TURN_KIND) {
+        const handed = this.roster.turn((entry.data as ChatTurnData | undefined)?.turn ?? -1);
+        if (handed) this.ctx.storage.kv.put(PI_CHAIN_KEY, { hop: handed.hop, root: handed.root });
+        else this.ctx.storage.kv.delete(PI_CHAIN_KEY);
+        continue;
+      }
+      if (entry.kind === CHAT_MESSAGE_KIND || entry.kind === "pi.user") {
+        this.ctx.storage.kv.delete(PI_CHAIN_KEY);
+        continue;
+      }
+      if (entry.kind !== "pi.assistant" || !this.roster.hasAny()) continue;
+      const message = entry.model?.[0];
       if (message?.role !== "assistant" || message.stopReason !== "stop") continue;
       const chain = this.ctx.storage.kv.get<{ hop: number; root: number }>(PI_CHAIN_KEY);
-      this.turns.fromPi(assistantText(message), event.entry.id as number, chain ?? { hop: 0 });
+      this.turns.fromPi(assistantText(message), entry.id as number, chain ?? { hop: 0 });
     }
+  }
+
+  /**
+   * What the skill classifier reads for an agent's turn, or one handed to pi: the asking line, with the chat's newest
+   * entries. Its pick adds to the chat's list as a person's message does, so the list only grows.
+   */
+  #skillsForTurn(ask: string): SkillsFor {
+    return { text: ask, recent: memoAsync(() => this.#recentEntries()) };
   }
 
   /** What the turn controller needs of this chat (worker/agents/controller.ts). */
@@ -2059,22 +2105,29 @@ export class ChatAgent extends DurableObject<Env> {
       },
       post: async (reply, forPi) => {
         const root = await this.#root();
-        await root.submit({ type: "write", requestId: `agent-reply:${reply.turn}`, entry: { kind: CHAT_AGENT_KIND, data: reply } }, BACKGROUND_CONTEXT);
+        // Request ids, so a reply posted again after a restart is placed once.
+        const key = `${reply.agentId}:${reply.turn}`;
+        await root.submit({ type: "write", requestId: `agent-reply:${key}`, entry: { kind: CHAT_AGENT_KIND, data: reply } }, BACKGROUND_CONTEXT);
         if (forPi && reply.text) {
-          const said: UserMessage = { role: "user", content: `${speakerLabel({ name: reply.name, kind: "agent" })}: ${reply.text}`, timestamp: Date.now() };
-          await root.submit({ type: "write", requestId: `agent-aside:${reply.turn}`, entry: { kind: CHAT_ASIDE_KIND, model: [said] } }, BACKGROUND_CONTEXT);
+          const said: UserMessage = { role: "user", content: askOf({ name: reply.name, kind: "agent" }, reply.text, MAX_ASK_CHARS), timestamp: Date.now() };
+          await root.submit({ type: "write", requestId: `agent-aside:${key}`, entry: { kind: CHAT_ASIDE_KIND, model: [said] } }, BACKGROUND_CONTEXT);
         }
         // Unread in everyone's sidebar, as a person's message is. Only a view: a failure is logged.
         const author = { uid: `agent:${reply.agentId}`, name: reply.name };
         void this.#touchIndexes(reply.text || reply.name, author, [], reply.text).catch((error) => console.error("chat index:", errorMessage(error)));
       },
-      handToPi: async ({ hop, root, calledBy, ask }) => {
-        this.ctx.storage.kv.put(PI_CHAIN_KEY, { hop, root });
+      handToPi: async ({ id, hop, calledBy, ask }) => {
         await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
-        await Promise.all([this.refreshMcpTools(), this.refreshSkills(), this.refreshFiles(), this.refreshUserPrompt()]);
-        const data: ChatTurnData = { turn: root, calledBy, hop };
+        await Promise.all([this.refreshMcpTools(), this.refreshSkills(this.#skillsForTurn(ask)), this.refreshFiles(), this.refreshUserPrompt()]);
+        // The turn's row names the input: handed again after a restart, it is placed once. Its entry says which chain
+        // pi's answer is in (#piHandOffs).
+        const data: ChatTurnData = { turn: id, calledBy, hop };
         try {
-          await this.harness.submit(turnInput({ calledBy, hop, ask }), { whenBusy: "followUp", entry: { kind: CHAT_TURN_KIND, data } });
+          await this.harness.submit(turnInput({ calledBy, hop, ask }), {
+            operationId: `pi-turn:${id}`,
+            whenBusy: "followUp",
+            entry: { kind: CHAT_TURN_KIND, data },
+          });
         } catch (error) {
           this.#resumeSettle();
           throw error;
@@ -2087,16 +2140,15 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * Set an agent's session up for a turn: the owner's tools and skills as they are now, its model and effort (the
-   * chat's model when it names none), its own instructions, and only the tools this turn may use (deniedTools).
+   * chat's model when it names none), its own instructions, and only the tools this turn may use (allowedTools).
    */
-  async #configureAgent(
-    entry: RosterEntry,
-    agent: AgentDefinition,
-    turn: AgentTurn,
-    conversation: (session: string) => Promise<Conversation>,
-  ): Promise<void> {
-    await Promise.all([this.refreshMcpTools(), this.refreshSkills(), this.refreshFiles(), this.refreshUserPrompt()]);
-    const [session, catalog, rootAgent] = await Promise.all([conversation(entry.session), this.#catalog(), this.#root().then((root) => root.agent(BACKGROUND_CONTEXT))]);
+  async #configureAgent(entry: RosterEntry, agent: AgentDefinition, turn: AgentTurn, conversation: (session: string) => Promise<Conversation>): Promise<void> {
+    await Promise.all([this.refreshMcpTools(), this.refreshSkills(this.#skillsForTurn(turn.ask)), this.refreshFiles(), this.refreshUserPrompt()]);
+    const [session, catalog, rootAgent] = await Promise.all([
+      conversation(entry.session),
+      this.#catalog(),
+      this.#root().then((root) => root.agent(BACKGROUND_CONTEXT)),
+    ]);
     const named = agent.model && checkSetting(catalog, { model: agent.model, thinkingLevel: agent.effort });
     const choice =
       named && !isAuto(named)
@@ -2105,9 +2157,12 @@ export class ChatAgent extends DurableObject<Env> {
             model: this.#modelOf(rootAgent),
             thinkingLevel: rootAgent.thinkingLevel,
           });
-    const installed = this.registry.snapshot().tools().map(({ tool }) => tool);
-    const denied = new Set(
-      deniedTools(
+    const installed = this.registry
+      .snapshot()
+      .tools()
+      .map(({ tool }) => tool);
+    const allowed = new Set(
+      allowedTools(
         installed.map((tool) => tool.name),
         this.#mcpTools,
         agent,
@@ -2115,12 +2170,16 @@ export class ChatAgent extends DurableObject<Env> {
         (server) => this.hub.server(server)?.auth === "oauth",
       ),
     );
-    const deferred = installed.filter((tool) => tool.deferred && !denied.has(tool.name));
+    const enabled = installed.filter((tool) => allowed.has(tool.name));
+    const deferred = enabled.filter((tool) => tool.deferred);
+    // Its MCP calls are held to these too, as each starts (mayCall), before the session is set up for the turn.
+    this.roster.setTools(entry.agentId, [...allowed]);
     await session.configure(
       {
         ...this.#agentChange(choice),
         instructions: agentInstructions(agent, this.#nameOf(entry.ownerUid)),
-        tools: { remove: installed.filter((tool) => denied.has(tool.name)) },
+        // Exactly these: a tool installed after this turn was set up stays off for it.
+        tools: enabled,
         // An agent's turns are few and its own: it gets every MCP tool it may use, without the tool picker.
         modelTools: deferred.length ? { add: deferred } : null,
       },
@@ -2455,8 +2514,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
         const text = String(message.text ?? "").trim().slice(0, 20_000);
         const replyTo = typeof message.replyTo === "number" ? message.replyTo : undefined;
         if (text || attachments.length) await this.#chat.prompt(text, person, attachments, mentions, replyTo);
-      }
-      else if (message.type === "abort") await this.#chat.abort(person, typeof message.agent === "string" ? message.agent : undefined);
+      } else if (message.type === "abort") await this.#chat.abort(person, typeof message.agent === "string" ? message.agent : undefined);
       else if (message.type === "model") await this.#chat.setModel(message, person);
       else if (message.type === "react") await this.#chat.react(person, message.entry, message.emoji, message.on === true);
     } catch (error) {

@@ -1,3 +1,4 @@
+import { AGENT_NAME } from "../../shared/mentions.ts";
 import { MAX_CHAT_AGENTS, type AgentColor, type AgentTurnStatus, type AgentTurnView, type ChatAgentView } from "../../shared/agents.ts";
 import type { Sql } from "../members.ts";
 
@@ -21,6 +22,8 @@ export interface RosterEntry {
   mirrored: number;
   /** Its owner turned it off since: it takes no turns until they turn it on. */
   off: boolean;
+  /** The tools its session was last set up with, by name: what its calls are held to. Null before its first turn. */
+  tools: string[] | null;
 }
 
 /** A turn an agent was given, as the chat keeps it: who called it, its chain of hand-offs, and what it answers. */
@@ -34,6 +37,8 @@ export interface AgentTurn extends AgentTurnView {
    * says. Absent when it is no entry of the log.
    */
   askKey?: string;
+  /** Its input reached its session (see ChatRoster.markSubmitted). */
+  submitted?: true;
 }
 
 type RosterRow = {
@@ -49,6 +54,7 @@ type RosterRow = {
   applied: number;
   mirrored: number;
   off: number;
+  tools: string | null;
 };
 
 type TurnRow = {
@@ -64,6 +70,7 @@ type TurnRow = {
   ask_key: string | null;
   created_at: number;
   started_at: number | null;
+  submitted_at: number | null;
   ended_at: number | null;
 };
 
@@ -81,6 +88,7 @@ function entryOf(row: RosterRow): RosterEntry {
     applied: row.applied,
     mirrored: row.mirrored,
     off: row.off === 1,
+    tools: row.tools === null ? null : (JSON.parse(row.tools) as string[]),
   };
 }
 
@@ -98,6 +106,7 @@ function turnOf(row: TurnRow): AgentTurn {
     ...(row.ask_key !== null && { askKey: row.ask_key }),
     createdAt: row.created_at,
     ...(row.started_at !== null && { startedAt: row.started_at }),
+    ...(row.submitted_at !== null && { submitted: true }),
     ...(row.ended_at !== null && { endedAt: row.ended_at }),
   };
 }
@@ -122,15 +131,20 @@ export class ChatRoster {
       CREATE TABLE IF NOT EXISTS chat_agents (
         agent_id TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, name TEXT NOT NULL UNIQUE, session TEXT NOT NULL, added_by TEXT NOT NULL,
         added_at INTEGER NOT NULL, avatar TEXT NOT NULL, color TEXT NOT NULL, job TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 0,
-        mirrored INTEGER NOT NULL DEFAULT -1, off INTEGER NOT NULL DEFAULT 0
+        mirrored INTEGER NOT NULL DEFAULT -1, off INTEGER NOT NULL DEFAULT 0, tools TEXT
       );
       CREATE TABLE IF NOT EXISTS chat_agent_turns (
         id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, status TEXT NOT NULL, hop INTEGER NOT NULL, called_by TEXT NOT NULL,
         answers INTEGER, by_owner INTEGER NOT NULL, root INTEGER, ask TEXT NOT NULL, ask_key TEXT, created_at INTEGER NOT NULL,
-        started_at INTEGER, ended_at INTEGER
+        started_at INTEGER, submitted_at INTEGER, ended_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS chat_agent_turns_by_agent ON chat_agent_turns (agent_id, status, id);
     `);
+  }
+
+  /** The roster's clock: what its turns' times are taken from. */
+  now(): number {
+    return this.#now();
   }
 
   list(): RosterEntry[] {
@@ -212,6 +226,16 @@ export class ChatRoster {
     return name !== before.name || view.avatar !== before.avatar || view.color !== before.color || view.job !== before.job || view.off !== before.off;
   }
 
+  /** The tools an agent's session was set up with for its turn now (see RosterEntry.tools). */
+  setTools(agentId: string, tools: readonly string[]): void {
+    this.#sql.exec("UPDATE chat_agents SET tools = ? WHERE agent_id = ?", JSON.stringify(tools), agentId);
+  }
+
+  /** Whether an agent's session `session` may call `tool` now: only a tool it was set up with. No for any other session. */
+  mayCall(session: string, tool: string): boolean {
+    return this.bySession(session)?.tools?.includes(tool) ?? false;
+  }
+
   /** The newest log entry an agent's session has read: what it is sent next starts after it. */
   setMirrored(agentId: string, through: number): void {
     this.#sql.exec("UPDATE chat_agents SET mirrored = MAX(mirrored, ?) WHERE agent_id = ?", through, agentId);
@@ -252,10 +276,51 @@ export class ChatRoster {
     return this.#sql.exec("SELECT COUNT(*) AS n FROM chat_agent_turns WHERE hop > 0 AND (root = ? OR id = ?)", root, root).toArray()[0].n as number;
   }
 
-  /** What the newest turns of an agent answered (askKey): its catch-up leaves them out, as its inputs carried them. */
-  askKeys(agentId: string, limit = 50): Set<string> {
-    const rows = this.#sql.exec("SELECT ask_key FROM chat_agent_turns WHERE agent_id = ? AND ask_key IS NOT NULL ORDER BY id DESC LIMIT ?", agentId, limit).toArray();
+  /**
+   * What the newest turns of an agent answered (askKey), the ones its session was given and `current`: its catch-up
+   * leaves them out, as their inputs carry them. A turn still waiting, or one stopped before it started, is read there.
+   */
+  askKeys(agentId: string, current: number, limit = 50): Set<string> {
+    const rows = this.#sql
+      .exec(
+        "SELECT ask_key FROM chat_agent_turns WHERE agent_id = ? AND ask_key IS NOT NULL AND (submitted_at IS NOT NULL OR id = ?) ORDER BY id DESC LIMIT ?",
+        agentId,
+        current,
+        limit,
+      )
+      .toArray();
     return new Set(rows.map((row) => row.ask_key as string));
+  }
+
+  /** A running turn's input reached its session: a restart waits on it, where one not submitted yet starts again. */
+  markSubmitted(id: number): void {
+    this.#sql.exec("UPDATE chat_agent_turns SET submitted_at = ? WHERE id = ? AND submitted_at IS NULL", this.#now(), id);
+  }
+
+  /**
+   * After a restart: the running turns whose input never reached their session go back to the queue, at their place, to
+   * start again. Returns how many.
+   */
+  requeueUnsubmitted(): number {
+    return this.#sql.exec(
+      "UPDATE chat_agent_turns SET status = 'queued', started_at = NULL WHERE status = 'running' AND submitted_at IS NULL AND agent_id != ?",
+      AGENT_NAME,
+    ).rowsWritten;
+  }
+
+  /**
+   * Record a turn handed to pi (agent id AGENT_NAME), queued until pi's inbox has it: it counts in its chain's hand-offs,
+   * and its id names pi's input, so a retry places it once.
+   */
+  queuePiTurn(turn: Pick<AgentTurn, "hop" | "calledBy" | "answers" | "ask"> & { root: number }): AgentTurn {
+    return this.enqueue({ agentId: AGENT_NAME, byOwner: false, ...turn });
+  }
+
+  /** The turns handed to pi that its inbox may not have yet: what a restart hands it again. */
+  queuedPiTurns(): AgentTurn[] {
+    return (this.#sql.exec("SELECT * FROM chat_agent_turns WHERE agent_id = ? AND status = 'queued' ORDER BY id", AGENT_NAME).toArray() as TurnRow[]).map(
+      turnOf,
+    );
   }
 
   turn(id: number): AgentTurn | null {
@@ -265,7 +330,9 @@ export class ChatRoster {
 
   /** The turn an agent runs now, if any. */
   running(agentId: string): AgentTurn | null {
-    const row = this.#sql.exec("SELECT * FROM chat_agent_turns WHERE agent_id = ? AND status = 'running' ORDER BY id LIMIT 1", agentId).toArray()[0] as TurnRow | undefined;
+    const row = this.#sql.exec("SELECT * FROM chat_agent_turns WHERE agent_id = ? AND status = 'running' ORDER BY id LIMIT 1", agentId).toArray()[0] as
+      | TurnRow
+      | undefined;
     return row ? turnOf(row) : null;
   }
 
@@ -274,9 +341,12 @@ export class ChatRoster {
     return (this.#sql.exec("SELECT * FROM chat_agent_turns WHERE status = 'running' ORDER BY id").toArray() as TurnRow[]).map(turnOf);
   }
 
-  /** The agents that have turns waiting. */
+  /** The agents that have turns waiting (not pi, whose turns are its inbox's). */
   waitingAgents(): string[] {
-    return this.#sql.exec("SELECT DISTINCT agent_id FROM chat_agent_turns WHERE status = 'queued' ORDER BY agent_id").toArray().map((row) => row.agent_id as string);
+    return this.#sql
+      .exec("SELECT DISTINCT agent_id FROM chat_agent_turns WHERE status = 'queued' AND agent_id != ? ORDER BY agent_id", AGENT_NAME)
+      .toArray()
+      .map((row) => row.agent_id as string);
   }
 
   /** How many turns wait for each agent. */
@@ -317,7 +387,11 @@ export class ChatRoster {
     const rows = (
       agentId === undefined
         ? this.#sql.exec("UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE status IN ('queued', 'running') RETURNING *", this.#now())
-        : this.#sql.exec("UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE agent_id = ? AND status IN ('queued', 'running') RETURNING *", this.#now(), agentId)
+        : this.#sql.exec(
+            "UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE agent_id = ? AND status IN ('queued', 'running') RETURNING *",
+            this.#now(),
+            agentId,
+          )
     ).toArray() as TurnRow[];
     return rows.map(turnOf);
   }

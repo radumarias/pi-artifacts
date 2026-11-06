@@ -27,13 +27,16 @@ export interface ServerCatalog {
  *
  * `deferred`: the MCP tools are pi's deferred tools, offered to the model only once loaded: the tool picker loads the
  * few each message needs (worker/agent/tool-pick.ts), and the model loads others with tool_search.
+ *
+ * `mayCall`: checked as each call starts, with the calling conversation's id (a pi session's id is its number): false
+ * refuses the call. The tools a session is offered are its first limit; this one holds whatever it was offered.
  */
 export function mcpExtension(
   hub: McpHub,
   catalog: Map<string, ServerCatalog>,
   unavailable: Map<string, string>,
   discover: () => Promise<string>,
-  { deferred = false }: { deferred?: boolean } = {},
+  { deferred = false, mayCall }: { deferred?: boolean; mayCall?: (conversationId: string, tool: string) => boolean } = {},
 ): { extension: Extension; summary: string; listing: string; toolInfo: Map<string, { server: string; readOnly: boolean }> } {
   // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
   // and providers reject a request whose tool names repeat: number the later ones.
@@ -59,7 +62,8 @@ export function mcpExtension(
           parameters: Type.Unsafe<Record<string, unknown>>((tool.inputSchema as object) ?? { type: "object" }),
           replay: readOnly ? "safe" : "unsafe",
           ...(deferred && { deferred: true as const }),
-          execute: async (args) => {
+          execute: async (args, api) => {
+            if (mayCall && !mayCall(String(api.conversationId), name)) throw new Error(`This turn may not use ${name}.`);
             const result = await hub.call(server, tool.name, args);
             const payload = result.payload ?? result.content;
             // Compact JSON: the result stays in the conversation, which every later call sends again, and indenting
@@ -102,7 +106,10 @@ export function mcpExtension(
         "Use it when the user asks what is available, after they sign in, or when a tool you expected is missing.",
       parameters: Type.Object({}),
       replay: "safe",
-      execute: async () => ({ output: text(clip(await discover())) }),
+      execute: async (_args, api) => {
+        if (mayCall && !mayCall(String(api.conversationId), MCP_DISCOVER_TOOL)) throw new Error(`This turn may not use ${MCP_DISCOVER_TOOL}.`);
+        return { output: text(clip(await discover())) };
+      },
     }),
   );
   const extension = defineExtension({ name: "mcp", tools, sections: [section("mcp_servers", () => summary)] });

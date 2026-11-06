@@ -81,7 +81,9 @@ const GROWS_ITSELF = CSS.supports("field-sizing", "content");
 const atBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 
 export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity, onLeft, onMenu }: Props) {
-  const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react, hints, dropHint } = useChat(chatId);
+  const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react, hints, dropHint, agents } = useChat(chatId);
+  // pi, or an agent of the chat, is working or has turns waiting: Stop stops them all.
+  const working = state.busy || agents.some((agent) => agent.busy || agent.queued);
   const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
@@ -376,7 +378,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                 />
                 {/* While the agent works Stop is here. Once something is typed or attached, Send joins it: a message for the
                     agent waits its turn in the queue, and stopping needs no clearing of the box. */}
-                {state.busy && (
+                {working && (
                   // Stop lands where Send was when a run starts, or when sending empties the box and takes Send away:
                   // a double click's second click (detail 2) is not a Stop. It goes once the run ends, so the cursor goes
                   // back to the input, as after Send, rather than to nowhere.
@@ -397,7 +399,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                     </Icon>
                   </button>
                 )}
-                {(!state.busy || hasMessage) && (
+                {(!working || hasMessage) && (
                   <button
                     type="submit"
                     className="icon-button primary"
@@ -525,7 +527,9 @@ const Entry = memo(function Entry({
   }
   if (entry.kind === CHAT_PEOPLE_KIND) {
     const data = entry.data as unknown as ChatPeopleData;
-    const [them, you] = PEOPLE_EVENTS[data.event].map((said) => said.replace("{agent}", data.agent ?? "an agent"));
+    // A Stop of one agent names it; one of everything names pi, whose run it stopped with the agents' turns.
+    const agent = data.agent ? `@${data.agent}` : data.event === "stopped" ? AGENT_NAME : "an agent";
+    const [them, you] = PEOPLE_EVENTS[data.event].map((said) => said.replace("{agent}", agent));
     return <div className="chat-notice">{data.uid === uid ? `You ${you}` : `${data.name} ${them}`}</div>;
   }
   if (entry.kind === CHAT_AGENT_KIND) {
@@ -652,16 +656,16 @@ function PeopleBar({ people, online, uid, working }: { people: ChatPeople; onlin
 
 /**
  * Each notice as said of someone else, and of the viewer (who may have been removed and invited back). `{agent}` is
- * the agent an owner added or removed.
+ * the agent an owner added or removed, or the one someone stopped.
  */
 const PEOPLE_EVENTS: Record<ChatPeopleData["event"], readonly [string, string]> = {
   joined: ["joined the chat", "joined the chat"],
   rejoined: ["joined again from another window or device", "joined again from another window or device"],
   left: ["left the chat", "left the chat"],
   removed: ["was removed from the chat", "were removed from the chat"],
-  stopped: [`stopped ${AGENT_NAME}`, `stopped ${AGENT_NAME}`],
-  "agent-added": ["added @{agent} to the chat", "added @{agent} to the chat"],
-  "agent-removed": ["removed @{agent} from the chat", "removed @{agent} from the chat"],
+  stopped: ["stopped {agent}", "stopped {agent}"],
+  "agent-added": ["added {agent} to the chat", "added {agent} to the chat"],
+  "agent-removed": ["removed {agent} from the chat", "removed {agent} from the chat"],
 };
 
 /**

@@ -488,7 +488,7 @@ export interface ChatPeopleData extends Person {
    * `stopped`: they stopped the agent mid-run.
    */
   event: "joined" | "rejoined" | "left" | "removed" | "stopped" | "agent-added" | "agent-removed";
-  /** For agent-added and agent-removed: the agent's handle. */
+  /** For agent-added and agent-removed, and a stopped that stopped one agent only: the agent's handle. */
   agent?: string;
 }
 

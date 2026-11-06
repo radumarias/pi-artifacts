@@ -79,7 +79,9 @@ export async function chatRoute(
     );
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen|seat|system-prompt|agents)(?:\/([a-z0-9-]+))?)?$/);
+  const match = url.pathname.match(
+    /^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen|seat|system-prompt|agents)(?:\/([a-z0-9-]+))?)?$/,
+  );
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;

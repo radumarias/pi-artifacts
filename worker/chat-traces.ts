@@ -1,5 +1,6 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { firstText } from "../shared/canonical.ts";
+import { CHAT_AGENT_KIND, type ChatAgentReplyData } from "../shared/agents.ts";
 import { CHAT_MESSAGE_KIND, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails, type SavedFilesDetails } from "../shared/protocol.ts";
 
 /** The agent's tools that write the user's files (worker/agent/tools.ts), and how their results say what they saved. */
@@ -26,7 +27,10 @@ export function savedReport(saved: readonly string[], skipped: readonly string[]
   return [saved.length ? `saved: ${saved.join(", ")}` : "", skipped.length ? `not saved: ${skipped.join("; ")}` : ""];
 }
 
-/** What a chat left outside its own object, as its transcript records it: the artifacts it published and the files it attached or saved. */
+/**
+ * What a chat left outside its own object, as its transcript records it: the artifacts it published and the files it
+ * attached or saved, its agents' included.
+ */
 export interface ChatTraces {
   artifacts: Set<string>;
   files: Set<string>;
@@ -41,6 +45,12 @@ export function chatTraces(entries: Iterable<EntryRecord>, traces: ChatTraces = 
   for (const entry of entries) {
     if (entry.kind === CHAT_MESSAGE_KIND) {
       for (const attachment of (entry.data as unknown as ChatMessageData | undefined)?.attachments ?? []) traces.files.add(attachment.path);
+    }
+    // An agent of the roster works in a session of its own: its reply says what it published and saved.
+    if (entry.kind === CHAT_AGENT_KIND) {
+      const reply = entry.data as unknown as Partial<ChatAgentReplyData> | undefined;
+      for (const page of reply?.published ?? []) if (typeof page?.artifactId === "string") traces.artifacts.add(page.artifactId);
+      for (const path of reply?.saved ?? []) if (typeof path === "string") traces.files.add(path);
     }
     for (const message of entry.model ?? []) {
       if (message.role !== "toolResult") continue;

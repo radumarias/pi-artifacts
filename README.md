@@ -517,6 +517,38 @@ people: many people share one conversation with one agent, and their messages qu
   data in the conversation anyway. A page's write tools stay the author's only.
 - Routes in `worker/chat-routes.ts`; members and invites in `worker/members.ts`, in the chat object's SQLite.
 
+## Agents
+
+Besides `pi`, a chat can hold agents of its owner's: each with its own name (called as `@name`), job line,
+instructions, model and effort, and the MCP servers it may use.
+
+- **Definitions** live in the owner's `UserDirectory` (`agents` table, `worker/agents/store.ts`), with routes under
+  `/api/agents` (`worker/agents-routes.ts`). Each change counts the version up; a save that read an older version is
+  refused. An agent pi proposes (`agent_propose`) is saved off until its owner turns it on, as skills are, and the model
+  can never change or turn on an agent of the user's. An agent's name follows `AGENT_NAME_PATTERN` and can't be `pi`
+  or a word for everyone.
+- **In a chat**, the owner adds agents that are on (`POST /api/chats/:id/agents`). The chat keeps only a roster that
+  points at definitions (`chat_agents`, `worker/agents/roster.ts`), and runs each agent in a pi session of its own in
+  the chat object, set up afresh from its definition before each turn.
+- **Who speaks:** a message that names agents with `@name` gives each a turn, in the order named; a reply to an agent's
+  message gives it one too. Turns wait in a queue in the chat's SQLite (`chat_agent_turns`), one at a time per agent,
+  and survive a restart: a turn whose input never reached its session starts again, and a reply is posted before its
+  turn ends, under a request id, so it is placed once. An agent's reply naming another agent (or `@pi`) hands the work
+  on, at most three hand-offs per person's message however many agents it named (`MAX_HOPS`), a hand-off to pi counted
+  too; an agent never calls itself. One its owner turned off says so when it is called. Stop stops pi and every agent.
+- **What an agent reads:** before each turn, its session gets one passive write with what was said in the chat since its
+  last turn, one labelled message each (`[Ana · person]`, `[research · agent]`, `[Radu · person · your owner]`), its
+  further lines indented and anything in it shaped like an owner's label marked as quoted; then the turn's input names
+  who asked and quotes the message. Its tool calls stay in its own session; only its final text is posted to the chat
+  (a `chat.agent` entry, with the pages it published and the files it saved), which pi also reads as context.
+- **Who decides its tools:** a turn its owner asked for may use the agent's servers (`servers`, all when unset). Any
+  other turn (a member's message, a hand-off, pi naming it) gets only read-only tools of the servers it may use in
+  shared chats (`sharedServers`; by default those that don't sign in each user), and of the app's own tools only those
+  that read the chat's pages and the owner's skills: no writes, code, private files or sign-in links. The tools are an
+  allow-list set on the session before each turn (`allowedTools` in `worker/agents/turns.ts`), and each MCP call is
+  checked against it again as it starts. Only the owner's messages are instructions to it (its own prompt says so); the
+  others are information. Like pi, it acts as the owner: their sign-ins, files, skills, and pages owned by them.
+
 ## Models
 
 Each chat picks its model and effort above the message box. The picker (`src/chat/ModelPicker.tsx`, choices from

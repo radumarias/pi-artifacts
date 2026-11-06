@@ -19,7 +19,8 @@ const AGENT_ID = /^[a-f0-9]{16}$/;
 export async function agentsRoute(request: Request, directory: DurableObjectStub<UserDirectory>): Promise<Response | null> {
   const path = new URL(request.url).pathname;
   const method = request.method;
-  const answer = (result: AgentResult | { error: string } | null, status = 200) => (result && "error" in result ? json(result, 400) : json(result ?? {}, status));
+  const answer = (result: AgentResult | { error: string } | null, status = 200) =>
+    result && "error" in result ? json(result, 400) : json(result ?? {}, status);
   if (path === "/api/agents" && method === "GET") return json(await directory.listAgents());
   if (path === "/api/agents" && method === "POST") {
     const body = await readJson<{ enabled?: unknown }>(request);

@@ -109,7 +109,7 @@ export function peopleExtension(people: () => ChatPeople, agents: () => readonly
 /** The people section as pi reads it. */
 function piPeople({ owner, members }: ChatPeople, roster: readonly PromptAgent[]): string {
   // The same text whether or not the chat was ever shared: the prefix outlives the members who left.
-  const about = 'In a shared chat, each user message starts with its author\'s name ("name: text"); one without a name is the owner\'s.';
+  const about = "In a shared chat, each user message starts with its author's name (\"name: text\"); one without a name is the owner's.";
   const others = roster.length
     ? ` Other agents in this chat: ${roster.map((agent) => `@${agent.name} (${agent.job})`).join(", ")}. Each answers only when a message names it, and its replies reach you as context. ` +
       "To hand work to one, name it with @ and its name in your reply, only when its help is needed."
@@ -129,7 +129,9 @@ function piPeople({ owner, members }: ChatPeople, roster: readonly PromptAgent[]
 /** The people section as one of the roster's agents reads it. */
 function agentPeople({ owner, members }: ChatPeople, roster: readonly PromptAgent[], self: PromptAgent): string {
   const agents = [`@${AGENT_NAME} (the chat's main assistant)`, ...roster.filter((agent) => agent !== self).map((agent) => `@${agent.name} (${agent.job})`)];
-  const people = members.length ? `${owner.name} owns this chat, and ${members.map((m) => m.name).join(", ")} joined it.` : `${owner.name} owns this chat and is alone in it.`;
+  const people = members.length
+    ? `${owner.name} owns this chat, and ${members.map((m) => m.name).join(", ")} joined it.`
+    : `${owner.name} owns this chat and is alone in it.`;
   return (
     `${people} The other agents here: ${agents.join(", ")}. ` +
     "Whoever asks, you work with the owner's MCP connections, files and skills, as far as your turn allows, and artifacts you publish belong to the owner."

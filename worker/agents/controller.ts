@@ -1,9 +1,17 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { CHAT_TURN_KIND, defaultAvatar, defaultColor, MAX_HOPS, type AgentDefinition, type ChatAgentReplyData, type ChatTurnData } from "../../shared/agents.ts";
+import {
+  CHAT_TURN_KIND,
+  defaultAvatar,
+  defaultColor,
+  MAX_HOPS,
+  type AgentDefinition,
+  type ChatAgentReplyData,
+  type ChatTurnData,
+} from "../../shared/agents.ts";
 import { AGENT_NAME } from "../../shared/mentions.ts";
 import { errorMessage } from "../../shared/util.ts";
 import type { AgentTurn, ChatRoster, RosterEntry } from "./roster.ts";
-import { askOf, handOffs, mirrorText, publishedIn, turnInput } from "./turns.ts";
+import { askOf, handOffs, MAX_ASK_CHARS, mirrorText, turnInput, turnOutputs } from "./turns.ts";
 
 /** How one operation in an agent's session ended, as PiHarness.wait says. */
 export interface TurnResult {
@@ -31,12 +39,15 @@ export interface TurnHost {
   wait(session: string, operationId: string): Promise<TurnResult>;
   /** Stop what a session runs, and what waits in its inbox. */
   abort(session: string): Promise<void>;
-  /** The session's entries from the turn's input on (its chat.turn entry), oldest first: where its published pages are found. */
+  /** The session's entries from the turn's input on (its chat.turn entry), oldest first: where its outputs are found. */
   turnEntries(session: string, turn: number): Promise<readonly EntryRecord[]>;
   /** Post an agent's reply to the log; `forPi`: also as context pi reads (not when pi is handed the turn, which carries it). */
   post(reply: ChatAgentReplyData, forPi: boolean): Promise<void>;
-  /** Give pi a turn: another agent named it. */
-  handToPi(turn: { hop: number; root: number; calledBy: ChatAgentReplyData["calledBy"]; ask: string }): Promise<void>;
+  /**
+   * Give pi a turn another agent named it for: `turn` is its row (ChatRoster.queuePiTurn), whose id names pi's input, so
+   * handing it again (after a restart) places it once.
+   */
+  handToPi(turn: Pick<AgentTurn, "id" | "hop" | "root" | "calledBy" | "ask">): Promise<void>;
   /** The roster's view changed (an agent started or ended a turn, or was dropped): tell everyone. */
   changed(): void;
   /** Keep the object alive for work that outlives the call that started it. */
@@ -74,13 +85,14 @@ export class AgentTurns {
 
   /** Queue a turn for each agent, in order, and start them. */
   call(agentIds: readonly string[], caller: Caller): AgentTurn[] {
-    // Hand-offs from one reply share one chain: without one of their own, the first turn starts it for the rest.
+    // The turns one message gives share one chain, so its hand-offs stay within MAX_HOPS however many agents it names:
+    // without one of their own, the first turn starts it for the rest.
     let root = caller.root;
     const turns = agentIds.flatMap((agentId) => {
       if (!this.#host.roster.get(agentId)) return [];
       const { calledBy, answers, byOwner, ask, askKey } = caller;
       const turn = this.#host.roster.enqueue({ agentId, hop: caller.hop ?? 0, root, calledBy, answers, byOwner, ask, askKey });
-      if ((caller.hop ?? 0) > 0) root ??= turn.id;
+      root ??= turn.id;
       return [turn];
     });
     if (turns.length) this.#host.changed();
@@ -108,38 +120,55 @@ export class AgentTurns {
     const turn = roster.startNext(agentId);
     if (!turn) return;
     this.#host.changed();
+    // A person's Stop, or the agent leaving the roster, can end the turn at any await: it then goes no further.
+    const live = () => roster.turn(turn.id)?.status === "running";
     try {
       const agent = await this.#host.definition(entry);
+      if (!live()) return;
       if (!agent) {
         // Its owner deleted it: it leaves the roster, and what waited for it with it.
         roster.remove(agentId);
         this.#host.changed();
         return;
       }
-      const view = { name: agent.name, avatar: agent.avatar ?? defaultAvatar(agent.name), color: agent.color ?? defaultColor(agent.name), job: agent.job, off: !agent.enabled };
+      const view = {
+        name: agent.name,
+        avatar: agent.avatar ?? defaultAvatar(agent.name),
+        color: agent.color ?? defaultColor(agent.name),
+        job: agent.job,
+        off: !agent.enabled,
+      };
       if (roster.refresh(agentId, view)) this.#host.changed();
       if (!agent.enabled) {
         await this.#ended(roster.get(agentId) ?? entry, turn, { status: "unanswered", reason: `its owner turned @${entry.name} off` });
         return;
       }
       const current = roster.get(agentId) ?? entry;
-      await this.#catchUp(current);
+      await this.#catchUp(current, turn.id);
+      if (!live()) return;
       await this.#host.configure(current, agent, turn);
+      if (!live()) return;
       roster.refresh(agentId, view, agent.version);
       const data: ChatTurnData = { turn: turn.id, calledBy: turn.calledBy, hop: turn.hop };
       await this.#host.submit(current.session, turnInput(turn), operationId(turn.id), data);
+      roster.markSubmitted(turn.id);
+      if (!live()) {
+        // Stopped while its input went in: the stop's abort may have come first, so the run it started stops too.
+        await this.#host.abort(current.session).catch((error: unknown) => console.error("agent stop:", errorMessage(error)));
+        return;
+      }
     } catch (error) {
       await this.#ended(entry, turn, { status: "unanswered", reason: errorMessage(error) });
       return;
     }
-    void this.#await(entry, turn);
+    this.#host.waitUntil(this.#await(entry, turn));
   }
 
   /** Send an agent's session what was said in the log since its last turn, as one passive write. */
-  async #catchUp(entry: RosterEntry): Promise<void> {
+  async #catchUp(entry: RosterEntry, turn: number): Promise<void> {
     const entries = await this.#host.logAfter(entry.mirrored);
     if (!entries.length) return;
-    const { text, through } = mirrorText(entries, entry.agentId, entry.ownerUid, this.#host.roster.askKeys(entry.agentId));
+    const { text, through } = mirrorText(entries, entry.agentId, entry.ownerUid, this.#host.roster.askKeys(entry.agentId, turn));
     if (text) await this.#host.write(entry.session, text, `mirror:${entry.agentId}:${through}`);
     this.#host.roster.setMirrored(entry.agentId, through);
   }
@@ -161,22 +190,26 @@ export class AgentTurns {
     }
   }
 
-  /** A turn ended: once only, its reply goes to the log, and its hand-offs and the agent's next turn start. */
+  /**
+   * A turn ended: its reply goes to the log, then the turn ends and its hand-offs are queued at once, with no wait in
+   * between, so a restart never loses them or queues them twice. Only once: a turn that ended already (a second wait on
+   * it, a Stop meanwhile) posts nothing, and a reply posted again (a restart before the turn ended) is placed once.
+   */
   async #ended(entry: RosterEntry, turn: AgentTurn, result: TurnResult): Promise<void> {
     const roster = this.#host.roster;
-    const ended = roster.end(turn.id, result.status === "done" ? "done" : "failed");
-    // Stopped meanwhile (a person's Stop, or the agent left the roster): it posts nothing.
-    if (!ended) {
+    const now = roster.turn(turn.id);
+    if (now?.status !== "running" && now?.status !== "queued") {
       this.#host.changed();
       this.pump(entry.agentId);
       return;
     }
     const text = (result.text ?? "").trim();
     let published: ChatAgentReplyData["published"] = [];
+    let saved: string[] = [];
     try {
-      published = publishedIn(await this.#host.turnEntries(entry.session, turn.id));
+      ({ published, saved } = turnOutputs(await this.#host.turnEntries(entry.session, turn.id)));
     } catch (error) {
-      console.error("agent turn, pages:", errorMessage(error));
+      console.error("agent turn, outputs:", errorMessage(error));
     }
     const current = roster.get(entry.agentId) ?? entry;
     const reply: ChatAgentReplyData = {
@@ -189,11 +222,12 @@ export class AgentTurns {
       calledBy: turn.calledBy,
       turn: turn.id,
       hop: turn.hop,
-      startedAt: ended.startedAt ?? ended.createdAt,
-      endedAt: ended.endedAt ?? Date.now(),
+      startedAt: now.startedAt ?? now.createdAt,
+      endedAt: roster.now(),
       ...(result.status !== "done" && { failed: result.reason ?? "it ended without an answer" }),
       ...(turn.answers !== undefined && { answers: turn.answers }),
       ...(published.length && { published }),
+      ...(saved.length && { saved }),
     };
     // Who it hands work to, within what the chain may still make.
     const left = MAX_HOPS - roster.handOffsFrom(turn.root);
@@ -204,10 +238,16 @@ export class AgentTurns {
     } catch (error) {
       console.error("agent reply:", errorMessage(error));
     }
+    // From here to the hand-offs queued, no await: the turn's end and what it starts are written together.
+    if (!roster.end(turn.id, result.status === "done" ? "done" : "failed")) {
+      this.#host.changed();
+      this.pump(entry.agentId);
+      return;
+    }
     // The agent's own reply is in its session already: its catch-up starts after it.
     const caller = {
       calledBy: { name: current.name, agentId: entry.agentId },
-      ask: askOf({ name: current.name, kind: "agent" }, text),
+      ask: askOf({ name: current.name, kind: "agent" }, text, MAX_ASK_CHARS),
       askKey: `turn:${turn.id}`,
       // A hand-off can only read, whoever started the chain: agents cannot give each other permission.
       byOwner: false,
@@ -217,11 +257,21 @@ export class AgentTurns {
     };
     const agents = next.filter((id) => id !== AGENT_NAME);
     if (agents.length) this.call(agents, caller);
-    if (toPi) {
-      await this.#host.handToPi(caller).catch((error: unknown) => console.error("hand to pi:", errorMessage(error)));
-    }
+    const piTurn = toPi ? roster.queuePiTurn(caller) : null;
     this.#host.changed();
     this.pump(entry.agentId);
+    if (piTurn) await this.#handToPi(piTurn);
+  }
+
+  /** Hand pi its turn, then mark it handed: a failure ends it as failed, and a restart before then hands it again. */
+  async #handToPi(turn: AgentTurn): Promise<void> {
+    try {
+      await this.#host.handToPi(turn);
+      this.#host.roster.end(turn.id, "done");
+    } catch (error) {
+      console.error("hand to pi:", errorMessage(error));
+      this.#host.roster.end(turn.id, "failed");
+    }
   }
 
   /**
@@ -230,6 +280,9 @@ export class AgentTurns {
    */
   resume(): void {
     const roster = this.#host.roster;
+    // A turn whose input never went in (the object stopped while it was set up) starts again, from the queue.
+    roster.requeueUnsubmitted();
+    for (const turn of roster.queuedPiTurns()) this.#host.waitUntil(this.#handToPi(turn));
     for (const turn of roster.allRunning()) {
       const entry = roster.get(turn.agentId);
       if (entry && !this.#waiting.has(turn.id)) this.#host.waitUntil(this.#await(entry, turn));
@@ -254,7 +307,12 @@ export class AgentTurns {
   fromPi(text: string, entry: number, chain: { hop: number; root?: number } = { hop: 0 }): void {
     const roster = this.#host.roster;
     const left = chain.root === undefined ? MAX_HOPS : MAX_HOPS - roster.handOffsFrom(chain.root);
-    const agents = left > 0 ? handOffs(text, AGENT_NAME, chain.hop, roster.list()).filter((id) => id !== AGENT_NAME).slice(0, left) : [];
+    const agents =
+      left > 0
+        ? handOffs(text, AGENT_NAME, chain.hop, roster.list())
+            .filter((id) => id !== AGENT_NAME)
+            .slice(0, left)
+        : [];
     if (!agents.length) return;
     this.call(agents, {
       calledBy: { name: AGENT_NAME, agentId: AGENT_NAME },

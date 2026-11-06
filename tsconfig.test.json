@@ -49,6 +49,7 @@
     "src/back-link.ts",
     "shared",
     "worker/mcp",
+    "worker/agents",
     "worker/agent/mcp.ts",
     "worker/agent/output.ts",
     "worker/agent/attachments.ts",

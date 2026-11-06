@@ -69,6 +69,8 @@ export class AgentStore {
         id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, definition TEXT NOT NULL, origin TEXT NOT NULL, enabled INTEGER NOT NULL,
         version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, copied_from TEXT
       );
+      CREATE TABLE IF NOT EXISTS agents_changes (id INTEGER PRIMARY KEY CHECK (id = 1), n INTEGER NOT NULL);
+      INSERT OR IGNORE INTO agents_changes (id, n) VALUES (1, 0);
     `);
   }
 
@@ -88,8 +90,12 @@ export class AgentStore {
 
   /** A short string that changes whenever any definition does: a chat reads definitions again only on a change. */
   version(): string {
-    const row = this.#sql.exec("SELECT COUNT(*) AS n, COALESCE(MAX(updated_at), 0) AS at, COALESCE(SUM(version), 0) AS v FROM agents").toArray()[0];
-    return `${row.n}:${row.at}:${row.v}`;
+    return String(this.#sql.exec("SELECT n FROM agents_changes WHERE id = 1").toArray()[0].n as number);
+  }
+
+  /** Count a change of any definition, for version(). */
+  #changed(): void {
+    this.#sql.exec("UPDATE agents_changes SET n = n + 1 WHERE id = 1");
   }
 
   /**
@@ -110,7 +116,8 @@ export class AgentStore {
     if (existing && version !== undefined && existing.version !== version) {
       return { error: `The agent "${existing.name}" changed since you read it (version ${existing.version}); read it again first.` };
     }
-    if (existing && origin === "agent" && existing.origin === "user") return { error: `"${existing.name}" is one of the user's own agents; the model cannot change it.` };
+    if (existing && origin === "agent" && existing.origin === "user")
+      return { error: `"${existing.name}" is one of the user's own agents; the model cannot change it.` };
     const named = this.byName(agent.name);
     if (named && named.id !== id) return { error: `There is already an agent named "${agent.name}"; pick another name.` };
     if (!existing) {
@@ -118,7 +125,8 @@ export class AgentStore {
       if (n >= MAX_AGENTS) return { error: `There are ${MAX_AGENTS} agents, the most there can be; delete one first.` };
       if (origin === "agent") {
         const pending = this.#sql.exec("SELECT COUNT(*) AS n FROM agents WHERE origin = 'agent' AND enabled = 0").toArray()[0].n as number;
-        if (pending >= MAX_AGENT_PROPOSALS) return { error: `${MAX_AGENT_PROPOSALS} proposed agents already wait for review; ask the user to look at them first.` };
+        if (pending >= MAX_AGENT_PROPOSALS)
+          return { error: `${MAX_AGENT_PROPOSALS} proposed agents already wait for review; ask the user to look at them first.` };
       }
     }
     // Strictly newer than the version it replaces, even within one millisecond: a chat compares them.
@@ -136,6 +144,7 @@ export class AgentStore {
         now,
         existing.id,
       );
+      this.#changed();
       return this.get(existing.id)!;
     }
     const newId = randomHex(8);
@@ -150,6 +159,7 @@ export class AgentStore {
       now,
       kept ? JSON.stringify(kept) : null,
     );
+    this.#changed();
     return this.get(newId)!;
   }
 
@@ -171,11 +181,14 @@ export class AgentStore {
       now,
       id,
     );
+    this.#changed();
     return this.get(id)!;
   }
 
   /** Delete an agent; null when it was there. */
   delete(id: string): { error: string } | null {
-    return this.#sql.exec("DELETE FROM agents WHERE id = ?", id).rowsWritten > 0 ? null : { error: "No such agent." };
+    if (this.#sql.exec("DELETE FROM agents WHERE id = ?", id).rowsWritten === 0) return { error: "No such agent." };
+    this.#changed();
+    return null;
   }
 }
