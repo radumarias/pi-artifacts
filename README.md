@@ -525,6 +525,25 @@ a model no source prices keeps pi-ai's, and one pi-ai does not know either count
 cost panel say ("price unknown"). They are list prices: Workers AI's free daily allowance, and any discount the
 account has, are not taken off. Everyone in a shared chat sees them.
 
+## Dictation
+
+The microphone under the message box tries three ways, best first (`src/chat/dictation-engine.ts`):
+
+1. **On this device**: the browser's own speech recognition with `processLocally` (Chrome 139+), once
+   `SpeechRecognition.available()` says the language pack is installed. It works offline, and the audio never leaves
+   the device. A pack that can be downloaded starts downloading on the first press, for the next time.
+2. **The browser's service**: the same API without `processLocally`. In Chrome it sends the audio to Google's service,
+   so Chromium browsers without Google's key (Brave, Arc) and blocked networks fail it with a `network` error.
+3. **The Worker**: when that API is missing (Firefox) or fails that way while online, the composer records the clip
+   (up to 2 minutes), turns it into 16 kHz mono WAV and posts it to `POST /api/dictation`, which runs
+   `DICTATION_MODEL` (Whisper large v3 turbo on Workers AI, through the `AI` binding) and returns the text when the
+   recording stops. Each person may send 12 clips a minute (`DICTATION`) and have `DICTATION_DAILY_MINUTES` (60) of
+   audio written out a day, counted in their `UserDirectory`. An empty `DICTATION_MODEL` turns it off.
+
+| Recording for the Worker | Writing it out | Done |
+| --- | --- | --- |
+| ![Recording](docs/media/dictation/recording-dark.png) | ![Writing out what you said](docs/media/dictation/transcribing-light.png) | ![The text in the message box](docs/media/dictation/done-dark.png) |
+
 ## Layout
 
 | Path | What |
