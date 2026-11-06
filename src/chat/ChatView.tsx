@@ -436,7 +436,6 @@ const Entry = memo(function Entry({
       <User
         text={data.text}
         author={data.uid !== uid ? data : undefined}
-        ownName={data.name}
         uid={uid}
         attachments={data.attachments}
         mentions={data.mentions}
@@ -591,11 +590,10 @@ function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
   return queued.map((message, i) => {
     const mine = message.uid === uid;
     return (
-      <div key={message.id} className="queued">
+      <div key={message.id} className={mine ? "queued mine" : "queued"}>
         <User
           text={message.text}
           author={mine ? undefined : message}
-          ownName={message.name}
           uid={uid}
           attachments={message.attachments}
           mentions={message.mentions}
@@ -621,14 +619,13 @@ function userText(message: UserMessage): string {
 }
 
 /**
- * A person's message, under their badge and name ("You" for the viewer's own), as everyone's are. Attachments show
- * above the text, and the message it answers above that. In a shared chat each person's messages have their colour, and one
+ * A person's message: someone else's on the left under their badge and name, the viewer's own on the right in a bubble,
+ * as in a messaging app. Attachments show above the text, and the message it answers above that. In a shared chat each person's messages have their colour, and one
  * that called the agent shows, once `picked`, that the agent took it.
  */
 function User({
   text,
   author,
-  ownName,
   uid,
   attachments = [],
   mentions,
@@ -642,8 +639,6 @@ function User({
   text: string;
   /** Undefined for the viewer's own message. */
   author?: Person;
-  /** On the viewer's own message, their name as it was sent: its first letter goes on their badge. */
-  ownName?: string;
   uid: string;
   attachments?: Attachment[];
   mentions?: Mention[];
@@ -659,10 +654,9 @@ function User({
   const people = useSharedChat();
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
-  const by = author?.uid ?? uid;
   // In a shared chat, their colour; in one with no one else, the first.
-  const tint = people ? tintOf(people, by) : 0;
-  const role = people && (people.owner.uid === by ? "owner" : "member");
+  const tint = people && author ? tintOf(people, author.uid) : 0;
+  const role = people && author && (people.owner.uid === author.uid ? "owner" : "member");
   const tagsMe = !mine && mentions?.some((mention) => mention.kind === "person" && mention.uid === uid);
   const files = attachments.length > 0 && (
     <div className="attachments">
@@ -678,12 +672,14 @@ function User({
     </div>
   );
   return (
-    <div ref={content} className={tagsMe ? "message mentions-me" : "message"}>
-      <div className="byline">
-        <Avatar name={author?.name ?? ownName ?? "You"} tint={tint} />
-        <strong>{author?.name ?? "You"}</strong>
-        {role && <small>{role}</small>}
-      </div>
+    <div ref={content} className={mine ? "message mine" : tagsMe ? "message mentions-me" : "message"}>
+      {author && (
+        <div className="byline">
+          <Avatar name={author.name} tint={tint} />
+          <strong>{author.name}</strong>
+          {role && <small>{role}</small>}
+        </div>
+      )}
       {bubble && files}
       {/* Over the top corner of the bubble, or of the files when there is no text. */}
       <div className="bubble-row">
