@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -12,11 +12,15 @@ import {
   CHAT_MESSAGE_KIND,
   CHAT_PEOPLE_KIND,
   everyone,
+  incomingKey,
   PUBLISH_TOOL,
   type AutoPick,
+  type ToolPickNote,
   type ChatMessageData,
   type ChatPeople,
   type ChatPeopleData,
+  type IncomingAttachment,
+  type IncomingMessage,
   type Person,
   type Presence,
   type PublishedDetails,
@@ -33,7 +37,7 @@ import { ReactionChips, ReactionsContext, useMessageReactions, type MessageReact
 import { isReactable, type EntryReactions } from "../../shared/reactions.ts";
 import { AgentAvatar, AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
 import { MenuButton } from "../layout.tsx";
-import { AutoPicked } from "./AutoPick.tsx";
+import { AutoPicked, ToolsPicked } from "./AutoPick.tsx";
 import { ChatCost, PromptCost } from "./Cost.tsx";
 import { ContextMeter } from "./Context.tsx";
 import { ChatPromptButton } from "../SystemPrompt.tsx";
@@ -49,13 +53,13 @@ import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
 import { useRevealedText } from "./reveal.ts";
-import { firstNew, isAgent, sentAt, shown } from "./entries.ts";
+import { firstNew, isAgent, openHints, sentAt, shown } from "./entries.ts";
 
 interface Props {
   chatId: string;
   /** The chat's name, at the start of its header. */
   title?: string;
-  /** The signed-in user: their own messages show as "You". */
+  /** The signed-in user: their own messages show on the right, with no name over them. */
   uid: string;
   /** When the user had last seen the chat, if something came in since: a "New" line goes over the first such message. */
   newSince?: number;
@@ -82,7 +86,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity, onLeft, onMenu }: Props) {
-  const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react } = useChat(chatId);
+  const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react, hints, dropHint } = useChat(chatId);
   const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
@@ -103,6 +107,15 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     setReplying(quote);
     input.current?.focus();
   }, []);
+  // "Ask pi" under a message of the viewer's that looks meant for the agent: a reply to it that calls the agent.
+  const askAgent = useCallback(
+    (entry: number) => {
+      if (!prompt(AGENT_TOKEN, undefined, undefined, entry)) return;
+      dropHint(entry);
+      following.current = true;
+    },
+    [prompt, dropHint],
+  );
   const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
   // Whether the conversation so far has arrived: publishes in it are not new.
@@ -119,7 +132,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     const el = list.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, []);
-  useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length]);
+  useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length, state.incoming.length]);
   // On a phone, dragging the conversation left shows when each message was sent.
   const compact = useCompact();
   const track = useRef<HTMLDivElement>(null);
@@ -145,10 +158,12 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     onArtifact(latest, loading);
   }, [state.entries, onArtifact]);
 
+  // Something to send: what Send and Enter take, and what turns Stop into Send while the agent works.
+  const hasMessage = /\S/.test(draft) || attachments.pending.length > 0;
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (attachments.sending || !hasMessage) return;
     const text = draft.trim();
-    if (attachments.sending || (!text && attachments.pending.length === 0)) return;
     const named = mentions.take(text);
     const replyTo = replying?.id;
     if (attachments.pending.length === 0) {
@@ -226,6 +241,9 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     [newSince, state.entries, uid, people, isOwner],
   );
   useNewInView(list, following, newAt, newSince);
+  const hinted = useMemo(() => openHints(hints, state.entries), [hints, state.entries]);
+  // A hint comes in after its message: keep it in view for a reader at the bottom.
+  useEffect(follow, [follow, hinted]);
   const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
   return (
     <SharedChat.Provider value={shared}>
@@ -256,7 +274,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
             <Compact.Provider value={compact}>
               <div className="messages" ref={list} onScroll={onScroll} data-compact={compact || undefined}>
                 <div className="transcript" ref={track}>
-                  {state.entries.length === 0 && !state.busy && (
+                  {state.entries.length === 0 && !state.busy && !state.incoming.length && (
                     <div className="empty-chat">
                       <h2>What should we build?</h2>
                       <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
@@ -270,7 +288,17 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                         {dayStart !== undefined && <DaySeparator at={dayStart} />}
                         {entry.id === newAt && <NewDivider />}
                         {bylines.has(entry.id) && <AgentByline />}
-                        <Entry entry={entry} reactions={reactions[entry.id]} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
+                        <Entry
+                          entry={entry}
+                          reactions={reactions[entry.id]}
+                          uid={uid}
+                          ownerName={ownerName}
+                          onOpen={onArtifact}
+                          onReply={reply}
+                          hinted={hinted.has(entry.id as number)}
+                          onAskAgent={askAgent}
+                          onNoHint={dropHint}
+                        />
                         {spend && <PromptCost spend={spend} />}
                       </Fragment>
                     );
@@ -279,7 +307,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
                   {thinking && <Thinking since={state.runStartedAt!} />}
                   {state.error && <div className="chat-error">{state.error}</div>}
-                  <Queue queued={state.queued} uid={uid} />
+                  <Queue queued={state.queued} incoming={state.incoming} uid={uid} />
                 </div>
               </div>
             </Compact.Provider>
@@ -332,8 +360,12 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   }
                   rows={1}
                 />
-                {state.busy ? (
-                  <button type="button" className="icon-button" onClick={abort} title="Stop" aria-label="Stop">
+                {/* While the agent works the button stops it, until something is typed or attached: then it sends, and a
+                    message for the agent waits its turn in the queue. Emptying the box brings Stop back. */}
+                {state.busy && !hasMessage ? (
+                  // Sending empties the box, so Stop takes Send's place under the pointer: a double click's second
+                  // click (detail 2 on the same button) is not a Stop.
+                  <button type="button" className="icon-button" onClick={(e) => e.detail <= 1 && abort()} title="Stop" aria-label="Stop">
                     <Icon>
                       <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" stroke="none" />
                     </Icon>
@@ -342,12 +374,12 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   <button
                     type="submit"
                     className="icon-button primary"
-                    disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
+                    disabled={!connected || attachments.sending || !hasMessage}
                     title={sendLabel}
                     aria-label={sendLabel}
                   >
-                    <Icon>
-                      <path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4" />
+                    <Icon stroke={2.2}>
+                      <path d="M12 19V5M6 11l6-6 6 6" />
                     </Icon>
                   </button>
                 )}
@@ -410,6 +442,9 @@ const Entry = memo(function Entry({
   ownerName,
   onOpen,
   onReply,
+  hinted,
+  onAskAgent,
+  onNoHint,
 }: {
   entry: EntryRecord;
   /** Its reactions; the same object until they change, so a reaction draws only its message again. */
@@ -419,6 +454,10 @@ const Entry = memo(function Entry({
   ownerName?: string;
   onOpen: (artifact: PublishedDetails) => void;
   onReply: (quote: ReplyQuote) => void;
+  /** A message of the viewer's that looks meant for the agent: Ask pi under it calls the agent on it (onAskAgent). */
+  hinted: boolean;
+  onAskAgent: (entry: number) => void;
+  onNoHint: (entry: number) => void;
 }) {
   const people = useSharedChat();
   const reactions = useMessageReactions(isReactable(entry) ? entry.id : undefined, byEmoji);
@@ -436,7 +475,6 @@ const Entry = memo(function Entry({
       <User
         text={data.text}
         author={data.uid !== uid ? data : undefined}
-        ownName={data.name}
         uid={uid}
         attachments={data.attachments}
         mentions={data.mentions}
@@ -445,8 +483,10 @@ const Entry = memo(function Entry({
         // In the transcript, a message that called the agent was picked up: it was placed in its run.
         picked={data.summoned}
         auto={data.auto}
+        tools={data.tools}
         reactions={reactions}
         onReply={answer}
+        hint={hinted && <CallHint onAsk={() => onAskAgent(entry.id as number)} onNo={() => onNoHint(entry.id as number)} />}
       />
     );
   }
@@ -584,27 +624,38 @@ const PEOPLE_EVENTS: Record<ChatPeopleData["event"], readonly [string, string]> 
 };
 
 /**
- * Messages sent while the agent was busy, below everything it is doing now, oldest first: faded and marked queued,
- * with their place when more than one waits. Each leaves the queue for the transcript when its turn comes.
+ * Messages not in the transcript yet, below everything the agent is doing now, oldest first, faded: those sent while
+ * the agent was busy, marked queued, with their place when more than one waits; then those the chat is still getting
+ * ready to put in (see IncomingMessage). Each leaves for the queue or the transcript when it goes there.
  */
-function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
-  return queued.map((message, i) => {
-    const mine = message.uid === uid;
-    return (
-      <div key={message.id} className="queued">
-        <User
-          text={message.text}
-          author={mine ? undefined : message}
-          ownName={message.name}
-          uid={uid}
-          attachments={message.attachments}
-          mentions={message.mentions}
-          replyTo={message.replyTo}
-        />
-        <small className="queued-label">{queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"}</small>
-      </div>
-    );
-  });
+function Queue({ queued, incoming, uid }: { queued: QueuedMessage[]; incoming: IncomingMessage[]; uid: string }) {
+  return (
+    <>
+      {queued.map((message, i) => (
+        <Waiting key={message.id} message={message} uid={uid} label={queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"} />
+      ))}
+      {incoming.map((message) => (
+        <Waiting key={incomingKey(message)} message={message} uid={uid} label={message.picking ? "Auto · picking a model…" : "Sending…"} incoming />
+      ))}
+    </>
+  );
+}
+
+function Waiting({ message, uid, label, incoming = false }: { message: QueuedMessage | IncomingMessage; uid: string; label: string; incoming?: boolean }) {
+  const mine = message.uid === uid;
+  return (
+    <div className={`queued${mine ? " mine" : ""}${incoming ? " incoming" : ""}`}>
+      <User
+        text={message.text}
+        author={mine ? undefined : message}
+        uid={uid}
+        attachments={message.attachments}
+        mentions={"mentions" in message ? message.mentions : undefined}
+        replyTo={message.replyTo}
+      />
+      <small className="queued-label">{label}</small>
+    </div>
+  );
 }
 
 /** A message's blocks, skipping any slot a stream has not filled yet. */
@@ -621,48 +672,47 @@ function userText(message: UserMessage): string {
 }
 
 /**
- * A person's message, under their badge and name ("You" for the viewer's own), as everyone's are. Attachments show
- * above the text, and the message it answers above that. In a shared chat each person's messages have their colour, and one
- * that called the agent shows, once `picked`, that the agent took it.
+ * A person's message: someone else's on the left under their badge and name, the viewer's own on the right in a bubble,
+ * as in a messaging app. Attachments show above the text, and the message it answers above that. In a shared chat each
+ * other person's badge has their colour, and a message that called the agent shows, once `picked`, that the agent took it.
  */
 function User({
   text,
   author,
-  ownName,
   uid,
   attachments = [],
   mentions,
   replyTo,
   picked,
   auto,
+  tools,
   sentAt,
   reactions = null,
   onReply,
+  hint,
 }: {
   text: string;
   /** Undefined for the viewer's own message. */
   author?: Person;
-  /** On the viewer's own message, their name as it was sent: its first letter goes on their badge. */
-  ownName?: string;
   uid: string;
-  attachments?: Attachment[];
+  /** On an incoming message, only their names and image thumbnails yet. */
+  attachments?: (Attachment | IncomingAttachment)[];
   mentions?: Mention[];
   replyTo?: ReplyQuote;
   picked?: boolean;
   /** What Auto picked to answer it, in a chat on Auto. */
   auto?: AutoPick;
+  /** Which MCP tools were offered to answer it, when the chat had enough to pick. */
+  tools?: ToolPickNote;
   /** When it was sent, shown under it on hover; none in the queue, which says so instead. */
   sentAt?: number;
   reactions?: MessageReactions | null;
   onReply?: () => void;
+  /** Under the message: the offer to call the agent on it (CallHint). */
+  hint?: ReactNode;
 }) {
-  const people = useSharedChat();
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
-  const by = author?.uid ?? uid;
-  // In a shared chat, their colour; in one with no one else, the first.
-  const tint = people ? tintOf(people, by) : 0;
-  const role = people && (people.owner.uid === by ? "owner" : "member");
   const tagsMe = !mine && mentions?.some((mention) => mention.kind === "person" && mention.uid === uid);
   const files = attachments.length > 0 && (
     <div className="attachments">
@@ -678,12 +728,8 @@ function User({
     </div>
   );
   return (
-    <div ref={content} className={tagsMe ? "message mentions-me" : "message"}>
-      <div className="byline">
-        <Avatar name={author?.name ?? ownName ?? "You"} tint={tint} />
-        <strong>{author?.name ?? "You"}</strong>
-        {role && <small>{role}</small>}
-      </div>
+    <div ref={content} className={mine ? "message mine" : tagsMe ? "message mentions-me" : "message"}>
+      {author ? <Byline author={author} /> : <span className="sr-only">You</span>}
       {bubble && files}
       {/* Over the top corner of the bubble, or of the files when there is no text. */}
       <div className="bubble-row">
@@ -692,7 +738,39 @@ function User({
       </div>
       <ReactionChips reactions={reactions} picked={picked} />
       {auto && <AutoPicked pick={auto} />}
+      {tools && <ToolsPicked note={tools} />}
+      {hint}
       {sentAt !== undefined && <SentTime at={sentAt} />}
+    </div>
+  );
+}
+
+/**
+ * Under a message of the viewer's that did not call the agent but looks meant for it ("pi, can you…"): Ask pi, which
+ * replies to it with "@pi", or no.
+ */
+function CallHint({ onAsk, onNo }: { onAsk: () => void; onNo: () => void }) {
+  return (
+    <div className="call-hint" role="group" aria-label={`Meant for ${AGENT_NAME}?`}>
+      <span>Meant for {AGENT_NAME}?</span>
+      <button type="button" className="call-hint-ask" onClick={onAsk} title={`Reply to it with ${AGENT_TOKEN}, so ${AGENT_NAME} answers it`}>
+        Ask {AGENT_NAME}
+      </button>
+      <button type="button" className="call-hint-no" onClick={onNo} title={`Not for ${AGENT_NAME}`} aria-label={`Not for ${AGENT_NAME}`}>
+        ×
+      </button>
+    </div>
+  );
+}
+
+/** Over someone else's message: their badge in their colour and their name, and in a shared chat whether they own it. */
+function Byline({ author }: { author: Person }) {
+  const people = useSharedChat();
+  return (
+    <div className="byline">
+      <Avatar name={author.name} tint={people ? tintOf(people, author.uid) : 0} />
+      <strong>{author.name}</strong>
+      {people && <small>{people.owner.uid === author.uid ? "owner" : "member"}</small>}
     </div>
   );
 }
@@ -714,9 +792,9 @@ const SHOWN: Record<Attachment["shown"], string> = {
   path: "the agent got its name only; its tools can open it",
 };
 
-function Attached({ attachment }: { attachment: Attachment }) {
+function Attached({ attachment }: { attachment: Attachment | IncomingAttachment }) {
   const name = baseName(attachment.path);
-  const title = `${attachment.path} · ${formatBytes(attachment.size)} · ${SHOWN[attachment.shown]}`;
+  const title = "shown" in attachment ? `${attachment.path} · ${formatBytes(attachment.size)} · ${SHOWN[attachment.shown]}` : attachment.path;
   if (attachment.thumb) return <img className="attachment-thumb" src={attachment.thumb} alt={name} title={title} />;
   return (
     <span className="attachment-chip" title={title}>

@@ -2,7 +2,7 @@ import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { modelKey, modelKeyOfLedger } from "../../shared/models.ts";
-import { CHAT_MESSAGE_KIND, type AutoPick, type ChatMessageData } from "../../shared/protocol.ts";
+import { CHAT_MESSAGE_KIND, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
 
 /**
  * What model calls cost. pi-ai prices each model reply when it comes in, from its model's prices (worker/models.ts
@@ -25,9 +25,20 @@ function spendOf(usage: Usage): Spend {
   return { cost: usage.cost.total, input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite };
 }
 
-/** What Auto's router call for a message cost; nothing for a message not sent on Auto, or one no router picked for. */
-export function autoSpendOf(pick: AutoPick | undefined): Spend {
-  return pick?.router ? { ...NONE, cost: pick.router.cost, input: pick.router.input, output: pick.router.output } : NONE;
+/** What one router call (Auto's, or the tool picker's) cost; nothing for none. */
+export function routerSpendOf(call: RouterSpend | undefined): Spend {
+  return call ? { ...NONE, cost: call.cost, input: call.input, output: call.output } : NONE;
+}
+
+/** The tool picker's name, from its id: "cloudflare-workers-ai/typesafe/jev" is "Jev". */
+export function toolPickerName(id: string): string {
+  const name = id.slice(id.lastIndexOf("/") + 1);
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : id;
+}
+
+/** What the picks for a message cost: Auto's router call and the tool picker's; nothing for a message with neither. */
+function pickSpendOf(data: Partial<ChatMessageData> | undefined): Spend {
+  return plus(routerSpendOf(data?.auto?.router), routerSpendOf(data?.tools?.picker));
 }
 
 function plus(a: Spend, b: Spend): Spend {
@@ -79,7 +90,7 @@ export function promptSpend(entries: readonly EntryRecord[], running: boolean): 
     if (entry.kind === CHAT_MESSAGE_KIND && (entry.data as Partial<ChatMessageData> | undefined)?.aside) continue;
     // A person's message: a prompt starts. `pi.user` is one from before chats were shared.
     if (entry.kind === CHAT_MESSAGE_KIND || entry.kind === "pi.user") {
-      total = autoSpendOf((entry.data as Partial<ChatMessageData> | undefined)?.auto);
+      total = pickSpendOf(entry.data as Partial<ChatMessageData> | undefined);
       [modelMs, toolMs, replies, tools, end] = [0, 0, 0, 0, 0];
       // Messages placed together share one time, so the newest one's is the prompt's. An earlier one whose run failed
       // before any reply is not part of it: the person wrote again later.
@@ -118,7 +129,7 @@ export function totalTime(prompts: Iterable<PromptSpend>): Timing {
 
 /**
  * One row of a chat's spend: a model at one effort (none for replies from before efforts were recorded), or a tool (or
- * Auto's router, under AUTO_LEDGER_PREFIX and its id).
+ * Auto's router, under AUTO_LEDGER_PREFIX and its id, or the tool picker, under TOOL_PICK_LEDGER_PREFIX and its id).
  */
 export type Share = Spend & { model: string; effort?: ModelThinkingLevel };
 

@@ -305,15 +305,19 @@ body.resizing iframe { pointer-events: none; }
 .empty-chat h2 { margin: 0 0 10px; color: var(--text); font-size: 28px; line-height: 1.1; }
 
 /*
- * The transcript, as the mockups draw a chat: every message, the viewer's own too, starts at the left under its
- * author's badge and name, its text indented past the badge (--gutter), with no bubble around it. The agent's replies
- * read the same under its square badge, their parts indented alike. Lines that belong to no one (days, "New", joins)
- * span the whole column.
+ * The transcript, as the mockups draw a chat: someone else's message starts at the left under its author's badge and
+ * name, its text indented past the badge (--gutter), with no bubble around it. The agent's replies read the same under
+ * its square badge, their parts indented alike. The viewer's own messages sit on the right in a bubble. Lines that
+ * belong to no one (days, "New", joins) span the whole column.
  */
 .transcript { width: 100%; max-width: var(--column); margin: 0 auto; }
-:is(.message > :not(.byline, .sent-time), .transcript > :is(.assistant, .step, .artifact-card, .prompt-cost, .thinking, .chat-error)) { margin-left: var(--gutter); }
+:is(.message:not(.mine) > :not(.byline, .sent-time), .transcript > :is(.assistant, .step, .artifact-card, .prompt-cost, .thinking, .chat-error)) { margin-left: var(--gutter); }
 .bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 100%; min-width: 0; }
+.message.mine { align-items: flex-end; padding-left: 15%; }
+.message.mine > .bubble-row { align-self: auto; }
+.message.mine .bubble { padding: 8px 14px; border-radius: 18px 18px 4px 18px; background: var(--surface-2); }
+.message.mine :is(.attachments, .reactions) { justify-content: flex-end; }
 /* A message that tags the viewer: on the accent's tint, so it stands out in a busy chat. */
 .message.mentions-me .bubble { margin-left: -10px; padding: 4px 10px; border-radius: 8px; background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 /* The badge, taller than the name's line, reaches down beside the text; the text starts right under the name. */
@@ -335,9 +339,10 @@ body.resizing iframe { pointer-events: none; }
 .presence.online { background: var(--live); }
 .presence.working { top: -3px; right: -3px; bottom: auto; background: var(--working); animation: notify-pulse 1.6s ease-in-out infinite; }
 /*
- * React, copy, reply and "…": in a pill at the right end of a person's message, level with their name, and in a row
- * under the agent's replies. When it was sent: under the message, and beside that row. All on hover, holding their
- * place so nothing moves. The pill rises 28px above the text: .messages leaves room for it over the first message.
+ * React, copy, reply and "…": in a pill at the right end of someone else's message, level with their name (beside the
+ * viewer's own bubble, on its left), and in a row under the agent's replies. When it was sent: under the message, and
+ * beside that row. All on hover, holding their place so nothing moves. The pill rises 28px above the text: .messages
+ * leaves room for it over the first message.
  */
 .bubble-row { position: relative; display: flex; align-self: stretch; max-width: 100%; }
 .message-actions { position: relative; }
@@ -357,6 +362,10 @@ body.resizing iframe { pointer-events: none; }
   .message:is(:hover, :focus-within) .floating > .message-tools, .floating.open > .message-tools, .floating > .message-menu { pointer-events: auto; }
   /* An open menu over the next message stays above that message's pill. */
   .message-actions.floating.open { z-index: 6; }
+  /* The viewer's own message has no name above it: the pill waits beside the bubble, on its left. */
+  .message.mine .message-actions.floating { left: auto; right: calc(100% + 6px); top: 0; bottom: auto; }
+  /* Room for that pill (up to four buttons) beside a bubble as wide as the message allows, in a narrow column too. */
+  .messages:not([data-compact]) .message.mine { padding-left: max(15%, 132px); }
   .floating .icon-button { padding: 4px; border-radius: 8px; }
   .floating .icon-button:hover, .floating .icon-button[aria-expanded="true"] { background: var(--surface-2); }
   .floating svg { width: 16px; height: 16px; }
@@ -408,15 +417,21 @@ body.resizing iframe { pointer-events: none; }
 }
 /* Under a message sent on Auto: the model and effort picked to answer it. Always shown, small and muted. */
 .auto-pick { max-width: min(100%, 420px); padding: 0 4px; color: var(--muted); font-size: 12px; line-height: 16px; }
-.auto-pick summary { display: flex; align-items: center; justify-content: flex-end; gap: 6px; list-style: none; cursor: pointer; }
+.auto-pick summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; }
 .auto-pick summary::-webkit-details-marker { display: none; }
-.auto-pick-why { white-space: pre-line; overflow-wrap: anywhere; text-align: right; }
-/* Under someone else's message, on the left like it. */
-.message.other .auto-pick summary { justify-content: flex-start; }
-.message.other .auto-pick-why { text-align: left; }
+.auto-pick-why { white-space: pre-line; overflow-wrap: anywhere; }
+/* Under the viewer's own message, on the right like it. */
+.message.mine .auto-pick summary { justify-content: flex-end; }
+.message.mine .auto-pick-why { text-align: right; }
 .auto-pick-tag { flex: none; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; font-weight: 600; }
 .auto-pick-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auto-pick.kept .auto-pick-model { font-style: italic; }
+/* Under the viewer's message that looks meant for the agent though it did not call it: Ask pi, or no. */
+.call-hint { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 2px 2px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 999px; background: var(--accent-soft); color: var(--text); font-size: 13px; line-height: 22px; }
+.call-hint-ask { padding: 0 10px; border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; }
+.call-hint-no { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.call-hint-ask:hover { filter: brightness(1.1); }
+.call-hint-no:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
 /* Reactions under a message: each emoji, how many, the viewer's own marked; a click adds or takes back theirs. */
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; }
 .reaction { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 22px; }
@@ -647,6 +662,8 @@ a.mention-chip:hover { text-decoration: underline; }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: var(--shadow-card), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 /* Bottom-aligned, so Send stays by the last line as the input grows. */
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
+/* Send (an up arrow) and Stop are round. */
+.composer-row .icon-button { border-radius: 50%; }
 .composer textarea {
   flex: 1;
   min-width: 0;
@@ -951,6 +968,11 @@ a.mention-chip:hover { text-decoration: underline; }
 .queued { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius); }
 .queued > :not(.queued-label) { opacity: 0.6; }
 .queued-label { margin-left: var(--gutter); color: var(--working); font-size: 12px; font-weight: 500; }
+.queued.mine .queued-label { align-self: flex-end; margin-left: 0; }
+/* A message on its way in (its files read, on Auto the model picked): faded like the queue, with no box, its label pulsing. */
+.queued.incoming { border-color: transparent; }
+.queued.incoming .queued-label { animation: notify-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .queued.incoming .queued-label { animation: none; } }
 /* What the model calls cost: per prompt under the agent's last reply to it, and for the whole chat in the header. */
 .prompt-cost { align-self: flex-start; padding-left: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chat-cost > button { font-variant-numeric: tabular-nums; }

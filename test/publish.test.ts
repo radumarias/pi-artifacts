@@ -152,6 +152,25 @@ describe("write, check, publish", () => {
     expect(local.checked).toEqual([broken, fixed]);
     expect(local.versions).toHaveLength(1);
   });
+
+  it("keeps a draft the screenshot look stopped from publishing, until it is checked again unchanged", async () => {
+    const { scope, versions, drafts } = chat(() => ({ ...report([]), screenshot: "SHOT", text: "Prices" }));
+    let looks = 0;
+    scope.look = async () => (looks++, { look: { by: "Jev", verdict: "blank", probability: 0.95 } });
+    const { id } = await writeDraft(scope, { html: fixed });
+    const first = await checkDraft(scope, id, {});
+    expect(first.report?.errors).toEqual([expect.stringContaining("looks blank")]);
+    const why = "The screenshot looks blank (Jev, 95% sure)";
+    expect(await drafts.get(id)).toMatchObject({ errors: 1, lookStopped: why });
+    await expect(publishDraft(scope, { title: "Prices", draftId: id })).rejects.toThrow("found 1 error");
+    // Written again unchanged, the page keeps what stopped it.
+    expect(await writeDraft(scope, { html: fixed })).toMatchObject({ lookStopped: why });
+    const again = await checkDraft(scope, id, {});
+    expect(again.draft).toMatchObject({ errors: 0, warnings: 1, lookStopped: why });
+    expect(looks).toBe(1);
+    await publishDraft(scope, { title: "Prices", draftId: id });
+    expect(versions).toEqual([{ id: undefined, html: fixed }]);
+  });
 });
 
 describe("writeDraft", () => {

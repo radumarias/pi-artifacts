@@ -1,8 +1,10 @@
+import type { Usage } from "@earendil-works/pi-ai";
 import { CHECK_TOOL, DRAFTS_TOOL, manifestOf, WRITE_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary } from "../../shared/protocol.ts";
 import { collapseSkillFiles, inlinedSkillFiles, inlineSkillFiles, skillRefs, type InlinedPage, type SkillFileInfo } from "../../shared/skill-files.ts";
 import { errorMessage, formatBytes, plural } from "../../shared/util.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../artifacts/browser.ts";
 import { timedOutReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
+import { reviewLook, type Look, type Reviewed } from "../artifacts/look.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { ArtifactStore } from "../storage/artifacts.ts";
@@ -20,6 +22,8 @@ export interface PublishScope {
    * `signal` aborts. Throws BrowserUnavailable without a browser, CheckTimedOut when the page held it too long.
    */
   checkPage(input: CheckInput, signal?: AbortSignal): Promise<CheckReport>;
+  /** A vision classifier's look at each check's screenshot (worker/artifacts/look.ts); unset, the checks go without. */
+  look?: Look;
   /** The artifacts published in this chat, newest first. */
   chatArtifacts(): Promise<ArtifactSummary[]>;
   /** The pages written in this chat and not published yet: in the owner's folder, encrypted with their key. */
@@ -213,14 +217,17 @@ export async function writeDraft(scope: PublishScope, input: WriteInput): Promis
   return drafts.save({ id, html, manifest, artifactId, ...(Object.keys(skillSets).length && { skillSets }) }, null);
 }
 
-/** What checking a draft came to: the draft, and the check's report, or why no browser checked it. */
+/** What checking a draft came to: the draft, and the check's report, or why no browser checked it; what the look cost. */
 export interface CheckedDraft {
   draft: Draft;
   report?: CheckReport;
   unchecked?: string;
+  usage?: Usage;
+  /** Set when this check's look at the screenshot stopped the draft: what it saw. */
+  lookStopped?: string;
 }
 
-/** Check a draft in the headless browser, and keep with it what the check found. */
+/** Check a draft in the headless browser, with a look at its screenshot (scope.look), and keep with it what the check found. */
 export async function checkDraft(
   scope: PublishScope,
   id: string,
@@ -230,10 +237,13 @@ export async function checkDraft(
   const drafts = await scope.drafts();
   const draft = await draftNamed(drafts, id, "Not checked.");
   const { html, pageLine } = await pageToRun(scope, draft, "Not checked.");
-  const checked = await checkInBrowser(scope, { html, manifest: draft.manifest, ...options, ...(html !== draft.html && { pageLine }) }, signal);
-  const check = draftCheck(checked.report);
+  const { report, unchecked } = await checkInBrowser(scope, { html, manifest: draft.manifest, ...options, ...(html !== draft.html && { pageLine }) }, signal);
+  const looked: Partial<Reviewed> = report && scope.look ? await reviewLook(scope.look, report, { stoppedBefore: draft.lookStopped, signal }) : { report };
+  const check = draftCheck(looked.report);
+  const stopped = looked.stopped ?? draft.lookStopped;
+  if (check && stopped) check.lookStopped = stopped;
   if (check) await drafts.recordCheck(id, check);
-  return { draft: { ...draft, ...check }, ...checked };
+  return { draft: { ...draft, ...check }, report: looked.report, unchecked, usage: looked.usage, lookStopped: looked.stopped };
 }
 
 /** How many checks in a row may find errors before the agent stops fixing and asks the user. */

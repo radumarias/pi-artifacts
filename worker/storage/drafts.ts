@@ -35,6 +35,8 @@ export interface DraftPage {
 export interface DraftCheck {
   errors: number | null;
   warnings: number;
+  /** What the look at a check's screenshot stopped this draft for (worker/artifacts/look.ts): it stops a draft once. */
+  lookStopped?: string;
 }
 
 /**
@@ -82,7 +84,8 @@ export class ChatDrafts {
     if (!object) return null;
     const { html, manifest, artifactId, skillSets, savedAt } = (await object.json()) as Draft;
     const entry = index.find((e) => e.id === id);
-    return { id, html, manifest, artifactId, skillSets, savedAt, errors: entry?.errors ?? null, warnings: entry?.warnings ?? 0 };
+    const stopped = entry?.lookStopped;
+    return { id, html, manifest, artifactId, skillSets, savedAt, errors: entry?.errors ?? null, warnings: entry?.warnings ?? 0, ...(stopped && { lookStopped: stopped }) };
   }
 
   /**
@@ -112,7 +115,7 @@ export class ChatDrafts {
       ...page,
       artifactId: page.artifactId ?? before?.artifactId,
       savedAt: Date.now(),
-      ...(check ?? { errors: before?.errors ?? null, warnings: before?.warnings ?? 0 }),
+      ...(check ?? { errors: before?.errors ?? null, warnings: before?.warnings ?? 0, ...(before?.lookStopped && { lookStopped: before.lookStopped }) }),
     };
     const { html, manifest, skillSets, ...summary } = draft;
     const bytes = new TextEncoder().encode(html).byteLength;

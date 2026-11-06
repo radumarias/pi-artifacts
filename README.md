@@ -200,6 +200,15 @@ page's CSP, with its live calls answered by the chat's MCP connections. It retur
 - the results of **tests** the agent passes: short scripts run in the page once its data arrived, such as "the price
   table has rows".
 
+A check that found no errors also gets a **look at its screenshot** (`worker/artifacts/look.ts`): a vision classifier on
+Workers AI (TypeSafe's Jev by default, `CHECK_LOOK_MODEL`, run through the `AI` binding with no key) answers whether the
+page shows its content, or looks blank, shows an error, is stuck loading or is broken. It catches what only shows in the
+picture, such as text the same colour as its background or a chart that drew nothing. A sure "blank", or a sure "error"
+when no live call failed outside the page, is an error; anything else it sees is a warning. Since a model can be wrong,
+it stops a draft only once: checked again unchanged, after the agent looked at the screenshot, its finding is a warning.
+The look answers without writing text (input priced only) and its spend counts in the chat's cost panel; when it fails
+or takes over 6 s, the check goes on without it. An empty `CHECK_LOOK_MODEL` turns it off.
+
 A draft that passes is published by its `draft_id`. A publish without an `artifact_id` goes to the artifact the draft was
 written for, else to the chat's artifact whose title matches (`new_artifact: true` makes a separate one), so a fix the
 model publishes without the id never turns into a second artifact stuck at version 1. `artifact_publish` takes only a
@@ -318,6 +327,15 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   `/api/skills/:name`), and the list labels each skill's source. A new skill cannot take a built-in's name, but a
   built-in added later can take one of yours: then the agent uses yours while it is on, and the list says so.
 - The tool list is guidance shown on activation, not a sandbox: every tool of the chat stays callable.
+- **Only the skills a chat needs are listed.** Before each message that starts a run, a System One classifier on
+  Workers AI (`SKILLS_MODEL`, TypeSafe's Jev by default, through the AI binding) answers, for each enabled skill the
+  chat does not list yet, whether the message needs it (one yes-or-no question per skill, from the message, the names
+  of its attachments and the end of the conversation). Only those join the chat's list
+  (`worker/agent/skill-pick.ts`). The list only grows: it is part of the system prompt and the tools, and the
+  provider's prompt cache keeps the conversation only while they stay the same, so a chat the agent answered before
+  the skills were picked keeps every skill it was shown. When the classifier fails or runs out
+  of time, every skill it was asked about is listed, as before; an empty `SKILLS_MODEL` lists every enabled skill. Its
+  calls count in the chat's AI cost ("Skill picks").
 
 ## System prompts
 
@@ -346,6 +364,13 @@ people: many people share one conversation with one agent, and their messages qu
   user message, which pi places at once when idle, or at its next step while it works. So the model reads the talk as
   context when it is next called, and a run starts only for `@pi`. A message that called pi shows 👀 once its run
   picked it up, and pi's answers carry its name. A chat nobody shares works as before: every message is a prompt.
+- **Spotting messages meant for pi:** an aside may still be for pi ("pi, can you…"). Once it is placed, a System One
+  classifier on Workers AI (`CALL_HINT_MODEL`, TypeSafe's Jev by default, through the AI binding with no provider key)
+  reads it with the end of the conversation and says how likely it is meant for pi (`worker/agent/call-hint.ts`). At
+  0.7 or more, only its author's windows are told (`callHint`), and show "Meant for pi? Ask pi" under it: Ask pi
+  replies to the message with `@pi`, which calls pi like any reply. The message itself stays an aside, nothing runs on
+  its own, and a failed or slow call (past 4 s) shows nothing. Each call is in the chat's AI cost ("Spotting asks for
+  pi"). The hint lives only in the open windows, and goes once pi has run since (it read the message then).
 - **Tagging people:** "@" also offers the others in the chat; a pick puts `@name` in the text and sends the person's
   uid with the message, which the chat keeps only for someone in it. The tagged person sees the tag in their colour
   and the message marked; their sidebar shows "@" on the chat until they open it, and every app window they have open

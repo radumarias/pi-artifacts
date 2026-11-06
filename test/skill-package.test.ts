@@ -191,7 +191,7 @@ describe("skillSource with files", () => {
     fileSet: "0123456789abcdef",
   };
   const texts: Record<string, string> = { "dist/ds.js": "x".repeat(100_000), "references/tokens.md": "# Tokens" };
-  const source = skillSource([kit], "v", async (_, path) => texts[path] ?? null);
+  const source = skillSource([kit], "v", undefined, async (_, path) => texts[path] ?? null);
 
   it("lists the files when the skill is activated, with how pages use them", async () => {
     const content = await source.load("quiet-kit");

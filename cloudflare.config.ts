@@ -46,13 +46,30 @@ export default defineConfig({
       THINKING_LEVEL: bindings.text("high"),
       // What names a chat after its first message: a small, fast model, as a pi-ai AI Gateway specifier or a Workers AI id.
       TITLE_MODEL: bindings.text("openai/gpt-4.1-nano"),
+      // In a shared chat, a message that does not call the agent ("@pi") may still be meant for it ("pi, can you…"):
+      // this System One classifier on Workers AI (worker/agent/call-hint.ts) says how likely, through the AI binding (no
+      // provider key), and the author is offered to call the agent on it. Empty turns it off.
+      CALL_HINT_MODEL: bindings.text("typesafe/jev"),
       // Auto, in the model picker: before each message that starts a run, a router model reads the end of the
       // conversation and the message, and picks one of AUTO_MODELS and an effort to answer it (worker/agent/route.ts).
       // ROUTER_MODEL: the router, a small, fast model; a comma-separated list is tried in order (the first the picker
       // lists answers; the next if it fails), with ROUTE_MS for all of them. If none answers, the chat keeps its model.
       // decisions:<model> asks that OpenAI model through OpenAI's Decisions API, which picks without writing a reply
-      // (input priced only), through AI Gateway with the OpenAI key.
-      ROUTER_MODEL: bindings.text("decisions:openai/gpt-6-luna,cerebras/gpt-oss-120b,openai/gpt-4.1-nano"),
+      // (input priced only), through AI Gateway with the OpenAI key; system-one:<model> asks a System One classifier on
+      // Workers AI (typesafe/jev, @cf/cloudflare/clef-flash) the same way, through the AI binding. Workers AI runs on
+      // Cloudflare's own network, with no provider key and no hop to another provider: Jev first, then gpt-oss-120b there,
+      // then Gemini Flash-Lite with the Google AI Studio key.
+      ROUTER_MODEL: bindings.text("system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
+      // The tool picker: before each message that starts a run, a System One classifier on Workers AI (by its id, as
+      // CALL_HINT_MODEL; through the AI binding, no key) reads the end of the conversation and the message, and picks
+      // the few MCP tools it needs; only those are offered to the model, which loads any other with tool_search
+      // (worker/agent/tool-pick.ts). Fewer tool definitions per request, and fewer wrong calls. Only with more than 10 MCP tools; if it fails, every tool is
+      // offered. Empty: every tool, always.
+      TOOL_PICK_MODEL: bindings.text("typesafe/jev"),
+      // Which skills the agent is shown: before each message that starts a run, this System One classifier on Workers AI
+      // (by its id, as CALL_HINT_MODEL; through the AI binding) says which of the user's skills not shown in the chat yet the message
+      // needs; only those join the ones shown (worker/agent/skill-pick.ts). Empty: every enabled skill, always.
+      SKILLS_MODEL: bindings.text("typesafe/jev"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
       // picker does not list (no key in AI Gateway for their provider) are left out.
       AUTO_MODELS: bindings.json([
@@ -90,6 +107,10 @@ export default defineConfig({
       // Headless Chrome (Browser Rendering): the agent checks each page in it before publishing (worker/artifacts/check.ts).
       // Local development runs a local Chrome, which miniflare downloads on first use.
       BROWSER: bindings.browser({ dev: { remote: false } }),
+      // A vision classifier on Workers AI, run through the AI binding, looks at each check's screenshot and stops a page
+      // it is sure renders blank or shows an error (worker/artifacts/look.ts): a System One model that sees images, by
+      // its Workers AI id. Empty: checks go without it, as with PI_OFFLINE=1, where the AI binding cannot reach Workers AI.
+      CHECK_LOOK_MODEL: bindings.text(process.env.PI_OFFLINE === "1" ? "" : "typesafe/jev"),
       // Workers AI binding. Pi's createAI() routes Claude through AI Gateway with it.
       AI: bindings.ai({}),
       // Each user's files (users/<uid>/files/…) and drafts (users/<uid>/drafts/<chatId>/…), and a read cache of artifact versions (artifacts/<id>/…).

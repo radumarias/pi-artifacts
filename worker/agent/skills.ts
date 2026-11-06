@@ -14,12 +14,14 @@ export type SkillFileReader = (skill: SkillInfo, path: string) => Promise<string
  * lists their descriptions in the system prompt and adds `activate_skill` and
  * `read_skill_resource`, which reads a skill's files through `readFile`.
  * Where a built-in and a user skill share a name, the user's (when on) wins.
- * `version` is the user's skills version (UserDirectory.skillsVersion), so the
- * chat reinstalls only when it changes.
+ * `shown`, when given, keeps only the skills of those names (the ones picked for
+ * the chat, worker/agent/skill-pick.ts). `version` is the user's skills version
+ * (UserDirectory.skillsVersion); the fingerprint adds the names listed, so the
+ * chat reinstalls only when either changes.
  */
-export function skillSource(skills: readonly SkillInfo[], version: string, readFile?: SkillFileReader): SkillSource {
+export function skillSource(skills: readonly SkillInfo[], version: string, shown?: ReadonlySet<string>, readFile?: SkillFileReader): SkillSource {
   // The agent activates by name alone: a built-in skill the user replaced with their own is left out.
-  const enabled = skills.filter(isActive);
+  const enabled = skills.filter((skill) => isActive(skill) && (!shown || shown.has(skill.name)));
   const byName = new Map(enabled.map((skill) => [skill.name, skill]));
   const descriptor = (skill: SkillInfo) => ({
     name: skill.name,
@@ -29,7 +31,7 @@ export function skillSource(skills: readonly SkillInfo[], version: string, readF
   });
   return {
     id: "pi-artifacts",
-    fingerprint: version,
+    fingerprint: shown ? `${version}|${enabled.map(({ name }) => name).sort().join(",")}` : version,
     list: async () => enabled.map(descriptor),
     load: async (name): Promise<SkillContent | null> => {
       const skill = byName.get(name);

@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
+import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 import { isReadOnly, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, type ToolInfo } from "../../shared/protocol.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import { clip, text } from "./output.ts";
@@ -23,12 +24,16 @@ export interface ServerCatalog {
  * every server afresh and returns the new listing: the agent's mcp_discover.
  * Returns the extension, the summary its prompt section shows, and the
  * listing mcp_discover answers with.
+ *
+ * `deferred`: the MCP tools are pi's deferred tools, offered to the model only once loaded: the tool picker loads the
+ * few each message needs (worker/agent/tool-pick.ts), and the model loads others with tool_search.
  */
 export function mcpExtension(
   hub: McpHub,
   catalog: Map<string, ServerCatalog>,
   unavailable: Map<string, string>,
   discover: () => Promise<string>,
+  { deferred = false }: { deferred?: boolean } = {},
 ): { extension: Extension; summary: string; listing: string } {
   // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
   // and providers reject a request whose tool names repeat: number the later ones.
@@ -50,6 +55,7 @@ export function mcpExtension(
           description: `[MCP server "${server}", tool "${tool.name}"${readOnly ? ", read-only" : ""}] ${tool.description}`,
           parameters: Type.Unsafe<Record<string, unknown>>((tool.inputSchema as object) ?? { type: "object" }),
           replay: readOnly ? "safe" : "unsafe",
+          ...(deferred && { deferred: true as const }),
           execute: async (args) => {
             const result = await hub.call(server, tool.name, args);
             const payload = result.payload ?? result.content;
@@ -73,6 +79,10 @@ export function mcpExtension(
     "tools all appear under the portal's name (often prefixed with each server's name), and whose own tools may list or connect the servers behind it. " +
     `When the user asks what is available, or says they have just signed in or connected something, call ${MCP_DISCOVER_TOOL} first, then answer from what it lists. ` +
     "A tool may answer with a link the user must open (to sign in, for example); pass such links on as they are.\n" +
+    (deferred
+      ? "Only the tools this message looks likely to need are offered to you; the others listed here are not loaded. " +
+        `To call one that is not offered, load it first with ${TOOL_SEARCH_TOOL_NAME}, searching for its agent tool name.\n`
+      : "") +
     connected +
     (missing && `\n\n${missing}`);
   // What mcp_discover answers: the servers without the guidance the prompt already gives, and the sign-in links first,
@@ -83,7 +93,8 @@ export function mcpExtension(
       name: MCP_DISCOVER_TOOL,
       description:
         "List every MCP server of this chat again, now: each server's tools for this user (a portal's included), and the servers that need a sign-in, with the link. " +
-        "Tools it finds can be called right after. Use it when the user asks what is available, after they sign in, or when a tool you expected is missing.",
+        (deferred ? `Load a tool it finds with ${TOOL_SEARCH_TOOL_NAME} before calling it. ` : "Tools it finds can be called right after. ") +
+        "Use it when the user asks what is available, after they sign in, or when a tool you expected is missing.",
       parameters: Type.Object({}),
       replay: "safe",
       execute: async () => ({ output: text(clip(await discover())) }),

@@ -317,7 +317,8 @@ export function artifactExtension(scope: ChatScope): Extension {
         description:
           `Render a draft (saved with ${WRITE_TOOL}) in a headless browser before publishing it, with its live MCP calls answered as the viewer's would be (read-only tools only; ` +
           "a write tool gets a not_granted error instead of running). Returns errors (uncaught exceptions, console errors, blocked or failed loads, " +
-          "calls the page got wrong, failed tests), warnings, how the live calls went, the visible text and a screenshot. Nothing is published, " +
+          "calls the page got wrong, failed tests, a screenshot a vision model is sure looks blank or shows an error), warnings, how the live calls went, " +
+          "the visible text and a screenshot. Nothing is published, " +
           `so fixing and checking again uses up no versions. Fix what it finds with ${WRITE_TOOL}, draft_id and edits, then check the new draft. ` +
           "Pass `tests`: a few short checks of what the page must show once its data arrived.",
         parameters: Type.Object({
@@ -339,7 +340,7 @@ export function artifactExtension(scope: ChatScope): Extension {
         }),
         execute: async (args, _api, context) => {
           scope.failedChecks.allow();
-          const { draft, report, unchecked } = await checkDraft(scope, args.draft_id, { tests: args.tests, viewport: args.viewport }, context.abortSignal);
+          const { draft, report, unchecked, usage, lookStopped } = await checkDraft(scope, args.draft_id, { tests: args.tests, viewport: args.viewport }, context.abortSignal);
           const { id } = draft;
           const failed = report ? report.errors.length > 0 : undefined;
           // A check that could not run counts too, unless such a page is published anyway (local development): a browser
@@ -351,11 +352,15 @@ export function artifactExtension(scope: ChatScope): Extension {
               : "A page is published only once a check passes: check it again in a while.";
             return { output: text(`The page could not be checked: ${unchecked}. Nothing was published. ${next}${stop}`) };
           }
+          // A look at the screenshot can be wrong: a page it stopped may also be checked again unchanged (look.ts).
+          const fix = lookStopped
+            ? `Look at the screenshot: fix the page with ${WRITE_TOOL}, draft_id "${id}" and edits, then check the new draft; or, if it does show what ` +
+              `it should, check draft "${id}" again unchanged.`
+            : `Fix them with ${WRITE_TOOL}, draft_id "${id}" and edits for just what changes, then check the new draft.`;
           const headline = failed
-            ? `The check found ${plural(report.errors.length, "error")} in draft "${id}". Fix them with ${WRITE_TOOL}, draft_id "${id}" and edits ` +
-              `for just what changes, then check the new draft. Nothing was published.${stop}`
+            ? `The check found ${plural(report.errors.length, "error")} in draft "${id}". ${fix} Nothing was published.${stop}`
             : `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with draft_id "${id}".`;
-          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed };
+          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed, usage };
         },
       }),
       defineTool({

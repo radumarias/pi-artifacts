@@ -38,3 +38,16 @@ export function firstNew(entries: readonly EntryRecord[], seenAt: number, uid: s
   }
   return undefined;
 }
+
+/**
+ * The hinted messages (`hints`, entries the agent was not called on but that look meant for it) still worth calling it
+ * on: those it has not run since. A run after one (its reply, or a message that called it) read the message already.
+ */
+export function openHints(hints: ReadonlySet<number>, entries: readonly EntryRecord[]): ReadonlySet<number> {
+  if (!hints.size) return hints;
+  const called = entries.findLast(
+    (entry) => isAgent(entry) || (entry.kind === CHAT_MESSAGE_KIND && (entry.data as unknown as ChatMessageData).summoned === true),
+  );
+  const after = called === undefined ? -1 : (called.id as number);
+  return new Set([...hints].filter((id) => id > after));
+}
