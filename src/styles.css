@@ -656,6 +656,8 @@ a.mention-chip:hover { text-decoration: underline; }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: var(--shadow-card), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 /* Bottom-aligned, so Send stays by the last line as the input grows. */
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
+/* Send (an up arrow) and Stop are round. */
+.composer-row .icon-button { border-radius: 50%; }
 .composer textarea {
   flex: 1;
   min-width: 0;

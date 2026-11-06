@@ -352,8 +352,8 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                     title={sendLabel}
                     aria-label={sendLabel}
                   >
-                    <Icon>
-                      <path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4" />
+                    <Icon stroke={2.2}>
+                      <path d="M12 19V5M6 11l6-6 6 6" />
                     </Icon>
                   </button>
                 )}
