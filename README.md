@@ -498,6 +498,14 @@ then on, even before its first message, until someone changes it. Before a user 
 Auto (when the deployment has a `ROUTER_MODEL`), which runs on `MODEL` at `THINKING_LEVEL` from `cloudflare.config.ts`
 (Claude Sonnet 5.5 at high effort) until it picks, and keeps that when no router answers.
 
+A provider lists its models whether or not its account can pay for a call (a key with no credits left still lists
+them), so Auto picks only models that answer: each time the providers are asked for their lists, every model in
+`AUTO_MODELS` gets a tiny call (a few tokens), and a model whose call, or any real call, fails for a reason that will
+not pass on its own (no key or credits, a quota, no access, no such model; not a rate limit or a busy server) is marked
+for every chat until the next try (`worker/model-health.ts`). Auto leaves marked models out; the picker says "not
+answering", with why in its tooltip. A stream that ends with an error event names the provider's own code and message
+(`worker/stream-errors.ts`).
+
 With many providers the list is long, so the picker is a searchable menu: a search box over every model (by name, id
 or provider), then the user's favorites (the star on each row) and recent picks, then each provider's models in a
 section that opens and closes (the current model's open at first). Each row shows the context window, the price per

@@ -284,7 +284,7 @@ describe("the Decisions router", () => {
     const { options, sent } = gateway(() => Response.json(answer("anthropic/claude-haiku-5.5")), "team");
     const routed = await route([decisionsRouter(options, luna)], { ...request(), current: "openai/gpt-4o" });
     expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low" });
-    expect(routed.router).toEqual({ model: "openai/gpt-6-luna", cost: 0.0002, input: 2_000, output: 0 });
+    expect(routed.router).toEqual({ model: "openai/gpt-6-luna", cost: 0.0002, input: 2_000, output: 0, ms: expect.any(Number) });
     expect(sent[0].url).toBe("https://workers-binding.ai/ai-gateway/gateways/gw/openai/v1/decisions");
     expect(sent[0].init?.headers).toMatchObject({ "cf-aig-byok-alias": "team", "cf-aig-collect-log": "false" });
     // The gateway's stored key answers, not one of the request's.
@@ -354,7 +354,7 @@ describe("a System One classifier on Workers AI as a router", () => {
     }));
     const routed = await route([workersAIClassifierRouter(ai, jev)], request());
     expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low" });
-    expect(routed.router).toEqual({ model: "cloudflare-workers-ai/typesafe/jev", cost: expect.closeTo(0.000042, 12), input: 1_000, output: 0 });
+    expect(routed.router).toEqual({ model: "cloudflare-workers-ai/typesafe/jev", cost: expect.closeTo(0.000042, 12), input: 1_000, output: 0, ms: expect.any(Number) });
     expect(runs[0].model).toBe("typesafe/jev");
     const questions = runs[0].input.questions as Record<string, { type: string; criteria: Record<string, string> }>;
     expect(Object.keys(questions)).toEqual(["model", "effort"]);

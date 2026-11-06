@@ -83,7 +83,8 @@ export const MAX_MESSAGE_CHARS = 4_000;
 const MAX_REASON_CHARS = 120;
 
 /**
- * The models Auto may pick for a message, in the deployment's order: those of `wanted` the picker lists, whose context
+ * The models Auto may pick for a message, in the deployment's order: those of `wanted` the picker lists and that did not
+ * fail when last tried or called (ModelInfo.failing, worker/model-health.ts), whose context
  * holds the conversation with room for a reply (COMPACTION.reserveTokens) and, when images are attached, that see
  * images (unless none does). Empty when the picker lists none of them.
  */
@@ -91,7 +92,7 @@ export function autoCandidates(models: readonly ModelInfo[], wanted: readonly Au
   const byId = new Map(models.map((model) => [model.id, model]));
   const listed = wanted.flatMap(({ id, use }) => {
     const model = byId.get(id);
-    return model ? [{ ...model, ...(use && { use }) }] : [];
+    return model && !model.failing ? [{ ...model, ...(use && { use }) }] : [];
   });
   const fit = listed.filter((model) => (model.contextWindow ?? DEFAULT_CONTEXT_WINDOW) - COMPACTION.reserveTokens > needs.contextTokens);
   const fitting = fit.length ? fit : listed;
@@ -342,9 +343,9 @@ export const NO_USAGE: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-/** What a router call (Auto's, or the tool picker's) cost, as a message's pick shows it. */
-export function routerSpend(id: string, usage: Usage): RouterSpend {
-  return { model: id, cost: usage.cost.total, input: usage.input + usage.cacheRead, output: usage.output };
+/** What a router call (Auto's, or the tool picker's) cost, and how long it took (`ms`), as a message's pick shows it. */
+export function routerSpend(id: string, usage: Usage, ms?: number): RouterSpend {
+  return { model: id, cost: usage.cost.total, input: usage.input + usage.cacheRead, output: usage.output, ...(ms !== undefined && { ms }) };
 }
 
 /** A router's pick, the router that made it (by the picker's id) and what its call cost, and the call's usage, for pi's ledger. */
@@ -361,7 +362,7 @@ export interface Routed {
  */
 export async function route(routers: readonly Router[], request: RouteRequest, timeoutMs = ROUTE_MS): Promise<Routed> {
   if (!routers.length) throw new Error("no router model is available");
-  if (!request.candidates.length) throw new Error("none of the models Auto picks among is available");
+  if (!request.candidates.length) throw new Error("none of the models Auto picks among is available (not listed, or failing when last tried)");
   const done = new AbortController();
   const signal = AbortSignal.any([done.signal, AbortSignal.timeout(timeoutMs)]);
   const errors: string[] = [];
@@ -378,11 +379,12 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
           const i = next++;
           const router = routers[i];
           asking++;
+          const asked = Date.now();
           // The deadline holds even for a router that does not stop on the signal.
           abortable(router.ask(request, signal), signal).then(
             ({ pick, usage }) => {
               picked = true;
-              resolve({ pick, router: routerSpend(router.id, usage), usage });
+              resolve({ pick, router: routerSpend(router.id, usage, Date.now() - asked), usage });
             },
             (error) => {
               errors[i] = `${router.id}: ${clip(errorMessage(error), MAX_ERROR_CHARS)}`;

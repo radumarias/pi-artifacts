@@ -83,7 +83,8 @@ export default defineConfig({
       // needs; only those join the ones shown (worker/agent/skill-pick.ts). Empty: every enabled skill, always.
       SKILLS_MODEL: bindings.text("typesafe/jev"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
-      // picker does not list (no key in AI Gateway for their provider) are left out.
+      // picker does not list (no key in AI Gateway for their provider) are left out, as are those that cannot be called
+      // (no credits, no access): each gets a tiny call whenever the providers are asked for their lists (worker/model-health.ts).
       AUTO_MODELS: bindings.json([
         { id: "anthropic/claude-opus-5.5", use: "the hardest work: large or intricate pages, debugging what failed, long multi-step tool use" },
         { id: "anthropic/claude-sonnet-5.5", use: "most page building and editing, data work, writing code" },

@@ -5,9 +5,16 @@ import { useCatalog } from "./ModelPicker.tsx";
 import { formatCost, routerSpendOf, shortTokens, toolPickerName } from "./spend.ts";
 import { stepLabel } from "./Steps.tsx";
 
-/** "Picked by Jev in 0.4 s for $0.0001 (2k in · 0 out).": who picked, how fast, at what cost. */
+/** Seconds, to a tenth: "2.3 s". */
+const seconds = (ms: number) => `${(ms / 1_000).toFixed(1)} s`;
+
+/**
+ * "Picked by Jev in 2.3 s (its own answer 0.4 s) for $0.0001 (2k in · 0 out).": who picked, how fast (the whole step:
+ * reading the chat and the models too, then the call itself), at what cost.
+ */
 function pickedBy(name: string, ms: number, spend: RouterSpend): string {
-  return `Picked by ${name} in ${(ms / 1_000).toFixed(1)} s for ${formatCost(spend.cost)} (${shortTokens(routerSpendOf(spend))}).`;
+  const own = spend.ms !== undefined ? ` (its own answer ${seconds(spend.ms)})` : "";
+  return `Picked by ${name} in ${seconds(ms)}${own} for ${formatCost(spend.cost)} (${shortTokens(routerSpendOf(spend))}).`;
 }
 
 /** A pick under a message: a tag and what was picked; its tooltip says why. A tap shows the same under it: phones have no hover. */
@@ -34,7 +41,7 @@ export const AutoPicked = memo(function AutoPicked({ pick }: { pick: AutoPick })
   const label = choiceLabel(info(pick.model), pick.model, pick.thinkingLevel);
   const { router } = pick;
   const why = router
-    ? [pick.reason && `Why: ${pick.reason}.`, pickedBy(info(router.model)?.name ?? router.model, pick.ms, router)].filter(Boolean).join("\n")
+    ? [pick.reason && `Why: ${pick.reason}.`, pickedBy(info(router.model)?.name ?? toolPickerName(router.model), pick.ms, router)].filter(Boolean).join("\n")
     : `The chat kept the model it was on.\nWhy: ${pick.failed ?? "no router could pick"}`;
   return <PickChip tag="Auto" label={router ? label : `kept ${label}`} why={why} kept={!router} />;
 });

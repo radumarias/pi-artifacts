@@ -70,7 +70,7 @@ const MAX_RECENT = 5;
 
 /** The short facts under a model's name: its context, its price per million tokens in and out, whether it sees images. */
 function facts(model: ModelInfo): string[] {
-  const parts: string[] = [];
+  const parts: string[] = model.failing ? ["not answering"] : [];
   if (model.contextWindow) parts.push(`${COMPACT.format(model.contextWindow)} context`);
   if (!model.price) parts.push("price unknown");
   else if (model.price.input === 0 && model.price.output === 0) parts.push("free");
@@ -463,7 +463,9 @@ function ModelMenu({
                       ) : (
                         <small
                           title={
-                            model.price
+                            model.failing
+                              ? `Not answering when last tried, so Auto leaves it out: ${model.failing}`
+                              : model.price
                               ? "Context window; dollars per million input / output tokens"
                               : "No list price is known for this model: the cost panel leaves its replies out of the total."
                           }

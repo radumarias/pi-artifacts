@@ -53,6 +53,8 @@ export interface ModelInfo {
   contextWindow?: number;
   /** Dollars per million input and output tokens. Absent when no price is known: its replies then count as free. */
   price?: { input: number; output: number };
+  /** Why the model could not be called when last tried (no credits, no access): Auto leaves it out until it answers. */
+  failing?: string;
 }
 
 /** The picker's choices: the models, and when the providers were last asked for them (ms since the epoch). */

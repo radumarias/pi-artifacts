@@ -3,6 +3,7 @@ import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { createAI } from "agents/models/pi-ai";
 import type { PageAiResponse, PageError, PageStorageResponse, PageValues } from "../../shared/protocol.ts";
 import { GeminiCompat } from "../gemini.ts";
+import { withReadableStreamErrors } from "../stream-errors.ts";
 import { json, readJson } from "../http.ts";
 import { catalogSource, loadCatalog, piModels } from "../models.ts";
 import type { Storage } from "../storage/index.ts";
@@ -86,7 +87,7 @@ let made: { models: Models; ids: string[] } | undefined;
 async function pageModels(env: Env, storage: Storage): Promise<[Models, Model<Api>[]]> {
   if (!made) {
     const gemini = new GeminiCompat();
-    const ai = createAI({ binding: gemini.binding(env.AI), gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined });
+    const ai = createAI({ binding: gemini.binding(withReadableStreamErrors(env.AI)), gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined });
     made = { models: piModels(ai.provider, gemini), ids: env.PAGE_AI_MODEL.split(",").map((id) => id.trim()).filter(Boolean) };
   }
   const catalog = await loadCatalog(catalogSource(env, storage.models, waitUntil));

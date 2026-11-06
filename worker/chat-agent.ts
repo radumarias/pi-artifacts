@@ -107,8 +107,11 @@ import {
   startingSetting,
   piModels,
   loadCatalog,
+  markFailing,
   type Catalog,
 } from "./models.ts";
+import { withFailuresReported } from "./model-health.ts";
+import { withReadableStreamErrors } from "./stream-errors.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, type Tag } from "./users.ts";
 
@@ -213,13 +216,13 @@ export class ChatAgent extends DurableObject<Env> {
   readonly storage = new Storage(this.env);
   /** Gemini's thought signatures, read off its answers by the AI binding below and put back on its next requests. */
   readonly gemini = new GeminiCompat();
-  readonly ai = createAI({ binding: this.gemini.binding(this.env.AI), gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
+  readonly ai = createAI({ binding: this.gemini.binding(withReadableStreamErrors(this.env.AI)), gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
   readonly registry = createRegistry();
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
       // The chat's model may be one a provider listed: have the list before pi looks the model up.
       await this.#catalog();
-      const models = piModels(this.ai.provider, this.gemini);
+      const models = this.#models();
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again. Compaction is set here, where the app reads it too.
       const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction: COMPACTION };
@@ -581,13 +584,15 @@ export class ChatAgent extends DurableObject<Env> {
       tools = deferredTools(await root.agent(BACKGROUND_CONTEXT));
       if (!tools.length) return undefined;
       const history = routeHistory((await recent()) ?? []);
+      const asked = Date.now();
       const picked = await pickTools(this.env.AI, picker, { message, history, tools }, AbortSignal.timeout(TOOL_PICK_MS));
+      const askedMs = Date.now() - asked;
       const id = pickerId(picker);
       // Paid for whether or not the pick is used. Only a record, off the prompt's path: a failure is logged.
       void root
         .commit((tx) => recordSpend(tx, root.id, `${TOOL_PICK_LEDGER_PREFIX}${id}`, picked.usage), BACKGROUND_CONTEXT)
         .catch((error: unknown) => console.error("tool pick spend:", errorMessage(error)));
-      return { tools: picked.tools, of: tools.length, picker: routerSpend(id, picked.usage), ms: Date.now() - started };
+      return { tools: picked.tools, of: tools.length, picker: routerSpend(id, picked.usage, askedMs), ms: Date.now() - started };
     } catch (error) {
       console.error("tool pick:", errorMessage(error));
       return tools.length ? { tools: [], of: tools.length, failed: pickFailure(error), ms: Date.now() - started } : undefined;
@@ -618,7 +623,13 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** pi-ai's models for the chat's calls outside its runs (Auto's router, the chat's title): made once. */
   get #oneShotModels(): Models {
-    return (this.#oneShot ??= piModels(this.ai.provider, this.gemini));
+    return (this.#oneShot ??= this.#models());
+  }
+
+  /** pi-ai's models as the chat calls them: a model that cannot be called is marked for every chat (markFailing), so Auto leaves it out. */
+  #models(): Models {
+    const source = catalogSource(this.env, this.storage.models);
+    return withFailuresReported(piModels(this.ai.provider, this.gemini), (id, error) => this.ctx.waitUntil(markFailing(source, id, error)));
   }
 
   /** The chat's one conversation. PiHarness has made it by the time pi() resolves. */

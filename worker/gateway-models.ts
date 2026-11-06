@@ -11,6 +11,7 @@ import { OPENROUTER_MODELS } from "@earendil-works/pi-ai/providers/openrouter.mo
 import { XAI_MODELS } from "@earendil-works/pi-ai/providers/xai.models";
 import type { ProviderId } from "../shared/models.ts";
 import { errorMessage, isObject, text, type Json } from "../shared/util.ts";
+import type { ModelFailures } from "./model-health.ts";
 
 type ModelCost = Model<Api>["cost"];
 
@@ -40,10 +41,14 @@ export interface ProviderListing {
   error?: string;
 }
 
-/** Every provider's listing, and when they were asked. Stored as is (worker/storage/model-cache.ts). */
+/**
+ * Every provider's listing, and when they were asked, and the models that failed when last tried or called
+ * (worker/model-health.ts). Stored as is (worker/storage/model-cache.ts).
+ */
 export interface Discovery {
   checkedAt: number;
   providers: Partial<Record<GatewayProviderId, ProviderListing>>;
+  failing?: ModelFailures;
 }
 
 /** How pi-ai talks to a provider's models through AI Gateway: the wire, and the vendor URL it is routed by. */
