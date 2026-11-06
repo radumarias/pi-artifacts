@@ -16,6 +16,7 @@ import {
   type ProviderId,
 } from "../shared/models.ts";
 import { errorMessage } from "../shared/util.ts";
+import type { CacheWarmer } from "./cache-warmer.ts";
 import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discovery, type GatewayFetcher, type GatewayOptions, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
 import { GeminiCompat } from "./gemini.ts";
 import { failureOf, tryModels, type ModelFailures } from "./model-health.ts";
@@ -390,8 +391,9 @@ interface GatewayEnv {
 }
 
 /** agents/models/pi-ai over the deployment's AI Gateway, with Gemini's answers read by `gemini`. */
-export function gatewayAI(env: GatewayEnv, gemini: GeminiCompat) {
-  return createAI({ binding: gemini.binding(env.AI), gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined });
+export function gatewayAI(env: GatewayEnv, gemini: GeminiCompat, warmer?: CacheWarmer) {
+  const binding = gemini.binding(env.AI);
+  return createAI({ binding: warmer ? warmer.binding(binding) : binding, gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined });
 }
 
 /** Where a Worker or chat object finds the catalog, from its environment. */

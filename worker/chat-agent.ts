@@ -50,6 +50,7 @@ import {
   AUTO_LEDGER_PREFIX,
   AUTO_MODEL,
   COMPACTION,
+  compactionOverrides,
   HINT_LEDGER_PREFIX,
   isAuto,
   modelKey,
@@ -98,6 +99,7 @@ import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, sharesResults, type McpServerConfig } from "./mcp/servers.ts";
+import { CacheWarmer } from "./cache-warmer.ts";
 import { GeminiCompat } from "./gemini.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
 import {
@@ -225,7 +227,9 @@ export class ChatAgent extends DurableObject<Env> {
   readonly storage = new Storage(this.env);
   /** Gemini's thought signatures, read off its answers by the AI binding below and put back on its next requests. */
   readonly gemini = new GeminiCompat();
-  readonly ai = gatewayAI(this.env, this.gemini);
+  /** Keeps the chat's Claude prompt cache from expiring between its calls (cache-warmer.ts). */
+  readonly warmer = new CacheWarmer();
+  readonly ai = gatewayAI(this.env, this.gemini, this.warmer);
   readonly registry = createRegistry();
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
@@ -233,8 +237,11 @@ export class ChatAgent extends DurableObject<Env> {
       await this.#catalog();
       const models = this.#models();
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
-      // otherwise wait, shown as queued, until someone writes again. Compaction is set here, where the app reads it too.
-      const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction: COMPACTION };
+      // otherwise wait, shown as queued, until someone writes again. Compaction is set here, where the app reads it too:
+      // at most CONTEXT_BUDGET tokens, however large the model's window (a model listed later goes by its own window
+      // until the chat object starts again).
+      const compaction = { ...COMPACTION, modelOverrides: compactionOverrides(models.getModels()) };
+      const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction };
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
         // A new chat starts on its user's last pick, else on Auto (startingSetting); PiHarness then finds the root and

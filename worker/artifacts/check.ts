@@ -92,8 +92,11 @@ const TESTS_MS = 20_000;
 export const CHECK_MS = 60_000;
 /** The tallest page a screenshot shows: a longer page is cut at this height. */
 const MAX_SHOT_HEIGHT = 2_400;
-/** The longest side the model sees an image at: a larger screenshot would only be scaled down on the way. */
-const MAX_SHOT_SIDE = 1_568;
+/**
+ * The screenshot's longest side. It stays in the conversation, which every later call sends again: at 1,280 a tall page
+ * is about 1,200 tokens, against 1,750 at the 1,568 a model would take, and still shows layout and text sizes.
+ */
+const MAX_SHOT_SIDE = 1_280;
 /** The step panel's thumbnail: this wide, and as tall as the panel shows (its max-height at that width). */
 const THUMB_WIDTH = 480;
 const THUMB_RATIO = 0.75;

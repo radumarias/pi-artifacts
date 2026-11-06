@@ -24,6 +24,7 @@ import { literalPath, MAX_DRAFTS, type FileEntry, type UserFiles } from "../stor
 import { checkDraft, draftLine, draftNamed, FailedChecks, publishDraft, readPageSource, writeDraft, type PublishScope } from "./publish.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, outputPaths, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
+import { pagePart } from "./page-part.ts";
 
 /** What the tools need from the chat they run in. */
 export interface ChatScope extends PublishScope {
@@ -128,13 +129,25 @@ export function filesIndexExtension(index: string): Extension {
   return defineExtension({ name: "files-index", sections: [section("user_files", () => index)] });
 }
 
+/**
+ * The most of a run's output the model reads: its end, where results and errors are. All of it stays in the
+ * conversation, which every later call sends again; a script that has more to show writes it to ./out.
+ */
+const MAX_RUN_STDOUT = 10_000;
+const MAX_RUN_STDERR = 4_000;
+
+/** The end of `value`, at most `max` characters, saying how many were cut from its start. */
+function tail(value: string, max: number): string {
+  return value.length <= max ? value : `[${value.length - max} earlier characters cut] …\n${value.slice(-max)}`;
+}
+
 const SANDBOX_FILES =
   "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
   "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/<chat>/report.csv is ./files/out/<chat>/report.csv). " +
   "Anything written to ./out/ (top level, not subfolders) is saved back to this chat's folder under out/ in the user's files (named with them). " +
   "Skills you name are copied into ./skills/<name>/, so their scripts run as the skill says. " +
   "Each run starts with fresh ./files, ./skills and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
-  "Returns exit code, stdout and stderr.";
+  `Returns exit code, the last ${MAX_RUN_STDOUT.toLocaleString("en")} characters of stdout and the last ${MAX_RUN_STDERR.toLocaleString("en")} of stderr: print a summary, and write anything longer to ./out.`;
 
 /** The files `refs` name, read, keyed by where they go under ./files/ (see sandboxLayout). */
 async function sandboxInputs(files: UserFiles, refs: readonly string[], ownFolder: string, maxBytes = MAX_SANDBOX_BYTES): Promise<SandboxFile[]> {
@@ -201,8 +214,8 @@ async function runInSandbox(
     inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,
     skills.length && `skills copied in: ${[...new Set(args.skills)].map((name) => `./skills/${name}/`).join(", ")}`,
     `exit code ${result.exitCode}`,
-    `stdout:\n${result.stdout}`,
-    result.stderr && `stderr:\n${result.stderr}`,
+    `stdout:\n${tail(result.stdout, MAX_RUN_STDOUT)}`,
+    result.stderr && `stderr:\n${tail(result.stderr, MAX_RUN_STDERR)}`,
     ...savedReport(saved, skipped),
   ];
   return { output: text(clip(report.filter(Boolean).join("\n\n"))), details: { saved } satisfies SavedFilesDetails, isError: result.exitCode !== 0 };
@@ -265,6 +278,14 @@ const mcpParameter = (more = "") =>
       description: `e.g. [{"server": "CoinGecko", "tools": ["execute"]}]${more}`,
     }),
   );
+
+const pagePartParameter = Type.Optional(
+  Type.String({
+    description:
+      'Only part of the page: "120-180" for those lines, or a piece of its text for the lines around each place it occurs. ' +
+      "What you read stays in this chat's context, which every later step sends again, so to change one part, read that part.",
+  }),
+);
 
 /** What a check's result gives the model: a line on what came of it, the report, then the screenshot. */
 function checkOutput(headline: string, report: CheckReport) {
@@ -415,7 +436,7 @@ export function artifactExtension(scope: ChatScope): Extension {
           `List this chat's drafts, newest first: pages you wrote that are not published yet, with how their checks went (the newest ${MAX_DRAFTS} are kept; ` +
           "a published page's draft goes). Pass draft_id to get one back, its html and mcp, to carry on from it: after a fix went wrong, " +
           "when the user asks for an earlier attempt, or when you no longer have the page you were working on.",
-        parameters: Type.Object({ draft_id: Type.Optional(Type.String()) }),
+        parameters: Type.Object({ draft_id: Type.Optional(Type.String()), part: pagePartParameter }),
         replay: "safe",
         execute: async (args) => {
           const drafts = await scope.drafts();
@@ -426,13 +447,13 @@ export function artifactExtension(scope: ChatScope): Extension {
           }
           const draft = await draftNamed(drafts, args.draft_id);
           const declared = JSON.stringify(draft.manifest.mcp?.servers ?? []);
-          return { output: text(`Draft ${draftLine(draft)}, mcp ${declared}:\n\n${draft.html}`) };
+          return { output: text(`Draft ${draftLine(draft)}, mcp ${declared}:\n\n${pagePart(draft.html, args.part)}`) };
         },
       }),
       defineTool({
         name: "artifact_read",
         description: "Read the HTML of an artifact published in this chat, to revise it, or of one the user named with @ from another of their chats, to build on it.",
-        parameters: Type.Object({ artifact_id: Type.String(), version: Type.Optional(Type.Number()) }),
+        parameters: Type.Object({ artifact_id: Type.String(), version: Type.Optional(Type.Number()), part: pagePartParameter }),
         replay: "safe",
         execute: async (args) => {
           const meta = await ownArtifact(scope, args.artifact_id);
@@ -440,7 +461,7 @@ export function artifactExtension(scope: ChatScope): Extension {
           const html = await readPageSource(scope, meta.id, version);
           if (html === null) throw new Error(`Artifact ${meta.id} has no version ${version}.`);
           const declared = JSON.stringify(manifestOf(meta, version) ?? {});
-          return { output: text(`Version ${version} of ${meta.latest}, manifest ${declared}:\n\n${html}`) };
+          return { output: text(`Version ${version} of ${meta.latest}, manifest ${declared}:\n\n${pagePart(html, args.part)}`) };
         },
       }),
       defineTool({

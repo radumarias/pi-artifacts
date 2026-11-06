@@ -2,7 +2,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
-import { COMPACTION } from "../../shared/models.ts";
+import { COMPACTION, compactionPoint } from "../../shared/models.ts";
 import { COMPACT, contextUse, COUNT } from "./spend.ts";
 
 const RADIUS = 7;
@@ -21,11 +21,14 @@ export const ContextMeter = memo(function ContextMeter({ entries, model }: { ent
   if (!use) return null;
   // The chosen model's window, which the next reply runs in and is summarized against; else the one that replied's.
   const info = catalog.models.find((entry) => entry.id === model) ?? catalog.models.find((entry) => entry.id === use.model);
-  const size = info?.contextWindow;
-  if (!size) return null;
+  const full = info?.contextWindow;
+  if (!full) return null;
+  // What a chat holds before a reply waits for a summary (CONTEXT_BUDGET, or less in a small window), plus that
+  // reply's room: the ring is full there, not at a 1M window the chat never reaches.
+  const size = Math.min(full, compactionPoint(full) + COMPACTION.reserveTokens);
   const share = Math.min(1, use.tokens / size);
   const percent = Math.round(share * 100);
-  const compactAt = Math.max(0, size - COMPACTION.reserveTokens - COMPACTION.backgroundTokens);
+  const compactAt = Math.max(0, compactionPoint(full) - COMPACTION.backgroundTokens);
   // Near the summary point, unless one was just made (the next reply starts from less). A window smaller than the
   // compaction margins has no such point (compactAt 0): only the share says how full it is.
   const nearCompaction = compactAt > 0 ? use.tokens >= compactAt : share >= 0.9;
@@ -58,7 +61,8 @@ export const ContextMeter = memo(function ContextMeter({ entries, model }: { ent
             {COUNT.format(use.tokens)} of {COUNT.format(size)} tokens
           </span>
           <small>
-            {info.name}'s window, filled as of the latest reply. Each message, reply and tool result adds to it.
+            {size < full ? `What this chat keeps of ${info.name}'s ${COMPACT.format(full)} window` : `${info.name}'s window`}, filled as of the latest reply.
+            Each message, reply and tool result adds to it.
             {use.compacted
               ? " Older messages were just summarized, so the next reply starts from less."
               : compactAt > 0 && ` Past about ${COMPACT.format(compactAt)}, older messages are summarized automatically and the latest kept as they are.`}

@@ -373,6 +373,21 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   of time, every skill it was asked about is listed, as before; an empty `SKILLS_MODEL` lists every enabled skill. Its
   calls count in the chat's AI cost ("Skill picks").
 
+## Keeping model calls small
+
+Every model call sends the whole conversation again, so most of what a chat costs is its context, read from the
+provider's prompt cache or written to it again:
+
+- **Context budget.** A conversation is summarized once it passes `CONTEXT_BUDGET` (160K tokens, `shared/models.ts`),
+  whatever the model's window; the summary starts in the background 32K before that. With 1M-token windows, long
+  page builds otherwise reached 400-740K tokens a call. The context meter fills up to that point.
+- **Warm cache.** Claude keeps a prompt cache for 5 minutes after its last use; a later call writes the whole
+  conversation again. `worker/cache-warmer.ts` sends a chat's last large Claude request again with `max_tokens: 0`
+  every 4.5 minutes, until 15 minutes after its last call, which keeps the cache at the price of a cache read.
+- **Smaller tool results.** MCP results go to the model as compact JSON, check screenshots at 1,280 px at most,
+  `run_python`/`run_bash` output by its last 10,000 characters, and `artifact_read`/`artifact_drafts` can return
+  part of a page (`part`: a line range or a piece of text).
+
 ## System prompts
 
 You can add your own instructions to the agent's built-in system prompt, which they never replace:

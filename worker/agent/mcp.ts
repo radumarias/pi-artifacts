@@ -59,7 +59,9 @@ export function mcpExtension(
           execute: async (args) => {
             const result = await hub.call(server, tool.name, args);
             const payload = result.payload ?? result.content;
-            return { output: text(clip(typeof payload === "string" ? payload : JSON.stringify(payload, null, 1))) };
+            // Compact JSON: the result stays in the conversation, which every later call sends again, and indenting
+            // a table of rows adds a token or so per field.
+            return { output: text(clip(typeof payload === "string" ? payload : JSON.stringify(payload))) };
           },
         }),
       );

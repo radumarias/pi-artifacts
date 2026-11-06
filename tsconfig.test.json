@@ -80,6 +80,8 @@
     "worker/models.ts",
     "worker/streams.ts",
     "worker/gemini.ts",
+    "worker/cache-warmer.ts",
+    "worker/agent/page-part.ts",
     "worker/model-health.ts",
     "worker/prices.json",
     "worker/agent/file-refs.ts",

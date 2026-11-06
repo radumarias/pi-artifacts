@@ -5,7 +5,7 @@ import { createAI } from "agents/models/pi-ai";
 import { discoverModels, type Discovery } from "../worker/gateway-models.ts";
 import { baseCatalog, catalogFrom, defaultModelChoice, forgetCatalog, listedProviders, loadCatalog, PRICES, startingSetting, withEffortRecorded } from "../worker/models.ts";
 import { ModelCache } from "../worker/storage/model-cache.ts";
-import { AUTO_MODEL, modelKeyOfLedger } from "../shared/models.ts";
+import { AUTO_MODEL, COMPACTION, compactionOverrides, compactionPoint, CONTEXT_BUDGET, modelKeyOfLedger } from "../shared/models.ts";
 import { FakeBucket } from "./fakes.ts";
 
 // The catalog before any provider was asked, as the Worker builds it from pi-ai.
@@ -342,5 +342,26 @@ describe("effort per reply", () => {
   it("keeps an effort the reply already says", async () => {
     const { models, model } = answering({ ...fauxAssistantMessage("a"), thinkingLevel: "medium" });
     expect((await models.streamSimple(model, context, { reasoning: "high" }).result()).thinkingLevel).toBe("medium");
+  });
+});
+
+describe("context budget", () => {
+  it("brings a large window's summary point down to CONTEXT_BUDGET and leaves smaller ones as they are", () => {
+    const overrides = compactionOverrides([
+      { provider: "anthropic", id: "anthropic/claude-opus-5.5", contextWindow: 1_000_000 },
+      { provider: "cloudflare-workers-ai", id: "@cf/small", contextWindow: 128_000 },
+    ]);
+    expect(overrides).toEqual({ "anthropic/anthropic/claude-opus-5.5": { reserveTokens: 1_000_000 - CONTEXT_BUDGET } });
+    expect(1_000_000 - overrides["anthropic/anthropic/claude-opus-5.5"].reserveTokens).toBe(compactionPoint(1_000_000));
+    expect(compactionPoint(128_000)).toBe(128_000 - COMPACTION.reserveTokens);
+  });
+
+  it("keys the overrides as pi looks a chat's model up: the provider and id of the catalog's model", () => {
+    const ai = createAI({ binding: { fetch: async () => new Response(), run: async () => new Response() } as never, gateway: "gw" });
+    const registry = createModels();
+    registry.setProvider(ai.provider);
+    const model = baseCatalog().model("anthropic/claude-opus-5.5")!;
+    const overrides = compactionOverrides(registry.getModels());
+    expect(overrides[`${model.provider}/${model.id}`]).toEqual({ reserveTokens: model.contextWindow - CONTEXT_BUDGET });
   });
 });

@@ -128,6 +128,28 @@ export function modelKey(provider: string, id: string): string {
  */
 export const COMPACTION = { reserveTokens: 16384, backgroundTokens: 32768 } as const;
 
+/**
+ * How large a chat's conversation grows before a reply waits for a summary, whatever the model's window. Every model
+ * call sends the whole conversation again, so in a 1M-token window a long page build reached 400-740K tokens a call,
+ * read again on every step and written again in full after each cache miss: most of what chats cost. A summary
+ * starts in the background COMPACTION.backgroundTokens before this.
+ */
+export const CONTEXT_BUDGET = 160_000;
+
+/** Where a reply in a model with a `contextWindow`-token window waits for a summary: its window's point, or the budget. */
+export function compactionPoint(contextWindow: number): number {
+  return Math.min(contextWindow - COMPACTION.reserveTokens, CONTEXT_BUDGET);
+}
+
+/**
+ * pi-durable's per-model compaction overrides (keyed `provider/id`) that bring each larger window's summary point down
+ * to CONTEXT_BUDGET: pi summarizes above `contextWindow - reserveTokens`, so the reserve takes up the rest of the window.
+ */
+export function compactionOverrides(models: readonly { provider: string; id: string; contextWindow: number }[]): Record<string, { reserveTokens: number }> {
+  const larger = models.filter((model) => model.contextWindow - COMPACTION.reserveTokens > CONTEXT_BUDGET);
+  return Object.fromEntries(larger.map((model) => [`${model.provider}/${model.id}`, { reserveTokens: model.contextWindow - CONTEXT_BUDGET }]));
+}
+
 /** The picker's id for a pi ledger key (`provider/id`). */
 export function modelKeyOfLedger(key: string): string {
   const slash = key.indexOf("/");

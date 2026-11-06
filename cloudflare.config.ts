@@ -53,7 +53,7 @@ export default defineConfig({
       MODEL: bindings.text("anthropic/claude-sonnet-5.5"),
       THINKING_LEVEL: bindings.text("high"),
       // What names a chat after its first message: a small, fast model, as a pi-ai AI Gateway specifier or a Workers AI id.
-      TITLE_MODEL: bindings.text("openai/gpt-4.1-nano"),
+      TITLE_MODEL: bindings.text("anthropic/claude-haiku-5.5"),
       // In a shared chat, a message that does not call the agent ("@pi") may still be meant for it ("pi, can you…"):
       // this System One classifier on Workers AI (worker/agent/call-hint.ts) says how likely, through the AI binding (no
       // provider key), and the author is offered to call the agent on it. Empty turns it off.
