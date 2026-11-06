@@ -27,14 +27,16 @@ export const MAX_FAILURE_CHARS = 300;
 /**
  * Whether an error says the model cannot be called at all, for now: no key, or one refused; no credits, quota or
  * payment; no such model, or no access to it. Not a rate limit, an overloaded or failing server, a timeout, or a request
- * the model refused for what it held (too long, a bad tool): those pass, or are the conversation's, not the model's.
+ * the model refused for what it held (too long, a bad tool, an earlier item it no longer has): those pass, or are the
+ * conversation's, not the model's. Only words providers use for the account or the model, so a conversation's own
+ * error never marks a model for every chat.
  */
 export function cannotCall(error: string): boolean {
   return CANNOT_CALL.test(error);
 }
 
 const CANNOT_CALL =
-  /\b(?:401|402|403|404)\b|insufficient|quota|balance|billing|credits?\b|payment|unauthori[sz]ed|forbidden|permission|not[ _]found|does not exist|no access|access denied|api[ _]key|deactivated|suspended/i;
+  /\b40[12]\b|insufficient[_ ](?:quota|balance|funds|credits?)|exceeded your current quota|billing|payment[_ ]required|credit balance|(?:no|out of) credits|invalid[_ ]api[_ ]key|incorrect api key|api key not valid|unauthori[sz]ed|model_not_found|does not exist or you do not have access|deactivated|suspended/i;
 
 /** How long a try may take: a model that does not answer by then is left as it was. */
 const TRY_MS = 20_000;
@@ -47,41 +49,26 @@ const TRY_TOKENS = 32;
  */
 export async function tryModels(models: Models, targets: readonly Model<Api>[], timeoutMs = TRY_MS): Promise<ModelFailures> {
   const signal = AbortSignal.timeout(timeoutMs);
-  const tries = await Promise.all(
-    targets.map(async (model): Promise<[string, string] | undefined> => {
-      try {
-        const reply = await abortable(
-          models.completeSimple(
-            model,
-            {
-              messages: [
-                {
-                  role: "user",
-                  content: "Reply with OK.",
-                  timestamp: Date.now(),
-                },
-              ],
-            },
-            {
-              maxTokens: TRY_TOKENS,
-              signal,
-              ...(model.reasoning && {
-                reasoning: clampThinkingLevel(model, "minimal") as Exclude<ModelThinkingLevel, "off">,
-              }),
-            },
-          ),
-          signal,
-        );
-        const error = reply.stopReason === "error" ? (reply.errorMessage ?? "") : "";
-        return error && cannotCall(error) ? [modelKey(model.provider, model.id), error] : undefined;
-      } catch (error) {
-        const message = errorMessage(error);
-        return !signal.aborted && cannotCall(message) ? [modelKey(model.provider, model.id), message] : undefined;
-      }
-    }),
-  );
+  const ask = async (model: Model<Api>): Promise<string> => {
+    try {
+      const reasoning = model.reasoning ? (clampThinkingLevel(model, "minimal") as Exclude<ModelThinkingLevel, "off">) : undefined;
+      const context = { messages: [{ role: "user" as const, content: "Reply with OK.", timestamp: Date.now() }] };
+      const reply = await abortable(
+        models.completeSimple(model, context, { maxTokens: TRY_TOKENS, signal, ...(reasoning && { reasoning }) }),
+        signal,
+      );
+      return reply.stopReason === "error" ? (reply.errorMessage ?? "") : "";
+    } catch (error) {
+      return signal.aborted ? "" : errorMessage(error);
+    }
+  };
+  const errors = await Promise.all(targets.map(ask));
   const at = Date.now();
-  return Object.fromEntries(tries.flatMap((failed) => (failed ? [[failed[0], { error: clip(failed[1], MAX_FAILURE_CHARS), at }]] : [])));
+  return Object.fromEntries(
+    targets.flatMap((model, i) =>
+      cannotCall(errors[i]) ? [[modelKey(model.provider, model.id), { error: clip(errors[i], MAX_FAILURE_CHARS), at }]] : [],
+    ),
+  );
 }
 
 /**

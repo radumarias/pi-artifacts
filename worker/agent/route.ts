@@ -344,8 +344,8 @@ export const NO_USAGE: Usage = {
 };
 
 /** What a router call (Auto's, or the tool picker's) cost, and how long it took (`ms`), as a message's pick shows it. */
-export function routerSpend(id: string, usage: Usage, ms?: number): RouterSpend {
-  return { model: id, cost: usage.cost.total, input: usage.input + usage.cacheRead, output: usage.output, ...(ms !== undefined && { ms }) };
+export function routerSpend(id: string, usage: Usage, ms: number): RouterSpend {
+  return { model: id, cost: usage.cost.total, input: usage.input + usage.cacheRead, output: usage.output, ms };
 }
 
 /** A router's pick, the router that made it (by the picker's id) and what its call cost, and the call's usage, for pi's ledger. */

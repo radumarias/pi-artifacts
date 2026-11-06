@@ -5,7 +5,7 @@ import { autoCandidates } from "../worker/agent/route.ts";
 import { cannotCall, tryModels, withFailuresReported, type ModelFailures } from "../worker/model-health.ts";
 import { baseCatalog, catalogFrom, forgetCatalog, loadCatalog, markFailing } from "../worker/models.ts";
 import { ModelCache } from "../worker/storage/model-cache.ts";
-import { readableLine, withReadableStreamErrors } from "../worker/stream-errors.ts";
+import { createAI } from "agents/models/pi-ai";
 import type { Discovery } from "../worker/gateway-models.ts";
 import { FakeBucket } from "./fakes.ts";
 
@@ -37,7 +37,6 @@ describe("what cannot be called", () => {
       "401 Incorrect API key provided",
       "The model `gpt-9` does not exist or you do not have access to it.",
       "model_not_found: no such model",
-      "403 Forbidden",
     ]) {
       expect(cannotCall(error), error).toBe(true);
     }
@@ -50,6 +49,8 @@ describe("what cannot be called", () => {
       "500 Internal Server Error",
       "Request timed out",
       "prompt is too long: 220000 tokens > 200000 maximum",
+      "Item with id 'rs_123' not found.",
+      "404 Not Found",
     ]) {
       expect(cannotCall(error), error).toBe(false);
     }
@@ -141,54 +142,23 @@ describe("failing models in the catalog", () => {
   });
 });
 
-describe("readable stream errors", () => {
-  it("puts a nested error's code and message on the event", () => {
-    const line = readableLine(
-      'data: {"type":"error","sequence_number":2,"error":{"type":"insufficient_quota","code":"insufficient_quota","message":"You exceeded your current quota"}}',
-    );
-    expect(JSON.parse(line.slice("data: ".length))).toMatchObject({
-      type: "error",
-      code: "insufficient_quota",
-      message: "You exceeded your current quota",
-    });
-  });
-
-  it("makes the event its own message when it says nothing else, and leaves other lines alone", () => {
-    const bare = JSON.parse(readableLine('data: {"type":"error"}').slice("data: ".length));
-    expect(bare).toEqual({
-      type: "error",
-      code: "unknown",
-      message: '{"type":"error"}',
-    });
-    const whole = 'data: {"type":"error","code":"server_error","message":"The server had an error"}';
-    expect(readableLine(whole)).toBe(whole);
-    for (const line of ['data: {"type":"response.output_text.delta","delta":"error"}', "event: error", "data: [DONE]"])
-      expect(readableLine(line)).toBe(line);
-  });
-
-  it("rewrites the binding's streamed answers, split anywhere, and passes everything else through", async () => {
-    const sse = 'data: {"type":"response.created"}\n\ndata: {"type":"error","error":{"code":"insufficient_quota","message":"No credits"}}\n\n';
-    const bytes = new TextEncoder().encode(sse);
-    const split = new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (let at = 0; at < bytes.length; at += 7) controller.enqueue(bytes.slice(at, at + 7));
-        controller.close();
-      },
-    });
-    const binding = {
-      logId: "abc",
-      run: async () =>
-        new Response(split, {
-          headers: { "content-type": "text/event-stream" },
-        }),
-      fetch: async () => Response.json({ ok: true }),
+describe("an error a streamed answer ends with", () => {
+  it("names the provider's code and message, nested or not (patches/@earendil-works__pi-ai)", async () => {
+    const answer = async (event: object) => {
+      const sse = `data: ${JSON.stringify({ type: "response.created", response: { id: "r" } })}\n\ndata: ${JSON.stringify(event)}\n\n`;
+      const binding = {
+        run: async () => new Response(sse, { headers: { "content-type": "text/event-stream" } }),
+        fetch: async () => new Response(""),
+      };
+      const ai = createAI({ binding: binding as never, gateway: "gw" });
+      return (await ai.completeSimple(ai("openai/gpt-6-luna"), { messages: [{ role: "user", content: "hi", timestamp: 0 }] })).errorMessage;
     };
-    const ai = withReadableStreamErrors(binding);
-    const answer = (await ai.run()) as Response;
-    const text = await answer.text();
-    expect(text).toContain('"code":"insufficient_quota","message":"No credits"');
-    expect(text.startsWith('data: {"type":"response.created"}\n\n')).toBe(true);
-    expect(await ((await ai.fetch()) as Response).json()).toEqual({ ok: true });
-    expect(ai.logId).toBe("abc");
+    expect(
+      await answer({ type: "error", error: { type: "insufficient_quota", code: "insufficient_quota", message: "You exceeded your current quota" } }),
+    ).toBe("Error Code insufficient_quota: You exceeded your current quota");
+    expect(await answer({ type: "error", code: "server_error", message: "The server had an error" })).toBe(
+      "Error Code server_error: The server had an error",
+    );
+    expect(await answer({ type: "error" })).toBe('Error Code unknown: {"type":"error"}');
   });
 });

@@ -503,8 +503,9 @@ them), so Auto picks only models that answer: each time the providers are asked 
 `AUTO_MODELS` gets a tiny call (a few tokens), and a model whose call, or any real call, fails for a reason that will
 not pass on its own (no key or credits, a quota, no access, no such model; not a rate limit or a busy server) is marked
 for every chat until the next try (`worker/model-health.ts`). Auto leaves marked models out; the picker says "not
-answering", with why in its tooltip. A stream that ends with an error event names the provider's own code and message
-(`worker/stream-errors.ts`).
+answering", with why in its tooltip. The tries run in the background, after the lists are kept. A stream that ends
+with an error event names the provider's own code and message, nested or not (a patch to pi-ai in `patches/`, until
+pi-ai reads OpenAI's nested errors itself).
 
 With many providers the list is long, so the picker is a searchable menu: a search box over every model (by name, id
 or provider), then the user's favorites (the star on each row) and recent picks, then each provider's models in a

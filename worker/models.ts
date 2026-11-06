@@ -10,6 +10,7 @@ import {
   providerLabel,
   type ModelCatalog,
   type ModelChoice,
+  type AutoCandidate,
   type ModelInfo,
   type ModelSetting,
   type ProviderId,
@@ -19,7 +20,6 @@ import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discover
 import { GeminiCompat } from "./gemini.ts";
 import { MAX_FAILURE_CHARS, tryModels, type ModelFailures } from "./model-health.ts";
 import prices from "./prices.json";
-import { withReadableStreamErrors } from "./stream-errors.ts";
 import { tapStream } from "./streams.ts";
 import type { ModelCache } from "./storage/model-cache.ts";
 
@@ -382,26 +382,32 @@ export interface CatalogSource extends GatewayOptions {
   tryModels?: (catalog: Catalog) => Promise<ModelFailures>;
 }
 
+/** What a Worker or chat object reaches AI Gateway with: the AI binding, the gateway's id, and the key alias. */
+interface GatewayEnv {
+  AI: NonNullable<Parameters<typeof createAI>[0]["binding"]>;
+  AI_GATEWAY_ID: string;
+  AI_BYOK_ALIAS?: string;
+}
+
+/** agents/models/pi-ai over the deployment's AI Gateway, with Gemini's answers read by `gemini`. */
+export function gatewayAI(env: GatewayEnv, gemini: GeminiCompat) {
+  return createAI({ binding: gemini.binding(env.AI), gateway: env.AI_GATEWAY_ID, byokAlias: env.AI_BYOK_ALIAS || undefined });
+}
+
 /** Where a Worker or chat object finds the catalog, from its environment. */
-export function catalogSource(
-  env: { AI: unknown; AI_GATEWAY_ID: string; AI_BYOK_ALIAS?: string; AUTO_MODELS?: unknown },
-  cache: ModelCache,
-  waitUntil?: (promise: Promise<unknown>) => void,
-): CatalogSource {
-  const byokAlias = env.AI_BYOK_ALIAS || undefined;
-  const auto = Array.isArray(env.AUTO_MODELS) ? (env.AUTO_MODELS as { id?: unknown }[]).flatMap(({ id }) => (typeof id === "string" ? [id] : [])) : [];
+export function catalogSource(env: GatewayEnv & { AUTO_MODELS?: unknown }, cache: ModelCache, waitUntil?: (promise: Promise<unknown>) => void): CatalogSource {
+  const auto = (env.AUTO_MODELS as AutoCandidate[] | undefined)?.map(({ id }) => id) ?? [];
   return {
     cache,
-    ai: env.AI as GatewayFetcher,
+    ai: env.AI as unknown as GatewayFetcher,
     gateway: env.AI_GATEWAY_ID,
-    byokAlias,
+    byokAlias: env.AI_BYOK_ALIAS || undefined,
     waitUntil,
     ...(auto.length && {
       tryModels: (catalog: Catalog) => {
         const gemini = new GeminiCompat();
-        const ai = createAI({ binding: gemini.binding(withReadableStreamErrors(env.AI as object)) as never, gateway: env.AI_GATEWAY_ID, byokAlias });
         const targets = auto.flatMap((id) => catalog.model(id) ?? []);
-        return tryModels(piModels(ai.provider, gemini, () => catalog), targets);
+        return tryModels(piModels(gatewayAI(env, gemini).provider, gemini, () => catalog), targets);
       },
     }),
   };
@@ -455,20 +461,38 @@ function readCached(cache: ModelCache): Promise<Discovery | null> {
  */
 function rediscover(source: CatalogSource, previous: Discovery | null | undefined): Promise<Catalog> {
   return (discovering ??= (async () => {
-    const discovery: Discovery = await discoverModels({ ai: source.ai, gateway: source.gateway, byokAlias: source.byokAlias, previous: previous ?? held?.discovery });
-    if (source.tryModels) {
-      // Tried afresh each time: a model that answers again loses its mark.
-      discovery.failing = await source.tryModels(catalogFrom(discovery)).catch((error: unknown) => {
-        console.error("models: could not try the Auto models:", errorMessage(error));
-        return previous?.failing;
-      });
-      for (const [id, failure] of Object.entries(discovery.failing ?? {})) console.error(`models: ${id} cannot be called:`, failure.error);
-    }
+    const before = previous ?? held?.discovery;
+    // The marks stand until the models are tried again, after the lists are kept: no one waits on the tries.
+    const discovery = { ...(await discoverModels({ ai: source.ai, gateway: source.gateway, byokAlias: source.byokAlias, previous: before })), failing: before?.failing };
     await source.cache.write(discovery).catch((error: unknown) => console.error("models: could not keep the discovery:", errorMessage(error)));
-    return hold(discovery);
+    const catalog = hold(discovery);
+    if (!source.tryModels) return catalog;
+    const trying = retry(source, discovery, catalog);
+    // In the background where the Worker can keep it alive; else (tests) waited on.
+    if (!source.waitUntil) return await trying;
+    source.waitUntil(trying);
+    return catalog;
   })().finally(() => {
     discovering = undefined;
   }));
+}
+
+/**
+ * Try the models that must answer, on `catalog` (that of `discovery`), and keep what they say for every isolate: afresh,
+ * so a model that answers again loses its mark. The catalog with the new marks; never throws: a try that fails keeps the
+ * marks as they were.
+ */
+async function retry(source: CatalogSource, discovery: Discovery, catalog: Catalog): Promise<Catalog> {
+  try {
+    const failing = await source.tryModels!(catalog);
+    for (const [id, failure] of Object.entries(failing)) console.error(`models: ${id} cannot be called:`, failure.error);
+    const tried = { ...discovery, failing };
+    await source.cache.write(tried);
+    return hold(tried);
+  } catch (error) {
+    console.error("models: could not try the Auto models:", errorMessage(error));
+    return catalog;
+  }
 }
 
 /**
@@ -504,8 +528,10 @@ export async function loadCatalog(source: CatalogSource, { refresh = false } = {
 export async function markFailing(source: CatalogSource, id: string, error: string): Promise<void> {
   try {
     console.error(`models: ${id} cannot be called:`, error);
+    // Marked already, here: every call to a model with no credits fails, and one mark is enough.
+    if (held?.discovery?.failing?.[id]) return;
     const discovery = (await readCached(source.cache)) ?? held?.discovery;
-    if (!discovery) return;
+    if (!discovery || discovery.failing?.[id]) return;
     const marked: Discovery = { ...discovery, failing: { ...discovery.failing, [id]: { error: clip(error, MAX_FAILURE_CHARS), at: Date.now() } } };
     await source.cache.write(marked);
     hold(marked);

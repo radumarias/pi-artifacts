@@ -4,7 +4,6 @@ import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentCh
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
-import { createAI } from "agents/models/pi-ai";
 import { DurableObject, exports } from "cloudflare:workers";
 import {
   CHAT_ASIDE_KIND,
@@ -104,6 +103,7 @@ import {
   checkSetting,
   currentCatalog,
   defaultModelChoice,
+  gatewayAI,
   startingSetting,
   piModels,
   loadCatalog,
@@ -111,7 +111,6 @@ import {
   type Catalog,
 } from "./models.ts";
 import { withFailuresReported } from "./model-health.ts";
-import { withReadableStreamErrors } from "./stream-errors.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
 import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, type Tag } from "./users.ts";
 
@@ -216,7 +215,7 @@ export class ChatAgent extends DurableObject<Env> {
   readonly storage = new Storage(this.env);
   /** Gemini's thought signatures, read off its answers by the AI binding below and put back on its next requests. */
   readonly gemini = new GeminiCompat();
-  readonly ai = createAI({ binding: this.gemini.binding(withReadableStreamErrors(this.env.AI)), gateway: this.env.AI_GATEWAY_ID, byokAlias: this.env.AI_BYOK_ALIAS || undefined });
+  readonly ai = gatewayAI(this.env, this.gemini);
   readonly registry = createRegistry();
   readonly harness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
@@ -586,13 +585,12 @@ export class ChatAgent extends DurableObject<Env> {
       const history = routeHistory((await recent()) ?? []);
       const asked = Date.now();
       const picked = await pickTools(this.env.AI, picker, { message, history, tools }, AbortSignal.timeout(TOOL_PICK_MS));
-      const askedMs = Date.now() - asked;
       const id = pickerId(picker);
       // Paid for whether or not the pick is used. Only a record, off the prompt's path: a failure is logged.
       void root
         .commit((tx) => recordSpend(tx, root.id, `${TOOL_PICK_LEDGER_PREFIX}${id}`, picked.usage), BACKGROUND_CONTEXT)
         .catch((error: unknown) => console.error("tool pick spend:", errorMessage(error)));
-      return { tools: picked.tools, of: tools.length, picker: routerSpend(id, picked.usage, askedMs), ms: Date.now() - started };
+      return { tools: picked.tools, of: tools.length, picker: routerSpend(id, picked.usage, Date.now() - asked), ms: Date.now() - started };
     } catch (error) {
       console.error("tool pick:", errorMessage(error));
       return tools.length ? { tools: [], of: tools.length, failed: pickFailure(error), ms: Date.now() - started } : undefined;
