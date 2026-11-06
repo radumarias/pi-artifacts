@@ -83,6 +83,8 @@ import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtens
 import type { SandboxFile } from "./sandbox.ts";
 import { formatSkillFile } from "./skills/index.ts";
 import { ChatReactions } from "./reactions.ts";
+import { clearImported, DumpError, dumpChat, hasConversation, restorePart } from "./chat-dump.ts";
+import { idRemapper, type ChatDumpCursor, type ChatDumpPage, type ChatDumpPart, type ChatImportStart } from "../shared/data-export.ts";
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
@@ -112,7 +114,7 @@ import {
 } from "./models.ts";
 import { withFailuresReported } from "./model-health.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
-import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, type Tag } from "./users.ts";
+import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, SYSTEM_PROMPT_KEY, type Tag } from "./users.ts";
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
@@ -172,6 +174,14 @@ const AUTO_KEY = "auto";
 const ROUTE_ENTRIES = 40;
 /** The names of the skills shown in this chat so far, once SKILLS_MODEL picks them (worker/agent/skill-pick.ts). */
 const SHOWN_SKILLS_KEY = "skillsShown";
+/** The artifacts of the owner's other chats this one brought in (see #broughtIn). */
+const BROUGHT_IN_KEY = "broughtIn";
+/** The settings of a chat its export carries, beside its tables (worker/chat-dump.ts), its own system prompt among them. */
+const EXPORTED_KV = [AUTO_KEY, SHOWN_SKILLS_KEY, BROUGHT_IN_KEY, SYSTEM_PROMPT_KEY];
+/** Set while an import fills the chat (ChatImportStart): what it puts in place of what. */
+const IMPORTING_KEY = "importing";
+/** Set once an import stored every part: until its owner's list has the chat, the same import may start it again. */
+const IMPORTED_KEY = "imported";
 
 /** The newest transcript entries, read at most once per message (see #recentEntries). */
 type RecentEntries = () => Promise<readonly EntryRecord[] | undefined>;
@@ -485,11 +495,11 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async #route(message: string, images: number, files: number, recent: RecentEntries): Promise<Routing | undefined> {
     const started = Date.now();
-    const kept = (failed: string): Routing => ({ kept: { failed, ms: Date.now() - started } });
+    const kept = (failed: string, more?: Pick<AutoPick, "running" | "missed">): Routing => ({ kept: { failed, ...more, ms: Date.now() - started } });
     let read;
     try {
       const [root, catalog, busy] = await Promise.all([this.#root(), this.#catalog(), this.#replying()]);
-      if (busy) return kept(RUNNING_WHEN_SENT);
+      if (busy) return kept(RUNNING_WHEN_SENT, { running: true });
       const [agent, items] = await Promise.all([root.agent(BACKGROUND_CONTEXT), recent()]);
       if (!items) return undefined;
       read = { root, catalog, agent, items };
@@ -510,8 +520,16 @@ export class ChatAgent extends DurableObject<Env> {
         .catch((error: unknown) => console.error("auto spend:", errorMessage(error)));
       // An effort the model does not take moves to the nearest it does; none named asks for its usual one.
       const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
-      if (!choice) return kept(`the router picked ${routed.pick.model}, which is not in the picker`);
-      const pick: AutoPick = { ...choice, ...(routed.pick.reason && { reason: routed.pick.reason }), router: routed.router, ms: Date.now() - started };
+      if (!choice) {
+        return kept(`the router picked ${routed.pick.model}, which is not in the picker`, { ...(routed.missed && { missed: routed.missed }) });
+      }
+      const pick: AutoPick = {
+        ...choice,
+        ...(routed.pick.reason && { reason: routed.pick.reason }),
+        router: routed.router,
+        ...(routed.missed && { missed: routed.missed }),
+        ms: Date.now() - started,
+      };
       return { pick, choice };
     } catch (error) {
       console.error("auto:", errorMessage(error));
@@ -530,7 +548,11 @@ export class ChatAgent extends DurableObject<Env> {
     const { root, busy, agent } = await now();
     const current = this.#modelOf(agent);
     if ("kept" in routed || busy) {
-      const kept = "kept" in routed ? routed.kept : { failed: RUNNING_WHEN_PICKED, ms: routed.pick.ms };
+      // A reply started meanwhile: the pick goes unused, but what failed on the way to it still shows.
+      const kept =
+        "kept" in routed
+          ? routed.kept
+          : { failed: RUNNING_WHEN_PICKED, running: true as const, ...(routed.pick.missed && { missed: routed.pick.missed }), ms: routed.pick.ms };
       return { model: current, thinkingLevel: agent.thinkingLevel, ...kept };
     }
     if (current !== routed.choice.model || agent.thinkingLevel !== routed.choice.thinkingLevel) {
@@ -972,13 +994,13 @@ export class ChatAgent extends DurableObject<Env> {
    * MAX_BROUGHT_IN.
    */
   #broughtIn(): string[] {
-    return this.ctx.storage.kv.get<string[]>("broughtIn") ?? [];
+    return this.ctx.storage.kv.get<string[]>(BROUGHT_IN_KEY) ?? [];
   }
 
   #bringIn(ids: readonly string[]): void {
     if (!ids.length) return;
     const kept = [...this.#broughtIn().filter((id) => !ids.includes(id)), ...ids].slice(-MAX_BROUGHT_IN);
-    this.ctx.storage.kv.put("broughtIn", kept);
+    this.ctx.storage.kv.put(BROUGHT_IN_KEY, kept);
   }
 
   /** For what a socket sends: its person may have been removed since it opened. */
@@ -1685,6 +1707,61 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /**
+   * One part of the chat's own storage, for its owner's export (worker/chat-dump.ts): its conversation, reactions and
+   * settings, from `cursor` on. Read in one go, so a part is as the chat stood at that moment.
+   */
+  exportPart(cursor?: ChatDumpCursor): ChatDumpPage | ChatRefusal {
+    if (this.#gone) return refuse(404, DELETED);
+    if (this.ctx.storage.kv.get(IMPORTING_KEY) !== undefined) return refuse(409, "This chat is still being imported.");
+    return dumpChat(this.ctx.storage.sql, this.ctx.storage.kv, EXPORTED_KV, cursor);
+  }
+
+  /**
+   * Start filling this chat from an export: only one that has no conversation here (a chat deleted here may be imported
+   * again). Its owner's list does not show it until importFinish, so nobody can open it meanwhile, and nothing runs in it.
+   * An import that stopped part way starts again from nothing.
+   */
+  importBegin(start: ChatImportStart): ChatRefusal | null {
+    const { sql, kv } = this.ctx.storage;
+    // An imported chat whose listing failed after importFinish (the Worker refuses one its owner's list has) starts again too.
+    const resuming = kv.get(IMPORTING_KEY) !== undefined || kv.get(IMPORTED_KEY) === true;
+    if (!resuming && !this.#deleted() && hasConversation(sql)) return refuse(409, "This chat already has a conversation here.");
+    this.ctx.storage.transactionSync(() => {
+      clearImported(sql, kv, EXPORTED_KV);
+      kv.delete(GONE_KEY);
+      kv.put(IMPORTING_KEY, start);
+    });
+    this.#gone = false;
+    return null;
+  }
+
+  /** Store one part of the chat's export, its ids changed as importBegin was told, all of it or none. */
+  importPart(part: ChatDumpPart): ChatRefusal | null {
+    const start = this.ctx.storage.kv.get<ChatImportStart>(IMPORTING_KEY);
+    if (!start) return refuse(409, "This chat's import has not begun.");
+    const remap = idRemapper([[start.from, this.uid], [secondSeatUid(start.from), secondSeatUid(this.uid)], ...Object.entries(start.artifacts)]);
+    try {
+      this.ctx.storage.transactionSync(() => restorePart(this.ctx.storage.sql, this.ctx.storage.kv, EXPORTED_KV, part, remap));
+    } catch (error) {
+      if (error instanceof DumpError) return refuse(400, error.message);
+      throw error;
+    }
+    return null;
+  }
+
+  /** The import has stored every part: the chat opens as it was, with nobody in it but its owner. */
+  importFinish(): ChatRefusal | null {
+    const kv = this.ctx.storage.kv;
+    if (kv.get(IMPORTING_KEY) === undefined) return refuse(409, "This chat's import has not begun.");
+    // The chat's system prompt came as the zip had it: keep it only within what a saved one may be.
+    const prompt = readSystemPrompt(kv);
+    if (prompt && "error" in saveSystemPrompt(kv, prompt)) kv.delete(SYSTEM_PROMPT_KEY);
+    kv.delete(IMPORTING_KEY);
+    kv.put(IMPORTED_KEY, true);
+    return null;
+  }
+
+  /**
    * What this chat left outside its object: the artifacts it published, by the owner's list and by its transcript (so
    * one the list missed goes too), and the files it attached or saved. Read a page of the history at a time.
    */
@@ -1914,9 +1991,8 @@ interface ChatNow {
   agent: Agent;
 }
 
-/** Auto's pick for a message, and the model and effort to run on when a router picked (see ChatAgent's #route). */
 /** What #route found: a router's pick and the model choice it names, or why the chat keeps its model, and how long that took. */
-type Routing = { pick: AutoPick; choice: ModelChoice } | { kept: { failed: string; ms: number } };
+type Routing = { pick: AutoPick; choice: ModelChoice } | { kept: Pick<AutoPick, "running" | "missed" | "ms"> & { failed: string } };
 
 /** What the chat's sockets need from the chat. */
 interface ChatSession {

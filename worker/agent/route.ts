@@ -353,12 +353,14 @@ export interface Routed {
   pick: RoutePick;
   router: RouterSpend;
   usage: Usage;
+  /** The routers that failed before this one picked, each with its error, cut short. */
+  missed?: string;
 }
 
 /**
  * Ask `routers` in their order, until one picks, within `timeoutMs` in all: the next one is asked when one fails, or
- * beside it once it has had TRY_MS, and the first pick wins; those still asking are stopped. Throws when none picked,
- * with each one's error, cut short.
+ * beside it once it has had TRY_MS, and the first pick wins, with the errors of those that failed before it (`missed`);
+ * those still asking are stopped. Throws when none picked, with each one's error, cut short.
  */
 export async function route(routers: readonly Router[], request: RouteRequest, timeoutMs = ROUTE_MS): Promise<Routed> {
   if (!routers.length) throw new Error("no router model is available");
@@ -366,6 +368,8 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
   const done = new AbortController();
   const signal = AbortSignal.any([done.signal, AbortSignal.timeout(timeoutMs)]);
   const errors: string[] = [];
+  /** Each router's error so far, in the routers' order, cut short. */
+  const failures = () => clip(errors.filter(Boolean).join("; "), MAX_ERRORS_CHARS);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<Routed>((resolve, reject) => {
@@ -384,7 +388,8 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
           abortable(router.ask(request, signal), signal).then(
             ({ pick, usage }) => {
               picked = true;
-              resolve({ pick, router: routerSpend(router.id, usage, Date.now() - asked), usage });
+              const missed = failures();
+              resolve({ pick, router: routerSpend(router.id, usage, Date.now() - asked), usage, ...(missed && { missed }) });
             },
             (error) => {
               errors[i] = `${router.id}: ${clip(errorMessage(error), MAX_ERROR_CHARS)}`;
@@ -396,7 +401,7 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
         }
         if (asking === 0) {
           for (let i = next; i < routers.length; i++) errors[i] = `${routers[i].id}: out of time`;
-          reject(new Error(clip(errors.filter(Boolean).join("; "), MAX_ERRORS_CHARS)));
+          reject(new Error(failures()));
         }
       };
       ask();

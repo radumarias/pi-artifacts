@@ -5,7 +5,7 @@ import { SkillError, type SkillInfo } from "../shared/skills.ts";
 import { MAX_SKILL_FILE_READ, skillSource } from "../worker/agent/skills.ts";
 import { readSkillPackage } from "../worker/skills/package.ts";
 import { SkillFiles } from "../worker/storage/skill-files.ts";
-import { unzip, UnzipError } from "../worker/unzip.ts";
+import { unzip, UnzipError } from "../shared/unzip.ts";
 import { FakeBucket } from "./fakes.ts";
 
 /** A zip as zip tools write it: each file deflated (or stored), local headers, then the central directory. */

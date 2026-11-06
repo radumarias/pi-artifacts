@@ -1,5 +1,5 @@
 import { MAX_SKILL_ZIP_BYTES, type SkillFileInfo } from "../shared/skill-files.ts";
-import { SKILL_NAME_PATTERN, SkillError, type SkillResult } from "../shared/skills.ts";
+import { SKILL_NAME_PATTERN, SkillError, type SavedSkillOrigin, type SkillResult } from "../shared/skills.ts";
 import { formatBytes } from "../shared/util.ts";
 import { json, readJson } from "./http.ts";
 import { formatSkillFile, parseSkillFile } from "./skills/index.ts";
@@ -81,12 +81,7 @@ async function importPackage(request: Request, directory: DurableObjectStub<User
   }
 }
 
-/**
- * Import a skill package as one of the user's skills, turned on, with its files. The files are written first, as a new
- * set, then the skill saved naming that set, so a skill never names files that are not there; the set it named until
- * then (as the save says, so that two imports at once each delete the one they replaced) is deleted after. A refused
- * skill leaves no files. Throws a SkillError for a package that cannot be read.
- */
+/** Import a skill package as one of the user's skills, turned on, with its files (saveSkillWithFiles). Throws a SkillError for a package that cannot be read. */
 async function importSkillPackage(
   zip: Uint8Array,
   directory: DurableObjectStub<UserDirectory>,
@@ -94,16 +89,36 @@ async function importSkillPackage(
 ): Promise<SkillResult & { skipped?: string[] }> {
   const pkg = await readSkillPackage(zip);
   const { name } = parseSkillFile(pkg.markdown);
-  const list: SkillFileInfo[] = pkg.files.map((file) => ({ path: file.path, size: file.bytes.byteLength, ...(file.binary && { binary: true as const }) }));
-  const set = await skillFiles.write(name, pkg.files);
-  const saved = await directory.saveSkill({ markdown: pkg.markdown }, "user", true, { set, list });
+  const saved = await saveSkillWithFiles(directory, skillFiles, name, { markdown: pkg.markdown }, "user", true, pkg.files);
+  return "error" in saved ? saved : { ...saved, skipped: pkg.skipped };
+}
+
+/**
+ * Save skill `name` (`input` as UserDirectory.saveSkill takes it) with `files`. The files are written first, as a new
+ * set, then the skill saved naming that set, so a skill never names files that are not there; the set it named until
+ * then (as the save says, so that two saves at once each delete the one they replaced) is deleted after. A refused skill
+ * leaves no files. Without `files` (not even an empty list), the skill keeps the files it has.
+ */
+export async function saveSkillWithFiles(
+  directory: DurableObjectStub<UserDirectory>,
+  skillFiles: SkillFiles,
+  name: string,
+  input: unknown,
+  origin: SavedSkillOrigin,
+  enabled: boolean,
+  files?: readonly { path: string; bytes: Uint8Array; binary?: boolean }[],
+): Promise<SkillResult> {
+  if (!files) return directory.saveSkill(input, origin, enabled);
+  const list: SkillFileInfo[] = files.map((file) => ({ path: file.path, size: file.bytes.byteLength, ...(file.binary && { binary: true as const }) }));
+  const set = await skillFiles.write(name, files);
+  const saved = await directory.saveSkill(input, origin, enabled, { set, list });
   if ("error" in saved) {
-    await skillFiles.drop(name, set);
+    await skillFiles.drop(name, set).catch(() => {});
     return saved;
   }
   const { replacedFileSet, ...skill } = saved;
   if (replacedFileSet) await skillFiles.drop(name, replacedFileSet).catch(() => {});
-  return { ...skill, skipped: pkg.skipped };
+  return skill;
 }
 
 /** Delete one of the user's skills, and its files when it has any. */

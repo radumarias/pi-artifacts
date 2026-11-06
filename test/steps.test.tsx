@@ -300,9 +300,18 @@ describe("step run", () => {
     expect(tookTogether([result(1_000, 1_000), result(1_500, 1_000), result(4_000, 1_000), result(undefined, 200)])).toBe(2_700);
   });
 
-  it("spins while a step in it runs", () => {
+  it("spins while a step in it runs, saying in red what failed so far", () => {
     const html = render(items("ok", "open"), [{ ...slot("running"), startedAt: Date.now() - 5_000 }], true);
     expect(html).toMatch(/^<details class="step step-run active">/);
     expect(html).toContain('<span class="step-status">Running…</span><span class="step-time">5s</span>');
+    expect(html).not.toContain("step-failed");
+    const failing = render(items("bad", "open"), [{ ...slot("running"), startedAt: Date.now() - 5_000 }], true);
+    expect(failing).toContain('<span class="step-time">5s</span><span class="step-time step-failed">· 1 failed</span>');
+  });
+
+  it("says what failed when it stopped", () => {
+    // "open" has no result and no run goes on: stopped, after "bad" failed and "ok" succeeded.
+    const html = render(items("ok", "bad", "open"));
+    expect(html).toContain('<span class="step-status">Stopped</span><span class="step-time step-failed">· 1 failed</span>');
   });
 });

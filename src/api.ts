@@ -1,3 +1,17 @@
+import type {
+  ArtifactVersionImport,
+  ChatDumpCursor,
+  ChatImportStart,
+  ExportedChat,
+  ExportedPageValues,
+  ExportedSkill,
+  ExportedSkillFiles,
+  ExportStart,
+  ImportedSettings,
+  ImportPlan,
+  ImportPlanRequest,
+} from "../shared/data-export.ts";
+import { formatCursor, NEXT_PART_HEADER, parseCursor } from "../shared/data-export.ts";
 import { DICTATION_ROUTE, DICTATION_TYPE } from "../shared/dictation.ts";
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
@@ -8,6 +22,7 @@ import {
   SEAT_PARAM,
   SECOND_SEAT,
   SOCKET_PING,
+  type ArtifactMeta,
   type ArtifactSummary,
   type ArtifactView,
   type ChatContents,
@@ -216,4 +231,42 @@ export const api = {
   chatSocketUrl: (chatId: string) => socketUrl(chatPath(chatId, "/ws")),
   /** The sidebar's socket, which says when the chat list changed. */
   sidebarSocketUrl: () => socketUrl("/api/me/ws"),
+};
+
+/** A draft as the export holds it: as the Worker stores it (worker/storage/drafts.ts), JSON the import gives back as it came. */
+export type DraftJson = Record<string, unknown>;
+
+/** A GET's body as a blob, or null when it is not there (404); throws with the Worker's error otherwise. */
+export async function fetchBlob(url: string): Promise<{ blob: Blob; response: Response } | null> {
+  const response = await fetch(url);
+  if (response.status === 404) return null;
+  if (!response.ok) throw responseError(response, await response.json().catch(() => null));
+  return { blob: await response.blob(), response };
+}
+
+/** Export and import of everything the user has, a piece at a time (worker/data-routes.ts, src/data/). */
+export const dataApi = {
+  exportStart: () => request<ExportStart>("/api/me/export"),
+  /** One part of a chat's storage as its JSON (a ChatDumpPart), kept as a blob, and where the next part starts; null when the chat is gone. */
+  exportChatPart: async (chatId: string, cursor?: ChatDumpCursor): Promise<{ part: Blob; next?: ChatDumpCursor } | null> => {
+    const fetched = await fetchBlob(`/api/me/export/chats/${chatId}${cursor ? `?cursor=${formatCursor(cursor)}` : ""}`);
+    return fetched && { part: fetched.blob, next: parseCursor(fetched.response.headers.get(NEXT_PART_HEADER)) };
+  },
+  exportDrafts: (chatId: string) => request<DraftJson[]>(`/api/me/export/chats/${chatId}/drafts`),
+  exportArtifact: (id: string) => request<ArtifactMeta>(`/api/me/export/artifacts/${id}`),
+  exportSkillFiles: (name: string) => request<ExportedSkillFiles>(`/api/me/export/skills/${name}`),
+  plan: (body: ImportPlanRequest) => request<ImportPlan>("/api/me/import/plan", post(body)),
+  importSettings: (settings: ImportedSettings) => request<{ applied: string[] }>("/api/me/import/account", post(settings)),
+  importSkill: (skill: ExportedSkill, files: ExportedSkillFiles["files"]) => request<{ skipped?: string }>("/api/me/import/skills", post({ skill, files })),
+  /** One file at its own path; `skipped` when there is one there already. */
+  importFile: (path: string, body: Blob) => request<{ skipped?: true }>(`/api/me/import/files/${encodePath(path)}`, { method: "PUT", body }),
+  importChatBegin: (chatId: string, start: ChatImportStart) => request<object>(`/api/me/import/chats/${chatId}/begin`, post(start)),
+  /** One part, as the export holds it (a ChatDumpPart's JSON). */
+  importChatPart: (chatId: string, part: Blob) =>
+    request<object>(`/api/me/import/chats/${chatId}/rows`, { method: "POST", headers: { "content-type": "application/json" }, body: part }),
+  importChatDrafts: (chatId: string, drafts: DraftJson[]) => request<object>(`/api/me/import/chats/${chatId}/drafts`, post(drafts)),
+  importChatFinish: (chatId: string, chat: Pick<ExportedChat, "title" | "createdAt" | "updatedAt">) =>
+    request<object>(`/api/me/import/chats/${chatId}/finish`, post(chat)),
+  importArtifactVersion: (id: string, version: ArtifactVersionImport) => request<{ latest: number }>(`/api/me/import/artifacts/${id}/versions`, post(version)),
+  importPageValues: (values: ExportedPageValues[]) => request<{ imported: number }>("/api/me/import/page-values", post(values)),
 };
