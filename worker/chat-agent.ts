@@ -13,6 +13,8 @@ import {
   isOwnedBy,
   isReadOnly,
   manifestOf,
+  secondSeat,
+  secondSeatUid,
   SOCKET_NOT_A_MEMBER,
   SOCKET_PING,
   STREAM_STEP_MS,
@@ -216,6 +218,7 @@ export class ChatAgent extends DurableObject<Env> {
   readonly sockets = new ChatSockets({
     events: () => this.harness.session().events(),
     runStartedAt: (snapshot) => this.runStartedAt(snapshot),
+    toolsStartedAt: (snapshot) => this.toolsStartedAt(snapshot),
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
     queued: (ids) => this.queued(ids),
@@ -375,6 +378,26 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /**
+   * When each call of the snapshot's round that is running now started, by its call id: its tool task's first change to
+   * running. A call whose task can't be read is left out (the browser then counts from when it connected).
+   */
+  async toolsStartedAt(snapshot: SnapshotEvent): Promise<Record<string, number>> {
+    const running = snapshot.tools.filter((slot) => slot.status === "running" && slot.taskId);
+    if (!running.length) return {};
+    try {
+      const pi = await this.harness.pi();
+      // Each on its own: one task that can't be read leaves out only its call.
+      const read = (slot: (typeof running)[number]) =>
+        pi.getTask(slot.taskId!, BACKGROUND_CONTEXT).catch((error: unknown) => (console.error("tool start:", errorMessage(error)), undefined));
+      const tasks = await Promise.all(running.map(read));
+      return Object.fromEntries(running.flatMap((slot, i) => (tasks[i]?.startedAt === undefined ? [] : [[slot.callId, tasks[i].startedAt]])));
+    } catch (error) {
+      console.error("tool start:", errorMessage(error));
+      return {};
+    }
+  }
+
+  /**
    * Run this chat on another model or effort, from its next model request on, for everyone in it; or on Auto, which picks
    * them for each message that starts a run (#route), starting with the next. It also becomes the default for new chats
    * of whoever picked it, owner or member.
@@ -391,7 +414,9 @@ export class ChatAgent extends DurableObject<Env> {
       this.sockets.broadcast({ type: "auto", on: auto });
     }
     // The chat has changed by now, so a failure to remember the pick for new chats is logged, not reported as a failed change.
-    await this.#index(by.uid).setModelChoice(setting).catch((error: unknown) => console.error("model:", errorMessage(error)));
+    await this.#index(this.#account(by.uid))
+      .setModelChoice(setting)
+      .catch((error: unknown) => console.error("model:", errorMessage(error)));
   }
 
   /** Whether the chat is on Auto. */
@@ -703,7 +728,7 @@ export class ChatAgent extends DurableObject<Env> {
       this.#tellSharedOnce();
       return true;
     }
-    void this.#index(person.uid).removeSharedChat(this.chatId, this.uid);
+    if (this.#hasSidebar(person.uid)) void this.#index(person.uid).removeSharedChat(this.chatId, this.uid);
     return false;
   }
 
@@ -744,8 +769,9 @@ export class ChatAgent extends DurableObject<Env> {
     const repliesToAgent = quote !== null && "agent" in quote;
     const calling = !shared || repliesToAgent || summonsAgent(text);
     const byOwner = author.uid === this.uid;
-    // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works.
-    const own = byOwner ? [] : mentionInputs.filter((input): input is OwnFile => input.kind === "file" && input.own === true);
+    // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works. The
+    // owner's second seat has none of its own.
+    const own = this.#account(author.uid) === this.uid ? [] : mentionInputs.filter((input): input is OwnFile => input.kind === "file" && input.own === true);
     const attaching = Promise.all([
       // Someone else attaches only what they uploaded here, or a file the chat already holds: no other of the owner's.
       byOwner ? attachments : this.#attachable(author.uid, attachments),
@@ -948,7 +974,7 @@ export class ChatAgent extends DurableObject<Env> {
     if (named && titleFrom) void this.#nameChat(titleFrom, title).catch((error: unknown) => console.error("chat title:", errorMessage(error)));
     const all = title !== this.#membersTouched.title || now - this.#membersTouched.at >= MEMBERS_TOUCH_MS;
     if (all) this.#membersTouched = { title, at: now };
-    const members = this.members.list().filter((member) => all || member.uid === author.uid || tagged.has(member.uid));
+    const members = this.#listingMembers().filter((member) => all || member.uid === author.uid || tagged.has(member.uid));
     await Promise.allSettled(
       members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== author.uid, tagOf(member.uid), named)),
     );
@@ -1058,9 +1084,27 @@ export class ChatAgent extends DurableObject<Env> {
     return exports.UserDirectory.getByName(uid);
   }
 
+  /**
+   * Whose account someone in the chat is: their own, or for the owner's second seat (secondSeat) the owner's. Only
+   * someone with an account of their own has a sidebar (a directory) and files; the seat has neither.
+   */
+  #account(uid: string): string {
+    return uid === secondSeatUid(this.uid) ? this.uid : uid;
+  }
+
+  /** Whether `uid`, someone other than the owner, has a sidebar of their own that lists this chat. */
+  #hasSidebar(uid: string): boolean {
+    return this.#account(uid) === uid;
+  }
+
+  /** The members whose sidebars list this chat: all but the owner's second seat. */
+  #listingMembers(): Person[] {
+    return this.members.list().filter((member) => this.#hasSidebar(member.uid));
+  }
+
   /** The owner's directory and each member's: every sidebar that lists this chat. */
   #everyonesIndexes() {
-    return [this.#directory, ...this.members.list().map((member) => this.#index(member.uid))];
+    return [this.#directory, ...this.#listingMembers().map((member) => this.#index(member.uid))];
   }
 
   /** A single-use link's token, shown once to the owner. The chat itself decides who may: only its owner. */
@@ -1108,10 +1152,30 @@ export class ChatAgent extends DurableObject<Env> {
       await index.removeSharedChat(this.chatId, this.uid).catch(() => {});
       return refuse(403, failed.error);
     }
+    this.#joined(person);
+    return null;
+  }
+
+  /**
+   * The owner sits in the chat a second time, as a member (secondSeat), to try it as the people they share it with see
+   * it. Taken already, it is just opened again. Its windows join as the owner does, with no invite.
+   */
+  addSecondSeat(by: Person): ChatRefusal | null {
+    if (by.uid !== this.uid) return refuse(403, "Only the chat's owner can join it a second time.");
+    if (this.#gone) return refuse(404, DELETED);
+    const seat = secondSeat(by);
+    if (this.members.has(seat.uid)) return null;
+    const full = this.members.add(seat);
+    if (full) return refuse(409, full.error);
+    this.#joined(seat);
+    return null;
+  }
+
+  /** Someone new is in the chat: everyone's app and the transcript hear it, and the owner's sidebar that it is shared. */
+  #joined(person: Person): void {
     this.sockets.broadcastPeople();
     this.#notePeople(person, "joined");
     this.#tellShared();
-    return null;
   }
 
   /**
@@ -1144,7 +1208,7 @@ export class ChatAgent extends DurableObject<Env> {
     this.#tellShared();
     // The agent acts as the owner: a removed person's queued requests must not run after they are out.
     await this.#withdrawQueued(uid).catch((error: unknown) => console.error("withdraw queued:", errorMessage(error)));
-    await this.#index(uid).removeSharedChat(this.chatId, this.uid);
+    if (this.#hasSidebar(uid)) await this.#index(uid).removeSharedChat(this.chatId, this.uid);
     return null;
   }
 
@@ -1165,7 +1229,8 @@ export class ChatAgent extends DurableObject<Env> {
       title: title ?? "",
       artifacts: metas.flatMap((meta) => (meta && isOwnedBy(meta, this.uid, this.chatId) ? [{ id: meta.id, title: meta.title }] : [])),
       files: traces.files.filter((path) => stored.has(path)),
-      members: this.members.list().length,
+      // The people it is shared with: the owner's second seat is the owner.
+      members: this.#listingMembers().length,
     };
   }
 
@@ -1193,7 +1258,7 @@ export class ChatAgent extends DurableObject<Env> {
       // Only files the owner was shown, and only this chat's: never one the preview left out, nor any other path sent.
       const confirmed = new Set(files);
       const toDelete = traces.files.filter((path) => confirmed.has(path));
-      const members = this.members.list();
+      const members = this.#listingMembers();
       this.sockets.disconnect();
       await Promise.all([
         ...members.map((member) => this.#index(member.uid).removeSharedChat(this.chatId, this.uid)),
@@ -1453,6 +1518,7 @@ interface Routing {
 interface ChatSession {
   events(): Promise<AgentEventStream>;
   runStartedAt(snapshot: SnapshotEvent): Promise<number | undefined>;
+  toolsStartedAt(snapshot: SnapshotEvent): Promise<Record<string, number>>;
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
   queued(ids: readonly number[]): Promise<QueuedMessage[]>;
@@ -1468,6 +1534,13 @@ interface ChatSession {
 /** How long a socket's attach may take to send its snapshot (see ChatSockets.#attach). */
 const ATTACH_MS = 30_000;
 
+/**
+ * A socket attaches again at once when pi ends its stream, but at most once in this long: when pi ends it again sooner,
+ * the socket waits for its next message (or the object's next start). Otherwise a pi that fails each time it opens
+ * would be opened again and again, for every socket.
+ */
+const REATTACH_MS = 10_000;
+
 /** An attach that did not send its snapshot in time. */
 class AttachStalled extends Error {}
 
@@ -1481,11 +1554,13 @@ type SocketAttachment = { owner: typeof OWNER; person: Person; sent?: string };
  * The chat's browser connections, one or more per person in the chat. Each
  * socket gets its own pi event stream: a snapshot of the conversation first,
  * then one batch per commit. Sockets hibernate; after the object restarts,
- * streams are reattached in onStart.
+ * streams are reattached in onStart, and a stream pi ends is replaced at once.
  */
 class ChatSockets extends LifecycleCapability implements DurableObjectCapability {
   readonly #chat: ChatSession;
   readonly #streams = new Map<WebSocket, Promise<AgentEventStream>>();
+  /** When each socket was last attached again because pi ended its stream (see REATTACH_MS). */
+  readonly #reattached = new WeakMap<WebSocket, number>();
 
   constructor(chat: ChatSession) {
     super("chat-sockets");
@@ -1628,29 +1703,55 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
     let step = "opening the conversation";
     const opening = (async () => {
       const events = await this.#chat.events();
-      step = "reading its run and queue";
+      // A stream pi ended itself delivers nothing more: its session closed (a storage error fails it, and pi opens again
+      // for the next prompt or wake). The socket stays open, and every later attach would find the dead stream, so the
+      // page heard nothing until it was reloaded. Follow the conversation on a new stream: its snapshot brings what the
+      // socket missed. A stream this class stopped has left #streams already. Followed from here, as the session can
+      // close while the snapshot below is read, and a stream that has ended cannot be started.
+      let ended = false;
+      void events.closed.then((end) => {
+        ended = true;
+        if (end.reason === "stopped" || this.#streams.get(ws) !== attached) return;
+        const cause = "error" in end ? `: ${errorMessage(end.error)}` : "";
+        this.#streams.delete(ws);
+        const now = Date.now();
+        const again = ws.readyState === WebSocket.OPEN && now - (this.#reattached.get(ws) ?? -Infinity) >= REATTACH_MS;
+        const next = again ? "attaching again" : "waiting for the socket's next message";
+        console.error(`chat socket: events ended (${end.reason}${cause}), ${next}`);
+        if (!again) return;
+        this.#reattached.set(ws, now);
+        void this.#attach(ws);
+      });
+      step = "reading its run, calls and queue";
       const attachment = ws.deserializeAttachment() as SocketAttachment;
       send(ws, { type: "people", people: this.#chat.peopleFor(attachment.person.uid) });
       send(ws, { type: "reactions", reactions: this.#chat.reactions() });
       // After events(): a new chat that starts on Auto is set so as pi opens it.
       send(ws, { type: "auto", on: this.#chat.auto() });
-      const snapshot = await this.#events([events.snapshot]);
-      // Not by runElapsedMs, which changes with the time it is sent at.
+      // Timed only once it is to be sent: a wake attaches every socket again, and most find their snapshot already sent.
+      const snapshot = await this.#events([events.snapshot], false);
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
-      if (sent !== attachment.sent && send(ws, snapshot)) ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
-      events.start(async (batch) => {
-        if (!send(ws, await this.#events(batch))) await this.#detach(ws);
-      });
+      if (sent !== attachment.sent && send(ws, { ...snapshot, ...(await this.#timing(events.snapshot)) })) {
+        ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
+      }
+      // Ended meanwhile, it has been replaced above (or left for the socket's next message).
+      if (!ended) {
+        events.start(async (batch) => {
+          if (!send(ws, await this.#events(batch))) await this.#detach(ws);
+        });
+      }
       return events;
     })();
     const attached = deadline(opening, ATTACH_MS, () => new AttachStalled(`no snapshot after ${ATTACH_MS / 1000} s, stuck ${step}`));
     this.#streams.set(ws, attached);
     attached.catch((error) => {
+      // Should the stream come after all, it goes unused.
+      if (error instanceof AttachStalled) void opening.then((events) => events.stop()).catch(() => {});
+      // Detached, or replaced as pi ended the stream it was opening: the socket has nothing more to hear from this one.
+      if (this.#streams.get(ws) !== attached) return;
       this.#streams.delete(ws);
       if (error instanceof AttachStalled) {
         console.error("chat socket:", error.message);
-        // Should the stream come after all, it goes unused.
-        void opening.then((events) => events.stop()).catch(() => {});
         close(ws, 1011, "Reconnect");
         // A close the chat makes itself may never come back as onWebSocketClose: the others hear of it now.
         this.#broadcastPresence(new Set([ws]));
@@ -1662,19 +1763,29 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
   }
 
   /**
-   * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run has gone;
-   * a batch that changes pi's inbox, with the people's messages waiting in it.
+   * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run and its
+   * running calls have gone, unless `timed` is false; a batch that changes pi's inbox, with the people's messages waiting in it.
    */
-  async #events(batch: readonly AgentEvent[]): Promise<Extract<ChatServerMessage, { type: "events" }>> {
+  async #events(batch: readonly AgentEvent[], timed = true): Promise<Extract<ChatServerMessage, { type: "events" }>> {
     const snapshot = batch.findLast((event) => event.type === "snapshot");
     const ids = inboxIds(batch);
-    const [started, queued] = await Promise.all([
-      snapshot && this.#chat.runStartedAt(snapshot),
+    const [timing, queued] = await Promise.all([
+      snapshot && timed ? this.#timing(snapshot) : undefined,
       // Only a view of what pi has queued: without it the chat still works.
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
-    const runElapsedMs = started === undefined ? undefined : Math.max(0, Date.now() - started);
-    return { type: "events", events: batch.map((event) => withoutImageData(withoutSystemPrompt(event))), runElapsedMs, ...(queued && { queued }) };
+    return { type: "events", events: batch.map((event) => withoutImageData(withoutSystemPrompt(event))), ...timing, ...(queued && { queued }) };
+  }
+
+  /** How long the snapshot's run and its running calls have gone, by the server's clock. */
+  async #timing(snapshot: SnapshotEvent): Promise<Pick<ChatServerMessage & { type: "events" }, "runElapsedMs" | "toolsElapsedMs">> {
+    const [started, toolsStarted] = await Promise.all([this.#chat.runStartedAt(snapshot), this.#chat.toolsStartedAt(snapshot)]);
+    const now = Date.now();
+    const since = (at: number) => Math.max(0, now - at);
+    return {
+      runElapsedMs: started === undefined ? undefined : since(started),
+      toolsElapsedMs: Object.fromEntries(Object.entries(toolsStarted).map(([id, at]) => [id, since(at)])),
+    };
   }
 
   async #detach(ws: WebSocket): Promise<void> {

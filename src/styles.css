@@ -347,10 +347,11 @@ body.resizing iframe { pointer-events: none; }
 .press-menu button svg { width: 18px; height: 18px; color: var(--muted); }
 .press-menu button:active, .press-menu button:focus-visible { background: var(--surface-2); }
 .press-toast { position: fixed; left: 50%; bottom: 96px; z-index: 50; translate: -50% 0; padding: 8px 14px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px; }
-/* Over the first message of each day: the day, between two wavy lines. */
-.day-separator { display: flex; align-items: center; gap: 12px; margin: 4px 0; color: var(--muted); font-size: 13px; }
-.day-separator::before, .day-separator::after {
-  content: ""; flex: 1; height: 6px; background: var(--border);
+/* Over the first message of each day: the day, between two wavy lines. Over the first one the reader has not seen: "New", the same in the accent colour. */
+.day-separator, .new-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0; color: var(--muted); font-size: 13px; }
+.new-divider { color: var(--accent); --rule: color-mix(in srgb, var(--accent) 70%, transparent); }
+.day-separator::before, .day-separator::after, .new-divider::before, .new-divider::after {
+  content: ""; flex: 1; height: 6px; background: var(--rule, var(--border));
   --wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3Q3 .5 6 3T12 3' fill='none' stroke='black' stroke-width='1.3'/%3E%3C/svg%3E") repeat-x center / 12px 6px;
   -webkit-mask: var(--wave);
   mask: var(--wave);
@@ -412,6 +413,8 @@ button.reaction:hover { border-color: var(--muted); }
 .share-warning { margin: 0; font-size: 13px; color: var(--muted); }
 .invite-link { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
 .invite-link input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.second-seat { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; padding-top: 8px; border-top: 1px solid var(--border); }
+.second-seat a { color: var(--accent); }
 .invite-link small { flex-basis: 100%; }
 /* Markdown replies: the bubble's pre-wrap would double the spacing Markdown already gives. */
 .bubble.markdown { white-space: normal; }
@@ -456,6 +459,8 @@ button.reaction:hover { border-color: var(--muted); }
 .step[open] .step-hint { display: none; }
 .step-status { flex: none; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .step.error .step-status { color: var(--error); }
+/* A running step's count (RunningFor in Steps.tsx), beside its shimmering status. */
+.step-time { flex: none; margin-left: -4px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .step-chevron { flex: none; align-self: center; width: 12px; height: 12px; margin-left: -4px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.15s; }
 .step > summary:hover .step-chevron { stroke: var(--text); }
 .step[open] .step-chevron { transform: rotate(90deg); }

@@ -1,7 +1,7 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
-import type { ChatPeopleView, CreatedInvite } from "../../shared/protocol.ts";
+import { secondSeatUid, type ChatPeopleView, type CreatedInvite } from "../../shared/protocol.ts";
 import { errorMessage } from "../../shared/util.ts";
-import { api } from "../api.ts";
+import { api, secondSeatPath } from "../api.ts";
 
 interface Props {
   chatId: string;
@@ -13,7 +13,10 @@ interface Props {
   onClose: () => void;
 }
 
-/** The chat's people. Its owner invites by link and removes members; a member can leave. */
+/**
+ * The chat's people. Its owner invites by link, removes members, and can join a second time as a member (secondSeat)
+ * to try the chat as they see it; a member can leave.
+ */
 export function SharePanel({ chatId, uid, isOwner, people, onLeft, onClose }: Props) {
   const [created, setCreated] = useState<CreatedInvite | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,8 +46,27 @@ export function SharePanel({ chatId, uid, isOwner, people, onLeft, onClose }: Pr
       setCreated(invite);
     });
 
+  const seatUid = secondSeatUid(people.owner.uid);
+  const seat = people.members.find((member) => member.uid === seatUid);
+  // The tab opens at the click, as a browser allows, and goes to the chat once the seat is there.
+  const joinSecondSeat = () =>
+    void act(async () => {
+      const tab = window.open("", "_blank");
+      try {
+        await api.joinSecondSeat(chatId);
+        if (tab) tab.location.href = secondSeatPath(chatId);
+      } catch (e) {
+        tab?.close();
+        throw e;
+      }
+    });
+
   const leave = () => {
-    if (!confirm("Leave this chat? You need a new invite to come back.")) return;
+    const question =
+      uid === seatUid
+        ? "Leave this chat as your second seat? You can join again from Share in your own window."
+        : "Leave this chat? You need a new invite to come back.";
+    if (!confirm(question)) return;
     void act(async () => {
       await api.removeMember(chatId, uid);
       onLeft();
@@ -81,6 +103,7 @@ export function SharePanel({ chatId, uid, isOwner, people, onLeft, onClose }: Pr
         {people.members.map((member) => (
           <li key={member.uid}>
             {member.name} {member.uid === uid && <small>you</small>}
+            {isOwner && member.uid === seatUid && <small>you, second seat</small>}
             {isOwner && (
               <button type="button" onClick={() => void act(() => api.removeMember(chatId, member.uid))}>
                 Remove
@@ -115,6 +138,18 @@ export function SharePanel({ chatId, uid, isOwner, people, onLeft, onClose }: Pr
               <small>Works once, until {new Date(created.expiresAt).toLocaleString()}. Only shown now.</small>
             </div>
           )}
+          <div className="second-seat">
+            {seat ? (
+              <a href={secondSeatPath(chatId)} target="_blank" rel="noreferrer">
+                Open as {seat.name}
+              </a>
+            ) : (
+              <button type="button" onClick={joinSecondSeat}>
+                Join as a second person
+              </button>
+            )}
+            <small>Try the chat as the people you invite see it: you join as a member in another tab, with this same sign-in.</small>
+          </div>
         </>
       ) : (
         <button type="button" onClick={leave}>

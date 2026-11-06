@@ -82,7 +82,7 @@ describe("chat reducer", () => {
       ] as never,
     });
     expect(state.tools).toEqual([
-      { toolCallId: "a", toolName: "run_python", output: "step 1\n", status: "running" },
+      { toolCallId: "a", toolName: "run_python", output: "step 1\n", status: "running", startedAt: 0 },
       { toolCallId: "b", toolName: "run_bash", output: "", status: "pending" },
       // Done without a result entry: it faulted or was orphaned.
       { toolCallId: "d", toolName: "run_bash", output: "", status: "stopped" },
@@ -92,7 +92,7 @@ describe("chat reducer", () => {
   it("follows a call from its start to its end, and keeps one that ended without a result as stopped", () => {
     const call = { toolName: "run_python" };
     let state = reduce(empty, { type: "events", at: 0, events: [{ type: "tool_execution_start", toolCallId: "a", ...call, args: {} }] as never });
-    expect(state.tools).toEqual([{ toolCallId: "a", toolName: "run_python", output: "", status: "running" }]);
+    expect(state.tools).toEqual([{ toolCallId: "a", toolName: "run_python", output: "", status: "running", startedAt: 0 }]);
     state = reduce(state, { type: "events", at: 0, events: [{ type: "tool_execution_end", toolCallId: "a", ...call }] as never });
     expect(state.tools[0].status).toBe("stopped");
     const entry = { id: "r", kind: "pi.tool-result", model: [] };

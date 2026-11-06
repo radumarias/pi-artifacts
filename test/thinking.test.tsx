@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { THINKING_WORDS, Thinking, formatElapsed, nextWord } from "../src/chat/Thinking.tsx";
+import { formatElapsed } from "../src/chat/elapsed.ts";
+import { THINKING_WORDS, Thinking, nextWord } from "../src/chat/Thinking.tsx";
 import { reduce, unansweredCalls, waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
 
 const idle: ChatState = { entries: [], tools: [], busy: false, queued: [] };
@@ -99,5 +100,22 @@ describe("elapsed time", () => {
     const running = reduce(idle, { type: "events", at: 5_000, events: [{ type: "run_start", inputs: [] }] as never });
     const again = reduce(running, { type: "events", at: 20_000, events: [{ type: "snapshot", entries: [], tools: [], run: { inputs: [] } }] as never });
     expect(again.runStartedAt).toBe(5_000);
+  });
+
+  it("times each running call: from its start, else the server's duration, else the start it knows, else the snapshot", () => {
+    const call = { toolName: "run_python" };
+    const started = reduce(busy, { type: "events", at: 5_000, events: [{ type: "tool_execution_start", toolCallId: "a", ...call, args: {} }] as never });
+    expect(started.tools[0].startedAt).toBe(5_000);
+    const slots = [
+      { callId: "a", name: "run_python", status: "running" },
+      { callId: "b", name: "run_python", status: "running" },
+      { callId: "c", name: "run_python", status: "running" },
+      { callId: "d", name: "run_python", status: "pending" },
+    ];
+    const snapshot = { type: "snapshot", entries: [], tools: slots, run: { inputs: [] } };
+    const again = reduce(started, { type: "events", at: 20_000, toolsElapsedMs: { b: 3_000, c: -1 }, events: [snapshot] as never });
+    expect(again.tools.map((t) => t.startedAt)).toEqual([5_000, 17_000, 20_000, undefined]);
+    const fresh = reduce(idle, { type: "events", at: 20_000, events: [snapshot] as never });
+    expect(fresh.tools[0].startedAt).toBe(20_000);
   });
 });

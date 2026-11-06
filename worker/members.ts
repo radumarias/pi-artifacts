@@ -149,7 +149,19 @@ export class ChatMembers {
     const refused = this.#refusal(secretHash, now);
     if (refused) return refused;
     this.#sql.exec("DELETE FROM chat_invites WHERE secret_hash = ?", secretHash);
-    this.#sql.exec("INSERT INTO chat_members (uid, name, joined_at) VALUES (?, ?, ?)", person.uid, person.name, now);
+    this.#insert(person, now);
     return null;
+  }
+
+  /** Add someone not yet a member, with no invite: the owner's second seat (secondSeat), which the owner adds for themselves. */
+  add(person: Person, now = Date.now()): { error: string } | null {
+    const full = this.#full();
+    if (full) return full;
+    this.#insert(person, now);
+    return null;
+  }
+
+  #insert(person: Person, now: number): void {
+    this.#sql.exec("INSERT INTO chat_members (uid, name, joined_at) VALUES (?, ?, ?)", person.uid, person.name, now);
   }
 }

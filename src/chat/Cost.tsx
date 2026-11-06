@@ -4,7 +4,7 @@ import { AUTO_LEDGER_PREFIX, effortLabel, type ModelInfo } from "../../shared/mo
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
 import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
-import { formatElapsed } from "./Thinking.tsx";
+import { formatElapsed } from "./elapsed.ts";
 
 /** Where the time went, for a tooltip: "model replies 48s (3), tools 31s (2)". */
 function describeTime(time: Timing): string {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatElapsed, useElapsed } from "./elapsed.ts";
 
 /** Playful status words shown while the agent waits on the model. */
 export const THINKING_WORDS = [
@@ -33,32 +34,18 @@ export function nextWord(current?: string, random = Math.random): string {
   return choices[Math.floor(random() * choices.length)];
 }
 
-/** Time since `ms` ago, the way a stopwatch reads it: "12s", "2m 21s", "2m", "1h 5m". */
-export function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1_000));
-  const [hours, minutes] = [Math.floor(seconds / 3_600), Math.floor(seconds / 60) % 60];
-  if (hours) return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
-  if (minutes) return seconds % 60 ? `${minutes}m ${seconds % 60}s` : `${minutes}m`;
-  return `${seconds}s`;
-}
-
 /**
  * Three pulsing dots, a rotating status word with a shimmer, and the time since the run started. Screen readers hear
  * "Working" once, not every word or second; with reduced motion the word stays put and styles.css stops the animations.
  */
 export function Thinking({ since }: { since: number }) {
   const [word, setWord] = useState(() => nextWord());
-  const [now, setNow] = useState(Date.now);
+  const elapsed = useElapsed(since);
   useEffect(() => {
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const timer = setInterval(() => setWord((current) => nextWord(current)), WORD_MS);
     return () => clearInterval(timer);
   }, []);
-  // Tick on each whole second since the start, so the count turns over on time and never skips or repeats a second.
-  useEffect(() => {
-    const timer = setTimeout(() => setNow(Date.now()), 1_000 - ((((now - since) % 1_000) + 1_000) % 1_000));
-    return () => clearTimeout(timer);
-  }, [now, since]);
   return (
     <div className="thinking" role="status">
       <span className="thinking-dots" aria-hidden="true">
@@ -71,7 +58,7 @@ export function Thinking({ since }: { since: number }) {
         {word}
       </span>
       <span className="thinking-time" aria-hidden="true">
-        {formatElapsed(now - since)}
+        {formatElapsed(elapsed)}
       </span>
       <span className="sr-only">Working…</span>
     </div>

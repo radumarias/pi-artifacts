@@ -1,4 +1,4 @@
-import { UID_PATTERN } from "../../shared/protocol.ts";
+import { isSecondSeatUid, UID_PATTERN } from "../../shared/protocol.ts";
 import { sha256Hex } from "../../shared/util.ts";
 import { AccessError, verifyAccessJwt } from "./access.ts";
 
@@ -17,7 +17,7 @@ export const DEMO_COOKIE = "pi_uid";
 export async function identify(request: Request, env: Env): Promise<Identity | null> {
   if (env.AUTH_MODE === "demo") {
     const uid = cookieValue(request, DEMO_COOKIE);
-    return uid && UID_PATTERN.test(uid) ? { uid } : null;
+    return uid && UID_PATTERN.test(uid) && !isSecondSeatUid(uid) ? { uid } : null;
   }
 
   const token = request.headers.get("cf-access-jwt-assertion") ?? cookieValue(request, "CF_Authorization");
