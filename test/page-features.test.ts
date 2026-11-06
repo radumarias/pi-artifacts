@@ -1,7 +1,8 @@
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { PAGE_AI_LIMITS, PAGE_STORAGE_LIMITS } from "../shared/protocol.ts";
-import { askPageModel, checkChanges, checkPageAiRequest, jsonIn, mergeValues } from "../worker/artifacts/page-features.ts";
+import { jsonIn } from "../shared/util.ts";
+import { askPageModel, checkChanges, checkPageAiRequest, mergeValues } from "../worker/artifacts/page-features.ts";
 
 describe("page storage", () => {
   it("puts the viewer's own values over the author's, and a removed one stays removed", () => {
@@ -71,7 +72,7 @@ describe("askPageModel", () => {
       },
     };
     const answer = await askPageModel(models as never, [model("first"), model("second", true)], { ...request, json: true });
-    expect(answer).toMatchObject({ ok: true, json: { order: ["revenue"] }, model: "second", usage });
+    expect(answer).toMatchObject({ ok: true, json: { order: ["revenue"] }, usage });
     expect(asked.map((a) => a.id)).toEqual(["first", "second"]);
     expect(asked[1].maxTokens).toBeGreaterThan(500);
     expect(asked[1].system).toMatch(/JSON/);
@@ -100,6 +101,7 @@ describe("askPageModel", () => {
         { role: "assistant", content: "two" },
         { role: "user", content: "three" },
       ],
+      maxTokens: 100,
     });
     expect(seen).toMatchObject([
       { role: "user", content: "one" },

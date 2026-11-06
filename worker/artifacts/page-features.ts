@@ -1,7 +1,8 @@
-import type { Api, AssistantMessage, Context, Model, Models, Usage } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type Api, type AssistantMessage, type Context, type Model, type Models, type ModelThinkingLevel, type Usage } from "@earendil-works/pi-ai";
 import { textOf } from "../../shared/canonical.ts";
 import { PAGE_AI_LIMITS, PAGE_STORAGE_LIMITS, type PageAiRequest, type PageError } from "../../shared/protocol.ts";
-import { clip, errorMessage } from "../../shared/util.ts";
+import { clip, errorMessage, isObject, jsonIn } from "../../shared/util.ts";
+import { NO_USAGE } from "../agent/route.ts";
 
 // The parts of a page's saved values and model calls that need no Worker: checks, merging, the model call itself.
 // The routes are in page-routes.ts.
@@ -19,7 +20,7 @@ export function mergeValues(defaults: Record<string, string | null>, own: Record
 
 /** The changes a page sent, checked: keys and values within PAGE_STORAGE_LIMITS, null for a removed key. */
 export function checkChanges(changes: unknown): Record<string, string | null> | string {
-  if (!changes || typeof changes !== "object" || Array.isArray(changes)) return "Expected {changes: {key: value or null}}.";
+  if (!isObject(changes)) return "Expected {changes: {key: value or null}}.";
   const entries = Object.entries(changes);
   if (entries.length > PAGE_STORAGE_LIMITS.keys) return `A write changes at most ${PAGE_STORAGE_LIMITS.keys} keys.`;
   for (const [key, value] of entries) {
@@ -41,10 +42,13 @@ export function checkChanges(changes: unknown): Record<string, string | null> | 
 const REASONING_TOKENS = 2_000;
 const JSON_INSTRUCTION = "Reply with one JSON value and nothing else: no prose, no Markdown fence.";
 
+/** A page's request as checked: with how long the answer may be. */
+export type CheckedPageAiRequest = PageAiRequest & { maxTokens: number };
+
 /** The request a page sent, checked; a string says what is wrong with it. */
-export function checkPageAiRequest(body: unknown): PageAiRequest | string {
-  if (!body || typeof body !== "object") return "Expected { system?, messages, maxTokens?, json? }.";
-  const { system, messages, maxTokens, json } = body as Record<string, unknown>;
+export function checkPageAiRequest(body: unknown): CheckedPageAiRequest | string {
+  if (!isObject(body)) return "Expected { system?, messages, maxTokens?, json? }.";
+  const { system, messages, maxTokens, json } = body;
   if (system !== undefined && typeof system !== "string") return "system must be a string.";
   if (typeof system === "string" && system.length > PAGE_AI_LIMITS.systemChars) return `system is at most ${PAGE_AI_LIMITS.systemChars} characters.`;
   if (!Array.isArray(messages) || messages.length === 0 || messages.length > PAGE_AI_LIMITS.messages) {
@@ -69,20 +73,20 @@ export function checkPageAiRequest(body: unknown): PageAiRequest | string {
 }
 
 /** What a page's model answered, and what it cost. */
-export type PageAiAnswer = { ok: true; text: string; json?: unknown; model: string; usage: Usage } | { ok: false; error: PageError; usage?: Usage };
+export type PageAiAnswer = { ok: true; text: string; json?: unknown; usage: Usage } | { ok: false; error: PageError; usage?: Usage };
 
 /**
  * Ask the first of `candidates` that answers. A model that fails passes the request to the next one; a reply that
  * is not the JSON asked for is `bad_output` (it was answered and paid for, so no other model is asked).
  */
-export async function askPageModel(models: Pick<Models, "completeSimple">, candidates: readonly Model<Api>[], request: PageAiRequest): Promise<PageAiAnswer> {
+export async function askPageModel(models: Pick<Models, "completeSimple">, candidates: readonly Model<Api>[], request: CheckedPageAiRequest): Promise<PageAiAnswer> {
   const failures: string[] = [];
   for (const model of candidates) {
     let reply: AssistantMessage;
     try {
       reply = await models.completeSimple(model, context(model, request), {
-        maxTokens: (request.maxTokens ?? PAGE_AI_LIMITS.defaultMaxTokens) + (model.reasoning ? REASONING_TOKENS : 0),
-        ...(model.reasoning && { reasoning: "low" as const }),
+        maxTokens: request.maxTokens + (model.reasoning ? REASONING_TOKENS : 0),
+        ...(model.reasoning && { reasoning: clampThinkingLevel(model, "low") as Exclude<ModelThinkingLevel, "off"> }),
         signal: AbortSignal.timeout(60_000),
       });
     } catch (error) {
@@ -94,10 +98,10 @@ export async function askPageModel(models: Pick<Models, "completeSimple">, candi
       continue;
     }
     const text = textOf(reply.content, "").trim();
-    if (!request.json) return { ok: true, text, model: model.id, usage: reply.usage };
+    if (!request.json) return { ok: true, text, usage: reply.usage };
     const json = jsonIn(text);
     if (json === undefined) return { ok: false, error: { code: "bad_output", message: `The model did not answer with JSON: ${clip(text, 200)}` }, usage: reply.usage };
-    return { ok: true, text, json, model: model.id, usage: reply.usage };
+    return { ok: true, text, json, usage: reply.usage };
   }
   if (failures.length) console.error("page ai:", failures.join("; "));
   return { ok: false, error: { code: "unavailable", message: candidates.length ? "The model did not answer; try again in a moment." : "This app has no model for pages." } };
@@ -117,25 +121,10 @@ function context(model: Model<Api>, request: PageAiRequest): Context {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            usage: NO_USAGE,
             stopReason: "stop",
             timestamp,
           },
     ),
   };
-}
-
-/** The JSON value a reply holds: all of it, else a fenced block, else from its first bracket to its last. */
-export function jsonIn(text: string): unknown {
-  const attempts = [text, /```(?:json)?\s*([\s\S]*?)```/i.exec(text)?.[1]];
-  const start = text.search(/[[{]/);
-  const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
-  if (start >= 0 && end > start) attempts.push(text.slice(start, end + 1));
-  for (const attempt of attempts) {
-    if (attempt === undefined) continue;
-    try {
-      return JSON.parse(attempt.trim());
-    } catch {}
-  }
-  return undefined;
 }

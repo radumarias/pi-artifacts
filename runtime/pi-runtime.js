@@ -38,8 +38,8 @@
 
   const namespaces = new Map();
   function use(name) {
-    const make = name === "mcp" ? createMcp : name === "storage" ? createStorage : name === "ai" ? createAi : null;
-    if (!make) return Promise.resolve(null);
+    const make = { mcp: createMcp, storage: createStorage, ai: createAi }[name];
+    if (typeof make !== "function") return Promise.resolve(null);
     if (!namespaces.has(name)) namespaces.set(name, connected().then((l) => (l ? make(l) : null)));
     return namespaces.get(name);
   }
@@ -109,8 +109,9 @@
     if (!signal) return call;
     if (signal.aborted) return Promise.reject(piError({ code: "cancelled", message: "aborted" }));
     return new Promise((resolve, reject) => {
-      signal.addEventListener("abort", () => reject(piError({ code: "cancelled", message: "aborted" })), { once: true });
-      call.then(resolve, reject);
+      const abort = () => reject(piError({ code: "cancelled", message: "aborted" }));
+      signal.addEventListener("abort", abort, { once: true });
+      call.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
     });
   }
 
@@ -193,19 +194,13 @@
 
   // What a page saves (pi.use("storage")): the viewer's own values for this page over the author's, loaded once and
   // read synchronously; changes go back in the background, a short while after the last one. The localStorage
-  // stand-in below is the same store.
-  const LIMITS = { keyChars: 256, valueChars: 100_000, totalChars: 500_000, keys: 500 };
+  // stand-in below is the same store. The Worker puts its limits in when it serves the page (worker/artifacts/serve.ts).
+  const LIMITS = __PAGE_STORAGE_LIMITS__;
   const WRITE_DELAY_MS = 500;
   const saved = { values: new Map(), changes: new Map(), isAuthor: false, link: null, timer: 0 };
 
   function quotaError(message) {
     return new DOMException(message, "QuotaExceededError");
-  }
-
-  function savedChars(values) {
-    let total = 0;
-    for (const [key, value] of values) total += key.length + value.length;
-    return total;
   }
 
   function change(key, value) {
@@ -250,10 +245,7 @@
       if (key.length > LIMITS.keyChars) throw quotaError(`A key is at most ${LIMITS.keyChars} characters.`);
       if (value.length > LIMITS.valueChars) throw quotaError(`A value is at most ${LIMITS.valueChars} characters.`);
       if (saved.values.get(key) === value) return;
-      const next = new Map(saved.values).set(key, value);
-      if (next.size > LIMITS.keys) throw quotaError(`A page saves at most ${LIMITS.keys} keys.`);
-      if (savedChars(next) > LIMITS.totalChars) throw quotaError(`A page saves at most ${LIMITS.totalChars} characters.`);
-      saved.values = next;
+      saved.values.set(key, value);
       change(key, value);
     },
     removeItem(key) {
@@ -347,8 +339,7 @@
         if (!body || !Array.isArray(body.messages) || !checkJson(body)) {
           return Promise.reject(badRequest("complete takes a prompt or { system?, messages, maxTokens?, json? }"));
         }
-        const params = { system: body.system, messages: body.messages, maxTokens: body.maxTokens, json: body.json === true };
-        return abortable(link.request("ai", params), options.signal);
+        return abortable(link.request("ai", body), options.signal);
       },
     });
   }

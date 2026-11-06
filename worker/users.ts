@@ -582,8 +582,8 @@ export class UserDirectory extends DurableObject<Env> {
 class PageLimitError extends Error {}
 
 /** Today, as YYYY-MM-DD in UTC. */
-function utcDay(now = Date.now()): string {
-  return new Date(now).toISOString().slice(0, 10);
+function utcDay(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 const packageFiles = (row: Pick<SkillRow, "files"> | undefined) => (row?.files ? (JSON.parse(row.files) as SkillPackageFiles) : null);

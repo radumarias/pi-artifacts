@@ -1,5 +1,8 @@
-import RUNTIME from "../../runtime/pi-runtime.js?raw";
-import { ARTIFACT_SANDBOX } from "../../shared/protocol.ts";
+import RUNTIME_SOURCE from "../../runtime/pi-runtime.js?raw";
+import { ARTIFACT_SANDBOX, PAGE_STORAGE_LIMITS } from "../../shared/protocol.ts";
+
+/** The page runtime as pages get it: with the storage limits the Worker holds them to. */
+const RUNTIME = RUNTIME_SOURCE.replace("__PAGE_STORAGE_LIMITS__", JSON.stringify(PAGE_STORAGE_LIMITS));
 
 /** The only hosts a page may load scripts from, as on claude.ai. */
 export const SCRIPT_HOSTS = [

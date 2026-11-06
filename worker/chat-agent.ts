@@ -1,6 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai/models";
-import type { Models, Provider, UserMessage } from "@earendil-works/pi-ai";
+import type { Models, UserMessage } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentChange, type AgentState, type Submission, type Conversation, type Cursor, type EntryId, type EntryRecord, type Extension, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { PiHarness, skills } from "agents/harness/pi";
@@ -105,10 +104,8 @@ import {
   checkSetting,
   currentCatalog,
   defaultModelChoice,
-  listedProviders,
+  piModels,
   loadCatalog,
-  withCurrentPrices,
-  withEffortRecorded,
   type Catalog,
 } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
@@ -181,17 +178,6 @@ interface SkillsFor {
   recent: RecentEntries;
 }
 
-/**
- * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
- * Gemini's tool calls signed: AI Gateway's catalog and Workers AI's through `provider`, and the models the providers list
- * (as this isolate's catalog has them now) through one pi provider each.
- */
-function piModels(provider: Provider, gemini: GeminiCompat) {
-  const models = createModels();
-  models.setProvider(withCurrentPrices(provider));
-  for (const listed of listedProviders(provider, currentCatalog)) models.setProvider(listed);
-  return gemini.models(withEffortRecorded(models));
-}
 
 /** The name of a user's chat object. The uid must come from a verified identity: it is what keeps users apart. */
 export function chatAgentName(uid: string, chatId: string): string {

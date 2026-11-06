@@ -18,7 +18,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { textOf } from "../../shared/canonical.ts";
 import { COMPACTION, modelKey, pricePerMillion, type AutoCandidate, type ModelInfo } from "../../shared/models.ts";
 import { CHAT_MESSAGE_KIND, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
-import { clip, errorMessage, isObject, plural } from "../../shared/util.ts";
+import { clip, errorMessage, isObject, jsonIn, plural } from "../../shared/util.ts";
 import { gatewayFetch, type GatewayOptions } from "../gateway-models.ts";
 import { bindingClassifierOptions, systemOneModel, type ModelRunner } from "./workers-ai.ts";
 import { DEFAULT_CONTEXT_WINDOW, thinkingLevelOf, type Catalog } from "../models.ts";
@@ -210,15 +210,7 @@ function effortOf(value: unknown): ModelThinkingLevel | undefined {
  * for a reply that names none. The effort is as named; the chat moves one the model does not take to the nearest it does.
  */
 export function parsePick(reply: string, candidates: readonly Candidate[]): RoutePick | undefined {
-  const start = reply.indexOf("{");
-  const end = reply.lastIndexOf("}");
-  if (start < 0 || end <= start) return undefined;
-  let value: unknown;
-  try {
-    value = JSON.parse(reply.slice(start, end + 1));
-  } catch {
-    return undefined;
-  }
+  const value = jsonIn(reply);
   if (!isObject(value)) return undefined;
   return pickOf(candidates, value.model, value.effort, value.reason);
 }

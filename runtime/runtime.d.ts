@@ -56,8 +56,9 @@ interface Pi {
  *
  * Values load once, when `use("storage")` resolves; from then on reads and writes are synchronous, like localStorage,
  * and writes are saved in the background half a second after the last one. Await it before the first read that
- * decides the layout. Strings only: JSON.stringify objects. Limits: keys up to 256 characters, a value up to 100 000,
- * 500 keys and 500 000 characters per viewer and page; going over throws a QuotaExceededError.
+ * decides the layout. Strings only: JSON.stringify objects. Limits: keys up to 256 characters and a value up to
+ * 100 000 (more throws a QuotaExceededError), and 500 keys and 500 000 characters of the viewer's own per page (a write
+ * over those is refused: flush() rejects with `too_large`, and the page keeps the value only until it is reloaded).
  *
  * `window.localStorage` is this same store (the frame's opaque origin has no localStorage of its own), so a library
  * that saves its state there keeps it; it reads empty until `use("storage")` resolved. sessionStorage lives as long

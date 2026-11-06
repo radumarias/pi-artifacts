@@ -167,9 +167,10 @@ export class ArtifactBroker {
         reply(true, { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations });
       } else if (method === "storage" || method === "ai") {
         // The Worker checks what the page sends; these go on as they are, answered with what came back.
-        const { ok, ...rest } = await (method === "storage" ? this.#o.pageStorage(params) : this.#o.pageAi(params));
-        if (ok) reply(true, rest);
-        else reply(false, (rest as { error: unknown }).error);
+        const response = await (method === "storage" ? this.#o.pageStorage(params) : this.#o.pageAi(params));
+        if (!response.ok) return reply(false, response.error);
+        const { ok: _ok, ...value } = response;
+        reply(true, value);
       } else {
         reply(false, { code: "bad_request", message: `Unknown method ${method}` });
       }

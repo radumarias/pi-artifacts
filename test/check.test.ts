@@ -46,6 +46,8 @@ describe("renderForCheck", () => {
     expect(capture).toBeGreaterThan(policy);
     expect(runtime).toBeGreaterThan(capture);
     expect(document).toContain("connect-src 'none'");
+    // The Worker's storage limits are in the runtime as numbers.
+    expect(document).toContain('const LIMITS = {"keyChars":256,');
     expect(document).not.toMatch(/content="sandbox/);
   });
 });

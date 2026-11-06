@@ -2,7 +2,7 @@ import { exports, waitUntil } from "cloudflare:workers";
 import { ID_PATTERN, isSecondSeatUid, UID_PATTERN, type ArtifactView, type ProxyRequest } from "../shared/protocol.ts";
 import { errorMessage } from "../shared/util.ts";
 import { PageCallCache } from "./artifacts/page-calls.ts";
-import { pageAiRoute, pageStorageRoute } from "./artifacts/page-routes.ts";
+import { pageAiRoute, pageFailed, pageStorageRoute } from "./artifacts/page-routes.ts";
 import { artifactETag, artifactResponse, notModified, sourceETag, sourceResponse } from "./artifacts/serve.ts";
 import { DEMO_COOKIE, identify } from "./auth/index.ts";
 import { filesRoute } from "./files-routes.ts";
@@ -112,8 +112,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     // A page's saved values and its model run as the viewer (worker/artifacts/page-routes.ts).
     if ((artifact[2] === "/storage" || artifact[2] === "/ai") && method === "POST") {
       const home = await artifactHome(storage, id);
-      if (!home) return json({ ok: false, error: { code: "bad_request", message: "No such artifact." } }, 404);
-      return artifact[2] === "/storage" ? pageStorageRoute(request, env, uid, { id, ownerUid: home.ownerUid }) : pageAiRoute(request, env, storage, uid);
+      if (!home) return pageFailed({ code: "bad_request", message: "No such artifact." }, 404);
+      return artifact[2] === "/storage" ? pageStorageRoute(request, env, uid, id, home.ownerUid) : pageAiRoute(request, env, storage, uid);
     }
     // A page's tool list and live calls go to the chat that published it.
     if ((artifact[2] === "/tools" && method === "GET") || (artifact[2] === "/mcp" && method === "POST")) {

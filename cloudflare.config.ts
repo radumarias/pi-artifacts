@@ -102,7 +102,7 @@ export default defineConfig({
       // a link the agent gives. A Cloudflare MCP portal is one entry for every server behind it.
       MCP_SERVERS: bindings.json(mcpServerList()),
       // Live calls from published pages: 120 a minute per viewer and chat, counted by Cloudflare across the Worker's
-      // isolates. The namespace is any number unique within the account.
+      // isolates; and, counted apart, each viewer's writes of pages' saved values. The namespace is any number unique within the account.
       PAGE_CALLS: bindings.rateLimit({ namespace: "4201", simple: { limit: 120, period: 60 } }),
       // What saved pages' model calls (pi.use("ai"): a viewer typing "put revenue first" into a dashboard) run on: a
       // comma-separated list of the picker's model ids, tried in order (worker/artifacts/page-ai.ts). gpt-oss-120b on

@@ -1,5 +1,6 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model, type Models, type ModelThinkingLevel, type Provider, type ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
+import { createModels } from "@earendil-works/pi-ai/models";
 import { createAI } from "agents/models/pi-ai";
 import {
   AUTO_MODEL,
@@ -15,6 +16,7 @@ import {
 } from "../shared/models.ts";
 import { errorMessage } from "../shared/util.ts";
 import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discovery, type GatewayFetcher, type GatewayOptions, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
+import type { GeminiCompat } from "./gemini.ts";
 import prices from "./prices.json";
 import { tapStream } from "./streams.ts";
 import type { ModelCache } from "./storage/model-cache.ts";
@@ -454,4 +456,16 @@ export async function loadCatalog(source: CatalogSource, { refresh = false } = {
 /** Forget what this isolate holds (tests). */
 export function forgetCatalog(): void {
   held = undefined;
+}
+
+/**
+ * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
+ * Gemini's tool calls signed: AI Gateway's catalog and Workers AI's through `provider`, and the models the providers list
+ * (as this isolate's catalog has them now) through one pi provider each.
+ */
+export function piModels(provider: Provider, gemini: GeminiCompat) {
+  const models = createModels();
+  models.setProvider(withCurrentPrices(provider));
+  for (const listed of listedProviders(provider, currentCatalog)) models.setProvider(listed);
+  return gemini.models(withEffortRecorded(models));
 }

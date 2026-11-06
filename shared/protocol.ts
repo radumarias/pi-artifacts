@@ -88,7 +88,11 @@ export interface PageValues {
 
 export type PageStorageResponse = ({ ok: true } & Partial<PageValues>) | { ok: false; error: PageError };
 
-/** How much one viewer may save for one page. The runtime (runtime/pi-runtime.js) holds the same numbers. */
+/**
+ * How much one viewer may save for one page: each key and value, and all their own (removed keys of the author's
+ * included). The runtime gets these numbers when a page is served (worker/artifacts/serve.ts) and refuses an oversized
+ * key or value at once; the totals only the Worker can count, so a write over them fails in the background.
+ */
 export const PAGE_STORAGE_LIMITS = { keyChars: 256, valueChars: 100_000, totalChars: 500_000, keys: 500 } as const;
 
 /** One call to a page's model (pi.use("ai")), as POST /api/artifacts/:id/ai takes it. */
