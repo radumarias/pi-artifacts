@@ -238,6 +238,8 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   );
   useNewInView(list, following, newAt, newSince);
   const hinted = useMemo(() => openHints(hints, state.entries), [hints, state.entries]);
+  // A hint comes in after its message: keep it in view for a reader at the bottom.
+  useEffect(follow, [follow, hinted]);
   const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
   return (
     <SharedChat.Provider value={shared}>
