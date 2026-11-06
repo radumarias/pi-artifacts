@@ -5,6 +5,10 @@ FROM ${SANDBOX_TOOLS_IMAGE} AS sandbox-tools
 
 FROM python:3.13-slim
 COPY --from=sandbox-tools /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
+# pandas and numpy for data work; the rest are what skills' scripts commonly import (PDF, Excel, Word, PowerPoint,
+# charts, images, YAML, templates, HTML/XML): the sandbox has no internet to install them at run time.
 RUN pip install --no-cache-dir pandas==2.3.3 numpy==2.3.4 \
- && mkdir -p /workspace/files /workspace/out
+    pypdf==6.21.1 pdfplumber==0.11.10 reportlab==5.0.1 openpyxl==3.1.5 python-docx==1.2.0 python-pptx==1.0.2 \
+    pillow==13.0.0 matplotlib==3.11.2 pyyaml==6.0.3 jinja2==3.1.6 beautifulsoup4==4.15.0 lxml==6.1.3 \
+ && mkdir -p /workspace/files /workspace/skills /workspace/out
 CMD ["sleep", "infinity"]

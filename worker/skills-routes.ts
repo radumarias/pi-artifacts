@@ -94,7 +94,7 @@ async function importSkillPackage(
 ): Promise<SkillResult & { skipped?: string[] }> {
   const pkg = await readSkillPackage(zip);
   const { name } = parseSkillFile(pkg.markdown);
-  const list: SkillFileInfo[] = pkg.files.map((file) => ({ path: file.path, size: file.bytes.byteLength }));
+  const list: SkillFileInfo[] = pkg.files.map((file) => ({ path: file.path, size: file.bytes.byteLength, ...(file.binary && { binary: true as const }) }));
   const set = await skillFiles.write(name, pkg.files);
   const saved = await directory.saveSkill({ markdown: pkg.markdown }, "user", true, { set, list });
   if ("error" in saved) {

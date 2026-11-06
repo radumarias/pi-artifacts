@@ -71,7 +71,33 @@ export type SkillResult = SkillInfo | { error: string };
 
 /** A tool list as people write it: names separated by spaces or commas. */
 export function splitTools(list: string): string[] {
-  return list.split(/[\s,]+/).filter(Boolean);
+  // A Claude Code tool may name what it allows in parentheses, spaces and all: "Bash(git add:*)" is one entry.
+  return list.match(/[^\s,(]+(?:\([^)]*\))?/g) ?? [];
+}
+
+/** Claude Code's tools, as the tools here that do their work (a skill written for Claude Code names them). */
+const CLAUDE_CODE_TOOLS: Record<string, string> = {
+  Read: "files_read",
+  Write: "files_write",
+  Edit: "files_write",
+  MultiEdit: "files_write",
+  NotebookEdit: "files_write",
+  Glob: "files_list",
+  Grep: "files_list",
+  LS: "files_list",
+  Bash: "run_bash",
+};
+
+/**
+ * The tools a SKILL.md's allowed-tools names, as tool names here: what a Claude Code tool allows ("Bash(git:*)") is
+ * dropped, and a Claude Code tool becomes the tool here that does its work. Any other name stays as it is.
+ */
+export function skillTools(listed: readonly unknown[]): unknown[] {
+  return listed.map((tool) => {
+    if (typeof tool !== "string") return tool;
+    const name = tool.trim().replace(/\(.*\)$/s, "");
+    return CLAUDE_CODE_TOOLS[name] ?? name;
+  });
 }
 
 /** A skill's fields trimmed, with the tool list deduplicated. Throws with what to fix. */

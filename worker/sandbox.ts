@@ -23,18 +23,20 @@ export interface SandboxRun {
 /**
  * One Linux container per chat for code the agent wants to run. No internet:
  * data comes in as files the agent picks from R2, in their folders under
- * ./files, and results go back the same way. Each run starts with fresh
- * ./files and ./out; anything else under /workspace stays while the
- * container is up (10 minutes after the last run).
+ * ./files (and skills' folders under ./skills), and results go back the same
+ * way. Each run starts with fresh ./files, ./skills and ./out; anything else
+ * under /workspace stays while the container is up (10 minutes after the
+ * last run).
  */
 export class Sandbox extends DurableObject<Env> {
-  async runPython(code: string, inputs: SandboxFile[]): Promise<SandboxRun> {
-    return this.#run({ name: "main.py", contents: code }, ["python3", "main.py"], inputs);
+  /** `skills` are skill folders' files, named <skill>/<path>: they go under ./skills/. */
+  async runPython(code: string, inputs: SandboxFile[], skills: SandboxFile[] = []): Promise<SandboxRun> {
+    return this.#run({ name: "main.py", contents: code }, ["python3", "main.py"], inputs, skills);
   }
 
   /** A bash script, run as written: it stops at the first failing command only if it says `set -e`. */
-  async runBash(script: string, inputs: SandboxFile[]): Promise<SandboxRun> {
-    return this.#run({ name: "run.sh", contents: script }, ["bash", "run.sh"], inputs);
+  async runBash(script: string, inputs: SandboxFile[], skills: SandboxFile[] = []): Promise<SandboxRun> {
+    return this.#run({ name: "run.sh", contents: script }, ["bash", "run.sh"], inputs, skills);
   }
 
   /** Stop the container, if it is up, and forget everything: its chat was deleted. */
@@ -43,18 +45,19 @@ export class Sandbox extends DurableObject<Env> {
     await this.ctx.storage.deleteAll();
   }
 
-  async #run(entry: { name: string; contents: string }, argv: string[], inputs: SandboxFile[]): Promise<SandboxRun> {
+  async #run(entry: { name: string; contents: string }, argv: string[], inputs: SandboxFile[], skills: SandboxFile[]): Promise<SandboxRun> {
     const container = await this.#ensureRunning();
     const files = new Files(container);
 
-    // Inputs keep their folders: made with ./files and ./out, passed as arguments so their names need no quoting.
-    const folders = new Set(inputs.map((input) => input.name.split("/").slice(0, -1).join("/")).filter(Boolean));
-    const dirs = [`${WORKSPACE}/files`, `${WORKSPACE}/out`, ...[...folders].map((folder) => `${WORKSPACE}/files/${folder}`)];
-    await this.#exec(container, ["sh", "-c", `rm -rf ${WORKSPACE}/files ${WORKSPACE}/out && mkdir -p "$@"`, "sh", ...dirs]);
-    await Promise.all([
-      ...inputs.map((input) => files.writeFile(`${WORKSPACE}/files/${input.name}`, input.bytes)),
-      files.writeFile(`${WORKSPACE}/${entry.name}`, entry.contents),
-    ]);
+    // Inputs and skills keep their folders: made with ./files, ./skills and ./out, passed as arguments so their names
+    // need no quoting.
+    const placed = [...inputs.map((file) => ({ path: `${WORKSPACE}/files/${file.name}`, bytes: file.bytes })), ...skills.map((file) => ({ path: `${WORKSPACE}/skills/${file.name}`, bytes: file.bytes }))];
+    const folders = new Set(placed.map((file) => file.path.slice(0, file.path.lastIndexOf("/"))));
+    const dirs = [`${WORKSPACE}/files`, `${WORKSPACE}/skills`, `${WORKSPACE}/out`, ...folders];
+    await this.#exec(container, ["sh", "-c", `rm -rf ${WORKSPACE}/files ${WORKSPACE}/skills ${WORKSPACE}/out && mkdir -p "$@"`, "sh", ...dirs]);
+    await Promise.all([...placed.map((file) => files.writeFile(file.path, file.bytes)), files.writeFile(`${WORKSPACE}/${entry.name}`, entry.contents)]);
+    // A skill's scripts may be run by their path, as its instructions say: they need to be executable.
+    if (skills.length) await this.#exec(container, ["chmod", "-R", "u+x", `${WORKSPACE}/skills`]);
 
     const run = await this.#exec(container, ["timeout", String(RUN_TIMEOUT_SECONDS), ...argv]);
 

@@ -29,7 +29,14 @@ Rules every page follows:
 - The page is the widget and nothing else: data, titles, labels, units, legends and the states above. No explanatory prose: no intro or "about this page" paragraph, no notes on how it works or where the data comes from, no footer describing it.
 - Use the full width of the frame: no max-width container or centered column; let a responsive grid fill the space, with modest padding.
 - Design: a clear hierarchy, readable numbers (tabular-nums, units, sensible rounding), color tokens on :root with a prefers-color-scheme: dark variant, a layout that works at phone width.
-- A skill you activated may bring its own design system or library: then its rules for how the page looks and is built come before the design line above, and the page uses the skill's scripts and stylesheets by reference (skill:<name>/<path>), as activate_skill says. Skills are often written for another host: where one says to copy or bundle files, publish supporting files or run a build or inline script, a reference does that here; its data still comes only through pi.use("mcp"), never placeholder values; and what the page has no equivalent for (an AI call, network, storage that must last) is left out or switched off.`;
+- A skill you activated may bring its own design system or library: then its rules for how the page looks and is built come before the design line above, and the page uses the skill's files by reference (skill:<name>/<path>), as activate_skill says. Skills are often written for another host; translate what they say to what is here:
+  - copy or bundle files next to the page, upload them to an asset store, publish supporting files, run a build or inline script: a reference does that here;
+  - make, host or publish an artifact or page: artifact_write, artifact_check, artifact_publish;
+  - a path to the skill's own folder (/mnt/skills/…/<name>/, a "skill directory" or "base directory"): ./skills/<name>/ in the sandbox, with skills: ["<name>"] on run_python or run_bash;
+  - an outputs folder or "present the file to the user" (/mnt/user-data/outputs and the like): write it to ./out/ in the sandbox, or with files_write, and name the saved path;
+  - uploads or attached files (/mnt/user-data/uploads and the like): the user's files, passed to the sandbox in files;
+  - connectors or tools from a page: the page's data comes only through pi.use("mcp"), never placeholder values, and the agent uses its own MCP tools;
+  - a tool, capability or service that has no equivalent here (a page calling a model, network from a page or the sandbox, storage that must last, a code repository, a browser or computer): leave that part out or switch it off, and tell the user what is missing.`;
 
 /** The system prompt, as pi sections rendered in this order. */
 export const promptExtension: Extension = defineExtension({

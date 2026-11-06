@@ -4,10 +4,10 @@ import { isHidden } from "../../shared/uploads.ts";
 import { literalPath } from "../storage/paths.ts";
 import { unzip, UnzipError } from "../unzip.ts";
 
-/** A skill package read out of its zip: the SKILL.md, the text files beside it, and what was left out and why. */
+/** A skill package read out of its zip: the SKILL.md, the files beside it (marked when not UTF-8 text), and what was left out and why. */
 export interface SkillPackage {
   markdown: string;
-  files: { path: string; bytes: Uint8Array }[];
+  files: { path: string; bytes: Uint8Array; binary?: true }[];
   skipped: string[];
 }
 
@@ -17,10 +17,10 @@ const CLUTTER = /(^|\/)(__MACOSX|Thumbs\.db|desktop\.ini)(\/|$)/;
 
 /**
  * The skill in a zip: its SKILL.md at the top, or in the one folder the zip holds (as zipping a folder makes), and the
- * files beside it, kept by their paths from there. Only text files are kept (UTF-8): a skill's files are read by the
- * agent and inlined into pages as scripts and stylesheets. Hidden files and operating-system clutter are not read;
- * files outside the skill's folder, binary files and files with characters user paths do not allow are left out and
- * named in `skipped`. Nothing in the zip is run. Throws a SkillError with what to fix.
+ * files beside it, kept by their paths from there, each marked when it is not UTF-8 text (an image, a font…). Hidden
+ * files and operating-system clutter are not read; files outside the skill's folder and files with characters user
+ * paths do not allow are left out and named in `skipped`. Nothing in the zip is run here. Throws a SkillError with what
+ * to fix.
  */
 export async function readSkillPackage(zip: Uint8Array): Promise<SkillPackage> {
   let entries;
@@ -55,8 +55,7 @@ export async function readSkillPackage(zip: Uint8Array): Promise<SkillPackage> {
     const relative = entry.name.slice(root.length);
     const path = literalPath(relative);
     if (path === undefined) skipped.push(`${relative} (a name with characters other than letters, digits, spaces, . - _ and /)`);
-    else if (!isText(entry.bytes)) skipped.push(`${relative} (not a text file)`);
-    else files.push({ path, bytes: entry.bytes });
+    else files.push({ path, bytes: entry.bytes, ...(!isText(entry.bytes) && { binary: true as const }) });
   }
   if (!isText(top.bytes)) throw new SkillError(`${SKILL_FILE} is not a text file.`);
   if (files.length > MAX_SKILL_FILES) throw new SkillError(`The skill has more than ${MAX_SKILL_FILES} files.`);

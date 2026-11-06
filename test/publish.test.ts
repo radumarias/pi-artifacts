@@ -78,7 +78,10 @@ function chat(check: (html: string) => CheckReport | Error, publishUnchecked = f
           return files.length ? [[name, { set: skillSet.id, files: files.map((key) => ({ path: key.slice(name.length + 1), size: skillFiles[key].length })) }] as const] : [];
         }),
       ),
-    readSkillFile: async (skill, set, path) => (set === skillSet.id ? (skillFiles[`${skill}/${path}`] ?? null) : null),
+    readSkillFile: async (skill, set, path) => {
+      const text = set === skillSet.id ? skillFiles[`${skill}/${path}`] : undefined;
+      return text === undefined ? null : new TextEncoder().encode(text);
+    },
     publishUnchecked,
   };
   return { scope, versions, checked, drafts };

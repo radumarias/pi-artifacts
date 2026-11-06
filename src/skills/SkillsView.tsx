@@ -155,10 +155,10 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
           <button type="button" onClick={() => setImporting("")}>
             Import SKILL.md
           </button>
-          <button type="button" onClick={() => packageInput.current?.click()} title="A zip of a skill's folder: its SKILL.md and the files it comes with">
+          <button type="button" onClick={() => packageInput.current?.click()} title="A zip (.zip or .skill) of a skill's folder: its SKILL.md and the files it comes with">
             Import package
           </button>
-          <input ref={packageInput} type="file" accept=".zip,application/zip" hidden onChange={importPackage} />
+          <input ref={packageInput} type="file" accept=".zip,.skill,application/zip" hidden onChange={importPackage} />
         </div>
       </header>
       {error && <p className="form-error">{error}</p>}

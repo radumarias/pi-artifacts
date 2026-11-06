@@ -43,8 +43,8 @@ export class SkillFiles {
     return set;
   }
 
-  /** A file's text, or null when the set has no such file. */
-  async read(skill: string, set: string, path: string): Promise<string | null> {
+  /** A file's bytes, or null when the set has no such file. */
+  async read(skill: string, set: string, path: string): Promise<Uint8Array | null> {
     let key: string;
     try {
       key = this.#objectKey(skill, set, path);
@@ -52,7 +52,7 @@ export class SkillFiles {
       return null;
     }
     const object = await this.#bucket.get(key, { ssecKey: this.#key });
-    return object ? object.text() : null;
+    return object ? new Uint8Array(await object.arrayBuffer()) : null;
   }
 
   /** Delete one set of a skill's files. */

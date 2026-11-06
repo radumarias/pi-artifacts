@@ -32,8 +32,8 @@ export interface PublishScope {
   publishUnchecked: boolean;
   /** The files of those of the owner's skills named that are on and have any, by name: what a page may name (shared/skill-files.ts). */
   skillSets(names: readonly string[]): Promise<Map<string, { set: string; files: SkillFileInfo[] }>>;
-  /** The text of one file of a set of a skill's files (SkillFiles), or null when the set has no such file, or is gone. */
-  readSkillFile(skill: string, set: string, path: string): Promise<string | null>;
+  /** The bytes of one file of a set of a skill's files (SkillFiles), or null when the set has no such file, or is gone. */
+  readSkillFile(skill: string, set: string, path: string): Promise<Uint8Array | null>;
 }
 
 /** Which artifact a publish goes to and what the version says (see artifactFor). */

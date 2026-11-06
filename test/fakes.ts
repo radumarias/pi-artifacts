@@ -39,7 +39,7 @@ export class FakeBucket {
     const start = range?.suffix !== undefined ? Math.max(0, bytes.byteLength - range.suffix) : (range?.offset ?? 0);
     if (range && start >= bytes.byteLength) throw new Error("The requested range is not satisfiable");
     const part = bytes.subarray(start, range?.length !== undefined ? start + range.length : undefined);
-    return { text: async () => value, json: async () => JSON.parse(value), size: bytes.byteLength, uploaded: new Date(0), body: new Blob([part]).stream() };
+    return { text: async () => value, json: async () => JSON.parse(value), arrayBuffer: async () => part.slice().buffer, size: bytes.byteLength, uploaded: new Date(0), body: new Blob([part]).stream() };
   }
 
   async put(key: string, body: unknown, options?: { ssecKey?: unknown }) {

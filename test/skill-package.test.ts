@@ -1,6 +1,6 @@
 import { crc32, deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { collapseSkillFiles, inlineSkillFiles, parseSkillRef, skillFilesNote, skillRefs } from "../shared/skill-files.ts";
+import { collapseSkillFiles, inlinedSkillFiles, inlineSkillFiles, parseSkillRef, skillFilesNote, skillRefs } from "../shared/skill-files.ts";
 import { SkillError, type SkillInfo } from "../shared/skills.ts";
 import { MAX_SKILL_FILE_READ, skillSource } from "../worker/agent/skills.ts";
 import { readSkillPackage } from "../worker/skills/package.ts";
@@ -75,7 +75,7 @@ describe("unzip", () => {
 });
 
 describe("readSkillPackage", () => {
-  it("finds the SKILL.md in the zip's one folder and keeps text files by their paths from there", async () => {
+  it("finds the SKILL.md in the zip's one folder and keeps its files by their paths from there, marking binary ones", async () => {
     const pkg = await readSkillPackage(
       zip({
         "quiet-kit/SKILL.md": SKILL_MD,
@@ -89,12 +89,13 @@ describe("readSkillPackage", () => {
       }),
     );
     expect(pkg.markdown).toBe(SKILL_MD);
-    expect(pkg.files.map((f) => [f.path, new TextDecoder().decode(f.bytes)])).toEqual([
-      ["dist/ds.js", "window.DS = {};"],
-      ["references/tokens.md", "# Tokens"],
+    expect(pkg.files.map((f) => [f.path, f.binary ?? false])).toEqual([
+      ["assets/logo.png", true],
+      ["dist/ds.js", false],
+      ["references/tokens.md", false],
     ]);
+    expect(new TextDecoder().decode(pkg.files[1].bytes)).toBe("window.DS = {};");
     expect(pkg.skipped).toEqual([
-      "assets/logo.png (not a text file)",
       expect.stringMatching(/^odd\+name\.js \(a name with characters/),
       "other/readme.txt (outside the skill's folder)",
     ]);
@@ -108,7 +109,8 @@ describe("readSkillPackage", () => {
 
 describe("skill file references", () => {
   const files: Record<string, string> = { "kit/dist/ds.js": "if (a <!-- b) x('</script>');", "kit/dist/ds.css": "a{content:'</style>'}" };
-  const read = async ({ skill, path }: { skill: string; path: string }) => files[`${skill}/${path}`] ?? null;
+  const encode = (text: string | undefined) => (text === undefined ? null : new TextEncoder().encode(text));
+  const read = async ({ skill, path }: { skill: string; path: string }) => encode(files[`${skill}/${path}`]);
   const page =
     '<head><link rel="stylesheet" href="skill:kit/dist/ds.css"><script type="module" src="skill:kit/dist/ds.js"></script>' +
     '<link rel="preconnect" href="https://fonts.googleapis.com"></head><body><script>DS()</script></body>';
@@ -123,7 +125,8 @@ describe("skill file references", () => {
       { skill: "kit", path: "dist/ds.css" },
       { skill: "kit", path: "dist/ds.js" },
     ]);
-    expect(() => skillRefs('<img src="skill:kit/logo.svg">')).toThrow(/nowhere else/);
+    expect(() => skillRefs('<div data-x="skill:kit/logo.svg"></div>')).toThrow(/nowhere else/);
+    expect(() => skillRefs('<script src="skill:kit/a.js">x()</script>')).toThrow(/nowhere else/);
     expect(() => skillRefs('<script src="skill:kit"></script>')).toThrow(/Not a skill file: "skill:kit"/);
   });
 
@@ -148,7 +151,7 @@ describe("skill file references", () => {
 
   it("maps the lines of the page as it runs to the lines of the page as written", async () => {
     const lines = { "kit/a.js": "one\ntwo\nthree", "kit/b.css": "x\ny" };
-    const readLines = async ({ skill, path }: { skill: string; path: string }) => lines[`${skill}/${path}` as keyof typeof lines] ?? null;
+    const readLines = async ({ skill, path }: { skill: string; path: string }) => encode(lines[`${skill}/${path}` as keyof typeof lines]);
     const written = 'line 1\n<script src="skill:kit/a.js"></script>\nline 3\n<link rel="stylesheet"\n href="skill:kit/b.css">\nline 6';
     const { html, pageLine } = await inlineSkillFiles(written, readLines);
     const at = (text: string) => html.slice(0, html.indexOf(text)).split("\n").length;
@@ -174,6 +177,43 @@ describe("skill file references", () => {
   });
 });
 
+describe("skill images, fonts and media in pages", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff]);
+  const woff = new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0xfe]);
+  const css = '@font-face{src:url(../fonts/a.woff2) format("woff2")} .x{background:url("img/b.png")} .y{background:url(https://x.test/y.png)} .z{background:url(gone.png)}';
+  const bytes: Record<string, Uint8Array> = {
+    "kit/dist/ds.css": new TextEncoder().encode(css),
+    "kit/fonts/a.woff2": woff,
+    "kit/dist/img/b.png": png,
+    "kit/logo.png": png,
+  };
+  const read = async ({ skill, path }: { skill: string; path: string }) => bytes[`${skill}/${path}`] ?? null;
+  const base64 = (data: Uint8Array) => Buffer.from(data).toString("base64");
+
+  it("puts an image in as a data: URL beside its name, and turns it back into a reference", async () => {
+    const page = '<p>Logo</p>\n<img alt="logo" src="skill:kit/logo.png" width="40">';
+    expect(skillRefs(page)).toEqual([{ skill: "kit", path: "logo.png" }]);
+    const { html } = await inlineSkillFiles(page, read);
+    expect(html).toBe(`<p>Logo</p>\n<img alt="logo" src="data:image/png;base64,${base64(png)}" data-skill-src="kit/logo.png" width="40">`);
+    expect(inlinedSkillFiles(html)).toEqual([{ skill: "kit", path: "logo.png" }]);
+    expect(collapseSkillFiles(html)).toBe(page);
+    expect(collapseSkillFiles(html, () => false)).toBe(html);
+  });
+
+  it("puts a skill stylesheet's fonts and images in as data: URLs, leaving other url()s as written", async () => {
+    const { html } = await inlineSkillFiles('<link rel="stylesheet" href="skill:kit/dist/ds.css">', read);
+    expect(html).toContain(`url("data:font/woff2;base64,${base64(woff)}") format("woff2")`);
+    expect(html).toContain(`url("data:image/png;base64,${base64(png)}")`);
+    expect(html).toContain("url(https://x.test/y.png)");
+    expect(html).toContain("url(gone.png)");
+    expect(collapseSkillFiles(html)).toBe('<link rel="stylesheet" href="skill:kit/dist/ds.css">');
+  });
+
+  it("refuses a binary file as a script", async () => {
+    await expect(inlineSkillFiles('<script src="skill:kit/logo.png"></script>', read)).rejects.toThrow(/Not a text file/);
+  });
+});
+
 describe("skillSource with files", () => {
   const kit: SkillInfo = {
     name: "quiet-kit",
@@ -187,11 +227,15 @@ describe("skillSource with files", () => {
       { path: "dist/ds.js", size: 100_000 },
       { path: "references/tokens.md", size: 8 },
       { path: "tools/build.py", size: 3 },
+      { path: "assets/logo.png", size: 5, binary: true },
     ],
     fileSet: "0123456789abcdef",
   };
   const texts: Record<string, string> = { "dist/ds.js": "x".repeat(100_000), "references/tokens.md": "# Tokens" };
-  const source = skillSource([kit], "v", undefined, async (_, path) => texts[path] ?? null);
+  const source = skillSource([kit], "v", undefined, {
+    read: async (_, path) => (path in texts ? new TextEncoder().encode(texts[path]) : null),
+    sandbox: true,
+  });
 
   it("lists the files when the skill is activated, with how pages use them", async () => {
     const content = await source.load("quiet-kit");
@@ -199,9 +243,11 @@ describe("skillSource with files", () => {
       ["dist/ds.js", "asset"],
       ["references/tokens.md", "reference"],
       ["tools/build.py", "script"],
+      ["assets/logo.png", "asset"],
     ]);
     expect(content?.body).toContain('<script src="skill:quiet-kit/<path>"></script>');
-    expect(skillFilesNote("x", [])).toBe("");
+    expect(content?.body).toContain('pass skills: ["quiet-kit"] to run_python or run_bash');
+    expect(skillFilesNote("x", [], true)).toBe("");
   });
 
   it("reads a listed file, cutting a long one, and nothing it does not list", async () => {
@@ -211,6 +257,9 @@ describe("skillSource with files", () => {
     expect(long?.content).toContain("by reference, skill:quiet-kit/dist/ds.js");
     expect(await source.readResource!("quiet-kit", "secret.txt")).toBeNull();
     expect(await source.readResource!("quiet-kit", "tools/build.py")).toBeNull();
+    const logo = await source.readResource!("quiet-kit", "assets/logo.png");
+    expect(logo).toMatchObject({ mimeType: "image/png" });
+    expect(logo?.content).toContain("./skills/quiet-kit/assets/logo.png");
   });
 
   it("offers no files without a reader", async () => {
@@ -227,8 +276,12 @@ describe("SkillFiles", () => {
     const bytes = (text: string) => new TextEncoder().encode(text);
     const first = await files.write("kit", [{ path: "dist/ds.js", bytes: bytes("one") }]);
     const second = await files.write("kit", [{ path: "dist/ds.js", bytes: bytes("two") }]);
-    expect(await files.read("kit", first, "dist/ds.js")).toBe("one");
-    expect(await files.read("kit", second, "dist/ds.js")).toBe("two");
+    const text = async (bytes: Promise<Uint8Array | null>) => {
+      const read = await bytes;
+      return read && new TextDecoder().decode(read);
+    };
+    expect(await text(files.read("kit", first, "dist/ds.js"))).toBe("one");
+    expect(await text(files.read("kit", second, "dist/ds.js"))).toBe("two");
     expect(await files.read("kit", second, "../x")).toBeNull();
     expect(bucket.calls.filter((c) => c.op === "put").every((c) => c.key?.startsWith("users/ada/skills/kit/") && c.ssecKey)).toBe(true);
     await files.dropAllBut("kit", second);

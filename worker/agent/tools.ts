@@ -37,6 +37,11 @@ export interface ChatScope extends PublishScope {
   failedChecks: FailedChecks;
   /** React with `emoji` to the newest message a person sent; who it was from, or null when there is none. */
   react(emoji: Reaction): Promise<string | null>;
+  /**
+   * The folders of those of the owner's skills named that are on, for the sandbox: each skill's SKILL.md and files,
+   * named <skill>/<path>. Throws naming a skill that is not one.
+   */
+  skillFolders(names: readonly string[]): Promise<SandboxFile[]>;
 }
 
 /**
@@ -127,7 +132,8 @@ const SANDBOX_FILES =
   "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
   "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/<chat>/report.csv is ./files/out/<chat>/report.csv). " +
   "Anything written to ./out/ (top level, not subfolders) is saved back to this chat's folder under out/ in the user's files (named with them). " +
-  "Each run starts with fresh ./files and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
+  "Skills you name are copied into ./skills/<name>/, so their scripts run as the skill says. " +
+  "Each run starts with fresh ./files, ./skills and ./out; other files under the working directory stay while the sandbox is up (10 minutes after the last run). " +
   "Returns exit code, stdout and stderr.";
 
 /** The files `refs` name, read, keyed by where they go under ./files/ (see sandboxLayout). */
@@ -178,15 +184,22 @@ export function sandboxName(uid: string, chatId: string): string {
  * this chat's folder in the user's files (chatOutFolder). The files go through the user's UserFiles, so they are
  * decrypted on the way in and encrypted with the user's key on the way out.
  */
-async function runInSandbox(scope: ChatScope, refs: string[] | undefined, run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[]) => Promise<SandboxRun>) {
+async function runInSandbox(
+  scope: ChatScope,
+  args: { files?: string[]; skills?: string[] },
+  run: (sandbox: ReturnType<typeof exports.Sandbox.getByName>, inputs: SandboxFile[], skills: SandboxFile[]) => Promise<SandboxRun>,
+) {
   const files = await scope.files();
   const folder = chatOutFolder(scope.chatId);
-  const inputs = await sandboxInputs(files, refs ?? [], folder);
-  const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs);
+  const [inputs, skills] = await Promise.all([sandboxInputs(files, args.files ?? [], folder), args.skills?.length ? scope.skillFolders(args.skills) : []]);
+  const bytes = [...inputs, ...skills].reduce((sum, file) => sum + file.bytes.byteLength, 0);
+  if (bytes > MAX_SANDBOX_BYTES) throw new Error(tooMuch(bytes));
+  const result = await run(exports.Sandbox.getByName(sandboxName(scope.uid, scope.chatId)), inputs, skills);
   const { toSave, skipped } = outputPaths(folder, result.outputs);
   const saved = await Promise.all([...toSave].map(([path, bytes]) => files.put(path, bytes)));
   const report = [
     inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,
+    skills.length && `skills copied in: ${[...new Set(skills.map((file) => `./skills/${file.name.split("/")[0]}/`))].join(", ")}`,
     `exit code ${result.exitCode}`,
     `stdout:\n${result.stdout}`,
     result.stderr && `stderr:\n${result.stderr}`,
@@ -200,6 +213,11 @@ const inputFiles = Type.Optional(
     description: "The user's files to copy in: paths, a file's name or the end of its path when only one file matches, or a folder for every file in it.",
   }),
 );
+const inputSkills = Type.Optional(
+  Type.Array(Type.String(), {
+    description: "Skills (by name) whose folders to copy in, to ./skills/<name>/ with their SKILL.md and files: what a skill's own scripts need.",
+  }),
+);
 
 export function sandboxExtension(scope: ChatScope): Extension {
   return defineExtension({
@@ -207,17 +225,17 @@ export function sandboxExtension(scope: ChatScope): Extension {
     tools: [
       defineTool({
         name: RUN_PYTHON_TOOL,
-        description: `Run a Python 3.13 script (pandas and numpy installed) in this chat's isolated Linux sandbox: no internet, 60 s limit. ${SANDBOX_FILES}`,
-        parameters: Type.Object({ code: Type.String(), files: inputFiles }),
-        execute: async (args) => runInSandbox(scope, args.files, (sandbox, inputs) => sandbox.runPython(args.code, inputs)),
+        description: `Run a Python 3.13 script in this chat's isolated Linux sandbox (installed: pandas, numpy, pypdf, pdfplumber, reportlab, openpyxl, python-docx, python-pptx, pillow, matplotlib, pyyaml, jinja2, beautifulsoup4, lxml): no internet, 60 s limit. ${SANDBOX_FILES}`,
+        parameters: Type.Object({ code: Type.String(), files: inputFiles, skills: inputSkills }),
+        execute: async (args) => runInSandbox(scope, args, (sandbox, inputs, skills) => sandbox.runPython(args.code, inputs, skills)),
       }),
       defineTool({
         name: RUN_BASH_TOOL,
         description:
           "Run a bash script in the same sandbox as run_python (Debian with coreutils, grep, sed, awk, tar, gzip, python3): no internet, so no package installs or downloads; 60 s limit. " +
           `Runs as written; start with set -e to stop at the first failing command. ${SANDBOX_FILES}`,
-        parameters: Type.Object({ script: Type.String(), files: inputFiles }),
-        execute: async (args) => runInSandbox(scope, args.files, (sandbox, inputs) => sandbox.runBash(args.script, inputs)),
+        parameters: Type.Object({ script: Type.String(), files: inputFiles, skills: inputSkills }),
+        execute: async (args) => runInSandbox(scope, args, (sandbox, inputs, skills) => sandbox.runBash(args.script, inputs, skills)),
       }),
     ],
   });

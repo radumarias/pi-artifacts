@@ -82,6 +82,8 @@ import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { deferredTools, MIN_TOOLS_TO_PICK, pickerId, pickFailure, pickTools, TOOL_PICK_MS, toolPicker, toolsToOffer, type PickableTool } from "./agent/tool-pick.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
+import type { SandboxFile } from "./sandbox.ts";
+import { formatSkillFile } from "./skills/index.ts";
 import { ChatReactions } from "./reactions.ts";
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
@@ -114,8 +116,8 @@ import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, type Tag } from "./us
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
-/** How much skill file text a chat object keeps in memory (characters): a design library or two. */
-const SKILL_FILE_CACHE_CHARS = 4_000_000;
+/** How many bytes of skill files a chat object keeps in memory: a design library or two. */
+const SKILL_FILE_CACHE_BYTES = 4_000_000;
 
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
 export interface ChatRefusal {
@@ -348,6 +350,7 @@ export class ChatAgent extends DurableObject<Env> {
       drafts: memoAsync(() => this.storage.chatDrafts(this.uid, this.chatId)),
       skillSets: (names) => this.#skillSets(names),
       readSkillFile: (skill, set, path) => this.#readSkillSetFile(skill, set, path),
+      skillFolders: (names) => this.#skillFolders(names),
       look: lookFrom(env.CHECK_LOOK_MODEL, env.AI),
       publishUnchecked: env.AUTH_MODE === "demo",
       failedChecks: new FailedChecks(),
@@ -714,7 +717,10 @@ export class ChatAgent extends DurableObject<Env> {
         // Not into a chat deleted meanwhile.
         if ((saved === undefined || (message && waiting.length)) && !this.#gone) this.ctx.storage.kv.put(SHOWN_SKILLS_KEY, [...shown]);
       }
-      const source = skillSource(listed, version, shown, (skill, path) => this.#readSkillFile(skill, path));
+      const source = skillSource(listed, version, shown, {
+        read: (skill, path) => this.#readSkillFile(skill, path),
+        sandbox: this.env.SANDBOX_ENABLED === "true",
+      });
       if (source.fingerprint === this.#skillsInstalled) return;
       this.registry.install(await skills([source]));
       this.#skillsInstalled = source.fingerprint;
@@ -765,28 +771,50 @@ export class ChatAgent extends DurableObject<Env> {
   /** The owner's skill files, encrypted with their key: deriving it is not free, so once per object. */
   readonly #skillFiles = memoAsync(() => this.storage.skillFiles(this.uid));
   /** Skill files read lately, by skill, set and path: a set never changes, so a write, its check and its publish read a file once. */
-  readonly #skillFileCache = new Map<string, string>();
+  readonly #skillFileCache = new Map<string, Uint8Array>();
   #skillFileCacheSize = 0;
 
   /** A file of one of the owner's skills, from the set its last import wrote; null when it has none by that path. */
-  #readSkillFile(skill: SkillInfo, path: string): Promise<string | null> {
+  #readSkillFile(skill: SkillInfo, path: string): Promise<Uint8Array | null> {
     if (!skill.fileSet || !skill.files?.some((file) => file.path === path)) return Promise.resolve(null);
     return this.#readSkillSetFile(skill.name, skill.fileSet, path);
   }
 
-  async #readSkillSetFile(skill: string, set: string, path: string): Promise<string | null> {
+  async #readSkillSetFile(skill: string, set: string, path: string): Promise<Uint8Array | null> {
     const key = `${skill}/${set}/${path}`;
     const cached = this.#skillFileCache.get(key);
     if (cached !== undefined) return cached;
-    const text = await (await this.#skillFiles()).read(skill, set, path);
-    if (text === null) return null;
-    if (this.#skillFileCacheSize + text.length > SKILL_FILE_CACHE_CHARS) {
+    const bytes = await (await this.#skillFiles()).read(skill, set, path);
+    if (bytes === null) return null;
+    if (this.#skillFileCacheSize + bytes.byteLength > SKILL_FILE_CACHE_BYTES) {
       this.#skillFileCache.clear();
       this.#skillFileCacheSize = 0;
     }
-    this.#skillFileCache.set(key, text);
-    this.#skillFileCacheSize += text.length;
-    return text;
+    this.#skillFileCache.set(key, bytes);
+    this.#skillFileCacheSize += bytes.byteLength;
+    return bytes;
+  }
+
+  /** The folders of the owner's skills named, for the sandbox (ChatScope.skillFolders): SKILL.md and every file. */
+  async #skillFolders(names: readonly string[]): Promise<SandboxFile[]> {
+    const unique = [...new Set(names)];
+    const skills = await Promise.all(unique.map((name) => this.#directory.getSkill(name)));
+    const off = unique.filter((_, i) => !skills[i] || !isActive(skills[i]));
+    if (off.length) throw new Error(`No such skill turned on: ${off.join(", ")}.`);
+    const copy = (bytes: Uint8Array): ArrayBuffer => bytes.slice().buffer;
+    const folders = await Promise.all(
+      skills.map(async (skill) => {
+        const files = await Promise.all(
+          (skill!.fileSet ? (skill!.files ?? []) : []).map(async ({ path }) => {
+            const bytes = await (await this.#skillFiles()).read(skill!.name, skill!.fileSet!, path);
+            if (bytes === null) throw new Error(`The skill "${skill!.name}" lost its file ${path}: import it again.`);
+            return { name: `${skill!.name}/${path}`, bytes: copy(bytes) };
+          }),
+        );
+        return [{ name: `${skill!.name}/SKILL.md`, bytes: copy(new TextEncoder().encode(formatSkillFile(skill!))) }, ...files];
+      }),
+    );
+    return folders.flat();
   }
 
   /** The file sets of the owner's own skills named that are on and have files (PublishScope.skillSets). */

@@ -31,8 +31,9 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   A skill the agent proposes (`skill_propose`) is saved off until the user turns it on; keep it that way. With
   `SKILLS_MODEL` set, Jev (Workers AI) picks which skills a message needs (`worker/agent/skill-pick.ts`); a chat's list
   only grows, so the prompt cache holds, and a failed pick lists them all. A skill imported as a package (a zip) keeps
-  its text files in `SkillFiles` (`worker/storage/skill-files.ts`); pages name them as `skill:<name>/<path>`, inlined
-  from the set pinned in the draft at check and publish (`shared/skill-files.ts`).
+  its files in `SkillFiles` (`worker/storage/skill-files.ts`); pages name them as `skill:<name>/<path>`, inlined
+  from the set pinned in the draft at check and publish (`shared/skill-files.ts`), and `run_python`/`run_bash` copy
+  a skill's folder to `./skills/<name>/` when named in `skills`.
 - Shared chats (`worker/chat-routes.ts`, `worker/members.ts`): the owner invites people by single-use link; they share
   the one conversation and the one agent, which always acts as the owner (owner's MCP sign-ins, files, skills; artifacts
   owned by the owner). The chat object checks membership on every socket and prompt; keep it that way. Once a chat

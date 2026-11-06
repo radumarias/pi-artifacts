@@ -36,6 +36,7 @@ describe("checkSkill", () => {
 
   it("splits a tool list on spaces and commas", () => {
     expect(splitTools(" files_read, run_python\nrun_bash ")).toEqual(["files_read", "run_python", "run_bash"]);
+    expect(splitTools("Bash(git add:*) Read, Grep")).toEqual(["Bash(git add:*)", "Read", "Grep"]);
   });
 
   it("rejects what is not an object", () => {
@@ -60,6 +61,17 @@ describe("SKILL.md", () => {
     const head = "---\nname: a\ndescription: Use when.\n";
     expect(parseSkillFile(`${head}allowed-tools: files_read, run_python\n---\nGo.`).tools).toEqual(["files_read", "run_python"]);
     expect(parseSkillFile(`${head}allowed-tools:\n  - files_read\n---\nGo.`).tools).toEqual(["files_read"]);
+  });
+
+  it("reads a Claude Code skill's allowed-tools as the tools here that do their work", () => {
+    const head = "---\nname: a\ndescription: Use when.\nlicense: MIT\n";
+    expect(parseSkillFile(`${head}allowed-tools: Bash(git add:*) Read Edit Write Grep WebFetch\n---\nGo.`).tools).toEqual([
+      "run_bash",
+      "files_read",
+      "files_write",
+      "files_list",
+      "WebFetch",
+    ]);
   });
 
   it("accepts CRLF line ends and a byte-order mark", () => {
