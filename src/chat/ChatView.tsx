@@ -55,7 +55,7 @@ interface Props {
   chatId: string;
   /** The chat's name, at the start of its header. */
   title?: string;
-  /** The signed-in user: their own messages show as "You". */
+  /** The signed-in user: their own messages show on the right, with no name over them. */
   uid: string;
   /** When the user had last seen the chat, if something came in since: a "New" line goes over the first such message. */
   newSince?: number;
@@ -620,8 +620,8 @@ function userText(message: UserMessage): string {
 
 /**
  * A person's message: someone else's on the left under their badge and name, the viewer's own on the right in a bubble,
- * as in a messaging app. Attachments show above the text, and the message it answers above that. In a shared chat each person's messages have their colour, and one
- * that called the agent shows, once `picked`, that the agent took it.
+ * as in a messaging app. Attachments show above the text, and the message it answers above that. In a shared chat each
+ * other person's badge has their colour, and a message that called the agent shows, once `picked`, that the agent took it.
  */
 function User({
   text,
@@ -669,7 +669,7 @@ function User({
   );
   return (
     <div ref={content} className={mine ? "message mine" : tagsMe ? "message mentions-me" : "message"}>
-      {author && <Byline author={author} />}
+      {author ? <Byline author={author} /> : <span className="sr-only">You</span>}
       {bubble && files}
       {/* Over the top corner of the bubble, or of the files when there is no text. */}
       <div className="bubble-row">
