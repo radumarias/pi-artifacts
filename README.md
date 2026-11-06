@@ -313,7 +313,8 @@ a request fits one, the agent calls `activate_skill` and gets the rest. Skills u
   chat does not list yet, whether the message needs it (one yes-or-no question per skill, from the message, the names
   of its attachments and the end of the conversation). Only those join the chat's list
   (`worker/agent/skill-pick.ts`). The list only grows: it is part of the system prompt and the tools, and the
-  provider's prompt cache keeps the conversation only while they stay the same. When the classifier fails or runs out
+  provider's prompt cache keeps the conversation only while they stay the same, so a chat the agent answered before
+  the skills were picked keeps every skill it was shown. When the classifier fails or runs out
   of time, every skill it was asked about is listed, as before; an empty `SKILLS_MODEL` lists every enabled skill. Its
   calls count in the chat's AI cost ("Skill picks").
 

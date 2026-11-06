@@ -159,6 +159,14 @@ const ROUTE_ENTRIES = 40;
 /** The names of the skills shown in this chat so far, once SKILLS_MODEL picks them (worker/agent/skill-pick.ts). */
 const SHOWN_SKILLS_KEY = "skillsShown";
 
+/** The newest transcript entries, read at most once per message (see #recentEntries). */
+type RecentEntries = () => Promise<readonly EntryRecord[] | undefined>;
+/** A message about to start a run, as the skill classifier reads it, and the end of the conversation before it. */
+interface SkillsFor {
+  text: string;
+  recent: RecentEntries;
+}
+
 /**
  * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
  * Gemini's tool calls signed: AI Gateway's catalog and Workers AI's through `provider`, and the models the providers list
@@ -460,14 +468,14 @@ export class ChatAgent extends DurableObject<Env> {
    * only when the conversation could not be read. Never throws: when no router picks in time (ROUTE_MS), or one picks a
    * model the picker does not list, the chat keeps its model, and the pick says why.
    */
-  async #route(message: string, images: number, files: number, recent: Promise<readonly EntryRecord[] | undefined>): Promise<Routing | undefined> {
+  async #route(message: string, images: number, files: number, recent: RecentEntries): Promise<Routing | undefined> {
     const started = Date.now();
     const kept = (failed: string): Routing => ({ kept: { failed, ms: Date.now() - started } });
     let read;
     try {
       const [root, catalog, busy] = await Promise.all([this.#root(), this.#catalog(), this.#replying()]);
       if (busy) return kept(RUNNING_WHEN_SENT);
-      const [agent, items] = await Promise.all([root.agent(BACKGROUND_CONTEXT), recent]);
+      const [agent, items] = await Promise.all([root.agent(BACKGROUND_CONTEXT), recent()]);
       if (!items) return undefined;
       read = { root, catalog, agent, items };
     } catch (error) {
@@ -604,9 +612,9 @@ export class ChatAgent extends DurableObject<Env> {
    * keeps the skills it has.
    */
   // One at a time, so an older refresh never installs over a newer one.
-  readonly refreshSkills = serial((message?: { text: string; recent: Promise<readonly EntryRecord[] | undefined> }) => this.#refreshSkills(message));
+  readonly refreshSkills = serial((message?: SkillsFor) => this.#refreshSkills(message));
 
-  async #refreshSkills(message: { text: string; recent: Promise<readonly EntryRecord[] | undefined> } | undefined): Promise<void> {
+  async #refreshSkills(message: SkillsFor | undefined): Promise<void> {
     try {
       const directory = this.#directory;
       const version = await directory.skillsVersion();
@@ -615,12 +623,15 @@ export class ChatAgent extends DurableObject<Env> {
       const classifier = this.#skillPicker();
       let shown: Set<string> | undefined;
       if (classifier) {
-        shown = new Set(this.ctx.storage.kv.get<string[]>(SHOWN_SKILLS_KEY) ?? []);
+        const saved = this.ctx.storage.kv.get<string[]>(SHOWN_SKILLS_KEY);
+        // A chat the agent answered before its skills were picked (or a run resumed with none saved) was shown every
+        // enabled skill: it keeps them, so its list only grows. A chat the agent has not answered yet starts with none.
+        const answered = saved === undefined && (!message || ((await message.recent())?.some(({ kind }) => kind === "pi.assistant") ?? true));
+        shown = new Set(answered ? listed.filter(isActive).map(({ name }) => name) : (saved ?? []));
         const waiting = listed.filter((skill) => isActive(skill) && !shown!.has(skill.name));
-        if (message && waiting.length) {
-          for (const name of await this.#pickSkills(classifier, message.text, message.recent, waiting)) shown.add(name);
-          this.ctx.storage.kv.put(SHOWN_SKILLS_KEY, [...shown]);
-        }
+        if (message && waiting.length) for (const name of await this.#pickSkills(classifier, message.text, message.recent, waiting)) shown.add(name);
+        // Not into a chat deleted meanwhile.
+        if ((saved === undefined || (message && waiting.length)) && !this.#gone) this.ctx.storage.kv.put(SHOWN_SKILLS_KEY, [...shown]);
       }
       const source = skillSource(listed, version, shown);
       if (source.fingerprint === this.#skillsInstalled) return;
@@ -644,13 +655,8 @@ export class ChatAgent extends DurableObject<Env> {
    * Which of `waiting` (skills not shown yet) `message` needs, as `classifier` says with the end of the conversation
    * (`recent`), and any it could not answer for. Its calls count in pi's ledger, off the prompt's path. Never throws.
    */
-  async #pickSkills(
-    classifier: SkillClassifier,
-    message: string,
-    recent: Promise<readonly EntryRecord[] | undefined>,
-    waiting: readonly SkillChoice[],
-  ): Promise<string[]> {
-    const history = routeHistory((await recent) ?? []);
+  async #pickSkills(classifier: SkillClassifier, message: string, recent: RecentEntries, waiting: readonly SkillChoice[]): Promise<string[]> {
+    const history = routeHistory((await recent()) ?? []);
     const pick = await classifier.pick({ message, history, skills: waiting });
     if (pick.errors.length) console.error("skills pick:", pick.errors.join("; "));
     if (pick.usage.totalTokens > 0 || pick.usage.cost.total > 0) {
@@ -663,7 +669,8 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * The newest ROUTE_ENTRIES transcript entries, newest first: what Auto's router and the skill classifier read of the
-   * conversation before a message starts a run, read once for both. Undefined when they could not be read.
+   * conversation before a message starts a run, read once for both, and only when one asks. Undefined when they could not
+   * be read.
    */
   async #recentEntries(): Promise<readonly EntryRecord[] | undefined> {
     try {
@@ -921,8 +928,8 @@ export class ChatAgent extends DurableObject<Env> {
     ]).then(([given, copied]) => [...given, ...copied]);
     // On Auto, the router picks the model while the rest gets ready. Its pick is used only if the message is a prompt.
     const images = attachments.filter((attachment) => attachment.image).length;
-    // What the router and the skill classifier read of the conversation, read once for both.
-    const recent = calling ? this.#recentEntries() : undefined;
+    // What the router and the skill classifier read of the conversation: read once for both, and only if one asks.
+    const recent = calling ? memoAsync(() => this.#recentEntries()) : undefined;
     const routing = recent && this.#auto() ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
     this.#announce({
       uid: author.uid,
