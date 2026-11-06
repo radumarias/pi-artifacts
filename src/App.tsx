@@ -264,16 +264,18 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
     else if (previewChat.current !== chatId) setPreview(null);
     previewChat.current = chatId;
   }, [chatId, opening]);
-  // A new publish always shows; the chat's newest artifact on load only when none was asked for.
+  // A new publish always shows; the chat's newest artifact on load only when none was asked for, and not on a narrow
+  // screen, where the preview would cover the chat just opened.
   const onArtifact = useCallback(
     (artifact: ArtifactPreview, loading?: boolean) => {
-      if (!loading || !opening) setPreview(artifact);
+      if (!loading || (!opening && !narrow)) setPreview(artifact);
     },
-    [opening],
+    [opening, narrow],
   );
 
-  // The menu closes once the user picked something in it: a chat, the skills, a file or an artifact to preview.
-  useEffect(() => setMenuOpen(false), [chatId, showSkills, preview]);
+  // The menu closes once the user picked something in it: a chat, the skills, a file or an artifact to preview; and when
+  // the window widens past NARROW, so it does not open again by itself when it narrows.
+  useEffect(() => setMenuOpen(false), [chatId, showSkills, preview, narrow]);
   useEffect(() => {
     if (!menuOpen) return;
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && setMenuOpen(false);
@@ -457,7 +459,18 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
           </ErrorBoundary>
         ) : chatId ? (
           // A new chat view, with a new socket, also between the owner and their second seat in the same chat.
-          <ErrorBoundary key={`${chatId}${secondSeat ? ".2" : ""}`} what="this chat">
+          <ErrorBoundary
+            key={`${chatId}${secondSeat ? ".2" : ""}`}
+            what="this chat"
+            // The chat's own header, with the menu button, is gone with it: without this a phone could not leave it.
+            head={
+              narrow && (
+                <header className="chat-header">
+                  <MenuButton onClick={openMenu} />
+                </header>
+              )
+            }
+          >
             <ChatView
               chatId={chatId}
               title={chats.find((chat) => chat.id === chatId)?.title}
