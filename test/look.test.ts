@@ -90,6 +90,7 @@ describe("a look at the check's screenshot", () => {
     expect(seen.errors).toEqual([]);
     expect(describeReport(seen)).toContain("Jev looked at the screenshot: it shows the page's content (88% sure).");
     expect(describeReport(report())).not.toContain("looked at the screenshot");
+    expect(describeReport(await looking("content", 0.3).review(report()))).not.toContain("looked at the screenshot");
   });
 });
 
@@ -126,7 +127,10 @@ describe("Jev on Workers AI", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { ai } = binding({ type: "choice", choice: "pretty", probabilities: { pretty: 1 }, confidence: 1 });
     const passed = report();
-    expect((await reviewLook(lookFrom("typesafe/jev", ai)!, passed)).report).toBe(passed);
+    const failed = await reviewLook(lookFrom("typesafe/jev", ai)!, passed);
+    expect(failed.report).toBe(passed);
+    // Billed all the same: its spend still counts.
+    expect(failed.usage?.input).toBe(2_000);
     expect(warn).toHaveBeenCalledWith("page look:", expect.stringContaining("no verdict"));
     warn.mockRestore();
   });

@@ -61,8 +61,18 @@ export interface PageLook {
   probability: number;
 }
 
-/** One look at a screenshot: what the classifier answered, and what the call cost. */
+/** One look at a screenshot: what the classifier answered, and what the call cost (on a billed call that failed, LookFailed has it). */
 export type Look = (screenshot: string, text: string, signal: AbortSignal) => Promise<{ look: PageLook; usage?: Usage }>;
+
+/** A look that failed, with what the call cost when it was billed all the same. */
+export class LookFailed extends Error {
+  constructor(
+    message: string,
+    readonly usage?: Usage,
+  ) {
+    super(message);
+  }
+}
 
 /** The look of a System One classifier on Workers AI, through the AI binding. */
 export function classifierLook(ai: ModelRunner, model: ClassifierModel<"cloudflare-workers-ai-system-one">): Look {
@@ -78,9 +88,11 @@ export function classifierLook(ai: ModelRunner, model: ClassifierModel<"cloudfla
       },
       { ...options, signal },
     );
-    if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `stopped: ${result.stopReason}`);
+    // A request whose answer could not be read was still billed: its usage goes with the error.
+    if (result.stopReason !== "stop") throw new LookFailed(result.errorMessage ?? `stopped: ${result.stopReason}`, result.usage);
     const answer = result.answers.shows;
-    if (answer?.type !== "choice" || !Object.hasOwn(VERDICTS, answer.choice)) throw new Error(`no verdict in its answer: ${JSON.stringify(answer)}`);
+    if (answer?.type !== "choice" || !Object.hasOwn(VERDICTS, answer.choice))
+      throw new LookFailed(`no verdict in its answer: ${JSON.stringify(answer)}`, result.usage);
     const verdict = answer.choice as LookVerdict;
     return { look: { by: model.name, verdict, probability: answer.probabilities[verdict] ?? answer.confidence }, usage: result.usage };
   };
@@ -129,16 +141,20 @@ export async function reviewLook(look: Look, report: CheckReport, { stoppedBefor
   // Ends the call once it is no longer waited for: out of time, or the check was stopped.
   const done = new AbortController();
   const asked = look(report.screenshot, report.text, done.signal);
+  let spent: Usage | undefined;
   const found = await deadline(asked, timeoutMs, () => new Error(`no answer in ${timeoutMs / 1000} s`), signal)
     .catch((error: unknown) => {
       if (signal?.aborted) throw error;
+      if (error instanceof LookFailed) spent = error.usage;
       console.warn("page look:", errorMessage(error));
     })
     .finally(() => done.abort());
-  if (!found) return { report };
+  if (!found) return { report, ...(spent && { usage: spent }) };
   const { look: seen, usage } = found;
+  // An answer below even odds says nothing, also of the page's content.
+  if (seen.probability < WARN_AT) return { report, usage };
   const reviewed: CheckReport = { ...report, look: seen };
-  if (seen.verdict === "content" || seen.probability < WARN_AT) return { report: reviewed, usage };
+  if (seen.verdict === "content") return { report: reviewed, usage };
   const line = `The screenshot looks ${SEEN[seen.verdict]} (${seen.by}, ${Math.round(seen.probability * 100)}% sure)`;
   // An error the page shows for a call that failed outside it (a sign-in, an outage) is the page doing its job.
   const stops = (seen.verdict === "blank" || (seen.verdict === "error" && !report.failedOutside)) && seen.probability >= ERROR_AT;

@@ -147,6 +147,8 @@ export interface CheckedDraft {
   report?: CheckReport;
   unchecked?: string;
   usage?: Usage;
+  /** Set when this check's look at the screenshot stopped the draft: what it saw. */
+  lookStopped?: string;
 }
 
 /** Check a draft in the headless browser, with a look at its screenshot (scope.look), and keep with it what the check found. */
@@ -164,7 +166,7 @@ export async function checkDraft(
   const stopped = looked.stopped ?? draft.lookStopped;
   if (check && stopped) check.lookStopped = stopped;
   if (check) await drafts.recordCheck(id, check);
-  return { draft: { ...draft, ...check }, report: looked.report, unchecked, usage: looked.usage };
+  return { draft: { ...draft, ...check }, report: looked.report, unchecked, usage: looked.usage, lookStopped: looked.stopped };
 }
 
 /** How many checks in a row may find errors before the agent stops fixing and asks the user. */

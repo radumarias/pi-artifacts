@@ -92,8 +92,8 @@ export default defineConfig({
       BROWSER: bindings.browser({ dev: { remote: false } }),
       // A vision classifier on Workers AI, run through the AI binding, looks at each check's screenshot and stops a page
       // it is sure renders blank or shows an error (worker/artifacts/look.ts): a System One model that sees images, by
-      // its Workers AI id. Empty: checks go without it.
-      CHECK_LOOK_MODEL: bindings.text("typesafe/jev"),
+      // its Workers AI id. Empty: checks go without it, as with PI_OFFLINE=1, where the AI binding cannot reach Workers AI.
+      CHECK_LOOK_MODEL: bindings.text(process.env.PI_OFFLINE === "1" ? "" : "typesafe/jev"),
       // Workers AI binding. Pi's createAI() routes Claude through AI Gateway with it.
       AI: bindings.ai({}),
       // Each user's files (users/<uid>/files/…) and drafts (users/<uid>/drafts/<chatId>/…), and a read cache of artifact versions (artifacts/<id>/…).

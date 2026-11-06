@@ -340,7 +340,7 @@ export function artifactExtension(scope: ChatScope): Extension {
         }),
         execute: async (args, _api, context) => {
           scope.failedChecks.allow();
-          const { draft, report, unchecked, usage } = await checkDraft(scope, args.draft_id, { tests: args.tests, viewport: args.viewport }, context.abortSignal);
+          const { draft, report, unchecked, usage, lookStopped } = await checkDraft(scope, args.draft_id, { tests: args.tests, viewport: args.viewport }, context.abortSignal);
           const { id } = draft;
           const failed = report ? report.errors.length > 0 : undefined;
           // A check that could not run counts too, unless such a page is published anyway (local development): a browser
@@ -352,9 +352,13 @@ export function artifactExtension(scope: ChatScope): Extension {
               : "A page is published only once a check passes: check it again in a while.";
             return { output: text(`The page could not be checked: ${unchecked}. Nothing was published. ${next}${stop}`) };
           }
+          // A look at the screenshot can be wrong: a page it stopped may also be checked again unchanged (look.ts).
+          const fix = lookStopped
+            ? `Look at the screenshot: fix the page with ${WRITE_TOOL}, draft_id "${id}" and edits, then check the new draft; or, if it does show what ` +
+              `it should, check draft "${id}" again unchanged.`
+            : `Fix them with ${WRITE_TOOL}, draft_id "${id}" and edits for just what changes, then check the new draft.`;
           const headline = failed
-            ? `The check found ${plural(report.errors.length, "error")} in draft "${id}". Fix them with ${WRITE_TOOL}, draft_id "${id}" and edits ` +
-              `for just what changes, then check the new draft. Nothing was published.${stop}`
+            ? `The check found ${plural(report.errors.length, "error")} in draft "${id}". ${fix} Nothing was published.${stop}`
             : `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with draft_id "${id}".`;
           return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed, usage };
         },
