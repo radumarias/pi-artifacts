@@ -1,3 +1,4 @@
+import { DICTATION_ROUTE, DICTATION_TYPE } from "../shared/dictation.ts";
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ModelCatalog } from "../shared/models.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
@@ -161,6 +162,9 @@ export const api = {
   /** One answer from the page's model (pi.use("ai")), paid for by this viewer. */
   pageAi: (id: string, request: PageAiRequest) => pageCall<PageAiResponse>(`/api/artifacts/${id}/ai`, request),
   /** The user's own system prompt, added to the built-in one in all their chats. Always theirs to change. */
+  /** The text the Worker heard in a recorded clip (16 kHz mono WAV), spoken in `lang` (BCP 47) as far as the browser knows. */
+  dictate: (wav: Uint8Array<ArrayBuffer>, lang: string, signal?: AbortSignal) =>
+    request<{ text: string }>(`${DICTATION_ROUTE}?lang=${encodeURIComponent(lang)}`, { method: "POST", headers: { "content-type": DICTATION_TYPE }, body: wav, signal }),
   systemPrompt: () => request<ChatSystemPrompt>("/api/me/system-prompt"),
   /** Save it; empty clears it. */
   setSystemPrompt: (text: string) => request<ChatSystemPrompt>("/api/me/system-prompt", send("PUT", { text })),

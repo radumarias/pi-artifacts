@@ -115,6 +115,14 @@ export default defineConfig({
       PAGE_AI_DAILY_USD: bindings.text("0.50"),
       // Calls to pages' models: 20 a minute per person.
       PAGE_AI: bindings.rateLimit({ namespace: "4202", simple: { limit: 20, period: 60 } }),
+      // Dictation for browsers whose own speech recognition is missing (Firefox) or cannot reach its service (Brave,
+      // Arc, a blocked network): the composer records the clip and a speech-to-text model on Workers AI, through the AI
+      // binding, writes it out (worker/dictation.ts). Empty: no such fallback; the browser's own recognition only.
+      DICTATION_MODEL: bindings.text(process.env.PI_OFFLINE === "1" ? "" : "@cf/openai/whisper-large-v3-turbo"),
+      // How many minutes of audio one person may have transcribed a day (UTC); counted in their UserDirectory.
+      DICTATION_DAILY_MINUTES: bindings.text("60"),
+      // Clips sent for transcribing: 12 a minute per person.
+      DICTATION: bindings.rateLimit({ namespace: "4203", simple: { limit: 12, period: 60 } }),
       // Headless Chrome (Browser Rendering): the agent checks each page in it before publishing (worker/artifacts/check.ts).
       // Local development runs a local Chrome, which miniflare downloads on first use.
       BROWSER: bindings.browser({ dev: { remote: false } }),

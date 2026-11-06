@@ -715,7 +715,9 @@ a.mention-chip:hover { text-decoration: underline; }
 .composer-more-glyph { flex: none; width: 18px; text-align: center; font-size: 16px; color: var(--muted); }
 .composer-model { margin-left: auto; }
 .composer-model .spinner { flex: none; width: 14px; height: 14px; margin-right: 6px; border-top-color: var(--text); }
-.dictation-error { min-width: 0; padding: 0 6px; font-size: 13px; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dictation-error, .dictation-status { min-width: 0; padding: 0 6px; font-size: 13px; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dictation-status { color: var(--muted); }
+.dictation-status .spinner { margin-right: 4px; border-top-color: var(--text); }
 /* How full the model's context is: a ring after the model picker, and its panel above it. */
 .context-meter { position: relative; display: flex; }
 .context-ring { padding: 4px; }
