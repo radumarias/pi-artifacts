@@ -236,6 +236,17 @@ it stops a draft only once: checked again unchanged, after the agent looked at t
 The look answers without writing text (input priced only) and its spend counts in the chat's cost panel; when it fails
 or takes over 6 s, the check goes on without it. An empty `CHECK_LOOK_MODEL` turns it off.
 
+A page's first check also gets a **code review** (`worker/artifacts/review.ts`), like the review pass run on the app's
+own code: a small, cheap model (`REVIEW_MODEL`, by default gpt-oss-120b on Workers AI, then Gemini Flash-Lite) reads the
+page's source, with line numbers, beside the browser check, so it adds no time unless it is the slower of the two. It
+looks for bugs, security holes (untrusted text from MCP calls, storage or `pi.use("ai")` put into `innerHTML` unescaped,
+MCP data saved to storage, where every viewer reads the author's values), work that never ends (polling without an end,
+`pi.use("ai")` on load or on a timer) and simpler code. What it says to fix is an error, so the agent fixes it with
+edits before publishing; a suggestion is a warning. The review is bounded to one round: a draft edited from a reviewed
+one is not reviewed again, and a draft it stopped passes when checked again unchanged, since the reviewer can be wrong.
+When it fails or takes over 45 s, the check goes on without it. The chat shows it as a step of its own under the check,
+and its spend in the cost panel ("Page code reviews"). An empty `REVIEW_MODEL` turns it off.
+
 A draft that passes is published by its `draft_id`. A publish without an `artifact_id` goes to the artifact the draft was
 written for, else to the chat's artifact whose title matches (`new_artifact: true` makes a separate one), so a fix the
 model publishes without the id never turns into a second artifact stuck at version 1. `artifact_publish` takes only a

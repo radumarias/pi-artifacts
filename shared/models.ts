@@ -103,6 +103,8 @@ export const SKILLS_LEDGER_PREFIX = "skills:";
 export const HINT_LEDGER_PREFIX = "hint:";
 /** The same for the tool picker (worker/agent/tool-pick.ts): `tool-pick:` and the classifier's id. */
 export const TOOL_PICK_LEDGER_PREFIX = "tool-pick:";
+/** The same for the code review of pages before they are published (worker/artifacts/review.ts): `review:` and the model's id. */
+export const REVIEW_LEDGER_PREFIX = "review:";
 
 /** A model Auto may pick (the deployment's AUTO_MODELS): the picker's id, and what it is best at, which the router reads. */
 export interface AutoCandidate {

@@ -1,10 +1,22 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, mcpParts, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
+import {
+  CHECK_TOOL,
+  DRAFTS_TOOL,
+  MCP_DISCOVER_TOOL,
+  mcpParts,
+  PUBLISH_TOOL,
+  WRITE_TOOL,
+  type CheckedDetails,
+  type CheckedResultDetails,
+  type ReviewedDetails,
+  type ReviewFindingKind,
+} from "../../shared/protocol.ts";
 import { clip, formatBytes, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { formatElapsed, useElapsed } from "./elapsed.ts";
+import { formatCost } from "./spend.ts";
 import type { StepItem } from "./stepRuns.ts";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
@@ -137,6 +149,7 @@ const SAID: Record<string, (n: number) => string> = {
   "write:new": some("wrote", "a page", "page"),
   "write:edit": again("edited the page"),
   [CHECK_TOOL]: again("checked the page"),
+  review: again("reviewed the code"),
   [PUBLISH_TOOL]: again("published"),
   [DRAFTS_TOOL]: again("listed drafts"),
   artifact_read: some("read", "an artifact", "artifact"),
@@ -164,16 +177,22 @@ function said(kind: string, n: number): string {
   return `used ${kind}${times(n)}`;
 }
 
+/** The code review a page check's result carries (a step of its own, ReviewStep), if any. */
+function reviewOf(result: ToolResultMessage | undefined): ReviewedDetails | undefined {
+  return (result?.details as Partial<CheckedResultDetails> | undefined)?.review;
+}
+
 /**
  * A run's summary in a line: what its calls did, by kind in the order they first came ("Queried sales 5 times, ran 3
- * commands"). Thoughts count only in a run of nothing else.
+ * commands"), a check's code review (from `results`) after the check. Thoughts count only in a run of nothing else.
  */
-export function runSummary(items: readonly StepItem[]): string {
+export function runSummary(items: readonly StepItem[], results?: ReadonlyMap<string, ToolResultMessage>): string {
   const kinds = new Map<string, number>();
+  const count = (kind: string) => kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
   for (const item of items) {
     if (item.kind !== "tool") continue;
-    const kind = kindOf(item.call);
-    kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+    count(kindOf(item.call));
+    if (reviewOf(results?.get(item.call.id))) count("review");
   }
   const line = kinds.size ? [...kinds].map(([kind, n]) => said(kind, n)).join(", ") : plural(items.length, "thought");
   return line.charAt(0).toUpperCase() + line.slice(1);
@@ -382,7 +401,8 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
     status: text + took,
     time: startedAt !== undefined && <RunningFor since={startedAt} />,
   };
-  const check = (result?.details as { check?: CheckedDetails } | undefined)?.check;
+  const check = (result?.details as Partial<CheckedResultDetails> | undefined)?.check;
+  const review = reviewOf(result);
   // Only when it is needed: a result can be long, and finished steps re-render as the chat grows.
   const output = () => (result ? resultText(result) : live!.tools.get(call.id)?.output) ?? "";
   // A call without arguments whose output is a short line (or which has none) is said on its line alone. Not while the
@@ -391,7 +411,7 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
     const line = shortOutput(output());
     if (line !== undefined) return <Panel {...props} hint={line} />;
   }
-  return (
+  const panel = (
     <Panel {...props} hint={stepHint(call.name, call.arguments)}>
       {() => {
         const shown = output();
@@ -410,6 +430,55 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
           </>
         );
       }}
+    </Panel>
+  );
+  return review ? (
+    <>
+      {panel}
+      <ReviewStep openKey={`review:${call.id}`} review={review} />
+    </>
+  ) : (
+    panel
+  );
+}
+
+const KIND_LABELS: Record<ReviewFindingKind, string> = { bug: "Bug", security: "Security", performance: "Performance", simplify: "Simpler code" };
+
+/**
+ * The code review that ran beside a page check (worker/artifacts/review.ts), as a step of its own under it: how many
+ * things to fix and suggestions it found, and what it cost, opening on each finding.
+ */
+export function ReviewStep({ openKey, review }: { openKey: string; review: ReviewedDetails }) {
+  const took = ` · ${tookFor(review.ms)}`;
+  if (review.failed) return <Panel openKey={openKey} icon={STATUS.stopped.icon} label="Review code" hint={review.failed} status={`Did not finish${took}`} />;
+  const fixes = review.findings.filter((finding) => finding.severity === "fix").length;
+  const suggestions = review.findings.length - fixes;
+  const found = [fixes && `${fixes} to fix`, suggestions && plural(suggestions, "suggestion")].filter(Boolean).join(", ");
+  const hint = `${found || "Nothing to change"} · ${formatCost(review.cost)}`;
+  const props = fixes
+    ? { tone: "error" as const, icon: "!", status: `Found issues${took}` }
+    : { tone: "done" as const, icon: STATUS.done.icon, status: STATUS.done.text + took };
+  return (
+    <Panel openKey={openKey} label="Review code" hint={hint} {...props}>
+      {review.findings.length
+        ? () => (
+            <>
+              <ul className="review-findings">
+                {review.findings.map((finding, i) => (
+                  <li key={i} className={finding.severity}>
+                    <div className="review-kind">
+                      {finding.severity === "fix" ? "Fix" : "Suggestion"} · {KIND_LABELS[finding.kind] ?? finding.kind}
+                      {finding.line ? ` · line ${finding.line}` : ""}
+                    </div>
+                    <p>{finding.problem}</p>
+                    {finding.fix && <p className="review-fix">{finding.fix}</p>}
+                  </li>
+                ))}
+              </ul>
+              {review.by && <p className="step-note">Reviewed by {review.by}</p>}
+            </>
+          )
+        : undefined}
     </Panel>
   );
 }
@@ -486,8 +555,9 @@ function OneStep({ item }: { item: StepItem }) {
  */
 export function StepRun({ items }: { items: readonly StepItem[] }) {
   const { results } = use(ResultsContext);
-  // The same items until the run grows: the line is worked out once for a finished run, and not for a step alone.
-  const label = useMemo(() => (items.length === 1 ? "" : runSummary(items)), [items]);
+  // The same items until the run grows, and results until one lands: the line is worked out once for a finished run,
+  // and not for a step alone.
+  const label = useMemo(() => (items.length === 1 ? "" : runSummary(items, results)), [items, results]);
   if (items.length === 1) return <OneStep item={items[0]} />;
   const calls = items.flatMap((item) => (item.kind === "tool" ? [item] : []));
   // Read only while a call is unfinished, as ToolStep does.

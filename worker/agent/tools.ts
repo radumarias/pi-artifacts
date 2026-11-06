@@ -11,13 +11,16 @@ import {
   WRITE_TOOL,
   type ArtifactMeta,
   type CheckedDetails,
+  type CheckedResultDetails,
   type PublishedDetails,
+  type ReviewedDetails,
   type SavedFilesDetails,
 } from "../../shared/protocol.ts";
 import { AGENT_REACTIONS, type Reaction } from "../../shared/reactions.ts";
 import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../shared/skills.ts";
 import { formatBytes, listSome, plural } from "../../shared/util.ts";
 import { describeReport, type CheckReport } from "../artifacts/check.ts";
+import type { PageReview } from "../artifacts/review.ts";
 import { chatOutFolder, FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, savedReport, wroteReport } from "../chat-traces.ts";
 import { MAX_RUN_STDERR, MAX_RUN_STDOUT, type SandboxFile, type SandboxRun } from "../sandbox.ts";
 import { literalPath, MAX_DRAFTS, type FileEntry, type UserFiles } from "../storage/index.ts";
@@ -282,6 +285,35 @@ function checkOutput(headline: string, report: CheckReport) {
   return content;
 }
 
+/**
+ * What the agent is told of a check's code review, after the headline: that a small model can be wrong, so it fixes
+ * the findings that are real, and how it goes on when one to fix is not.
+ */
+function reviewNote(review: PageReview, id: string): string {
+  if (review.failed) return " The code review of the page did not finish; it goes on without one.";
+  const fixes = review.findings.filter((finding) => finding.severity === "fix").length;
+  const suggestions = review.findings.length - fixes;
+  if (!review.findings.length) return " A code review of the page found nothing to change.";
+  const parts = [
+    fixes &&
+      `A code review of the page (by a small model, which can be wrong) found ${plural(fixes, "thing")} to fix, among the errors: fix those that are ` +
+        `real in the same edits as the rest. The page is reviewed once: if every one left is wrong and the browser found no other error, check draft "${id}" ` +
+        "again unchanged, and it passes.",
+    suggestions && `It suggests ${plural(suggestions, "change")}, among the warnings: make those clearly worth it in the same edits, or leave them.`,
+  ];
+  return ` ${parts.filter(Boolean).join(" ")}`;
+}
+
+function reviewedDetails(review: PageReview): ReviewedDetails {
+  return {
+    findings: review.findings,
+    ...(review.by && { by: review.by }),
+    cost: review.usage.cost.total,
+    ms: review.ms,
+    ...(review.failed && { failed: review.failed }),
+  };
+}
+
 function checkedDetails(report: CheckReport): CheckedDetails {
   return { thumb: report.thumb, errors: report.errors.length, warnings: report.warnings.length };
 }
@@ -345,7 +377,8 @@ export function artifactExtension(scope: ChatScope): Extension {
           `Render a draft (saved with ${WRITE_TOOL}) in a headless browser before publishing it, with its live MCP calls answered as the viewer's would be (read-only tools only; ` +
           "a write tool gets a not_granted error instead of running). Returns errors (uncaught exceptions, console errors, blocked or failed loads, " +
           "calls the page got wrong, failed tests, a screenshot a vision model is sure looks blank or shows an error), warnings, how the live calls went, " +
-          "the visible text and a screenshot. Nothing is published, " +
+          "the visible text and a screenshot. On a page's first check, a small model also reviews its code (bugs, security, performance, simpler code): " +
+          "what to fix is among the errors, suggestions among the warnings; a draft edited from a reviewed one is not reviewed again. Nothing is published, " +
           `so fixing and checking again uses up no versions. Fix what it finds with ${WRITE_TOOL}, draft_id and edits, then check the new draft. ` +
           "Pass `tests`: a few short checks of what the page must show once its data arrived.",
         parameters: Type.Object({
@@ -367,7 +400,12 @@ export function artifactExtension(scope: ChatScope): Extension {
         }),
         execute: async (args, _api, context) => {
           scope.failedChecks.allow();
-          const { draft, report, unchecked, usage, lookStopped } = await checkDraft(scope, args.draft_id, { tests: args.tests, viewport: args.viewport }, context.abortSignal);
+          const { draft, report, unchecked, usage, lookStopped, review } = await checkDraft(
+            scope,
+            args.draft_id,
+            { tests: args.tests, viewport: args.viewport },
+            context.abortSignal,
+          );
           const { id } = draft;
           const failed = report ? report.errors.length > 0 : undefined;
           // A check that could not run counts too, unless such a page is published anyway (local development): a browser
@@ -387,7 +425,8 @@ export function artifactExtension(scope: ChatScope): Extension {
           const headline = failed
             ? `The check found ${plural(report.errors.length, "error")} in draft "${id}". ${fix} Nothing was published.${stop}`
             : `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with draft_id "${id}".`;
-          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed, usage };
+          const details: CheckedResultDetails = { check: checkedDetails(report), ...(review && { review: reviewedDetails(review) }) };
+          return { output: checkOutput(`${headline}${review ? reviewNote(review, id) : ""}`, report), details, isError: failed, usage };
         },
       }),
       defineTool({

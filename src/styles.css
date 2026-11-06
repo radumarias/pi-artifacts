@@ -571,6 +571,13 @@ button.reaction:hover { border-color: var(--muted); }
 .step-run-list > .step > .step-body { margin: 4px 0 6px; padding: 0; border-left: 0; }
 .step-failed { color: var(--error); }
 .step-note { margin: 0; color: var(--muted); }
+.review-findings { margin: 0 0 8px; padding: 0; list-style: none; display: grid; gap: 6px; }
+.review-findings li { padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border-left: 3px solid var(--border); }
+.review-findings li.fix { border-left-color: var(--error); }
+.review-findings p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.review-kind { font: 600 11.5px/1.2 var(--font-body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.review-findings li.fix .review-kind { color: var(--error); }
+.review-fix { color: var(--muted); }
 .step-shot { margin: 0 0 10px; }
 .step-shot img { display: block; max-width: min(100%, 480px); max-height: 360px; object-fit: cover; object-position: top; border: 1px solid var(--border); border-radius: 6px; }
 .step-shot figcaption { margin-top: 4px; color: var(--muted); font-size: 12px; }

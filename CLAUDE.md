@@ -48,7 +48,9 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   the agent saves a page with `artifact_write` (then changes it only by edits), and `artifact_check` and `artifact_publish` take it by draft id and report console errors, failed calls, a screenshot and the agent's tests, and
   publish refuses a page with errors, or one no browser checked (except with `AUTH_MODE=demo`); keep it that way. A check
   with no errors also has a vision classifier (Jev on Workers AI, `CHECK_LOOK_MODEL`, `worker/artifacts/look.ts`) look at
-  its screenshot: a sure blank or error page is an error once per draft, the rest warnings; a failed look changes nothing. Until
+  its screenshot: a sure blank or error page is an error once per draft, the rest warnings; a failed look changes nothing. A
+  page's first check also has a small model (`REVIEW_MODEL`, `worker/artifacts/review.ts`) review its code beside it: what
+  to fix is an error, suggestions warnings; once per page (drafts edited from a reviewed one inherit `reviewed`). Until
   then a page is a draft, in the owner's R2 folder (`worker/storage/drafts.ts`, `ChatDrafts`), never a commit. `test/check.test.ts` runs the check in a local Chrome
   (`CHROME_PATH`, else Playwright's) and skips without one.
 - Each artifact is the repo `artifact-<id>`: one commit and tag `v<n>` per publish, pushed with isomorphic-git

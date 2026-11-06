@@ -95,6 +95,7 @@
     "worker/raw.d.ts",
     "worker/artifacts/check.ts",
     "worker/artifacts/look.ts",
+    "worker/artifacts/review.ts",
     "worker/agent/publish.ts",
     "worker/agent/prompt.ts",
     "worker/artifacts/serve.ts",

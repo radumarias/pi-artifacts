@@ -73,15 +73,20 @@ export function checkPageAiRequest(body: unknown): CheckedPageAiRequest | string
   };
 }
 
-/** What a page's model answered, and what every attempt at it cost (also those that failed). */
-export type PageAiAnswer = ({ ok: true; text: string; json?: unknown } | { ok: false; error: PageError }) & { usage: Usage };
+/** What a page's model answered (and which model did), and what every attempt at it cost (also those that failed). */
+export type PageAiAnswer = ({ ok: true; text: string; json?: unknown; model: Model<Api> } | { ok: false; error: PageError }) & { usage: Usage };
 
 /**
- * Ask the first of `candidates` that answers. A model that fails, or spends its whole allowance without an answer,
- * passes the request to the next one; a reply that is not the JSON asked for is `bad_output` (it was answered, so no
- * other model is asked).
+ * Ask the first of `candidates` that answers, each for at most `attemptMs`, until `signal` aborts. A model that fails,
+ * or spends its whole allowance without an answer, passes the request to the next one; a reply that is not the JSON
+ * asked for is `bad_output` (it was answered, so no other model is asked).
  */
-export async function askPageModel(models: Pick<Models, "completeSimple">, candidates: readonly Model<Api>[], request: CheckedPageAiRequest): Promise<PageAiAnswer> {
+export async function askPageModel(
+  models: Pick<Models, "completeSimple">,
+  candidates: readonly Model<Api>[],
+  request: CheckedPageAiRequest,
+  { signal, attemptMs = 60_000 }: { signal?: AbortSignal; attemptMs?: number } = {},
+): Promise<PageAiAnswer> {
   const failures: string[] = [];
   const usage = structuredClone(NO_USAGE);
   for (const model of candidates) {
@@ -90,9 +95,11 @@ export async function askPageModel(models: Pick<Models, "completeSimple">, candi
       reply = await models.completeSimple(model, context(model, request), {
         maxTokens: request.maxTokens + (model.reasoning ? REASONING_TOKENS : 0),
         ...(model.reasoning && { reasoning: clampThinkingLevel(model, "low") as Exclude<ModelThinkingLevel, "off"> }),
-        signal: AbortSignal.timeout(60_000),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(attemptMs)]) : AbortSignal.timeout(attemptMs),
       });
     } catch (error) {
+      // Stopped from outside (out of time, or no longer waited for): no other model is asked.
+      if (signal?.aborted) break;
       failures.push(`${model.id}: ${errorMessage(error)}`);
       continue;
     }
@@ -100,12 +107,13 @@ export async function askPageModel(models: Pick<Models, "completeSimple">, candi
     const text = textOf(reply.content, "").trim();
     if ((reply.stopReason !== "stop" && reply.stopReason !== "length") || !text) {
       failures.push(`${model.id}: ${reply.errorMessage ?? (text ? reply.stopReason : `no answer (${reply.stopReason})`)}`);
+      if (signal?.aborted) break;
       continue;
     }
-    if (!request.json) return { ok: true, text, usage };
+    if (!request.json) return { ok: true, text, model, usage };
     const json = jsonIn(text);
     if (json === undefined) return { ok: false, error: { code: "bad_output", message: `The model did not answer with JSON: ${clip(text, 200)}` }, usage };
-    return { ok: true, text, json, usage };
+    return { ok: true, text, json, model, usage };
   }
   if (failures.length) console.error("page ai:", failures.join("; "));
   const message = candidates.length ? "The model did not answer; try again in a moment." : "This app has no model for pages.";

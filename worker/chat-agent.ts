@@ -54,6 +54,7 @@ import {
   HINT_LEDGER_PREFIX,
   isAuto,
   modelKey,
+  REVIEW_LEDGER_PREFIX,
   SKILLS_LEDGER_PREFIX,
   TOOL_PICK_LEDGER_PREFIX,
   type AutoCandidate,
@@ -90,6 +91,7 @@ import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget,
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
 import { lookFrom } from "./artifacts/look.ts";
+import { modelReviewer, type PageReviewer } from "./artifacts/review.ts";
 import type { ChatAnswer } from "./artifacts/page-calls.ts";
 import { chatOutFolder, chatTraces, type ChatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
@@ -361,6 +363,7 @@ export class ChatAgent extends DurableObject<Env> {
       readSkillFile: (skill, set, path) => this.#readSkillSetFile(skill, set, path),
       skillFolders: (names, maxBytes) => this.#skillFolders(names, maxBytes),
       look: lookFrom(env.CHECK_LOOK_MODEL, env.AI),
+      review: () => this.#pageReviewer(),
       publishUnchecked: env.AUTH_MODE === "demo",
       failedChecks: new FailedChecks(),
       react: (emoji) => this.#agentReact(emoji),
@@ -764,6 +767,48 @@ export class ChatAgent extends DurableObject<Env> {
       if (!this.#skillClassifier && this.env.SKILLS_MODEL.trim()) console.error(`skills: SKILLS_MODEL names no System One model: ${this.env.SKILLS_MODEL}`);
     }
     return this.#skillClassifier ?? undefined;
+  }
+
+  /**
+   * The code review of pages before they are published: by the first of REVIEW_MODEL's models this deployment can run
+   * that answers, its calls counted in pi's ledger under REVIEW_LEDGER_PREFIX and that model's id. Undefined when it
+   * names none: pages then go unreviewed. Never throws.
+   */
+  async #pageReviewer(): Promise<PageReviewer | undefined> {
+    const ids = this.env.REVIEW_MODEL.split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (!ids.length) return undefined;
+    let catalog: Catalog;
+    try {
+      catalog = await this.#catalog();
+    } catch (error) {
+      console.error("page review:", errorMessage(error));
+      return undefined;
+    }
+    // Each model with the id REVIEW_MODEL names it by, which the cost panel finds its name by.
+    const named = new Map(
+      ids.flatMap((id) => {
+        const model = catalog.model(id);
+        return model ? [[model, id] as const] : [];
+      }),
+    );
+    if (!named.size) {
+      console.error(`page review: REVIEW_MODEL names no model this deployment can run: ${this.env.REVIEW_MODEL}`);
+      return undefined;
+    }
+    const review = modelReviewer(this.#oneShotModels, [...named.keys()]);
+    return async (html, signal) => {
+      const reviewed = await review(html, signal);
+      const { usage } = reviewed;
+      if (usage.totalTokens > 0 || usage.cost.total > 0) {
+        const model = [...named].find(([candidate]) => candidate.id === reviewed.by)?.[1] ?? ids[0];
+        void this.#root()
+          .then((root) => root.commit((tx) => recordSpend(tx, root.id, `${REVIEW_LEDGER_PREFIX}${model}`, usage), BACKGROUND_CONTEXT))
+          .catch((error: unknown) => console.error("page review spend:", errorMessage(error)));
+      }
+      return reviewed;
+    };
   }
 
   /**

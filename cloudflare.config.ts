@@ -142,6 +142,10 @@ export default defineConfig({
       // it is sure renders blank or shows an error (worker/artifacts/look.ts): a System One model that sees images, by
       // its Workers AI id. Empty: checks go without it, as with PI_OFFLINE=1, where the AI binding cannot reach Workers AI.
       CHECK_LOOK_MODEL: bindings.text(process.env.PI_OFFLINE === "1" ? "" : "typesafe/jev"),
+      // The code review of pages before they are published (worker/artifacts/review.ts): beside a page's first check, a
+      // small, cheap model reads its source and lists bugs, security holes and simpler code; the agent fixes them before
+      // publishing. A comma-separated list of the picker's model ids, tried in order, as PAGE_AI_MODEL. Empty: no review.
+      REVIEW_MODEL: bindings.text(process.env.PI_OFFLINE === "1" ? "" : "@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
       // Workers AI binding. Pi's createAI() routes Claude through AI Gateway with it.
       AI: bindings.ai({}),
       // Each user's files (users/<uid>/files/…) and drafts (users/<uid>/drafts/<chatId>/…), and a read cache of artifact versions (artifacts/<id>/…).

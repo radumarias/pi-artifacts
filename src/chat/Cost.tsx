@@ -1,6 +1,14 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
-import { AUTO_LEDGER_PREFIX, effortLabel, HINT_LEDGER_PREFIX, SKILLS_LEDGER_PREFIX, TOOL_PICK_LEDGER_PREFIX, type ModelInfo } from "../../shared/models.ts";
+import {
+  AUTO_LEDGER_PREFIX,
+  effortLabel,
+  HINT_LEDGER_PREFIX,
+  REVIEW_LEDGER_PREFIX,
+  SKILLS_LEDGER_PREFIX,
+  TOOL_PICK_LEDGER_PREFIX,
+  type ModelInfo,
+} from "../../shared/models.ts";
 import { AGENT_NAME } from "../../shared/mentions.ts";
 import { stepLabel } from "./Steps.tsx";
 import { useDismiss } from "../layout.tsx";
@@ -21,13 +29,15 @@ const PICKERS = [
   [SKILLS_LEDGER_PREFIX, "Skill picks"],
   [HINT_LEDGER_PREFIX, `Spotting asks for ${AGENT_NAME}`],
   [TOOL_PICK_LEDGER_PREFIX, "Tool picks"],
+  [REVIEW_LEDGER_PREFIX, "Page code reviews"],
 ] as const;
 
 /**
  * A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name;
  * Auto's router ("Auto picks · GPT OSS 120B"); the classifier that picks the skills shown ("Skill picks ·
  * cloudflare-workers-ai/typesafe/jev"); what told whether messages were meant for the agent ("Spotting asks for pi ·
- * typesafe/jev"); the tool picker ("Tool picks · cloudflare-workers-ai/typesafe/jev").
+ * typesafe/jev"); the tool picker ("Tool picks · cloudflare-workers-ai/typesafe/jev"); the review of pages' code ("Page
+ * code reviews · GPT OSS 120B").
  */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
   for (const [prefix, label] of PICKERS) {
@@ -66,7 +76,8 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
   const box = useDismiss<HTMLDivElement>(open, setOpen);
   if (spend.models.length === 0) return null;
   // By id, not the catalog: a deployment's default can be a Workers AI model the picker does not list.
-  const workersAi = spend.models.some((share) => share.model.startsWith("@cf/"));
+  // Also under a prefix: a page code review on Workers AI ("review:@cf/…").
+  const workersAi = spend.models.some((share) => /(^|:)@cf\//.test(share.model));
   // Listed models with no known price: their replies were priced at nothing.
   const unpriced = spend.models.filter((share) => models.has(share.model) && !models.get(share.model)!.price);
   return (

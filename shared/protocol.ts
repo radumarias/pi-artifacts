@@ -219,6 +219,32 @@ export type CheckedDetails = {
   warnings: number;
 };
 
+/** What a code review of a page found (worker/artifacts/review.ts): "fix" stops the page until it is fixed, "suggest" does not. */
+export type ReviewFindingKind = "bug" | "security" | "performance" | "simplify";
+export type ReviewFinding = {
+  severity: "fix" | "suggest";
+  kind: ReviewFindingKind;
+  /** The page's line it is about, when the reviewer said. */
+  line?: number;
+  problem: string;
+  fix?: string;
+};
+
+/** A check's code review as its result shows it in the chat: a step of its own under the check. */
+export type ReviewedDetails = {
+  findings: ReviewFinding[];
+  /** The model that answered, by its id. */
+  by?: string;
+  /** In dollars, at list prices; counted in the chat's cost under REVIEW_LEDGER_PREFIX. */
+  cost: number;
+  ms: number;
+  /** Set when the review did not finish: why. */
+  failed?: string;
+};
+
+/** A check's result details: what the chat shows of the check, and of the code review that ran beside it. */
+export type CheckedResultDetails = { check: CheckedDetails; review?: ReviewedDetails };
+
 /** The tool that saves a page the agent writes, or its edits to one, as a draft for the check and the publish to take by id. */
 export const WRITE_TOOL = "artifact_write";
 
