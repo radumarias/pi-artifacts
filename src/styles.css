@@ -314,7 +314,8 @@ body.resizing iframe { pointer-events: none; }
 :is(.message:not(.mine) > :not(.byline, .sent-time), .transcript > :is(.assistant, .step, .artifact-card, .prompt-cost, .thinking, .chat-error)) { margin-left: var(--gutter); }
 .bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 100%; min-width: 0; }
-.message.mine { align-self: flex-end; align-items: flex-end; max-width: 85%; }
+.message.mine { align-items: flex-end; padding-left: 15%; }
+.message.mine > .bubble-row { align-self: auto; }
 .message.mine .bubble { padding: 8px 14px; border-radius: 18px 18px 4px 18px; background: var(--surface-2); }
 .message.mine :is(.attachments, .reactions) { justify-content: flex-end; }
 /* A message that tags the viewer: on the accent's tint, so it stands out in a busy chat. */
@@ -360,11 +361,8 @@ body.resizing iframe { pointer-events: none; }
   .message:is(:hover, :focus-within) .floating > .message-tools, .floating.open > .message-tools, .floating > .message-menu { pointer-events: auto; }
   /* An open menu over the next message stays above that message's pill. */
   .message-actions.floating.open { z-index: 6; }
-  /* The viewer's own message has no name above it: the pill waits beside the bubble, on its left, bridged to it so the
-     pointer keeps the message hovered on its way over. */
-  .message.mine .message-actions.floating { left: auto; right: 100%; top: 0; bottom: auto; }
-  .message.mine .floating > .message-tools { position: relative; margin-right: 6px; }
-  .message.mine .floating > .message-tools::after { content: ""; position: absolute; left: 100%; top: 0; bottom: 0; width: 8px; }
+  /* The viewer's own message has no name above it: the pill waits beside the bubble, on its left. */
+  .message.mine .message-actions.floating { left: auto; right: calc(100% + 6px); top: 0; bottom: auto; }
   .floating .icon-button { padding: 4px; border-radius: 8px; }
   .floating .icon-button:hover, .floating .icon-button[aria-expanded="true"] { background: var(--surface-2); }
   .floating svg { width: 16px; height: 16px; }
@@ -384,8 +382,6 @@ body.resizing iframe { pointer-events: none; }
 [data-compact] .transcript { max-width: none; transition: transform 0.2s ease-out; }
 [data-compact] .transcript.revealing { transition: none; }
 [data-compact] .message { position: relative; align-self: stretch; }
-/* Stretched for its time as every message is, the viewer's own still keeps to the right. */
-[data-compact] .message.mine { max-width: none; padding-left: 15%; }
 [data-compact] .assistant { position: relative; }
 [data-compact] .message-foot { display: contents; }
 [data-compact] .sent-time { position: absolute; left: calc(100% + 24px); opacity: 1; padding: 0; }
@@ -418,12 +414,12 @@ body.resizing iframe { pointer-events: none; }
 }
 /* Under a message sent on Auto: the model and effort picked to answer it. Always shown, small and muted. */
 .auto-pick { max-width: min(100%, 420px); padding: 0 4px; color: var(--muted); font-size: 12px; line-height: 16px; }
-.auto-pick summary { display: flex; align-items: center; justify-content: flex-end; gap: 6px; list-style: none; cursor: pointer; }
+.auto-pick summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; }
 .auto-pick summary::-webkit-details-marker { display: none; }
-.auto-pick-why { white-space: pre-line; overflow-wrap: anywhere; text-align: right; }
-/* Under someone else's message, on the left like it. */
-.message:not(.mine) .auto-pick summary { justify-content: flex-start; }
-.message:not(.mine) .auto-pick-why { text-align: left; }
+.auto-pick-why { white-space: pre-line; overflow-wrap: anywhere; }
+/* Under the viewer's own message, on the right like it. */
+.message.mine .auto-pick summary { justify-content: flex-end; }
+.message.mine .auto-pick-why { text-align: right; }
 .auto-pick-tag { flex: none; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; font-weight: 600; }
 .auto-pick-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auto-pick.kept .auto-pick-model { font-style: italic; }

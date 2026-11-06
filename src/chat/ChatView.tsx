@@ -651,12 +651,8 @@ function User({
   reactions?: MessageReactions | null;
   onReply?: () => void;
 }) {
-  const people = useSharedChat();
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
-  // In a shared chat, their colour; in one with no one else, the first.
-  const tint = people && author ? tintOf(people, author.uid) : 0;
-  const role = people && author && (people.owner.uid === author.uid ? "owner" : "member");
   const tagsMe = !mine && mentions?.some((mention) => mention.kind === "person" && mention.uid === uid);
   const files = attachments.length > 0 && (
     <div className="attachments">
@@ -673,13 +669,7 @@ function User({
   );
   return (
     <div ref={content} className={mine ? "message mine" : tagsMe ? "message mentions-me" : "message"}>
-      {author && (
-        <div className="byline">
-          <Avatar name={author.name} tint={tint} />
-          <strong>{author.name}</strong>
-          {role && <small>{role}</small>}
-        </div>
-      )}
+      {author && <Byline author={author} />}
       {bubble && files}
       {/* Over the top corner of the bubble, or of the files when there is no text. */}
       <div className="bubble-row">
@@ -689,6 +679,18 @@ function User({
       <ReactionChips reactions={reactions} picked={picked} />
       {auto && <AutoPicked pick={auto} />}
       {sentAt !== undefined && <SentTime at={sentAt} />}
+    </div>
+  );
+}
+
+/** Over someone else's message: their badge in their colour and their name, and in a shared chat whether they own it. */
+function Byline({ author }: { author: Person }) {
+  const people = useSharedChat();
+  return (
+    <div className="byline">
+      <Avatar name={author.name} tint={people ? tintOf(people, author.uid) : 0} />
+      <strong>{author.name}</strong>
+      {people && <small>{people.owner.uid === author.uid ? "owner" : "member"}</small>}
     </div>
   );
 }
