@@ -666,7 +666,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .composer-row .icon-button { border-radius: 50%; }
 /* Stop is a filled grey circle, so it reads as a button next to Send as well as on its own. */
 .composer-row .composer-stop { background: color-mix(in srgb, var(--text) 12%, var(--surface)); }
-.composer-row .composer-stop:hover { background: color-mix(in srgb, var(--text) 20%, var(--surface)); }
+.composer-row .composer-stop:not(:disabled):hover { background: color-mix(in srgb, var(--text) 20%, var(--surface)); }
 .composer textarea {
   flex: 1;
   min-width: 0;
