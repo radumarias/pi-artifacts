@@ -50,10 +50,11 @@ import { Markdown } from "./Markdown.tsx";
 import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
 import { NotifyButton } from "./notify.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
-import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
+import { OrphanResult, StepRun, StepsProvider } from "./Steps.tsx";
+import { stepRuns, streamingSteps, type MessageSteps, type StepRuns } from "./stepRuns.ts";
 import { Thinking } from "./Thinking.tsx";
 import { useRevealedText } from "./reveal.ts";
-import { firstNew, isAgent, openHints, sentAt, shown } from "./entries.ts";
+import { firstNew, isAgent, openHints, published, sentAt, shown } from "./entries.ts";
 
 interface Props {
   chatId: string;
@@ -76,14 +77,6 @@ const GROWS_ITSELF = CSS.supports("field-sizing", "content");
 
 /** Whether the conversation is scrolled to (near) its end, where new output is followed. */
 const atBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-
-function published(entry: EntryRecord): PublishedDetails | undefined {
-  if (entry.kind !== "pi.tool-result") return undefined;
-  const message = entry.model?.[0] as ToolResultMessage | undefined;
-  if (message?.toolName !== PUBLISH_TOOL || message.isError) return undefined;
-  const details = message.details as Partial<PublishedDetails> | undefined;
-  return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
-}
 
 export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity, onLeft, onMenu }: Props) {
   const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react, hints, dropHint } = useChat(chatId);
@@ -235,6 +228,10 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   // Recomputed only when entries change, not as a reply streams.
   const dayStarts = useMemo(() => dayStartsOf(state.entries), [state.entries]);
   const agentLast = useMemo(() => endsInAgentTurn(state.entries), [state.entries]);
+  // The agent's steps in runs, each shown as one line where it starts; the streaming reply's first ones join the last run.
+  const lastRuns = useRef<StepRuns>(undefined);
+  const runs = useMemo(() => (lastRuns.current = stepRuns(state.entries, lastRuns.current)), [state.entries]);
+  const streamed = useMemo(() => state.partial && streamingSteps(runs, state.partial), [runs, state.partial]);
   const newAt = useMemo(
     // Only once it is known who owns the chat: until then a member's own legacy messages could not be told apart.
     () => (newSince === undefined || !people ? undefined : firstNew(state.entries, newSince, uid, isOwner)),
@@ -290,6 +287,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                         {bylines.has(entry.id) && <AgentByline />}
                         <Entry
                           entry={entry}
+                          steps={streamed?.grown?.entry === entry.id ? streamed.grown.steps : runs.byEntry.get(entry.id as number)}
                           reactions={reactions[entry.id]}
                           uid={uid}
                           ownerName={ownerName}
@@ -304,7 +302,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                     );
                   })}
                   {!agentLast && (state.partial || thinking) && <AgentByline />}
-                  {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
+                  {state.partial && <Assistant message={state.partial} steps={streamed?.steps} streaming onGrow={follow} />}
                   {thinking && <Thinking since={state.runStartedAt!} />}
                   {state.error && <div className="chat-error">{state.error}</div>}
                   <Queue queued={state.queued} incoming={state.incoming} uid={uid} />
@@ -450,6 +448,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
 // Entries never change once committed, so streaming a new reply re-renders only the reply, not the whole history.
 const Entry = memo(function Entry({
   entry,
+  steps,
   reactions: byEmoji,
   uid,
   ownerName,
@@ -460,6 +459,8 @@ const Entry = memo(function Entry({
   onNoHint,
 }: {
   entry: EntryRecord;
+  /** Where an agent message's steps show (stepRuns.ts). */
+  steps?: MessageSteps;
   /** Its reactions; the same object until they change, so a reaction draws only its message again. */
   reactions?: EntryReactions;
   uid: string;
@@ -509,7 +510,7 @@ const Entry = memo(function Entry({
     return <div className="chat-notice">{data.uid === uid ? `You ${you}` : `${data.name} ${them}`}</div>;
   }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") {
-    return <Assistant message={message} reactions={reactions} onReply={answer} />;
+    return <Assistant message={message} steps={steps} reactions={reactions} onReply={answer} />;
   }
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
     const artifact = published(entry);
@@ -887,17 +888,19 @@ function RevealedMarkdown({ text, onGrow }: { text: string; onGrow?: () => void 
 }
 
 /**
- * A reply: its text, and a collapsed panel for each thought and tool call in it. `streaming` while the model writes it,
- * with `onGrow` called as its text is revealed.
+ * A reply: its text, and its thoughts and tool calls as runs of steps (`steps`), each where it starts. `streaming` while
+ * the model writes it, with `onGrow` called as its text is revealed.
  */
 function Assistant({
   message,
+  steps,
   streaming = false,
   onGrow,
   reactions = null,
   onReply,
 }: {
   message: AssistantMessage;
+  steps?: MessageSteps;
   streaming?: boolean;
   onGrow?: () => void;
   reactions?: MessageReactions | null;
@@ -906,22 +909,24 @@ function Assistant({
   const content = useRef<HTMLDivElement>(null);
   // What a copy pastes as plain text: its Markdown. Not while it streams, when it has no actions.
   const text = streaming ? "" : textOf(blocks(message.content), "\n\n");
+  const parts = message.content.map((block, i) => {
+    if (!block) return null;
+    if (block.type === "text")
+      return block.text ? (
+        <div key={i} className="bubble markdown">
+          {streaming ? <RevealedMarkdown text={block.text} onGrow={onGrow} /> : <Markdown text={block.text} />}
+        </div>
+      ) : null;
+    // A step shows in its run, at the run's first step.
+    const run = steps?.get(i);
+    return run ? <StepRun key={i} items={run} /> : null;
+  });
+  const ended = message.stopReason === "error" || message.stopReason === "aborted";
+  // Nothing of its own to show (its steps are in an earlier message's run): no empty block to space the conversation.
+  if (!ended && parts.every((part) => !part)) return null;
   return (
     <div className="assistant" ref={content}>
-      {/* By the block's own index, which stays the same once the message lands, so an opened thought stays open. */}
-      {message.content.map((block, i) => {
-        if (!block) return null;
-        if (block.type === "text")
-          return block.text ? (
-            <div key={i} className="bubble markdown">
-              {streaming ? <RevealedMarkdown text={block.text} onGrow={onGrow} /> : <Markdown text={block.text} />}
-            </div>
-          ) : null;
-        if (block.type === "toolCall") return <ToolStep key={i} call={block} streaming={streaming} />;
-        if (block.type === "thinking" && !block.redacted && block.thinking.trim())
-          return <ThoughtStep key={i} openKey={`${message.timestamp}:${i}`} text={block.thinking} />;
-        return null;
-      })}
+      {parts}
       {message.stopReason === "error" && <div className="chat-error">The model failed: {message.errorMessage ?? "unknown error"}</div>}
       {message.stopReason === "aborted" && <div className="tool-call">Stopped.</div>}
       {text && (

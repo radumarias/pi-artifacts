@@ -511,7 +511,8 @@ button.reaction:hover { border-color: var(--muted); }
 .assistant { display: flex; flex-direction: column; gap: 4px; }
 .tool-call { color: var(--muted); font-size: 13px; }
 /* One step of the agent (Steps.tsx): a plain line with an icon, what it is, a hint and its status. An arrow after the
-   hint opens what went in and came out, beside a thin guide line; a step with nothing more to show has no arrow. */
+   hint opens what went in and came out, beside a thin guide line; a step with nothing more to show has no arrow.
+   A run of steps is a step too, holding its steps: rules on a step's line reach only its own (`> .step-line`). */
 .step { font-size: 13px; min-width: 0; }
 .step-line { display: flex; align-items: flex-start; gap: 8px; margin: 0 -6px; padding: 3px 6px; border-radius: 6px; line-height: 20px; list-style: none; }
 .step > summary { cursor: pointer; }
@@ -520,27 +521,39 @@ button.reaction:hover { border-color: var(--muted); }
 .step > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .step-icon { flex: none; display: grid; place-items: center; width: 16px; height: 20px; color: var(--muted); font-size: 12px; }
 .step-icon .thinking-spark { width: 14px; height: 14px; }
-.step.done .step-icon { color: var(--live); }
-.step.error .step-icon { color: var(--error); }
+.step.done > .step-line .step-icon { color: var(--live); }
+.step.error > .step-line .step-icon { color: var(--error); }
 .step-label { flex: none; font-weight: 500; white-space: nowrap; }
 /* Cut to one line, except on a step that has nothing to open, where it is the whole detail. */
 .step-hint { flex: 0 1 auto; min-width: 0; color: var(--muted); font: 12px/20px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .step-hint.prose { font: inherit; }
-.step.static .step-hint { flex: 1; white-space: normal; overflow-wrap: anywhere; }
-.step.error.static .step-hint { color: var(--error); }
+.step.static > .step-line .step-hint { flex: 1; white-space: normal; overflow-wrap: anywhere; }
+.step.error.static > .step-line .step-hint { color: var(--error); }
 /* Opened, the body shows it all. */
-.step[open] .step-hint { display: none; }
+.step[open] > .step-line .step-hint { display: none; }
 .step-status { flex: none; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.step.error .step-status { color: var(--error); }
+.step.error > .step-line .step-status { color: var(--error); }
 /* A running step's count (RunningFor in Steps.tsx), beside its shimmering status. */
 .step-time { flex: none; margin-left: -4px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .step-chevron { flex: none; align-self: center; width: 12px; height: 12px; margin-left: -4px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.15s; }
 .step > summary:hover .step-chevron { stroke: var(--text); }
-.step[open] .step-chevron { transform: rotate(90deg); }
+.step[open] > .step-line .step-chevron { transform: rotate(90deg); }
 .step-body { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 6px 7px; padding: 4px 0 4px 16px; border-left: 1px solid var(--border); }
-.step-section-label { margin-bottom: 4px; }
-.step-section pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font: 12px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.step-section.error pre { color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }
+/* What went in and what came out, each a shaded block with its name in it. */
+.step-section { padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.step-section-label { margin-bottom: 6px; }
+.step-section pre { margin: 0; max-height: 320px; overflow: auto; font: 12px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.step-section.error { background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }
+.step-section.error pre { color: var(--error); }
+/* A run of steps (StepRun): one line on what they did, which may wrap, opening on a box that lists them, a line between
+   each two. A step opened in it shows what went in and came out across the box, with no guide line. */
+.step-run > .step-line .step-label { flex: 0 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.step-run > .step-body { gap: 0; margin: 4px 0 8px; padding: 2px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.step-run-list { display: flex; flex-direction: column; }
+.step-run-list > .step { padding: 4px 0; }
+.step-run-list > .step + .step { border-top: 1px solid var(--border); }
+.step-run-list .step-body { margin: 4px 0 6px; padding: 0; border-left: 0; }
+.step-failed { color: var(--error); }
 .step-note { margin: 0; color: var(--muted); }
 .step-shot { margin: 0 0 10px; }
 .step-shot img { display: block; max-width: min(100%, 480px); max-height: 360px; object-fit: cover; object-position: top; border: 1px solid var(--border); border-radius: 6px; }
@@ -569,7 +582,7 @@ button.reaction:hover { border-color: var(--muted); }
 .thinking-spark g { transform-origin: 12px 12px; animation: thinking-morph 1.6s ease-in-out infinite; }
 .thinking-spark .thinking-spark-short { animation-delay: -0.8s; }
 /* The gradient is 2.5× the word, so moving it from 100% to 0% carries the bright band from left of the word to right of it. */
-.thinking-word, .step.active .step-status {
+.thinking-word, .step.active > .step-line .step-status {
   background: linear-gradient(90deg, var(--muted) 40%, var(--text) 50%, var(--muted) 60%) 100% 0 / 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -586,10 +599,10 @@ button.reaction:hover { border-color: var(--muted); }
 .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--working); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .thinking-dots i, .thinking-spark, .thinking-spark g, .thinking-word, .step.active .step-status, .spinner { animation: none; }
+  .thinking-dots i, .thinking-spark, .thinking-spark g, .thinking-word, .step.active > .step-line .step-status, .spinner { animation: none; }
   .thinking-dots i { opacity: 0.7; }
   .thinking-spark .thinking-spark-short { transform: scale(0.6); }
-  .thinking-word, .step.active .step-status { background: none; color: var(--muted); }
+  .thinking-word, .step.active > .step-line .step-status { background: none; color: var(--muted); }
   .step-chevron { transition: none; }
   .presence.working { animation: none; }
 }

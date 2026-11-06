@@ -1,10 +1,11 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
+import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
 import { clip, formatBytes, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { formatElapsed, useElapsed } from "./elapsed.ts";
+import { mcpParts, runSummary, type StepItem } from "./stepRuns.ts";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
 /** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
@@ -114,11 +115,8 @@ const INPUT_LABELS: Record<string, Record<string, string>> = {
 
 export function stepLabel(name: string): string {
   if (LABELS[name]) return LABELS[name];
-  let split = name.indexOf(MCP_TOOL_SEPARATOR);
-  if (split <= 0) return name;
-  // A server slug can end in "_" ("Reports (beta)" is "reports_beta_"): the separator is the last two of the run.
-  while (name[split + MCP_TOOL_SEPARATOR.length] === "_") split++;
-  return `${name.slice(0, split)} › ${name.slice(split + MCP_TOOL_SEPARATOR.length)}`;
+  const mcp = mcpParts(name);
+  return mcp ? `${mcp[0]} › ${mcp[1]}` : name;
 }
 
 /** Lines that say nothing about what a script does: blank, a shebang, shell options. */
@@ -164,7 +162,7 @@ export function inputSections(name: string, args: Record<string, unknown> | unde
     if (typeof value === "string" && (value.includes("\n") || value.length > 120)) sections.push({ label: INPUT_LABELS[name]?.[key] ?? key, text: value });
     else rest[key] = value;
   }
-  if (Object.keys(rest).length) sections.push({ label: sections.length ? "Arguments" : "Input", text: JSON.stringify(rest, null, 2) });
+  if (Object.keys(rest).length) sections.push({ label: sections.length ? "Arguments" : "Request", text: JSON.stringify(rest, null, 2) });
   return sections;
 }
 
@@ -190,8 +188,12 @@ const opened = new Set<string>();
  * holds, an arrow opens it on what the step was given and what came back; the body is only rendered while open, so a
  * long history of steps stays cheap. Without (`children` left out), the line is all there is, and its hint wraps.
  */
-function Panel({ openKey, tone, icon, label, hint, prose, status, time, children }: {
+function Panel({ openKey, openedAs, kind, tone, icon, label, hint, prose, status, time, children }: {
   openKey: string;
+  /** Another key it starts open for: the step a run grew from. */
+  openedAs?: string;
+  /** A class of its own, beside `step`. */
+  kind?: string;
   tone?: "active" | "done" | "error";
   icon: ReactNode;
   label: string;
@@ -203,8 +205,8 @@ function Panel({ openKey, tone, icon, label, hint, prose, status, time, children
   time?: ReactNode;
   children?: () => ReactNode;
 }) {
-  const [open, setOpen] = useState(() => opened.has(openKey));
-  const className = ["step", tone, !children && "static"].filter(Boolean).join(" ");
+  const [open, setOpen] = useState(() => opened.has(openKey) || (openedAs !== undefined && opened.has(openedAs)));
+  const className = ["step", kind, tone, !children && "static"].filter(Boolean).join(" ");
   const line = (
     <>
       <span className="step-icon">{icon}</span>
@@ -331,13 +333,68 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
             ))}
             {call.argumentsError && <Section label="Invalid arguments" text={call.argumentsError} error />}
             {shown ? (
-              <Section label={status === "error" ? "Error" : "Output"} text={shown} error={status === "error"} />
+              <Section label={status === "error" ? "Error" : "Response"} text={shown} error={status === "error"} />
             ) : (
               status === "stopped" && <p className="step-note">Stopped before it finished.</p>
             )}
           </>
         );
       }}
+    </Panel>
+  );
+}
+
+/** A step on its own: a call, or a thought. */
+function OneStep({ item }: { item: StepItem }) {
+  return item.kind === "tool" ? <ToolStep call={item.call} streaming={item.streaming} /> : <ThoughtStep openKey={item.key} text={item.text} />;
+}
+
+/**
+ * A run of steps (stepRuns.ts) as one line on what they did ("Queried sales 5 times, ran 3 commands") and where they
+ * are, opening on the list of them, each of which opens on what it was given and what came back. A run of one is that
+ * step alone. Opened, it stays open as it grows, and when a step the reader opened grows into a run.
+ */
+export function StepRun({ items }: { items: readonly StepItem[] }) {
+  const { results } = use(ResultsContext);
+  if (items.length === 1) return <OneStep item={items[0]} />;
+  const calls = items.flatMap((item) => (item.kind === "tool" ? [item] : []));
+  // Read only while a call is unfinished, as ToolStep does.
+  const live = calls.every((item) => results.has(item.call.id)) ? undefined : use(LiveContext);
+  let active: { status: StepStatus; startedAt?: number } | undefined;
+  let last: StepStatus | undefined;
+  let failed = 0;
+  let took = 0;
+  for (const { call, streaming } of calls) {
+    const result = results.get(call.id);
+    last = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
+    if (result) {
+      if (result.isError) failed++;
+      took += result.durationMs ?? 0;
+    } else if (last !== "stopped" && !active) active = { status: last, startedAt: last === "running" ? live!.tools.get(call.id)?.startedAt : undefined };
+  }
+  const shown: Pick<Parameters<typeof Panel>[0], "tone" | "icon" | "status" | "time"> = active
+    ? { tone: "active", icon: <Spark />, status: STATUS[active.status].text, time: active.startedAt !== undefined && <RunningFor since={active.startedAt} /> }
+    : !last
+      ? { icon: "✻" }
+      : last === "stopped"
+        ? { icon: STATUS.stopped.icon, status: STATUS.stopped.text }
+        : failed === calls.length
+          ? { tone: "error", icon: STATUS.error.icon, status: STATUS.error.text }
+          : {
+              tone: "done",
+              icon: STATUS.done.icon,
+              status: `Done${took ? ` · ${tookFor(took)}` : ""}`,
+              time: failed > 0 && <span className="step-time step-failed">· {failed} failed</span>,
+            };
+  return (
+    <Panel openKey={`run:${items[0].key}`} openedAs={items[0].key} kind="step-run" label={runSummary(items)} hint="" {...shown}>
+      {() => (
+        <div className="step-run-list">
+          {items.map((item) => (
+            <OneStep key={item.key} item={item} />
+          ))}
+        </div>
+      )}
     </Panel>
   );
 }

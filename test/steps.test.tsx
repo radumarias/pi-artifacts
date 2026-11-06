@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { inputSections, liveStatus, shortOutput, stepHint, stepLabel, stepResults, StepsProvider, stepsLive, thoughtLine, ThoughtStep, tookFor, ToolStep } from "../src/chat/Steps.tsx";
+import { inputSections, liveStatus, shortOutput, stepHint, stepLabel, stepResults, StepRun, StepsProvider, stepsLive, thoughtLine, ThoughtStep, tookFor, ToolStep } from "../src/chat/Steps.tsx";
+import { runSummary, stepRuns, streamingSteps, type StepItem } from "../src/chat/stepRuns.ts";
 import type { RunningTool } from "../src/chat/useChat.ts";
 
 const call = (id: string, name: string, args: Record<string, unknown>) => ({ type: "toolCall", id, name, arguments: args });
@@ -63,7 +64,7 @@ describe("step input", () => {
       { label: "Python", text: "import pandas\nprint(1)" },
       { label: "Arguments", text: '{\n  "files": [\n    "sales.csv"\n  ]\n}' },
     ]);
-    expect(inputSections("coingecko__get_price", { ids: "bitcoin" })).toEqual([{ label: "Input", text: '{\n  "ids": "bitcoin"\n}' }]);
+    expect(inputSections("coingecko__get_price", { ids: "bitcoin" })).toEqual([{ label: "Request", text: '{\n  "ids": "bitcoin"\n}' }]);
     expect(inputSections("mcp_discover", {})).toEqual([]);
   });
 });
@@ -148,5 +149,128 @@ describe("thought step", () => {
     expect(shortOutput(" ")).toBe("");
     expect(shortOutput("a\nb")).toBeUndefined();
     expect(shortOutput("x".repeat(201))).toBeUndefined();
+  });
+});
+
+describe("runs of steps", () => {
+  const assistant = (id: number, content: unknown[], timestamp = id) => ({ id, kind: "pi.assistant", model: [{ role: "assistant", timestamp, content }] });
+  const result = (id: number, callId: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    kind: "pi.tool-result",
+    model: [{ role: "toolResult", toolCallId: callId, toolName: "run_bash", content: [], isError: false, ...extra }],
+  });
+  const thought = (thinking: string) => ({ type: "thinking", thinking });
+  const text = (value: string) => ({ type: "text", text: value });
+  const keys = (items: readonly StepItem[] | null | undefined) => items?.map((item) => item.key);
+
+  it("joins the steps of a reply's messages until something shows between them", () => {
+    const chat = [
+      { id: 1, kind: "pi.user", model: [{ role: "user", content: "hi" }] },
+      assistant(2, [thought("Look first."), call("a", "juyo__run_query", {})]),
+      result(3, "a"),
+      // Not shown: an aside does not end the run.
+      { id: 4, kind: "chat.aside", data: {} },
+      assistant(5, [call("b", "run_bash", { script: "ls" })]),
+      result(6, "b"),
+      assistant(7, [text("Found it."), call("c", "run_bash", {})]),
+      result(8, "c"),
+      assistant(9, [call("d", "run_bash", {})]),
+    ] as never;
+    const runs = stepRuns(chat);
+    expect(keys(runs.byEntry.get(2)?.get(0))).toEqual(["2:0", "a", "b"]);
+    expect(runs.byEntry.get(2)?.get(1)).toBeNull();
+    expect(runs.byEntry.get(5)?.get(0)).toBeNull();
+    // Text ends a run; the next starts at its next step, and is still open.
+    expect(runs.byEntry.get(7)?.has(0)).toBe(false);
+    expect(keys(runs.byEntry.get(7)?.get(1))).toEqual(["c", "d"]);
+    expect(runs.open).toMatchObject({ entry: 7, index: 1 });
+    // The same places again are the same objects: a message whose steps did not change is not drawn again.
+    const again = stepRuns(chat, runs);
+    expect(again.byEntry.get(2)).toBe(runs.byEntry.get(2));
+  });
+
+  it("ends a run at a published artifact's card, a message, and a stopped message", () => {
+    const chat = [
+      assistant(1, [call("p", "artifact_publish", {})]),
+      result(2, "p", { toolName: "artifact_publish", details: { artifactId: "a1", version: 1 } }),
+      assistant(3, [call("q", "run_bash", {})], 3),
+      { id: 4, kind: "chat.message", data: { uid: "u", text: "and?" } },
+      {
+        ...assistant(5, [call("r", "run_bash", {})]),
+        model: [{ role: "assistant", timestamp: 5, content: [call("r", "run_bash", {})], stopReason: "aborted" }],
+      },
+      assistant(6, [call("s", "run_bash", {})]),
+    ] as never;
+    const runs = stepRuns(chat);
+    expect([1, 3, 5, 6].map((id) => keys(runs.byEntry.get(id)?.get(0)))).toEqual([["p"], ["q"], ["r"], ["s"]]);
+  });
+
+  it("joins a streaming reply's first steps to the run before it", () => {
+    const chat = [assistant(1, [call("a", "run_bash", {})]), result(2, "a")] as never;
+    const runs = stepRuns(chat);
+    const streaming = { role: "assistant", timestamp: 3, content: [call("b", "run_bash", {}), text("Done."), call("c", "run_bash", {})] } as never;
+    const { steps, grown } = streamingSteps(runs, streaming);
+    expect(grown?.entry).toBe(1);
+    expect(keys(grown?.steps.get(0))).toEqual(["a", "b"]);
+    expect(grown?.steps.get(0)?.[1]).toMatchObject({ streaming: true });
+    expect(steps.get(0)).toBeNull();
+    expect(keys(steps.get(2))).toEqual(["c"]);
+    // Text first: nothing joins.
+    expect(streamingSteps(runs, { role: "assistant", timestamp: 3, content: [text("So"), call("b", "run_bash", {})] } as never).grown).toBeUndefined();
+  });
+
+  it("says what a run did in a line, by kind in the order they came", () => {
+    const tool = (name: string, args: Record<string, unknown> = {}) =>
+      ({ kind: "tool", key: name, call: call(name, name, args), streaming: false }) as StepItem;
+    const thoughtItem = { kind: "thought", key: "t", text: "Hmm." } as StepItem;
+    expect(
+      runSummary([
+        thoughtItem,
+        tool("juyo__run_query"),
+        tool("run_bash"),
+        tool("juyo__list_hotels"),
+        tool("run_bash"),
+        tool("run_bash"),
+        tool("juyo__describe"),
+        tool("other__x"),
+      ]),
+    ).toBe("Queried juyo 3 times, ran 3 commands, queried other");
+    expect(runSummary([tool("files_write"), tool("run_bash")])).toBe("Wrote a file, ran a command");
+    expect(runSummary([tool("artifact_write", { html: "<p>" }), tool("artifact_check"), tool("artifact_write", { edits: [] }), tool("artifact_check")])).toBe(
+      "Wrote a page, checked the page twice, edited the page",
+    );
+    expect(runSummary([tool("brand_new"), tool("brand_new")])).toBe("Used brand_new twice");
+    expect(runSummary([thoughtItem, thoughtItem])).toBe("2 thoughts");
+  });
+});
+
+describe("step run", () => {
+  const items = (...ids: string[]) => ids.map((id) => ({ kind: "tool", key: id, call: call(id, "run_bash", { script: id }), streaming: false }) as StepItem);
+  const render = (run: StepItem[], tools: RunningTool[] = [], busy = false) =>
+    renderToStaticMarkup(
+      <StepsProvider entries={entries} tools={tools} busy={busy}>
+        <StepRun items={run} />
+      </StepsProvider>,
+    );
+
+  it("is the step alone when it has one", () => {
+    expect(render(items("ok"))).toMatch(
+      /^<details class="step done"><summary class="step-line"><span class="step-icon">✓<\/span><span class="step-label">Bash<\/span>/,
+    );
+  });
+
+  it("shows a summary line, how long it took and what failed, closed on its steps", () => {
+    const html = render(items("ok", "short", "bad"));
+    expect(html).toMatch(
+      /^<details class="step step-run done"><summary class="step-line"><span class="step-icon">✓<\/span><span class="step-label">Ran 3 commands<\/span><svg class="step-chevron"/,
+    );
+    expect(html).toContain('<span class="step-status">Done · 1.3s</span><span class="step-time step-failed">· 1 failed</span>');
+    expect(html).not.toContain("step-body");
+  });
+
+  it("spins while a step in it runs", () => {
+    const html = render(items("ok", "open"), [{ ...slot("running"), startedAt: Date.now() - 5_000 }], true);
+    expect(html).toMatch(/^<details class="step step-run active">/);
+    expect(html).toContain('<span class="step-status">Running…</span><span class="step-time">5s</span>');
   });
 });
