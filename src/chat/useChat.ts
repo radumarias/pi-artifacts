@@ -42,16 +42,20 @@ export interface ChatState {
   /** Messages sent while the agent was busy, oldest first: they wait their turn in pi's inbox. */
   queued: QueuedMessage[];
   /**
-   * Messages the chat is getting ready to put in, oldest first (see IncomingMessage); `arriving`, one that went in, kept
-   * until it shows in `entries` or `queued`: the chat says so on its own, and either can come first.
+   * Messages the chat is getting ready to put in, oldest first (see IncomingMessage). `arriving`: when one went in, by
+   * this browser's clock; it is kept until it shows in `entries` or `queued` (the chat says so on its own, and either
+   * can come first), or for ARRIVING_MS, should it never show (a Stop that withdrew it before the queue listed it).
    */
-  incoming: (IncomingMessage & { arriving?: true })[];
+  incoming: (IncomingMessage & { arriving?: number })[];
   /** The model and effort the chat runs on, from pi's agent state. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   /** pi's ledger of what the chat's model calls used and cost, by model. */
   usage?: UsageState;
 }
+
+/** How long an incoming message that went in is kept, at most, waiting to show in the transcript or the queue. */
+export const ARRIVING_MS = 10_000;
 
 const initial: ChatState = { entries: [], tools: [], busy: false, queued: [], incoming: [] };
 
@@ -62,7 +66,9 @@ type Action =
    * action, so one moves from queued to placed at once.
    */
   | (Omit<Extract<ChatServerMessage, { type: "events" }>, "events"> & { events: AgentEvent[]; at: number })
-  | Extract<ChatServerMessage, { type: "incoming" }>
+  | (Extract<ChatServerMessage, { type: "incoming" }> & { at: number })
+  /** ARRIVING_MS passed since an incoming message went in. */
+  | { type: "expire"; at: number }
   | { type: "error"; message?: string }
   | { type: "reset" };
 
@@ -81,10 +87,18 @@ export function reduce(state: ChatState, action: Action): ChatState {
   if (action.type === "reset") return initial;
   if (action.type === "error") return { ...state, error: action.message };
   if (action.type === "incoming") {
-    const arriving = state.incoming.filter((message) => message.arriving || incomingKey(message) === action.placed);
     const coming = new Set(action.incoming.map(incomingKey));
-    const incoming = [...action.incoming, ...arriving.filter((message) => !coming.has(incomingKey(message))).map((m) => ({ ...m, arriving: true as const }))];
-    return withoutShown({ ...state, incoming });
+    const arriving = state.incoming.flatMap((message) => {
+      const key = incomingKey(message);
+      if (coming.has(key)) return [];
+      if (message.arriving !== undefined) return [message];
+      return key === action.placed ? [{ ...message, arriving: action.at }] : [];
+    });
+    return withoutShown({ ...state, incoming: [...action.incoming, ...arriving] });
+  }
+  if (action.type === "expire") {
+    const incoming = state.incoming.filter((message) => message.arriving === undefined || action.at - message.arriving < ARRIVING_MS);
+    return incoming.length === state.incoming.length ? state : { ...state, incoming };
   }
   let next = state;
   for (const event of action.events) {
@@ -214,7 +228,7 @@ function withoutShown(state: ChatState): ChatState {
   const shown = (message: IncomingMessage) => {
     const key = incomingKey(message);
     const placed = (entry: EntryRecord) => entry.kind === CHAT_MESSAGE_KIND && incomingKey(entry.data as unknown as ChatMessageData) === key;
-    return state.queued.some((queued) => incomingKey(queued) === key) || state.entries.findLast(placed) !== undefined;
+    return state.queued.some((queued) => incomingKey(queued) === key) || state.entries.some(placed);
   };
   const incoming = state.incoming.filter((message) => !shown(message));
   return incoming.length === state.incoming.length ? state : { ...state, incoming };
@@ -284,6 +298,13 @@ export function useChat(chatId: string) {
   const [reactions, setReactions] = useState<Reactions>({});
   const [auto, setAuto] = useState(false);
   const socket = useRef<WebSocket | null>(null);
+  // One that went in and never showed is let go after ARRIVING_MS (see ChatState.incoming).
+  const arrived = state.incoming.reduce((first, message) => Math.min(first, message.arriving ?? Infinity), Infinity);
+  useEffect(() => {
+    if (arrived === Infinity) return;
+    const timer = setTimeout(() => dispatch({ type: "expire", at: Date.now() }), Math.max(0, arrived + ARRIVING_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [arrived]);
 
   useEffect(() => {
     dispatch({ type: "reset" });
@@ -325,7 +346,7 @@ export function useChat(chatId: string) {
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();
-        } else if (message.type === "incoming") dispatch(message);
+        } else if (message.type === "incoming") dispatch({ ...message, at: Date.now() });
         else dispatch({ type: "error", message: message.message });
       };
       ws.onclose = (event) => {

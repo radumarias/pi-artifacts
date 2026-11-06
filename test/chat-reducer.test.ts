@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reduce, type ChatState } from "../src/chat/useChat.ts";
+import { ARRIVING_MS, reduce, type ChatState } from "../src/chat/useChat.ts";
 
 const empty: ChatState = { entries: [], tools: [], busy: false, queued: [], incoming: [] };
 const assistant = (content: unknown[]) => ({ role: "assistant", content, api: "anthropic-messages", provider: "cloudflare", model: "m", usage: {}, stopReason: "stop", timestamp: 0 });
@@ -135,27 +135,33 @@ describe("incoming messages", () => {
     reduce(state, { type: "events", at: 0, events: [{ type: "entry_appended", entry: entry(id, data) }] as never });
 
   it("shows what the chat says is coming, and lets a dropped one go at once", () => {
-    const coming = reduce(empty, { type: "incoming", incoming: [aa, bb] });
+    const coming = reduce(empty, { type: "incoming", incoming: [aa, bb], at: 0 });
     expect(coming.incoming).toEqual([aa, bb]);
-    expect(reduce(coming, { type: "incoming", incoming: [bb] }).incoming).toEqual([bb]);
+    expect(reduce(coming, { type: "incoming", incoming: [bb], at: 0 }).incoming).toEqual([bb]);
   });
 
   it("keeps one that went in until its entry comes, whichever the chat says first", () => {
-    const coming = reduce(empty, { type: "incoming", incoming: [aa] });
-    const went = reduce(coming, { type: "incoming", incoming: [], placed: "me:5" });
-    expect(went.incoming).toEqual([{ ...aa, arriving: true }]);
+    const coming = reduce(empty, { type: "incoming", incoming: [aa], at: 0 });
+    const went = reduce(coming, { type: "incoming", incoming: [], placed: "me:5", at: 100 });
+    expect(went.incoming).toEqual([{ ...aa, arriving: 100 }]);
     // Another message's news keeps it arriving.
-    expect(reduce(went, { type: "incoming", incoming: [bb] }).incoming).toEqual([bb, { ...aa, arriving: true }]);
+    expect(reduce(went, { type: "incoming", incoming: [bb], at: 0 }).incoming).toEqual([bb, { ...aa, arriving: 100 }]);
     // Only its own entry (its author's, sent then) ends it.
     expect(appended(went, 3, { ...aa, sentAt: 4 }).incoming).toHaveLength(1);
     expect(appended(went, 3, { ...aa, text: "edited?" }).incoming).toEqual([]);
     // The entry first, then the news: gone at once.
-    expect(reduce(appended(coming, 3, aa), { type: "incoming", incoming: [], placed: "me:5" }).incoming).toEqual([]);
+    expect(reduce(appended(coming, 3, aa), { type: "incoming", incoming: [], placed: "me:5", at: 100 }).incoming).toEqual([]);
   });
 
   it("lets one go once it waits in the queue", () => {
-    const went = reduce(reduce(empty, { type: "incoming", incoming: [aa] }), { type: "incoming", incoming: [], placed: "me:5" });
+    const went = reduce(reduce(empty, { type: "incoming", incoming: [aa], at: 0 }), { type: "incoming", incoming: [], placed: "me:5", at: 100 });
     const queued = reduce(went, { type: "events", at: 0, events: [{ type: "inbox_update", items: [{ id: 9, mode: "followUp" }] }] as never, queued: [{ ...aa, id: 9 }] });
     expect(queued.incoming).toEqual([]);
+  });
+
+  it("lets one that went in go after ARRIVING_MS, should it never show", () => {
+    const went = reduce(reduce(empty, { type: "incoming", incoming: [aa, bb], at: 0 }), { type: "incoming", incoming: [bb], placed: "me:5", at: 100 });
+    expect(reduce(went, { type: "expire", at: 99 + ARRIVING_MS }).incoming).toHaveLength(2);
+    expect(reduce(went, { type: "expire", at: 100 + ARRIVING_MS }).incoming).toEqual([bb]);
   });
 });

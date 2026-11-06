@@ -276,6 +276,8 @@ export class ChatAgent extends DurableObject<Env> {
   #autoPlacing: Promise<void> = Promise.resolve();
   /** See incoming. In memory: a restart ends the prompts getting them ready too. */
   readonly #incoming = new Map<string, IncomingMessage>();
+  /** The last message's sentAt (see prompt). */
+  #lastSentAt = 0;
   /** Set once the owner starts deleting the chat, and kept as its only record after: from then on nobody is in it. */
   #gone = this.#deleted();
 
@@ -780,8 +782,9 @@ export class ChatAgent extends DurableObject<Env> {
     mentionInputs: readonly MentionInput[] = [],
     replyTo?: number,
   ): Promise<void> {
-    // When it came in: the refreshes and copies below can take seconds.
-    const sentAt = Date.now();
+    // When it came in: the refreshes and copies below can take seconds. Never the same as another's, which would make
+    // two messages of one person, sent in the same millisecond, one incoming message (incomingKey).
+    const sentAt = (this.#lastSentAt = Math.max(Date.now(), this.#lastSentAt + 1));
     let placed = false;
     try {
       placed = await this.#prompt(text, author, attachments, mentionInputs, replyTo, sentAt);
@@ -800,6 +803,14 @@ export class ChatAgent extends DurableObject<Env> {
   #announce(message: IncomingMessage): void {
     this.#incoming.set(incomingKey(message), message);
     this.sockets.broadcast({ type: "incoming", incoming: this.incoming() });
+  }
+
+  /** Show everyone the incoming message `key` no longer waits for Auto's router, while it is still incoming. */
+  #picked(key: string): void {
+    const message = this.#incoming.get(key);
+    if (!message?.picking) return;
+    const { picking: _, ...rest } = message;
+    this.#announce(rest);
   }
 
   /** See prompt. Whether the message went in: not when nothing was left of it. */
@@ -839,6 +850,8 @@ export class ChatAgent extends DurableObject<Env> {
       ...(quote && { replyTo: quote }),
       ...(routing && { picking: true }),
     });
+    // Picked (or not): the rest may still take a while, and should not say the router is still at it.
+    void routing?.then(() => this.#picked(incomingKey({ uid: author.uid, sentAt })));
     const [[attached, title], { mentions, note, broughtIn }] = await Promise.all([
       // Named after its text, or its files when it has none: for the sidebars.
       attaching.then(async (inputs) => [
@@ -1436,7 +1449,8 @@ export class ChatAgent extends DurableObject<Env> {
   /** Stop the agent's run, and the messages queued for it. In a shared chat the others see who stopped it. */
   async abort(by: Person): Promise<void> {
     this.#requireInChat(by);
-    const running = await this.#replying();
+    // Only for the notice: a failure to read pi's queue must not keep the run from stopping.
+    const running = await this.#replying().catch(() => false);
     await this.harness.abort();
     if (running && this.members.hasAny()) this.#notePeople(by, "stopped");
   }
