@@ -269,8 +269,8 @@ export class ChatAgent extends DurableObject<Env> {
   #seen: { through: number; traces: ChatTraces } = { through: -1, traces: chatTraces([]) };
   /** See #oneShotModels. */
   #oneShot: Models | undefined;
-  /** The hinter #hinter made; null until it is first asked for (undefined then means hints are off). */
-  #callHinter: CallHinter | undefined | null = null;
+  /** What tells whether an aside is meant for the agent (CALL_HINT_MODEL); undefined when hints are off. */
+  readonly #hinter: CallHinter | undefined = callHinter(this.env.AI as unknown as ModelRunner, this.env.CALL_HINT_MODEL);
   /** See #placeAuto. */
   #autoPlacing: Promise<void> = Promise.resolve();
   /** Set once the owner starts deleting the chat, and kept as its only record after: from then on nobody is in it. */
@@ -835,12 +835,13 @@ export class ChatAgent extends DurableObject<Env> {
     if (summoned && routing) await this.#placeAuto(async () => summon(dataWith(await this.#applyPick(await routing))));
     else if (summoned) await summon(dataWith());
     else {
-      const written = await this.#aside(content, dataWith());
+      const aside = await this.#aside(content, dataWith());
       // Meant for the agent, though it did not call it? Its author may be offered to (#hintCall). Off the prompt's path.
-      // Not while the agent works: it reads the message at its next step.
+      // Not while the agent works: it reads the message at its next step. The classifier reads whom it replies to too.
       const hinter = this.#hinter;
       if (hinter && this.#status() !== "running" && worthAsking(text)) {
-        void this.#hintCall(hinter, written, author, text).catch((error) => console.error("call hint:", errorMessage(error)));
+        const asked = [quote && replyLine(quote), text].filter(Boolean).join("\n\n");
+        void this.#hintCall(hinter, aside, author, asked).catch((error) => console.error("call hint:", errorMessage(error)));
       }
     }
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
@@ -889,12 +890,6 @@ export class ChatAgent extends DurableObject<Env> {
     return written;
   }
 
-  /** What tells whether an aside is meant for the agent (CALL_HINT_MODEL); undefined when hints are off. Made once. */
-  get #hinter(): CallHinter | undefined {
-    if (this.#callHinter === null) this.#callHinter = callHinter(this.env.AI as unknown as ModelRunner, this.env.CALL_HINT_MODEL);
-    return this.#callHinter;
-  }
-
   /**
    * An aside someone wrote (`written`, its `chat.message`) that may still be meant for the agent ("pi, can you…"): the
    * deployment's CALL_HINT_MODEL reads it with the end of the conversation, and when it is likely enough
@@ -903,15 +898,16 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async #hintCall(hinter: CallHinter, written: Submission, author: Person, text: string): Promise<void> {
     const root = await this.#root();
-    const [placed, page] = await Promise.all([written.wait(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
+    const placed = await written.wait(BACKGROUND_CONTEXT);
     if (placed.status !== "done") return;
     const entry = placed.entry;
+    // What came before it, newest first: not what followed it meanwhile.
+    const page = await root.entries({ maxEntryId: (entry - 1) as EntryId }, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT);
     const request = {
       author: author.name,
       message: text,
       people: everyone(this.people()).map((person) => person.name),
-      // What came before it: the page may already hold the message, and what followed.
-      history: routeHistory(page.items.filter((item) => item.id < entry)),
+      history: routeHistory(page.items),
     };
     const { probability, usage } = await hinter.ask(request, AbortSignal.timeout(HINT_MS));
     // Paid for whatever it said. Only a record: a failure is logged.

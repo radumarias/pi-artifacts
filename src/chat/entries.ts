@@ -44,6 +44,7 @@ export function firstNew(entries: readonly EntryRecord[], seenAt: number, uid: s
  * on: those it has not run since. A run after one (its reply, or a message that called it) read the message already.
  */
 export function openHints(hints: ReadonlySet<number>, entries: readonly EntryRecord[]): ReadonlySet<number> {
+  if (!hints.size) return hints;
   const called = entries.findLast(
     (entry) => isAgent(entry) || (entry.kind === CHAT_MESSAGE_KIND && (entry.data as unknown as ChatMessageData).summoned === true),
   );
