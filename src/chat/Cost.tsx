@@ -1,7 +1,7 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
 import { AUTO_LEDGER_PREFIX, effortLabel, type ModelInfo } from "../../shared/models.ts";
-import { CHECK_TOOL } from "../../shared/protocol.ts";
+import { stepLabel } from "./Steps.tsx";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
 import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
@@ -16,16 +16,15 @@ function describeTime(time: Timing): string {
 
 /**
  * A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name;
- * Auto's router ("Auto picks · GPT OSS 120B"); the page checks' looks at their screenshots.
+ * Auto's router ("Auto picks · GPT OSS 120B").
  */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
   if (share.model.startsWith(AUTO_LEDGER_PREFIX)) {
     const router = share.model.slice(AUTO_LEDGER_PREFIX.length);
     return `Auto picks · ${models.get(router)?.name ?? router}`;
   }
-  // The page check's spend is its look at the screenshot (worker/artifacts/look.ts).
-  if (share.model === CHECK_TOOL) return "Page checks · screenshot looks";
-  const name = models.get(share.model)?.name ?? share.model;
+  // Else a model's, or a tool's that reports a spend of its own (the page check's look at its screenshot).
+  const name = models.get(share.model)?.name ?? stepLabel(share.model);
   return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;
 }
 

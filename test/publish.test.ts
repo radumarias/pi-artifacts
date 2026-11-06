@@ -13,7 +13,6 @@ import {
 } from "../worker/agent/publish.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../worker/artifacts/browser.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
-import { PageLooks } from "../worker/artifacts/look.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
 import type { ArtifactStore } from "../worker/storage/artifacts.ts";
 import { ChatDrafts, draftId } from "../worker/storage/drafts.ts";
@@ -148,14 +147,19 @@ describe("write, check, publish", () => {
 
   it("keeps a draft the screenshot look stopped from publishing, until it is checked again unchanged", async () => {
     const { scope, versions, drafts } = chat(() => ({ ...report([]), screenshot: "SHOT", text: "Prices" }));
-    scope.looks = new PageLooks(async () => ({ look: { by: "Jev", verdict: "blank", probability: 0.95 } }));
+    let looks = 0;
+    scope.look = async () => (looks++, { look: { by: "Jev", verdict: "blank", probability: 0.95 } });
     const { id } = await writeDraft(scope, { html: fixed });
     const first = await checkDraft(scope, id, {});
     expect(first.report?.errors).toEqual([expect.stringContaining("looks blank")]);
-    expect(await drafts.get(id)).toMatchObject({ errors: 1 });
+    const why = "The screenshot looks blank (Jev, 95% sure)";
+    expect(await drafts.get(id)).toMatchObject({ errors: 1, lookStopped: why });
     await expect(publishDraft(scope, { title: "Prices", draftId: id })).rejects.toThrow("found 1 error");
+    // Written again unchanged, the page keeps what stopped it.
+    expect(await writeDraft(scope, { html: fixed })).toMatchObject({ lookStopped: why });
     const again = await checkDraft(scope, id, {});
-    expect(again.draft).toMatchObject({ errors: 0, warnings: 1 });
+    expect(again.draft).toMatchObject({ errors: 0, warnings: 1, lookStopped: why });
+    expect(looks).toBe(1);
     await publishDraft(scope, { title: "Prices", draftId: id });
     expect(versions).toEqual([{ id: undefined, html: fixed }]);
   });

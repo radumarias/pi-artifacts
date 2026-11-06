@@ -1,7 +1,7 @@
 import type { ClassifierModel, Usage } from "@earendil-works/pi-ai";
 import { classify } from "@earendil-works/pi-ai/api/cloudflare-workers-ai-system-one";
 import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
-import { clip, errorMessage } from "../../shared/util.ts";
+import { clip, deadline, errorMessage } from "../../shared/util.ts";
 import { viaAIBinding, type ModelRunner } from "../ai-binding.ts";
 import type { CheckReport } from "./check.ts";
 
@@ -13,9 +13,10 @@ import type { CheckReport } from "./check.ts";
  *
  * A classifier answers a choice question without writing text, with a probability for each answer: fast (well under a
  * second) and charged for input only. A sure "blank" or "error" is an error, so the page is not published; anything
- * less sure, and the other verdicts, are warnings. A model can be wrong, so a draft it stopped once is never stopped
- * again by it: checked again unchanged, after the agent looked at the screenshot itself, the finding is only a warning.
- * When the look fails or takes too long, the check goes on as it would without it.
+ * less sure, and the other verdicts, are warnings. A model can be wrong, so a draft it stopped once (its check keeps
+ * that, worker/storage/drafts.ts) is not looked at again: checked again unchanged, after the agent looked at the
+ * screenshot itself, the finding is only a warning. When the look fails or takes too long, the check goes on as it
+ * would without it.
  */
 
 /** What the page looks like, as the classifier answers. */
@@ -47,11 +48,9 @@ const INSTRUCTIONS =
 const ERROR_AT = 0.8;
 const WARN_AT = 0.5;
 /** How long the look may take: a check that passed waits for it. */
-export const LOOK_MS = 6_000;
+const LOOK_MS = 6_000;
 /** How much of the page's visible text the classifier reads with the picture. */
 const MAX_TEXT = 1_500;
-/** The drafts a look stopped, remembered so it never stops one twice: the newest this many. */
-const MAX_FLAGGED = 50;
 
 /** What a look found, as the report keeps it. */
 export interface PageLook {
@@ -81,20 +80,17 @@ export function classifierLook(ai: ModelRunner, model: ClassifierModel<"cloudfla
     );
     if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `stopped: ${result.stopReason}`);
     const answer = result.answers.shows;
-    const verdict = answer?.type === "choice" && Object.hasOwn(VERDICTS, answer.choice) ? (answer.choice as LookVerdict) : undefined;
-    if (!verdict || answer?.type !== "choice") throw new Error(`no verdict in its answer: ${JSON.stringify(answer)}`);
-    return {
-      look: { by: model.name, verdict, probability: answer.probabilities[verdict] ?? answer.confidence },
-      ...(result.usage && { usage: result.usage }),
-    };
+    if (answer?.type !== "choice" || !Object.hasOwn(VERDICTS, answer.choice)) throw new Error(`no verdict in its answer: ${JSON.stringify(answer)}`);
+    const verdict = answer.choice as LookVerdict;
+    return { look: { by: model.name, verdict, probability: answer.probabilities[verdict] ?? answer.confidence }, usage: result.usage };
   };
 }
 
 /**
- * A chat's looks by the classifier CHECK_LOOK_MODEL names: a System One model on Workers AI that sees images, by its
- * Workers AI id (`typesafe/jev`). Undefined for an empty setting, and, saying so in the log, for one that names no such model.
+ * The look CHECK_LOOK_MODEL names: a System One classifier on Workers AI that sees images, by its Workers AI id
+ * (`typesafe/jev`). Undefined for an empty setting, and, saying so in the log, for one that names no such model.
  */
-export function pageLooks(spec: string | undefined, ai: ModelRunner): PageLooks | undefined {
+export function lookFrom(spec: string | undefined, ai: ModelRunner): Look | undefined {
   const id = spec?.trim();
   if (!id) return undefined;
   const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
@@ -103,56 +99,52 @@ export function pageLooks(spec: string | undefined, ai: ModelRunner): PageLooks 
     console.warn(`CHECK_LOOK_MODEL: ${id} is not a System One model on Workers AI that sees images; checks go on without a look.`);
     return undefined;
   }
-  return new PageLooks(classifierLook(ai, model));
+  return classifierLook(ai, model);
 }
 
-/** A chat's looks at its checks' screenshots, and the drafts they stopped. */
-export class PageLooks {
-  readonly #look: Look;
-  readonly #timeoutMs: number;
-  readonly #flagged = new Set<string>();
+/** A check with what a look at its screenshot found: what the look cost, and, when it stopped the page, why. */
+export interface Reviewed {
+  report: CheckReport;
+  usage?: Usage;
+  /** Set when the look stopped the page: what it saw, for the draft's check to keep (DraftCheck.lookStopped). */
+  stopped?: string;
+}
 
-  constructor(look: Look, timeoutMs = LOOK_MS) {
-    this.#look = look;
-    this.#timeoutMs = timeoutMs;
-  }
+export interface ReviewOptions {
+  /** What the look saw when it stopped this draft before: it is not asked again, and that is a warning now. */
+  stoppedBefore?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
 
-  /**
-   * `report`, the check of draft `draftId`, with what a look at its screenshot found: none for a check that has no
-   * screenshot or found errors already (the page is not published either way, and the agent sees the screenshot), or
-   * when the look fails, which the log says.
-   */
-  async review(draftId: string, report: CheckReport, signal?: AbortSignal): Promise<CheckReport> {
-    if (!report.screenshot || report.errors.length) return report;
-    signal?.throwIfAborted();
-    let found: Awaited<ReturnType<Look>>;
-    try {
-      const timeout = AbortSignal.timeout(this.#timeoutMs);
-      found = await this.#look(report.screenshot, report.text, signal ? AbortSignal.any([signal, timeout]) : timeout);
-    } catch (error) {
+/**
+ * `report`, a check, with what `look` found in its screenshot: nothing for a check that has no screenshot or found
+ * errors already (the page is not published either way, and the agent sees the screenshot), or when the look fails,
+ * which the log says.
+ */
+export async function reviewLook(look: Look, report: CheckReport, { stoppedBefore, signal, timeoutMs = LOOK_MS }: ReviewOptions = {}): Promise<Reviewed> {
+  if (!report.screenshot || report.errors.length) return { report };
+  if (stoppedBefore)
+    return { report: { ...report, warnings: [...report.warnings, `${stoppedBefore}, on its check before: look at the screenshot to be sure.`] } };
+  // Ends the call once it is no longer waited for: out of time, or the check was stopped.
+  const done = new AbortController();
+  const asked = look(report.screenshot, report.text, done.signal);
+  const found = await deadline(asked, timeoutMs, () => new Error(`no answer in ${timeoutMs / 1000} s`), signal)
+    .catch((error: unknown) => {
       if (signal?.aborted) throw error;
       console.warn("page look:", errorMessage(error));
-      return report;
-    }
-    const { look, usage } = found;
-    const reviewed: CheckReport = { ...report, look, ...(usage && { usage }) };
-    if (look.verdict === "content" || look.probability < WARN_AT) return reviewed;
-    const sure = `${look.by}, ${Math.round(look.probability * 100)}% sure`;
-    const seen = `The screenshot looks ${SEEN[look.verdict]} (${sure})`;
-    // An error the page shows for a call that failed outside it (a sign-in, an outage) is the page doing its job.
-    const stops = (look.verdict === "blank" || (look.verdict === "error" && !report.failedOutside)) && look.probability >= ERROR_AT;
-    if (stops && !this.#flagged.has(draftId)) {
-      this.#remember(draftId);
-      const fix =
-        "Look at the screenshot: fix what makes it so (hidden or same-colour text, a chart that drew nothing, content that never rendered). " +
-        `If the page does show what it should, check this draft again unchanged: ${look.by}'s finding is then only a warning.`;
-      return { ...reviewed, errors: [`${seen}. ${fix}`] };
-    }
-    return { ...reviewed, warnings: [...report.warnings, `${seen}: look at the screenshot to be sure.`] };
-  }
-
-  #remember(draftId: string): void {
-    this.#flagged.add(draftId);
-    if (this.#flagged.size > MAX_FLAGGED) this.#flagged.delete(this.#flagged.values().next().value!);
-  }
+    })
+    .finally(() => done.abort());
+  if (!found) return { report };
+  const { look: seen, usage } = found;
+  const reviewed: CheckReport = { ...report, look: seen };
+  if (seen.verdict === "content" || seen.probability < WARN_AT) return { report: reviewed, usage };
+  const line = `The screenshot looks ${SEEN[seen.verdict]} (${seen.by}, ${Math.round(seen.probability * 100)}% sure)`;
+  // An error the page shows for a call that failed outside it (a sign-in, an outage) is the page doing its job.
+  const stops = (seen.verdict === "blank" || (seen.verdict === "error" && !report.failedOutside)) && seen.probability >= ERROR_AT;
+  if (!stops) return { report: { ...reviewed, warnings: [...report.warnings, `${line}: look at the screenshot to be sure.`] }, usage };
+  const fix =
+    "Look at the screenshot: fix what makes it so (hidden or same-colour text, a chart that drew nothing, content that never rendered). " +
+    `If the page does show what it should, check this draft again unchanged: ${seen.by}'s finding is then only a warning.`;
+  return { report: { ...reviewed, errors: [`${line}. ${fix}`] }, usage, stopped: line };
 }

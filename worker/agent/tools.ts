@@ -340,7 +340,7 @@ export function artifactExtension(scope: ChatScope): Extension {
         }),
         execute: async (args, _api, context) => {
           scope.failedChecks.allow();
-          const { draft, report, unchecked } = await checkDraft(scope, args.draft_id, { tests: args.tests, viewport: args.viewport }, context.abortSignal);
+          const { draft, report, unchecked, usage } = await checkDraft(scope, args.draft_id, { tests: args.tests, viewport: args.viewport }, context.abortSignal);
           const { id } = draft;
           const failed = report ? report.errors.length > 0 : undefined;
           // A check that could not run counts too, unless such a page is published anyway (local development): a browser
@@ -356,8 +356,7 @@ export function artifactExtension(scope: ChatScope): Extension {
             ? `The check found ${plural(report.errors.length, "error")} in draft "${id}". Fix them with ${WRITE_TOOL}, draft_id "${id}" and edits ` +
               `for just what changes, then check the new draft. Nothing was published.${stop}`
             : `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with draft_id "${id}".`;
-          const { usage } = report;
-          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed, ...(usage && { usage }) };
+          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed, usage };
         },
       }),
       defineTool({

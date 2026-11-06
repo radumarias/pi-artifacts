@@ -1,5 +1,4 @@
 import type { Frame, Page } from "@cloudflare/puppeteer";
-import type { Usage } from "@earendil-works/pi-ai";
 import { ARTIFACT_SANDBOX, type ArtifactManifest, type CallToolResult, type McpError, type McpErrorCode, type ToolInfo } from "../../shared/protocol.ts";
 import { clip, deadline, errorMessage } from "../../shared/util.ts";
 import type { PageLook } from "./look.ts";
@@ -70,8 +69,6 @@ export interface CheckReport {
   failedOutside?: true;
   /** What a vision classifier saw in the screenshot (worker/artifacts/look.ts), when one looked. */
   look?: PageLook;
-  /** What that look cost, for pi's ledger. */
-  usage?: Usage;
 }
 
 const VIEWPORTS: Record<CheckViewport, { width: number; height: number; isMobile?: boolean; hasTouch?: boolean }> = {
@@ -288,13 +285,13 @@ export async function checkPage(page: Page, input: CheckInput, bridge: Bridge): 
     errors: judged.errors,
     warnings: [...warnings, ...judged.warnings].slice(0, MAX_LINES),
     calls: judged.calls,
+    ...(judged.failedOutside && { failedOutside: judged.failedOutside }),
     tests: results,
     text: clip(shown.text.trim(), MAX_TEXT),
     screenshot,
     thumb: `data:image/jpeg;base64,${thumb}`,
     width: viewport.width,
     height,
-    ...(harness.calls.some(failedOutside) && { failedOutside: true as const }),
   };
 }
 
@@ -335,7 +332,7 @@ interface Observed {
 const KINDS: Record<string, string> = { exception: "Uncaught ", rejection: "Unhandled rejection: ", error: "console.error: ", warn: "console.warn: " };
 
 /** Sort what the check saw into errors and warnings. */
-export function judge({ log, calls, tests, text, graphics, mapLine, manifest }: Observed): Pick<CheckReport, "errors" | "warnings" | "calls"> {
+export function judge({ log, calls, tests, text, graphics, mapLine, manifest }: Observed): Pick<CheckReport, "errors" | "warnings" | "calls" | "failedOutside"> {
   const errors: string[] = [];
   const warnings: string[] = [];
   const outside = calls.some(failedOutside);
@@ -388,7 +385,7 @@ export function judge({ log, calls, tests, text, graphics, mapLine, manifest }: 
     warnings.push(`The page shows "${word}"${count > 1 ? ` ${count} times` : ""}: a value it rendered without having it?`);
   }
 
-  return { errors: errors.slice(0, MAX_LINES), warnings: [...new Set(warnings)].slice(0, MAX_LINES), calls: callLines };
+  return { errors: errors.slice(0, MAX_LINES), warnings: [...new Set(warnings)].slice(0, MAX_LINES), calls: callLines, ...(outside && { failedOutside: true as const }) };
 }
 
 /** Each distinct item with how often it came, in first-seen order. */
