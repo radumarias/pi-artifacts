@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { baseName } from "../../shared/attachments.ts";
 import {
   activeQuery,
@@ -19,7 +19,7 @@ import {
 import { everyone, type ChatPeople } from "../../shared/protocol.ts";
 import { formatBytes } from "../../shared/util.ts";
 import { api } from "../api.ts";
-import { Avatar, tintOf, tintStyle, useSharedChat } from "./people.tsx";
+import { AgentAvatar, Avatar, tintOf, tintStyle, useSharedChat } from "./people.tsx";
 
 /** The agent, as the picker offers it in a shared chat, where "@pi" is what calls it. */
 const AGENT_CHOICE = { agent: true, detail: "agent · asks it to answer" } as const;
@@ -186,31 +186,45 @@ export function MentionList({ mentions }: { mentions: ReturnType<typeof useMenti
         </div>
       ) : (
         choices.map((choice, i) => (
-          <button
-            key={choiceKey(choice)}
-            type="button"
-            role="option"
-            aria-selected={i === active}
-            className={i === active ? "mention-choice active" : "mention-choice"}
-            // Before the input loses focus, so the caret is still where the "@" is.
-            onMouseDown={(e) => {
-              e.preventDefault();
-              pick(choice);
-            }}
-            onMouseEnter={() => setActive(i)}
-          >
-            {"mention" in choice && choice.mention.kind === "person" && people ? (
-              <Avatar name={choice.mention.name} tint={tintOf(people, choice.mention.uid)} />
-            ) : (
-              <span className="mention-icon">{"agent" in choice ? "π" : choice.mention.kind === "file" ? "▤" : "▦"}</span>
+          <Fragment key={choiceKey(choice)}>
+            {(i === 0 || choiceGroup(choices[i - 1]) !== choiceGroup(choice)) && (
+              <div className="mention-group" role="presentation">
+                {choiceGroup(choice)}
+              </div>
             )}
-            <span className="mention-label">{"agent" in choice ? AGENT_NAME : mentionLabel(choice.mention)}</span>
-            <small>{choice.detail}</small>
-          </button>
+            <button
+              type="button"
+              role="option"
+              aria-selected={i === active}
+              className={i === active ? "mention-choice active" : "mention-choice"}
+              // Before the input loses focus, so the caret is still where the "@" is.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                pick(choice);
+              }}
+              onMouseEnter={() => setActive(i)}
+            >
+              {"agent" in choice ? (
+                <AgentAvatar />
+              ) : choice.mention.kind === "person" && people ? (
+                <Avatar name={choice.mention.name} tint={tintOf(people, choice.mention.uid)} />
+              ) : (
+                <span className="mention-icon">{choice.mention.kind === "file" ? "▤" : "▦"}</span>
+              )}
+              <span className="mention-label">{"agent" in choice ? AGENT_NAME : mentionLabel(choice.mention)}</span>
+              <small>{choice.detail}</small>
+            </button>
+          </Fragment>
         ))
       )}
     </div>
   );
+}
+
+/** The heading a choice is listed under: the agent, people, then files and artifacts. */
+function choiceGroup(choice: Choice): string {
+  if ("agent" in choice) return "Agent";
+  return { person: "People", file: "Files", artifact: "Artifacts" }[choice.mention.kind];
 }
 
 function choiceKey(choice: Choice): string {

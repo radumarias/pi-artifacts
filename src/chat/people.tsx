@@ -39,13 +39,20 @@ export function Avatar({ name, tint, online }: { name: string; tint: number; onl
   );
 }
 
-/** The agent's badge and name, over its replies in a shared chat. */
+/** The agent's badge: square-cornered where a person's is round. `working` adds a dot while it runs. */
+export function AgentAvatar({ working = false }: { working?: boolean }) {
+  return (
+    <span className="avatar agent" aria-hidden="true">
+      π{working && <i className="working-dot" />}
+    </span>
+  );
+}
+
+/** The agent's badge and name, over its replies. */
 export function AgentByline() {
   return (
     <div className="byline agent">
-      <span className="avatar agent" aria-hidden="true">
-        π
-      </span>
+      <AgentAvatar />
       <strong>{AGENT_NAME}</strong>
       <small>agent</small>
     </div>

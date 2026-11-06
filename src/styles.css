@@ -1,51 +1,68 @@
 /* The chat header's least height (its buttons can make it a little taller): the mention notices sit under it. */
 :root {
-  --header-h: 40px;
-  --bg: #f7f7f5;
+  --header-h: 52px;
+  /* Cool, slightly green neutrals; one blue accent for actions and the agent; a warm rust for work in progress. */
+  --bg: #f5f6f4;
   --surface: #ffffff;
-  --surface-2: #f0efeb;
-  --text: #1d1d1b;
-  --muted: #6b6a66;
-  --border: #e2e0da;
-  --accent: #c2410c;
+  --surface-2: #eaedea;
+  --text: #161a18;
+  --muted: #59625d;
+  --border: #d4d9d5;
+  --accent: #1d5fa8;
+  --accent-soft: #dde9f6;
   --accent-text: #ffffff;
-  --live: #15803d;
-  --error: #b91c1c;
+  --working: #9a4a12;
+  --working-soft: #f7e6d8;
+  --live: #1f7a50;
+  --error: #b42318;
   /* Each person's colour in a shared chat (src/chat/people.tsx), and the text on it. The agent keeps --accent. */
-  --person-0: #2563eb;
-  --person-1: #7c3aed;
-  --person-2: #db2777;
-  --person-3: #0f766e;
-  --person-4: #a16207;
-  --person-5: #15803d;
-  --person-6: #0369a1;
-  --person-7: #be123c;
+  --person-0: #3d6e8f;
+  --person-1: #8b6d4f;
+  --person-2: #9b4f86;
+  --person-3: #2f8a6a;
+  --person-4: #6a7570;
+  --person-5: #5b5f9e;
+  --person-6: #a35a2a;
+  --person-7: #74742c;
   --on-tint: #ffffff;
   --radius: 10px;
-  --radius-lg: 14px;
+  --radius-lg: 12px;
+  /* Popups and cards: a soft shadow that falls below, as on paper. */
+  --shadow-pop: 0 14px 34px -22px rgb(0 0 0 / 0.5);
+  --shadow-card: 0 14px 34px -26px rgb(0 0 0 / 0.45);
+  --font-display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* What a message's text is indented by: its author's badge and the gap after it. */
+  --gutter: 38px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #141413;
-    --surface: #1d1d1b;
-    --surface-2: #262624;
-    --text: #ecebe7;
-    --muted: #9b9a95;
-    --border: #34332f;
-    --accent: #f97316;
-    --accent-text: #141413;
-    --live: #4ade80;
-    --error: #f87171;
-    --person-0: #60a5fa;
-    --person-1: #a78bfa;
-    --person-2: #f472b6;
-    --person-3: #2dd4bf;
-    --person-4: #fbbf24;
-    --person-5: #4ade80;
-    --person-6: #38bdf8;
-    --person-7: #fb7185;
-    --on-tint: #141413;
+    --bg: #101312;
+    --surface: #171b19;
+    --surface-2: #1f2421;
+    --text: #e3e7e4;
+    --muted: #9aa49e;
+    --border: #2c3330;
+    --accent: #7db3ee;
+    --accent-soft: #15283d;
+    --accent-text: #101312;
+    --working: #f0a56b;
+    --working-soft: #3a2414;
+    --live: #5fd29a;
+    --error: #f48b82;
+    --person-0: #7fb4d6;
+    --person-1: #c9a582;
+    --person-2: #d792c4;
+    --person-3: #6cc6a3;
+    --person-4: #a9b4ae;
+    --person-5: #a6aaea;
+    --person-6: #e8a272;
+    --person-7: #c8c870;
+    --on-tint: #101312;
+    --shadow-pop: 0 16px 36px -18px rgb(0 0 0 / 0.8);
+    --shadow-card: 0 14px 34px -24px rgb(0 0 0 / 0.75);
     color-scheme: dark;
   }
 }
@@ -55,20 +72,28 @@ html, body, #root { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 15px/1.55 var(--font-body);
+  -webkit-font-smoothing: antialiased;
 }
+h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.01em; text-wrap: balance; }
+code, pre, kbd, samp { font-family: var(--font-mono); }
 button, .button, select, input, textarea { font: inherit; color: inherit; }
 button, .button, select {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   cursor: pointer;
   text-decoration: none;
 }
+/* Plain buttons (no class of their own) and the framed ones read as buttons: a little heavier than text. */
+button:not([class]), .button, button.primary, button.danger, .share-button { font-weight: 500; font-size: 14px; }
+button:not([class]):hover, .button:hover, .share-button:hover { background: var(--surface-2); }
 button:disabled { opacity: 0.5; cursor: default; }
-button.primary, .button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+button.primary, .button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button.primary:not(:disabled):hover, .button.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
 button.danger { background: var(--error); color: var(--surface); border-color: transparent; }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
 
 .workspace {
   display: grid;
@@ -101,6 +126,7 @@ body.resizing iframe { pointer-events: none; }
   gap: 6px;
   padding: 14px;
   background: var(--surface);
+  border-right: 1px solid var(--border);
   /* Chats scroll in .sidebar-scroll; artifacts, skills, the files panel and the footer stay at the bottom. */
   overflow: hidden;
   min-width: 0;
@@ -133,7 +159,8 @@ body.resizing iframe { pointer-events: none; }
 .sidebar.rail { align-items: center; padding: 14px 8px; }
 .sidebar.rail button, .sidebar.rail .back-to-site { width: 36px; padding: 6px 0; }
 .sidebar h3 { margin: 14px 0 2px; }
-.sidebar h3, .section-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+/* Section names: small capitals in the body face, as the mockups' eyebrows. */
+.sidebar h3, .section-head { font: 600 11.5px/1.2 var(--font-body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 /* After .sidebar h3, whose margin shorthand would otherwise win at equal specificity. */
 .sidebar .sidebar-pinned h3 { margin-top: 10px; }
 /* A section heading's h3 (SectionHead) adds no space of its own; its button pads it. */
@@ -153,7 +180,8 @@ body.resizing iframe { pointer-events: none; }
   text-overflow: ellipsis;
   font-size: 14px;
 }
-.sidebar nav a:hover, .sidebar nav a.active { background: var(--surface-2); }
+.sidebar nav a:hover { background: var(--surface-2); }
+.sidebar nav a.active { background: var(--surface-2); font-weight: 500; }
 /* A sidebar entry: its name, and on the right its status (ChatList.tsx): working, waiting for an answer, or unread. */
 .sidebar nav a.nav-item { display: flex; align-items: center; gap: 8px; }
 .sidebar nav .nav-title { flex: 1; min-width: 0; padding: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -170,6 +198,8 @@ body.resizing iframe { pointer-events: none; }
 .chat-link { position: relative; display: flex; border-radius: 6px; }
 .chat-link > a { flex: 1; min-width: 0; }
 .chat-link:hover, .chat-link.active, .chat-link:focus-within { background: var(--surface-2); }
+/* The open chat: marked by a bar in the accent at its start, besides its background. */
+.chat-link.active { box-shadow: inset 3px 0 0 var(--accent); }
 .chat-link:hover > a, .chat-link > a:hover { background: none; }
 .chat-delete { flex: none; display: grid; place-items: center; padding: 0 6px; border: 0; background: none; color: var(--muted); opacity: 0; }
 .chat-link:hover .chat-delete, .chat-delete:focus-visible { opacity: 1; }
@@ -177,9 +207,9 @@ body.resizing iframe { pointer-events: none; }
 @media (hover: none) { .chat-delete { opacity: 1; } }
 /* With a mouse, the button shows over the chat's status icon on hover, so the icons line up with the other lists'. */
 @media (hover: hover) { .chat-delete { position: absolute; top: 0; right: 0; bottom: 0; border-radius: 0 6px 6px 0; background: var(--surface-2); } }
-.confirm-dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: 0 12px 40px rgb(0 0 0 / 0.2); }
+.confirm-dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop); }
 .confirm-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
-.confirm-dialog h2 { margin: 0 0 10px; font-size: 18px; }
+.confirm-dialog h2 { margin: 0 0 10px; font-size: 20px; font-weight: 800; }
 .confirm-dialog p { margin: 0 0 10px; }
 .confirm-dialog > small { display: block; color: var(--muted); font-size: 13px; }
 .confirm-list { margin: 0 0 10px; padding-left: 20px; max-height: 140px; overflow-y: auto; font-size: 14px; overflow-wrap: anywhere; }
@@ -195,7 +225,7 @@ body.resizing iframe { pointer-events: none; }
 .chat-prompt-button.set { color: var(--accent); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .sidebar small { color: var(--muted); }
-.sidebar .upload { padding: 5px 8px; color: var(--accent); cursor: pointer; font-size: 14px; }
+.sidebar .upload { padding: 5px 8px; color: var(--accent); cursor: pointer; font-size: 14px; font-weight: 500; }
 .sidebar .upload:has(input:disabled) { opacity: 0.5; cursor: default; }
 .upload-actions { display: flex; flex-wrap: wrap; }
 .upload-status { padding: 2px 8px; overflow-wrap: anywhere; }
@@ -250,8 +280,8 @@ body.resizing iframe { pointer-events: none; }
 .account-button, :is(.account-menu, .composer-more-menu) button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; text-align: left; }
 .account-button { padding: 6px 8px; }
 /* The account menu and the composer's "more" menu: a box above their button, a row per action. */
-:is(.account-menu, .composer-more-menu) { position: absolute; left: 0; z-index: 5; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); }
-:is(.account-menu, .composer-more-menu) button { padding: 8px 10px; }
+:is(.account-menu, .composer-more-menu) { position: absolute; left: 0; z-index: 5; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop); }
+:is(.account-menu, .composer-more-menu) button { padding: 8px 10px; border-radius: 6px; }
 :is(.account-button, .account-menu button, .composer-more-menu button):hover, .account-button[aria-expanded="true"], .share-button[aria-expanded="true"], :is(.account-menu, .composer-more-menu) button:focus-visible { background: var(--surface-2); }
 :is(.account-button, .composer-more-button) > svg { flex: none; color: var(--muted); transition: transform 0.15s; }
 :is(.account-button, .composer-more-button)[aria-expanded="true"] > svg { transform: rotate(180deg); }
@@ -260,40 +290,48 @@ body.resizing iframe { pointer-events: none; }
 .account-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-menu { right: 0; bottom: calc(100% + 4px); }
 
-.main { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+/* A column: on a phone, the bar with the menu button over the skills or the empty page. */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+.main > * { flex: 1 1 auto; min-height: 0; }
+.main > .mobile-bar { flex: none; }
 .chat { display: flex; flex-direction: column; height: 100%; }
+/* The conversation reads in one column, centred in a wide window, as the composer below it. */
 .messages { flex: 1; min-height: 0; overflow-y: auto; padding: 32px 20px 8px; display: flex; flex-direction: column; gap: 10px; }
 .empty-chat { margin: auto; max-width: 440px; text-align: center; color: var(--muted); }
-.empty-chat h2 { color: var(--text); }
+.empty-chat h2 { margin: 0 0 10px; color: var(--text); font-size: 28px; font-weight: 800; line-height: 1.1; }
 
-/* Width capped by what holds it (.message, .assistant), never a share of its own row: that would wrap its last word. */
-.bubble { padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; }
-.bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
-.bubble.bot { background: var(--surface); border: 1px solid var(--border); }
-/* A person's message: yours on the right, someone else's on the left under their name. */
-.message { display: flex; flex-direction: column; gap: 3px; max-width: 88%; min-width: 0; }
-.message.mine { align-self: flex-end; align-items: flex-end; }
-.message.other { align-self: flex-start; align-items: flex-start; }
+/*
+ * The transcript, as the mockups draw a chat: every message, the viewer's own too, starts at the left under its
+ * author's badge and name, its text indented past the badge (--gutter), with no bubble around it. The agent's replies
+ * read the same under its square badge. Lines that belong to no one (days, "New", joins) span the whole column.
+ */
+.transcript { width: 100%; max-width: 760px; margin: 0 auto; padding-left: var(--gutter); }
+.chat-notice, .empty-chat { translate: calc(var(--gutter) / -2) 0; }
+.bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
+.message { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 100%; min-width: 0; }
 :is(.message, .bubble-row) > .attachments { max-width: 100%; }
-.bubble.peer { background: var(--surface-2); }
-/* In a shared chat, each person's messages have their colour (--tint, set on the message). */
-.message.tinted .bubble.user { background: var(--tint); color: var(--on-tint); }
-.message.tinted .bubble.peer { background: color-mix(in srgb, var(--tint) 13%, var(--surface)); border: 1px solid color-mix(in srgb, var(--tint) 28%, transparent); }
-.byline { display: flex; align-items: center; gap: 6px; padding-left: 2px; font-size: 13px; }
+/* A message that tags the viewer: on the accent's tint, so it stands out in a busy chat. */
+.message.mentions-me .bubble { margin-left: -10px; padding: 4px 10px; border-radius: 8px; background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+/* The badge hangs into the gutter, its top level with the name; the text starts right under the name. */
+.byline { display: flex; align-items: flex-start; gap: 10px; height: 22px; margin-left: calc(-1 * var(--gutter)); font-size: 14px; line-height: 22px; white-space: nowrap; }
+.byline .avatar { width: 28px; height: 28px; font-size: 12px; }
+.byline .avatar.agent { font-size: 15px; }
 .byline strong { font-weight: 600; }
-.message.tinted .byline strong { color: var(--tint); }
-.byline small { color: var(--muted); }
-.avatar { position: relative; flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--tint, var(--muted)); color: var(--on-tint); font-size: 11px; font-weight: 700; line-height: 1; }
-.avatar.agent { background: var(--accent); color: var(--accent-text); font-size: 13px; }
-/* Whether someone has the chat open: green while they do. */
+.byline small { color: var(--muted); font-size: 12px; }
+.byline.agent { margin-top: 4px; }
+.avatar { position: relative; flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--tint, var(--muted)); color: var(--on-tint); font: 600 11px/1 var(--font-body); }
+/* The agent's badge: a rounded square, where people's are round. */
+.avatar.agent { border-radius: 30%; background: var(--accent); color: var(--accent-text); font-size: 13px; }
+/* Whether someone has the chat open: green while they do. The agent's: a rust dot while it works. */
 .presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--bg); border-radius: 50%; background: var(--border); }
 .presence.online { background: var(--live); }
+.working-dot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border: 2px solid var(--bg); border-radius: 50%; background: var(--working); animation: notify-pulse 1.6s ease-in-out infinite; }
 /*
- * React, copy, reply and "…": in a pill over the top right corner of a person's bubble (never past the start of someone
- * else's), and in a row under the agent's replies. When it was sent: under the bubble, and beside that row. All on
- * hover, holding their place so nothing moves. The pill rises 28px above the bubble: .messages leaves room for it.
+ * React, copy, reply and "…": in a pill at the right end of a person's message, level with their name, and in a row
+ * under the agent's replies. When it was sent: under the message, and beside that row. All on hover, holding their
+ * place so nothing moves. The pill rises 28px above the text: .messages leaves room for it over the first message.
  */
-.bubble-row { position: relative; display: flex; max-width: 100%; }
+.bubble-row { position: relative; display: flex; align-self: stretch; max-width: 100%; }
 .message-actions { position: relative; }
 .message-actions, .sent-time { opacity: 0; transition: opacity 0.1s; }
 .message-tools { display: flex; gap: 2px; }
@@ -303,7 +341,6 @@ body.resizing iframe { pointer-events: none; }
 @media (hover: hover) {
   /* Across the bubble's width, letting clicks through but for the pill, which sits at its end. */
   .message-actions.floating { position: absolute; left: 0; right: 0; bottom: calc(100% - 4px); z-index: 5; display: flex; justify-content: flex-end; pointer-events: none; }
-  .message.other .message-actions.floating { justify-content: safe flex-end; }
   .floating > .message-tools {
     gap: 4px; padding: 3px;
     border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / 0.1);
@@ -324,13 +361,13 @@ body.resizing iframe { pointer-events: none; }
 /*
  * Compact (phones, narrow windows; useCompact in gestures.ts marks the list): no hover bar. A long press opens a
  * message's menu (.press-*), and dragging the conversation left (useSwipeReveal) uncovers each message's time, which
- * waits just past the right edge. Messages span the row for that, their parts still capped at 88%.
+ * waits just past the right edge. Messages span the row for that.
  */
 .messages[data-compact] { padding-top: 20px; overflow-x: hidden; touch-action: pan-y pinch-zoom; }
 [data-compact] .transcript { transition: transform 0.2s ease-out; }
 [data-compact] .transcript.revealing { transition: none; }
 [data-compact] .message:is(.mine, .other) { position: relative; align-self: stretch; max-width: none; }
-[data-compact] .message > :not(.sent-time) { max-width: 88%; }
+[data-compact] .message > :not(.sent-time) { max-width: 100%; }
 [data-compact] .assistant { position: relative; }
 [data-compact] .message-foot { display: contents; }
 [data-compact] .sent-time { position: absolute; left: calc(100% + 24px); opacity: 1; padding: 0; }
@@ -343,7 +380,7 @@ body.resizing iframe { pointer-events: none; }
   :is(.message, .assistant) a { -webkit-touch-callout: default; }
 }
 .press-layer { position: fixed; inset: 0; z-index: 50; }
-.press-emoji, .press-menu { position: fixed; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 8px 28px rgb(0 0 0 / 0.18); }
+.press-emoji, .press-menu { position: fixed; border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow-pop); }
 .press-emoji { left: 50%; translate: -50% 0; width: min(420px, 100vw - 24px); padding: 4px; border-radius: 999px; }
 .press-emoji .emoji-row { justify-content: space-between; }
 .press-emoji .emoji-row button { width: 40px; height: 40px; border-radius: 50%; font-size: 22px; }
@@ -354,7 +391,7 @@ body.resizing iframe { pointer-events: none; }
 .press-menu button:active, .press-menu button:focus-visible { background: var(--surface-2); }
 .press-toast { position: fixed; left: 50%; bottom: 96px; z-index: 50; translate: -50% 0; padding: 8px 14px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px; }
 /* Over the first message of each day: the day, between two wavy lines. Over the first one the reader has not seen: "New", the same in the accent colour. */
-.day-separator, .new-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0; color: var(--muted); font-size: 13px; }
+.day-separator, .new-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0 4px calc(-1 * var(--gutter)); color: var(--muted); font-size: 13px; }
 .new-divider { color: var(--accent); --rule: color-mix(in srgb, var(--accent) 70%, transparent); }
 .day-separator::before, .day-separator::after, .new-divider::before, .new-divider::after {
   content: ""; flex: 1; height: 6px; background: var(--rule, var(--border));
@@ -369,7 +406,6 @@ body.resizing iframe { pointer-events: none; }
 .auto-pick.kept .auto-pick-model { font-style: italic; }
 /* Reactions under a message: each emoji, how many, the viewer's own marked; a click adds or takes back theirs. */
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; }
-.reactions.mine { justify-content: flex-end; }
 .reaction { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 22px; }
 button.reaction { cursor: pointer; }
 button.reaction:hover { border-color: var(--muted); }
@@ -378,7 +414,7 @@ button.reaction:hover { border-color: var(--muted); }
 /* What the hover bar opens: the emoji to react with, and under "…" the same with its actions; above the bar low down. */
 .message-menu {
   position: absolute; top: calc(100% + 4px); z-index: 6; display: flex; flex-direction: column; min-width: max-content; padding: 6px;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12);
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop);
 }
 .message-menu.up { top: auto; bottom: calc(100% + 4px); }
 .message .message-menu { right: 0; }
@@ -400,14 +436,20 @@ button.reaction:hover { border-color: var(--muted); }
 .replying .reply-quote { flex: 1; min-width: 0; margin: 0; background: none; }
 
 /* Relative: the cost panel hangs from its right edge, so it stays on screen however wide the header is. */
-.chat-header { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; min-height: var(--header-h); }
-.chat-people { flex: 1; min-width: 0; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Everyone in a shared chat, in their colours, with a dot for who has it open now. */
-.people-bar { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; overflow: hidden; font-size: 14px; }
-.people-bar .person { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
-.people-bar .person-name { overflow: hidden; text-overflow: ellipsis; }
-.people-bar .person:not(.online) .person-name { color: var(--muted); }
-.people-bar .person small { color: var(--muted); }
+/* A bar over the conversation: the chat's name, who is in it, its cost and sharing. */
+.chat-header { position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 16px 8px 20px; min-height: var(--header-h); border-bottom: 1px solid var(--border); background: var(--surface); }
+.chat-title { flex: 0 1 auto; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-people { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Everyone in a shared chat as badges in their colours (a dot for who has it open now), a rule, then the agent's. */
+/* It keeps its size; the chat's name before it gives way (to an ellipsis) instead. */
+.people-bar { flex: none; display: flex; align-items: center; gap: 4px; margin-left: auto; padding: 3px; }
+.people-bar .person { display: inline-flex; flex: none; }
+.people-bar .avatar { width: 26px; height: 26px; font-size: 11.5px; }
+.people-bar .avatar.agent { font-size: 14px; }
+.people-bar .person:not(.online, .agent) .avatar { opacity: 0.7; }
+.people-bar .person-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.people-divider { flex: none; width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
+.chat-header :is(.presence, .working-dot) { border-color: var(--surface); }
 .share-panel, .cost-panel, .context-panel { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
 .share-panel ul, .cost-panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .share-panel { margin: 8px 20px 0; align-items: flex-start; }
@@ -431,17 +473,18 @@ button.reaction:hover { border-color: var(--muted); }
 .bubble.markdown li + li { margin-top: 3px; }
 .bubble.markdown h1, .bubble.markdown h2, .bubble.markdown h3, .bubble.markdown h4 { margin: 14px 0 8px; font-size: 1.05em; line-height: 1.3; }
 .bubble.markdown h1 { font-size: 1.2em; }
-.bubble.markdown code { font-family: ui-monospace, monospace; font-size: 0.9em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
-.bubble.markdown pre { background: var(--surface-2); padding: 10px 12px; border-radius: 8px; overflow-x: auto; white-space: pre; }
+.bubble.markdown h1, .bubble.markdown h2 { font-weight: 800; }
+.bubble.markdown code { font: 500 0.86em var(--font-mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.bubble.markdown pre { background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: var(--radius); overflow-x: auto; white-space: pre; font-size: 13px; line-height: 1.6; }
 .bubble.markdown pre code { background: none; padding: 0; }
 .bubble.markdown blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); }
 .bubble.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
 .bubble.markdown .md-table { overflow-x: auto; }
 .bubble.markdown table { border-collapse: collapse; font-size: 0.95em; }
-.bubble.markdown th, .bubble.markdown td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
-.bubble.markdown th { background: var(--surface-2); }
+.bubble.markdown th, .bubble.markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.bubble.markdown th { background: var(--surface-2); font-size: 0.85em; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .assistant { display: flex; flex-direction: column; gap: 4px; }
-.assistant > .bubble { max-width: 88%; }
+.assistant > .bubble { max-width: 100%; }
 .tool-call { color: var(--muted); font-size: 13px; }
 /* One step of the agent (Steps.tsx): a plain line with an icon, what it is, a hint and its status. An arrow after the
    hint opens what went in and came out, beside a thin guide line; a step with nothing more to show has no arrow. */
@@ -457,7 +500,7 @@ button.reaction:hover { border-color: var(--muted); }
 .step.error .step-icon { color: var(--error); }
 .step-label { flex: none; font-weight: 500; white-space: nowrap; }
 /* Cut to one line, except on a step that has nothing to open, where it is the whole detail. */
-.step-hint { flex: 0 1 auto; min-width: 0; color: var(--muted); font: 12px/20px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step-hint { flex: 0 1 auto; min-width: 0; color: var(--muted); font: 12px/20px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .step-hint.prose { font: inherit; }
 .step.static .step-hint { flex: 1; white-space: normal; overflow-wrap: anywhere; }
 .step.error.static .step-hint { color: var(--error); }
@@ -471,8 +514,8 @@ button.reaction:hover { border-color: var(--muted); }
 .step > summary:hover .step-chevron { stroke: var(--text); }
 .step[open] .step-chevron { transform: rotate(90deg); }
 .step-body { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 6px 7px; padding: 4px 0 4px 16px; border-left: 1px solid var(--border); }
-.step-section-label { margin-bottom: 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-.step-section pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.step-section-label { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+.step-section pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font: 12px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .step-section.error pre { color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }
 .step-note { margin: 0; color: var(--muted); }
 .step-shot { margin: 0 0 10px; }
@@ -484,7 +527,7 @@ button.reaction:hover { border-color: var(--muted); }
 .thinking { display: flex; align-items: center; gap: 10px; padding: 2px 4px; color: var(--muted); }
 /* The brightness passes from dot to dot, left to right. */
 .thinking-dots { flex: none; display: inline-flex; gap: 3px; }
-.thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); opacity: 0.3; animation: thinking-pulse 1.2s ease-in-out infinite; }
+.thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--working); opacity: 0.3; animation: thinking-pulse 1.2s ease-in-out infinite; }
 .thinking-dots i:nth-child(2) { animation-delay: 0.2s; }
 .thinking-dots i:nth-child(3) { animation-delay: 0.4s; }
 .thinking-time { margin-left: -2px; font-variant-numeric: tabular-nums; }
@@ -494,7 +537,7 @@ button.reaction:hover { border-color: var(--muted); }
   flex: none;
   width: 16px;
   height: 16px;
-  stroke: var(--accent);
+  stroke: var(--working);
   stroke-width: 2.6;
   stroke-linecap: round;
   animation: thinking-spin 3.2s ease-in-out infinite;
@@ -516,7 +559,7 @@ button.reaction:hover { border-color: var(--muted); }
 @keyframes thinking-in { from { opacity: 0; } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .chat-error { color: var(--error); }
-.spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
+.spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--working); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .thinking-dots i, .thinking-spark, .thinking-spark g, .thinking-word, .step.active .step-status, .spinner { animation: none; }
@@ -526,20 +569,27 @@ button.reaction:hover { border-color: var(--muted); }
   .step-chevron { transition: none; }
 }
 
+/* A published page in the conversation: a card, its icon on the accent's tint. */
 .artifact-card {
   display: flex;
   gap: 12px;
   align-items: center;
+  align-self: flex-start;
   text-align: left;
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  max-width: 360px;
+  padding: 10px 16px 10px 10px;
+  border-radius: var(--radius-lg);
+  max-width: 100%;
+  min-width: min(300px, 100%);
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.15s;
 }
 .artifact-card:hover { border-color: var(--accent); }
-.artifact-card-icon { font-size: 22px; color: var(--accent); }
-.artifact-card small { display: block; color: var(--muted); }
+.artifact-card-icon { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 22px; }
+.artifact-card strong { font-weight: 600; }
+.artifact-card small { display: block; color: var(--muted); font-size: 12.5px; }
 
-.composer { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 20px 14px; }
+/* As wide as the conversation's column (its badges' gutter included), centred under it. */
+.composer { position: relative; display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 800px; margin: 0 auto; padding: 10px 20px max(14px, env(safe-area-inset-bottom)); }
 /* What "@" offers, over the transcript just above the input. */
 .mention-list {
   position: absolute;
@@ -555,22 +605,23 @@ button.reaction:hover { border-color: var(--muted); }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 6px 24px rgb(0 0 0 / 0.12);
+  box-shadow: var(--shadow-pop);
 }
-.mention-choice { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; text-align: left; font-size: 14px; }
-.mention-choice.active { background: var(--surface-2); }
-.mention-icon { flex: none; color: var(--muted); }
+/* Over each kind of choice: the agent, people, files, artifacts. */
+.mention-group { padding: 9px 8px 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; line-height: 1; text-transform: uppercase; }
+.mention-choice { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; text-align: left; font-size: 14px; }
+.mention-choice.active { background: var(--accent-soft); }
+.mention-icon { flex: none; display: inline-grid; place-items: center; width: 22px; color: var(--muted); }
 .mention-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-choice small { flex: none; margin-left: auto; color: var(--muted); }
 .mention-empty { padding: 6px 8px; color: var(--muted); font-size: 14px; }
 /* A mention in a sent message: set off from the text around it. */
-.mention-chip.agent { background: color-mix(in srgb, var(--accent) 22%, transparent); font-weight: 600; }
-.mention-chip, .bubble a.mention-chip { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); color: inherit; font-weight: 500; text-decoration: none; }
+.mention-chip.agent { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mention-chip, .bubble a.mention-chip { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 10%, transparent); color: inherit; font-weight: 500; text-decoration: none; }
 a.mention-chip:hover { text-decoration: underline; }
 /* A person tagged, in their colour; the viewer's own tag stands out. */
-.mention-chip.person { background: color-mix(in srgb, var(--tint, currentColor) 20%, transparent); font-weight: 600; }
+.mention-chip.person { background: color-mix(in srgb, var(--tint, currentColor) 16%, transparent); color: color-mix(in srgb, var(--tint, currentColor) 75%, var(--text)); font-weight: 600; }
 .mention-chip.person.me { background: var(--tint, var(--accent)); color: var(--on-tint); }
-.message.mentions-me .bubble.peer { box-shadow: inset 3px 0 0 var(--accent); }
 /* The input and Send/Stop sit in one rounded box; attach, dictation and the model under it. */
 .composer-box {
   display: flex;
@@ -580,10 +631,11 @@ a.mention-chip:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
+  box-shadow: var(--shadow-card);
   cursor: text;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.composer-box:focus-within { border-color: color-mix(in srgb, var(--muted) 60%, var(--border)); }
+.composer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: var(--shadow-card), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 /* Bottom-aligned, so Send stays by the last line as the input grows. */
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
 .composer textarea {
@@ -606,6 +658,10 @@ a.mention-chip:hover { text-decoration: underline; }
 /* One size for every icon button, so Send and Stop swap without a shift. */
 .icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; }
 .icon-button:disabled { opacity: 0.35; }
+/* Send: the one filled button in the composer, in the accent, as the mockups' primary action. */
+.icon-button.send { border-radius: 9px; background: var(--accent); color: var(--accent-text); }
+.icon-button.send:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+.icon-button.send:disabled { opacity: 1; background: var(--surface-2); color: var(--muted); }
 .icon-button.listening { color: var(--error); }
 /* Attach, dictation and the "more" chevron at the left; the model and the context ring at the right. */
 .composer-tools { display: flex; align-items: center; gap: 2px; padding: 0 4px; min-height: 32px; }
@@ -627,7 +683,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .context-meter { --level: var(--muted); }
 .context-meter.high { --level: var(--accent); }
 .context-meter.full { --level: var(--error); }
-.context-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; width: min(300px, calc(100vw - 32px)); gap: 6px; box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); font-size: 14px; }
+.context-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; width: min(300px, calc(100vw - 32px)); gap: 6px; box-shadow: var(--shadow-pop); font-size: 14px; }
 .context-head, .panel-head { display: flex; justify-content: space-between; gap: 12px; }
 .context-head span { font-variant-numeric: tabular-nums; }
 .context-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
@@ -652,8 +708,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .pending-attachment button { border: 0; background: none; padding: 0 4px; cursor: pointer; color: var(--muted); }
 .file-icon { color: var(--muted); }
 /* A message's attachments, above its text. */
-.attachments { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; max-width: 88%; }
-.attachments.mine { align-self: flex-end; justify-content: flex-end; }
+.attachments { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; max-width: 100%; }
 .attachment-thumb { max-width: 160px; max-height: 160px; border-radius: var(--radius); border: 1px solid var(--border); }
 .attachment-chip { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 13px; overflow-wrap: anywhere; }
 /* The model and its effort, as plain text at the right of the row under the input. */
@@ -672,7 +727,7 @@ a.mention-chip:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 0.16);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
 }
 .model-search { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
@@ -713,10 +768,11 @@ a.mention-chip:hover { text-decoration: underline; }
 .artifact-panel.full { border-left: 0; }
 .artifact-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .artifact-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.artifact-title strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.artifact-title strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 600 15px/1.3 var(--font-display); }
 .artifact-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
-.pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); white-space: nowrap; }
-.pill.live { color: var(--live); }
+/* A status label: a rounded pill, quiet by default; tinted for live, review and the like. */
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.3; white-space: nowrap; }
+.pill.live { border-color: transparent; background: color-mix(in srgb, var(--live) 14%, var(--surface)); color: var(--live); }
 .artifact-frame { flex: 1; width: 100%; border: 0; background: #fff; }
 .artifact-stage { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 /* The page's source, laid over it: the page keeps its size and state behind it. */
@@ -732,7 +788,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .viewport-picker button { display: grid; place-items: center; border: 0; border-radius: 0; padding: 6px 8px; color: var(--muted); }
 .viewport-picker button + button { border-left: 1px solid var(--border); }
 .viewport-picker button:hover { color: var(--text); }
-.viewport-picker button[aria-pressed="true"] { background: var(--surface-2); color: var(--accent); }
+.viewport-picker button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .bubble a, .step a { color: var(--accent); overflow-wrap: anywhere; }
 .clone-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: 13px; }
 .clone-box code { flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
@@ -745,20 +801,20 @@ a.mention-chip:hover { text-decoration: underline; }
 .file-size { flex: none; color: var(--muted); font-size: 12px; }
 .file-body { flex: 1; min-height: 0; overflow: auto; }
 .file-note { margin: 0; padding: 8px 16px; color: var(--muted); font-size: 13px; }
-.file-code { margin: 0; padding: 12px 16px; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; tab-size: 4; width: max-content; min-width: 100%; }
+.file-code { margin: 0; padding: 12px 16px; font: 13px/1.6 var(--font-mono); white-space: pre; tab-size: 4; width: max-content; min-width: 100%; }
 .file-image { flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center; padding: 16px; background: var(--surface-2); }
 .file-image video { max-width: 100%; max-height: 100%; }
 .file-image audio { width: min(480px, 100%); }
 .file-image img { max-width: 100%; max-height: 100%; object-fit: contain; background: repeating-conic-gradient(var(--border) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
 .file-markdown { max-width: 860px; padding: 20px 28px 28px; line-height: 1.6; overflow-wrap: break-word; }
 .file-markdown > :first-child { margin-top: 0; }
-.file-markdown h1, .file-markdown h2 { padding-bottom: 6px; border-bottom: 1px solid var(--border); line-height: 1.3; }
+.file-markdown h1, .file-markdown h2 { padding-bottom: 6px; border-bottom: 1px solid var(--border); line-height: 1.2; font-weight: 800; }
 .file-markdown h1 { font-size: 1.7em; }
 .file-markdown h2 { font-size: 1.35em; margin-top: 1.6em; }
 .file-markdown h3 { font-size: 1.12em; margin-top: 1.4em; }
 .file-markdown a { color: var(--accent); }
 .file-markdown img { max-width: 100%; }
-.file-markdown code { font-family: ui-monospace, monospace; font-size: 0.88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.file-markdown code { font-family: var(--font-mono); font-size: 0.86em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
 .file-markdown pre { background: var(--surface-2); padding: 10px 14px; border-radius: 8px; overflow-x: auto; }
 .file-markdown pre code { background: none; padding: 0; font-size: 13px; }
 .file-markdown blockquote { margin-left: 0; border-left: 3px solid var(--border); padding-left: 12px; color: var(--muted); }
@@ -794,58 +850,107 @@ a.mention-chip:hover { text-decoration: underline; }
 .sign-in form { width: min(380px, 100%); display: flex; flex-direction: column; gap: 12px; }
 .sign-in label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
 .sign-in input { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-weight: 400; }
+.sign-in h1, .sign-in h2 { margin: 0; font-size: 32px; font-weight: 800; line-height: 1.05; }
 .sign-in p { color: var(--muted); margin: 0; }
 .sign-in .form-error { color: var(--error); }
 
+/* The menu button, and the bar that holds it where a chat's header does not: only in a narrow window. */
+.menu-button { display: none; }
+.mobile-bar { display: flex; align-items: center; gap: 6px; min-height: var(--header-h); padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.mobile-bar strong { font: 600 16px/1.3 var(--font-display); }
+/*
+ * Phones and narrow windows (NARROW in App.tsx): one column for the chat, or for the preview while one is open. The
+ * sidebar is a menu that slides in from the left over a dimmed page; its button sits at the start of the header.
+ */
 @media (max-width: 900px) {
-  .workspace, .workspace.with-preview { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .workspace, .workspace.with-preview { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .resize-handle { display: none; }
-  .sidebar.rail { flex-direction: row; justify-content: flex-start; }
-  .sidebar { border-bottom: 1px solid var(--border); max-height: 40vh; }
-  /* Stacked above the chat and short, the sidebar scrolls as a whole: chats first, then artifacts, skills and the files. */
-  .sidebar:not(.rail) { overflow-y: auto; }
-  .sidebar-scroll, .sidebar-pinned, .sidebar-pinned .artifact-list, .files-panel.open, .files-panel .files { flex: none; overflow: visible; max-height: none; }
+  .menu-button { display: inline-grid; margin-left: -6px; }
+  .sidebar.drawer {
+    position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(320px, 86vw); padding-top: max(14px, env(safe-area-inset-top)); padding-bottom: max(14px, env(safe-area-inset-bottom));
+    border-right: 1px solid var(--border); box-shadow: 0 0 40px rgb(0 0 0 / 0.25); overflow-y: auto;
+    translate: -105% 0; visibility: hidden; transition: translate 0.22s ease, visibility 0s 0.22s;
+  }
+  .sidebar.drawer.open { translate: 0 0; visibility: visible; transition: translate 0.22s ease; }
+  /* In the menu the sidebar scrolls as a whole: chats first, then artifacts, skills, the files and the account. */
+  .sidebar.drawer :is(.sidebar-scroll, .sidebar-pinned, .sidebar-pinned .artifact-list, .files-panel.open, .files-panel .files) { flex: none; overflow: visible; max-height: none; }
+  .drawer-backdrop { position: fixed; inset: 0; z-index: 39; background: rgb(0 0 0 / 0.35); animation: thinking-in 0.2s ease-out; }
   .workspace.with-preview .main { display: none; }
+  .chat-header { padding: 6px 10px 6px 12px; gap: 6px; }
+  .messages { padding: 24px 14px 8px; }
+  .composer { padding: 8px 12px max(10px, env(safe-area-inset-bottom)); }
+  .mention-list { left: 12px; right: 12px; }
+  .share-panel { margin: 8px 12px 0; }
+  .skills { padding: 20px 16px; }
+}
+/* Phones: badges and the gutter a little smaller; the people bar overlaps its badges to fit beside the name. */
+@media (max-width: 640px) {
+  :root { --gutter: 34px; }
+  .byline { gap: 8px; }
+  .byline .avatar { width: 26px; height: 26px; }
+  .people-bar { gap: 0; }
+  .people-bar .person + .person { margin-left: -6px; }
+  .people-bar .avatar { width: 24px; height: 24px; box-shadow: 0 0 0 2px var(--surface); }
+  .people-divider { margin: 0 6px; }
+  .chat-cost > button { padding: 5px 8px; font-size: 13px; }
+}
+/* A phone's header has room for the name, the people and sharing; each answer's cost still shows under it. */
+@media (max-width: 480px) { .chat-header .chat-cost { display: none; } }
+/* Touch: targets big enough for a finger. */
+@media (pointer: coarse) {
+  .icon-button { width: 40px; height: 40px; }
+  .sidebar nav a, .sidebar nav span { padding-block: 9px; }
 }
 
-.skills { height: 100%; overflow-y: auto; padding: 24px 20px; max-width: 860px; }
+.skills { height: 100%; overflow-y: auto; padding: 32px 24px; max-width: 900px; }
 .skills-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
-.skills-head h2 { margin: 0 0 4px; }
+.skills-head h2 { margin: 0 0 6px; font-size: 30px; font-weight: 800; line-height: 1.1; }
 .skills-head p { margin: 0; color: var(--muted); max-width: 60ch; }
 .skills-actions { display: flex; gap: 6px; align-items: flex-start; }
 .skills-note { color: var(--muted); font-size: 13px; }
-.skill-form { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-.skill-form label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+.skill-form { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
+.skill-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .skill-form label small { font-weight: 400; color: var(--muted); }
 .skill-form input:not([type=file]), .skill-form textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-weight: 400; }
-.skill-form textarea.code { font-family: ui-monospace, monospace; font-size: 13px; resize: vertical; }
+.skill-form input:not([type=file]), .skill-form textarea { color: var(--text); font-size: 15px; }
+.skill-form textarea.code { font-family: var(--font-mono); font-size: 13px; resize: vertical; }
 .skill-form-actions { display: flex; gap: 6px; }
-.skill-list { list-style: none; padding: 0; margin: 16px 0; display: flex; flex-direction: column; gap: 8px; }
-.skill { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.skill-list { list-style: none; padding: 0; margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 12px; }
+.skill { min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.skill-toggle strong, .skill-toggle b { font-weight: 600; }
 .skill.off { opacity: 0.75; }
 .skill p { margin: 6px 0 0; }
 .skill-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .skill-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; overflow-wrap: anywhere; }
 .skill-buttons { margin-left: auto; display: flex; gap: 6px; }
 .skill-buttons > * { font-size: 13px; padding: 3px 8px; }
-.pill.review { color: var(--accent); }
+.pill.review { border-color: transparent; background: var(--working-soft); color: var(--working); }
+/* A skill's on/off: a switch, as the mockups draw one. */
+.skill-toggle input[type="checkbox"] {
+  appearance: none; flex: none; position: relative; width: 32px; height: 18px; margin: 0; border-radius: 999px; background: var(--border); cursor: pointer; transition: background 0.15s;
+}
+.skill-toggle input[type="checkbox"]::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: left 0.15s;
+}
+.skill-toggle input[type="checkbox"]:checked { background: var(--accent); }
+.skill-toggle input[type="checkbox"]:checked::after { left: 16px; }
 .skill details { margin-top: 6px; font-size: 13px; color: var(--muted); }
 .skill summary { cursor: pointer; }
-.skill pre { white-space: pre-wrap; background: var(--surface-2); padding: 8px 10px; border-radius: 6px; color: var(--text); max-height: 320px; overflow: auto; }
+.skill pre { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); padding: 8px 10px; border-radius: 8px; font-size: 12px; color: var(--text); max-height: 320px; overflow: auto; }
 .form-error { color: var(--error); }
 
 
 /* Someone joined or left a shared chat: a quiet line between the messages. */
-.chat-notice { align-self: center; color: var(--muted); font-size: 13px; }
-/* A message waiting for the agent: faded, with its place in the queue under it. */
-.queued { display: flex; flex-direction: column; gap: 2px; }
+.chat-notice { align-self: center; padding: 2px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12.5px; }
+/* A message waiting for the agent: in a dashed box, faded, with its place in the queue under it. The box takes in the
+   badge's gutter, so the badge sits inside it. */
+.queued { display: flex; flex-direction: column; gap: 2px; margin-left: calc(-1 * var(--gutter) - 10px); padding: 8px 10px 8px calc(var(--gutter) + 10px); border: 1px dashed var(--border); border-radius: var(--radius); }
 .queued > :not(.queued-label) { opacity: 0.6; }
-.queued-label { color: var(--muted); font-size: 12px; padding: 0 4px; }
-.queued.mine .queued-label { align-self: flex-end; }
+.queued-label { color: var(--working); font-size: 12px; font-weight: 500; }
 /* What the model calls cost: per prompt under the agent's last reply to it, and for the whole chat in the header. */
 .prompt-cost { align-self: flex-start; padding-left: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chat-cost > button { font-variant-numeric: tabular-nums; }
-.cost-panel { position: absolute; right: 20px; top: calc(100% + 6px); z-index: 5; width: min(340px, calc(100% - 40px)); box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); font-size: 14px; }
+.cost-panel { position: absolute; right: 20px; top: calc(100% + 6px); z-index: 5; width: min(340px, calc(100% - 40px)); box-shadow: var(--shadow-pop); font-size: 14px; }
 .cost-panel ul { gap: 6px; }
 .cost-panel li { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; }
 .cost-panel li small { grid-row: 2; color: var(--muted); }
@@ -867,7 +972,7 @@ a.mention-chip:hover { text-decoration: underline; }
 @media (max-width: 900px) { .toasts { top: 12px; } }
 .toast {
   display: flex; align-items: flex-start; gap: 4px; padding: 4px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: var(--radius); background: var(--surface); box-shadow: 0 6px 24px rgb(0 0 0 / 0.14);
+  border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop);
 }
 .toast-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
 .toast-body strong { font-size: 14px; }
@@ -897,5 +1002,5 @@ a.mention-chip:hover { text-decoration: underline; }
 }
 .chat-filter .chips.sub .chip { padding: 1px 8px; font-size: 11.5px; }
 .chip:hover { color: var(--text); background: var(--surface-2); }
-.chip:is(.active, [aria-pressed="true"]) { border-color: var(--text); background: var(--text); color: var(--bg); }
+.chip:is(.active, [aria-pressed="true"]) { border-color: transparent; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .sidebar .chat-filter .nav-unread { position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; margin: 0; }

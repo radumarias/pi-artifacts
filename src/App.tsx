@@ -16,7 +16,7 @@ import { ChatFiles } from "./files/ChatFiles.tsx";
 import { FilePreview } from "./files/FilePreview.tsx";
 import { FilesNav, useUploads } from "./files/FilesNav.tsx";
 import { carriesFiles, fromDrop } from "./files/pick.ts";
-import { isBoolean, ResizeHandle, SectionHead, useStoredState } from "./layout.tsx";
+import { isBoolean, MenuButton, ResizeHandle, SectionHead, useMediaQuery, useStoredState } from "./layout.tsx";
 import { useLatest, useSidebarSocket } from "./sidebar.ts";
 import { SkillsView } from "./skills/SkillsView.tsx";
 
@@ -206,6 +206,8 @@ const SIDEBAR_MAX = 480;
 const RAIL_WIDTH = 52;
 const CHAT_MIN = 320;
 const PREVIEW_MIN = 360;
+/** Phones and narrow windows: one column, the sidebar a menu that slides in over it (styles.css, the same width). */
+const NARROW = "(max-width: 900px)";
 
 function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, navigate, onSignOut }: WorkspaceProps) {
   const { chats, load: loadChats, newSince } = useChatList(chatId);
@@ -223,6 +225,10 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false, isBoolean);
+  // Narrow, the sidebar is a menu, open or closed, and never the rail.
+  const narrow = useMediaQuery(NARROW);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const rail = collapsed && !narrow;
   const chatFilter = useChatFilter(chats, chatId);
   const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", true, isBoolean);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
@@ -265,6 +271,16 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
     },
     [opening],
   );
+
+  // The menu closes once the user picked something in it: a chat, the skills, a file or an artifact to preview.
+  useEffect(() => setMenuOpen(false), [chatId, showSkills, preview]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && setMenuOpen(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
+  const openMenu = useCallback(() => setMenuOpen(true), []);
 
   const openFile = useCallback((file: string) => setPreview({ file }), []);
   const chatFileBase = guestChat && chatFileRoute(guestChat);
@@ -325,12 +341,12 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
       {...dropHandlers}
       style={
         {
-          "--sidebar-w": `${collapsed ? RAIL_WIDTH : sidebarWidth}px`,
+          "--sidebar-w": `${rail ? RAIL_WIDTH : sidebarWidth}px`,
           "--chat-w": chatWidth === null ? "40%" : `${chatWidth}px`,
         } as CSSProperties
       }
     >
-      {collapsed ? (
+      {rail ? (
         <aside className="sidebar rail">
           <BackToSite compact />
           <button type="button" onClick={() => setCollapsed(false)} title="Show the sidebar" aria-label="Show the sidebar">
@@ -341,21 +357,27 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
           </button>
         </aside>
       ) : (
-        <aside className="sidebar">
+        <aside className={narrow ? (menuOpen ? "sidebar drawer open" : "sidebar drawer") : "sidebar"}>
           <BackToSite />
           <div className="sidebar-top">
             <button type="button" className="primary" onClick={newChat}>
               + New chat
             </button>
-            <button type="button" onClick={() => setCollapsed(true)} title="Hide the sidebar" aria-label="Hide the sidebar">
-              «
-            </button>
+            {narrow ? (
+              <button type="button" onClick={() => setMenuOpen(false)} title="Close the menu" aria-label="Close the menu">
+                ×
+              </button>
+            ) : (
+              <button type="button" onClick={() => setCollapsed(true)} title="Hide the sidebar" aria-label="Hide the sidebar">
+                «
+              </button>
+            )}
           </div>
           {/* Chats scroll here; artifacts, skills and the files panel stay below them. */}
           <div className="sidebar-scroll">
-          <h3>Chats</h3>
-          {chatFilter.bar && <ChatFilterBar {...chatFilter} />}
-          <ChatList chats={chatFilter.shown} openId={chatId} navigate={navigate} onDelete={setDeleting} empty={chatFilter.empty} />
+            <h3>Chats</h3>
+            {chatFilter.bar && <ChatFilterBar {...chatFilter} />}
+            <ChatList chats={chatFilter.shown} openId={chatId} navigate={navigate} onDelete={setDeleting} empty={chatFilter.empty} />
           </div>
           <section className="sidebar-pinned">
             <SectionHead name="Artifacts" count={artifacts.length + chatArtifacts.length} open={artifactsOpen} onToggle={setArtifactsOpen}>
@@ -418,9 +440,17 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
         max={() => SIDEBAR_MAX}
         onResize={setSidebarWidth}
         onReset={() => setSidebarWidth(SIDEBAR_DEFAULT)}
-        disabled={collapsed}
+        disabled={rail}
       />
+      {narrow && menuOpen && <div className="drawer-backdrop" onClick={() => setMenuOpen(false)} aria-hidden="true" />}
       <main className="main" ref={chatRef}>
+        {/* A chat has its own header, with the menu button in it. */}
+        {narrow && (showSkills || !chatId) && (
+          <header className="mobile-bar">
+            <MenuButton onClick={openMenu} />
+            <strong>{showSkills ? "Skills" : "Chats"}</strong>
+          </header>
+        )}
         {showSkills ? (
           <ErrorBoundary what="skills">
             <SkillsView skills={skills} loadError={skillsError} reload={loadSkills} />
@@ -430,6 +460,8 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
           <ErrorBoundary key={`${chatId}${secondSeat ? ".2" : ""}`} what="this chat">
             <ChatView
               chatId={chatId}
+              title={chats.find((chat) => chat.id === chatId)?.title}
+              onMenu={narrow ? openMenu : undefined}
               uid={secondSeat ? secondSeatUid(uid) : uid}
               newSince={newSince}
               onArtifact={onArtifact}
@@ -450,7 +482,7 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
           label="Chat width"
           width={chatWidth ?? chatRef.current?.offsetWidth ?? CHAT_MIN}
           min={CHAT_MIN}
-          max={() => (chatRef.current?.parentElement?.offsetWidth ?? innerWidth) - (collapsed ? RAIL_WIDTH : sidebarWidth) - PREVIEW_MIN}
+          max={() => (chatRef.current?.parentElement?.offsetWidth ?? innerWidth) - (rail ? RAIL_WIDTH : sidebarWidth) - PREVIEW_MIN}
           onResize={setChatWidth}
           onReset={() => setChatWidth(null)}
         />

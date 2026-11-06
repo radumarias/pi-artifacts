@@ -31,7 +31,8 @@ import { Compact, useCompact, useSwipeReveal } from "./gestures.ts";
 import { calendarDay, DaySeparator, SentTime } from "./SentTime.tsx";
 import { ReactionChips, ReactionsContext, useMessageReactions, type MessageReactions } from "./Reactions.tsx";
 import { isReactable, type EntryReactions } from "../../shared/reactions.ts";
-import { AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
+import { AgentAvatar, AgentByline, Avatar, SharedChat, tintOf, tintStyle, useSharedChat } from "./people.tsx";
+import { MenuButton } from "../layout.tsx";
 import { AutoPicked } from "./AutoPick.tsx";
 import { ChatCost, PromptCost } from "./Cost.tsx";
 import { ContextMeter } from "./Context.tsx";
@@ -52,7 +53,9 @@ import { firstNew, isAgent, sentAt, shown } from "./entries.ts";
 
 interface Props {
   chatId: string;
-  /** The signed-in user: their own messages show without a name. */
+  /** The chat's name, at the start of its header. */
+  title?: string;
+  /** The signed-in user: their own messages show as "You". */
   uid: string;
   /** When the user had last seen the chat, if something came in since: a "New" line goes over the first such message. */
   newSince?: number;
@@ -61,6 +64,8 @@ interface Props {
   onActivity: () => void;
   /** Called once the user left this chat. */
   onLeft: () => void;
+  /** Opens the app's menu (the sidebar), on a phone or a narrow window, where the header has a button for it. */
+  onMenu?: () => void;
 }
 
 const GROWS_ITSELF = CSS.supports("field-sizing", "content");
@@ -76,7 +81,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
-export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft }: Props) {
+export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity, onLeft, onMenu }: Props) {
   const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react } = useChat(chatId);
   const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
@@ -210,11 +215,11 @@ export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft
   const sendLabel = attachments.sending ? "Sending…" : "Send";
   const ownerName = people && !isOwner ? people.owner.name : undefined;
   const mine = online.find((presence) => presence.uid === uid)?.windows ?? 0;
-  // Where each reply of the agent's starts: after a person's message, its name goes over it in a shared chat.
-  const bylines = useMemo(() => (shared ? agentTurns(state.entries) : new Set<number>()), [shared, state.entries]);
+  // Where each reply of the agent's starts: after a person's message, its name goes over it.
+  const bylines = useMemo(() => agentTurns(state.entries), [state.entries]);
   // Recomputed only when entries change, not as a reply streams.
   const dayStarts = useMemo(() => dayStartsOf(state.entries), [state.entries]);
-  const agentLast = useMemo(() => shared !== null && endsInAgentTurn(state.entries), [shared, state.entries]);
+  const agentLast = useMemo(() => endsInAgentTurn(state.entries), [state.entries]);
   const newAt = useMemo(
     // Only once it is known who owns the chat: until then a member's own legacy messages could not be told apart.
     () => (newSince === undefined || !people ? undefined : firstNew(state.entries, newSince, uid, isOwner)),
@@ -227,8 +232,12 @@ export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft
       <ReactionsContext.Provider value={chatReactions}>
         <section className="chat">
           <header className="chat-header">
+            {onMenu && <MenuButton onClick={onMenu} />}
+            <h1 className="chat-title" title={title}>
+              {title}
+            </h1>
             {shared ? (
-              <PeopleBar people={shared} online={online} uid={uid} />
+              <PeopleBar people={shared} online={online} uid={uid} working={state.busy} />
             ) : (
               <span className="chat-people">{mine > 1 && `Open in ${mine} of your windows`}</span>
             )}
@@ -266,7 +275,7 @@ export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft
                       </Fragment>
                     );
                   })}
-                  {shared && !agentLast && (state.partial || thinking) && <AgentByline />}
+                  {!agentLast && (state.partial || thinking) && <AgentByline />}
                   {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
                   {thinking && <Thinking since={state.runStartedAt!} />}
                   {state.error && <div className="chat-error">{state.error}</div>}
@@ -332,7 +341,7 @@ export function ChatView({ chatId, uid, newSince, onArtifact, onActivity, onLeft
                 ) : (
                   <button
                     type="submit"
-                    className="icon-button"
+                    className="icon-button send"
                     disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
                     title={sendLabel}
                     aria-label={sendLabel}
@@ -427,6 +436,7 @@ const Entry = memo(function Entry({
       <User
         text={data.text}
         author={data.uid !== uid ? data : undefined}
+        ownName={data.name}
         uid={uid}
         attachments={data.attachments}
         mentions={data.mentions}
@@ -527,8 +537,11 @@ function endsInAgentTurn(entries: readonly EntryRecord[]): boolean {
   return last !== undefined && isAgent(last);
 }
 
-/** Who is in a shared chat, everyone with their colour, and a dot for those who have it open now. */
-function PeopleBar({ people, online, uid }: { people: ChatPeople; online: Presence[]; uid: string }) {
+/**
+ * Who is in a shared chat: everyone's badge in their colour, with a dot for those who have it open now, then the agent's,
+ * marked while it works. Names show on hover (and to screen readers).
+ */
+function PeopleBar({ people, online, uid, working }: { people: ChatPeople; online: Presence[]; uid: string; working: boolean }) {
   // Each open window is a socket; someone no longer in the chat may still show for a moment, so only people in it count.
   const windows = new Map(online.map((presence) => [presence.uid, presence.windows]));
   const all = everyone(people);
@@ -549,6 +562,14 @@ function PeopleBar({ people, online, uid }: { people: ChatPeople; online: Presen
           </span>
         );
       })}
+      <span className="people-divider" aria-hidden="true" />
+      <span className="person agent" title={`${AGENT_NAME}, the agent: ${working ? "working" : "idle"}`}>
+        <AgentAvatar working={working} />
+        <span className="person-name">
+          {AGENT_NAME}
+          {working && <small> working</small>}
+        </span>
+      </span>
     </div>
   );
 }
@@ -574,6 +595,7 @@ function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
         <User
           text={message.text}
           author={mine ? undefined : message}
+          ownName={message.name}
           uid={uid}
           attachments={message.attachments}
           mentions={message.mentions}
@@ -591,17 +613,22 @@ function blocks<T>(content: string | readonly (T | undefined | null)[]): T[] {
 }
 
 function userText(message: UserMessage): string {
-  return typeof message.content === "string" ? message.content : blocks(message.content).map((b) => (b.type === "text" ? b.text : "")).join("");
+  return typeof message.content === "string"
+    ? message.content
+    : blocks(message.content)
+        .map((b) => (b.type === "text" ? b.text : ""))
+        .join("");
 }
 
 /**
- * A person's message: yours on the right; someone else's on the left, under their name. Attachments show above the
- * text, and the message it answers above that. In a shared chat each person's messages have their colour, and one
+ * A person's message, under their badge and name ("You" for the viewer's own), as everyone's are. Attachments show
+ * above the text, and the message it answers above that. In a shared chat each person's messages have their colour, and one
  * that called the agent shows, once `picked`, that the agent took it.
  */
 function User({
   text,
   author,
+  ownName,
   uid,
   attachments = [],
   mentions,
@@ -615,6 +642,8 @@ function User({
   text: string;
   /** Undefined for the viewer's own message. */
   author?: Person;
+  /** On the viewer's own message, their name as it was sent: its first letter goes on their badge. */
+  ownName?: string;
   uid: string;
   attachments?: Attachment[];
   mentions?: Mention[];
@@ -631,6 +660,7 @@ function User({
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
   const tint = people ? tintOf(people, author?.uid ?? uid) : undefined;
+  const role = people && (people.owner.uid === (author?.uid ?? uid) ? "owner" : "member");
   const tagsMe = !mine && mentions?.some((mention) => mention.kind === "person" && mention.uid === uid);
   const files = attachments.length > 0 && (
     <div className={mine ? "attachments mine" : "attachments"}>
@@ -651,12 +681,11 @@ function User({
       className={[mine ? "message mine" : "message other", tint !== undefined && "tinted", tagsMe && "mentions-me"].filter(Boolean).join(" ")}
       style={tint === undefined ? undefined : tintStyle(tint)}
     >
-      {!mine && (
-        <div className="byline">
-          {tint !== undefined && <Avatar name={author.name} tint={tint} />}
-          <strong>{author.name}</strong>
-        </div>
-      )}
+      <div className="byline">
+        <Avatar name={author?.name ?? ownName ?? "You"} tint={tint ?? 0} />
+        <strong>{author?.name ?? "You"}</strong>
+        {role && <small>{role}</small>}
+      </div>
       {bubble && files}
       {/* Over the top corner of the bubble, or of the files when there is no text. */}
       <div className="bubble-row">
