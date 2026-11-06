@@ -15,10 +15,10 @@ import {
   type ModelSetting,
   type ProviderId,
 } from "../shared/models.ts";
-import { clip, errorMessage } from "../shared/util.ts";
+import { errorMessage } from "../shared/util.ts";
 import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discovery, type GatewayFetcher, type GatewayOptions, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
 import { GeminiCompat } from "./gemini.ts";
-import { MAX_FAILURE_CHARS, tryModels, type ModelFailures } from "./model-health.ts";
+import { failureOf, tryModels, type ModelFailures } from "./model-health.ts";
 import prices from "./prices.json";
 import { tapStream } from "./streams.ts";
 import type { ModelCache } from "./storage/model-cache.ts";
@@ -421,15 +421,17 @@ export function currentCatalog(): Catalog {
   return held?.catalog ?? baseCatalog();
 }
 
-/** When a discovery's newest failure was marked: a mark made since it was held makes it another one. */
-function markedAt(discovery: Discovery | null | undefined): number {
-  return Math.max(0, ...Object.values(discovery?.failing ?? {}).map((failure) => failure.at));
+/** A discovery's marks, to compare: a mark made or cleared since it was held makes it another one (not by time: isolates' clocks differ). */
+function marksOf(discovery: Discovery | null | undefined): string {
+  return Object.keys(discovery?.failing ?? {})
+    .sort()
+    .join("\n");
 }
 
 /** Hold a discovery, building its catalog only when it is not the one already held. */
 function hold(discovery: Discovery | null): Catalog {
   const readAt = Date.now();
-  if (held && held.discovery?.checkedAt === discovery?.checkedAt && markedAt(held.discovery) === markedAt(discovery)) {
+  if (held && held.discovery?.checkedAt === discovery?.checkedAt && marksOf(held.discovery) === marksOf(discovery)) {
     held.readAt = readAt;
     return held.catalog;
   }
@@ -462,8 +464,10 @@ function readCached(cache: ModelCache): Promise<Discovery | null> {
 function rediscover(source: CatalogSource, previous: Discovery | null | undefined): Promise<Catalog> {
   return (discovering ??= (async () => {
     const before = previous ?? held?.discovery;
-    // The marks stand until the models are tried again, after the lists are kept: no one waits on the tries.
-    const discovery = { ...(await discoverModels({ ai: source.ai, gateway: source.gateway, byokAlias: source.byokAlias, previous: before })), failing: before?.failing };
+    // The marks stand until the models are tried again, after the lists are kept: no one waits on the tries. With no
+    // models to try, they end here, as markFailing says.
+    const listed = await discoverModels({ ai: source.ai, gateway: source.gateway, byokAlias: source.byokAlias, previous: before });
+    const discovery = { ...listed, failing: source.tryModels ? before?.failing : undefined };
     await source.cache.write(discovery).catch((error: unknown) => console.error("models: could not keep the discovery:", errorMessage(error)));
     const catalog = hold(discovery);
     if (!source.tryModels) return catalog;
@@ -531,8 +535,10 @@ export async function markFailing(source: CatalogSource, id: string, error: stri
     // Marked already, here: every call to a model with no credits fails, and one mark is enough.
     if (held?.discovery?.failing?.[id]) return;
     const discovery = (await readCached(source.cache)) ?? held?.discovery;
-    if (!discovery || discovery.failing?.[id]) return;
-    const marked: Discovery = { ...discovery, failing: { ...discovery.failing, [id]: { error: clip(error, MAX_FAILURE_CHARS), at: Date.now() } } };
+    if (!discovery) return;
+    // Marked already, by another isolate: held here too, so this one's Auto leaves it out now.
+    if (discovery.failing?.[id]) return void hold(discovery);
+    const marked: Discovery = { ...discovery, failing: { ...discovery.failing, [id]: failureOf(error) } };
     await source.cache.write(marked);
     hold(marked);
   } catch (caught) {

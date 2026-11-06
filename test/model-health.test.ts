@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxProvider, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { autoCandidates } from "../worker/agent/route.ts";
-import { cannotCall, tryModels, withFailuresReported, type ModelFailures } from "../worker/model-health.ts";
+import { cannotCall, failureOf, tryModels, withFailuresReported, type ModelFailures } from "../worker/model-health.ts";
 import { baseCatalog, catalogFrom, forgetCatalog, loadCatalog, markFailing } from "../worker/models.ts";
 import { ModelCache } from "../worker/storage/model-cache.ts";
 import { createAI } from "agents/models/pi-ai";
@@ -51,9 +51,23 @@ describe("what cannot be called", () => {
       "prompt is too long: 220000 tokens > 200000 maximum",
       "Item with id 'rs_123' not found.",
       "404 Not Found",
+      // A number in a request the model refused is the conversation's, not a status.
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.401: `tool_use` ids were found without `tool_result` blocks"}}',
+      // Limits per minute whose words name quota or billing.
+      "429 You exceeded your current quota, please check your plan and billing details. Please retry in 30.5s.",
+      "429 Rate limit reached for requests per day. Visit https://platform.openai.com/account/billing to add a payment method.",
     ]) {
       expect(cannotCall(error), error).toBe(false);
     }
+  });
+});
+
+describe("a mark", () => {
+  it("leaves out what looks like a key or an account's id", () => {
+    expect(failureOf("401 Incorrect API key provided: sk-proj-****abcd. Org org-AbC123xyz.", 5)).toEqual({
+      error: "401 Incorrect API key provided: …. Org ….",
+      at: 5,
+    });
   });
 });
 

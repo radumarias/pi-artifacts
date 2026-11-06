@@ -22,7 +22,15 @@ export interface ModelFailure {
 export type ModelFailures = Record<string, ModelFailure>;
 
 /** How much of an error a mark keeps. */
-export const MAX_FAILURE_CHARS = 300;
+const MAX_FAILURE_CHARS = 300;
+
+/**
+ * A mark of `error`, now: cut short, with anything that looks like a key or an account's id left out, as every user of
+ * the deployment reads it in the picker.
+ */
+export function failureOf(error: string, at = Date.now()): ModelFailure {
+  return { error: clip(error.replace(/\b(?:sk|key|org|proj|acct)[-_][\w*-]{4,}/gi, "…"), MAX_FAILURE_CHARS), at };
+}
 
 /**
  * Whether an error says the model cannot be called at all, for now: no key, or one refused; no credits, quota or
@@ -32,11 +40,20 @@ export const MAX_FAILURE_CHARS = 300;
  * error never marks a model for every chat.
  */
 export function cannotCall(error: string): boolean {
-  return CANNOT_CALL.test(error);
+  return CANNOT_CALL.test(error) && !PASSES.test(error);
 }
 
+// A status only where the error leads with it or names it as one: a number elsewhere (messages.401 in a request the
+// model refused) is the conversation's.
 const CANNOT_CALL =
-  /\b40[12]\b|insufficient[_ ](?:quota|balance|funds|credits?)|exceeded your current quota|billing|payment[_ ]required|credit balance|(?:no|out of) credits|invalid[_ ]api[_ ]key|incorrect api key|api key not valid|unauthori[sz]ed|model_not_found|does not exist or you do not have access|deactivated|suspended/i;
+  /(?:^|\b(?:status|code)\s*:?\s*)40[12]\b|insufficient[_ ](?:quota|balance|funds|credits?)|exceeded your current quota|billing|payment[_ ]required|credit balance|(?:no|out of) credits|invalid[_ ]api[_ ]key|incorrect api key|api key not valid|unauthori[sz]ed|model_not_found|does not exist or you do not have access|deactivated|suspended/i;
+
+/**
+ * A limit that passes, though its words name quota or billing: Gemini's per-minute limit ("You exceeded your current
+ * quota, please check your plan and billing details … Please retry in 30s"), OpenAI's free tier's rate limit (with a
+ * billing link).
+ */
+const PASSES = /rate[_ -]?limit|retry in|try again/i;
 
 /** How long a try may take: a model that does not answer by then is left as it was. */
 const TRY_MS = 20_000;
@@ -65,9 +82,7 @@ export async function tryModels(models: Models, targets: readonly Model<Api>[], 
   const errors = await Promise.all(targets.map(ask));
   const at = Date.now();
   return Object.fromEntries(
-    targets.flatMap((model, i) =>
-      cannotCall(errors[i]) ? [[modelKey(model.provider, model.id), { error: clip(errors[i], MAX_FAILURE_CHARS), at }]] : [],
-    ),
+    targets.flatMap((model, i) => (cannotCall(errors[i]) ? [[modelKey(model.provider, model.id), failureOf(errors[i], at)]] : [])),
   );
 }
 
