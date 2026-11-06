@@ -6,12 +6,15 @@ export async function recordSpend(tx: Tx, conversationId: ConversationId, key: s
   const totals = (await tx.doc(UsageDoc, conversationId)).tools as Record<string, Usage>;
   const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
   // Drafts take strict JSON: no undefined counters.
-  if (!total) {
-    totals[key] = JSON.parse(JSON.stringify(usage)) as Usage;
-    return;
-  }
+  if (!total) totals[key] = JSON.parse(JSON.stringify(usage)) as Usage;
+  else addUsage(total, usage);
+}
+
+/** Add `usage` to `total`, in place, counter by counter, as pi adds them. */
+export function addUsage(total: Usage, usage: Usage): Usage {
   for (const counter of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[counter] += usage[counter];
   // Optional counters, as pi adds them: once either side reports one.
   for (const counter of ["cacheWrite1h", "reasoning"] as const) if (usage[counter] !== undefined) total[counter] = (total[counter] ?? 0) + usage[counter];
   for (const counter of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[counter] += usage.cost[counter];
+  return total;
 }

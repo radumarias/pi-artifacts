@@ -12,11 +12,14 @@ import {
   CHAT_MESSAGE_KIND,
   CHAT_PEOPLE_KIND,
   everyone,
+  incomingKey,
   PUBLISH_TOOL,
   type AutoPick,
   type ChatMessageData,
   type ChatPeople,
   type ChatPeopleData,
+  type IncomingAttachment,
+  type IncomingMessage,
   type Person,
   type Presence,
   type PublishedDetails,
@@ -128,7 +131,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     const el = list.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, []);
-  useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length]);
+  useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length, state.incoming.length]);
   // On a phone, dragging the conversation left shows when each message was sent.
   const compact = useCompact();
   const track = useRef<HTMLDivElement>(null);
@@ -270,7 +273,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
             <Compact.Provider value={compact}>
               <div className="messages" ref={list} onScroll={onScroll} data-compact={compact || undefined}>
                 <div className="transcript" ref={track}>
-                  {state.entries.length === 0 && !state.busy && (
+                  {state.entries.length === 0 && !state.busy && !state.incoming.length && (
                     <div className="empty-chat">
                       <h2>What should we build?</h2>
                       <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
@@ -303,7 +306,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   {state.partial && <Assistant message={state.partial} streaming onGrow={follow} />}
                   {thinking && <Thinking since={state.runStartedAt!} />}
                   {state.error && <div className="chat-error">{state.error}</div>}
-                  <Queue queued={state.queued} uid={uid} />
+                  <Queue queued={state.queued} incoming={state.incoming} uid={uid} />
                 </div>
               </div>
             </Compact.Provider>
@@ -619,26 +622,38 @@ const PEOPLE_EVENTS: Record<ChatPeopleData["event"], readonly [string, string]> 
 };
 
 /**
- * Messages sent while the agent was busy, below everything it is doing now, oldest first: faded and marked queued,
- * with their place when more than one waits. Each leaves the queue for the transcript when its turn comes.
+ * Messages not in the transcript yet, below everything the agent is doing now, oldest first, faded: those sent while
+ * the agent was busy, marked queued, with their place when more than one waits; then those the chat is still getting
+ * ready to put in (see IncomingMessage). Each leaves for the queue or the transcript when it goes there.
  */
-function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
-  return queued.map((message, i) => {
-    const mine = message.uid === uid;
-    return (
-      <div key={message.id} className={mine ? "queued mine" : "queued"}>
-        <User
-          text={message.text}
-          author={mine ? undefined : message}
-          uid={uid}
-          attachments={message.attachments}
-          mentions={message.mentions}
-          replyTo={message.replyTo}
-        />
-        <small className="queued-label">{queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"}</small>
-      </div>
-    );
-  });
+function Queue({ queued, incoming, uid }: { queued: QueuedMessage[]; incoming: IncomingMessage[]; uid: string }) {
+  return (
+    <>
+      {queued.map((message, i) => (
+        <Waiting key={message.id} message={message} uid={uid} label={queued.length > 1 ? `Queued · ${i + 1} of ${queued.length}` : "Queued"} />
+      ))}
+      {incoming.map((message) => (
+        <Waiting key={incomingKey(message)} message={message} uid={uid} label={message.picking ? "Auto · picking a model…" : "Sending…"} incoming />
+      ))}
+    </>
+  );
+}
+
+function Waiting({ message, uid, label, incoming = false }: { message: QueuedMessage | IncomingMessage; uid: string; label: string; incoming?: boolean }) {
+  const mine = message.uid === uid;
+  return (
+    <div className={`queued${mine ? " mine" : ""}${incoming ? " incoming" : ""}`}>
+      <User
+        text={message.text}
+        author={mine ? undefined : message}
+        uid={uid}
+        attachments={message.attachments}
+        mentions={"mentions" in message ? message.mentions : undefined}
+        replyTo={message.replyTo}
+      />
+      <small className="queued-label">{label}</small>
+    </div>
+  );
 }
 
 /** A message's blocks, skipping any slot a stream has not filled yet. */
@@ -677,7 +692,8 @@ function User({
   /** Undefined for the viewer's own message. */
   author?: Person;
   uid: string;
-  attachments?: Attachment[];
+  /** On an incoming message, only their names and image thumbnails yet. */
+  attachments?: (Attachment | IncomingAttachment)[];
   mentions?: Mention[];
   replyTo?: ReplyQuote;
   picked?: boolean;
@@ -770,9 +786,9 @@ const SHOWN: Record<Attachment["shown"], string> = {
   path: "the agent got its name only; its tools can open it",
 };
 
-function Attached({ attachment }: { attachment: Attachment }) {
+function Attached({ attachment }: { attachment: Attachment | IncomingAttachment }) {
   const name = baseName(attachment.path);
-  const title = `${attachment.path} · ${formatBytes(attachment.size)} · ${SHOWN[attachment.shown]}`;
+  const title = "shown" in attachment ? `${attachment.path} · ${formatBytes(attachment.size)} · ${SHOWN[attachment.shown]}` : attachment.path;
   if (attachment.thumb) return <img className="attachment-thumb" src={attachment.thumb} alt={name} title={title} />;
   return (
     <span className="attachment-chip" title={title}>

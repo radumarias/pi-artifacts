@@ -314,9 +314,9 @@ export interface ChatMessageData extends Person {
 }
 
 /**
- * What Auto picked for a message that started a run: a model (the picker's id) and an effort, why, and the router that
- * picked. With no router, none could pick (it failed or took too long), and the chat kept the model it ran on. `ms`: how
- * long picking took. A type, not an interface, so it is JSON pi can store.
+ * What Auto picked for a message that called the agent: a model (the picker's id) and an effort, why, and the router
+ * that picked. With no router, the chat kept the model it ran on: none could pick (it failed or took too long), or a
+ * reply was running. `ms`: how long picking took. A type, not an interface, so it is JSON pi can store.
  */
 export type AutoPick = {
   model: string;
@@ -324,7 +324,7 @@ export type AutoPick = {
   /** The router's reason, a few words. */
   reason?: string;
   router?: RouterSpend;
-  /** With no router: why none picked, as the tooltip shows it (each router's error, cut short). */
+  /** With no router: why the chat kept its model, as the tooltip shows it (a running reply, or each router's error, cut short). */
   failed?: string;
   ms: number;
 };
@@ -370,6 +370,27 @@ export interface QueuedMessage extends ChatMessageData {
   id: number;
 }
 
+/**
+ * A person's message the chat is getting ready to put in (its files read, the agent's tools refreshed, on Auto the
+ * model picked), which can take seconds: everyone sees it at once, faded, until it is in the transcript or the queue.
+ * `attachments`: their names, and thumbnails of images. `picking`: on Auto, the router is picking the model for it.
+ */
+export type IncomingMessage = Person & {
+  text: string;
+  sentAt: number;
+  attachments?: IncomingAttachment[];
+  replyTo?: ReplyQuote;
+  picking?: true;
+};
+
+/** What an incoming message shows of a file it attaches before the file is read. */
+export type IncomingAttachment = { path: string; thumb?: string };
+
+/** Which incoming message a `chat.message` (or one queued) is: its author's, sent at that time. */
+export function incomingKey(message: { uid: string; sentAt?: number }): string {
+  return `${message.uid}:${message.sentAt}`;
+}
+
 /** Someone with the chat open right now, and in how many windows (or devices). */
 export interface Presence {
   uid: string;
@@ -404,6 +425,11 @@ export type ChatServerMessage =
   | { type: "reacted"; entry: number; reactions: EntryReactions }
   /** Who has the chat open: whenever a window opens or closes. */
   | { type: "presence"; online: Presence[] }
+  /**
+   * The messages the chat is getting ready to put in, oldest first: on connect, and whenever one comes or goes.
+   * `placed`: the one that went, when it went in (it shows in the transcript or the queue next), not when it was dropped.
+   */
+  | { type: "incoming"; incoming: IncomingMessage[]; placed?: string }
   /** Whether the chat is on Auto (shared/models.ts AUTO_MODEL): on connect, and whenever someone turns it on or off. */
   | { type: "auto"; on: boolean }
   /**

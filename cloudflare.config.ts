@@ -55,8 +55,15 @@ export default defineConfig({
       // ROUTER_MODEL: the router, a small, fast model; a comma-separated list is tried in order (the first the picker
       // lists answers; the next if it fails), with ROUTE_MS for all of them. If none answers, the chat keeps its model.
       // decisions:<model> asks that OpenAI model through OpenAI's Decisions API, which picks without writing a reply
-      // (input priced only), through AI Gateway with the OpenAI key.
-      ROUTER_MODEL: bindings.text("decisions:openai/gpt-6-luna,cerebras/gpt-oss-120b,openai/gpt-4.1-nano"),
+      // (input priced only), through AI Gateway with the OpenAI key; system-one:<model> asks a System One classifier on
+      // Workers AI (typesafe/jev, @cf/cloudflare/clef-flash) the same way, through the AI binding. Workers AI runs on
+      // Cloudflare's own network, with no provider key and no hop to another provider: Jev first, then gpt-oss-120b there,
+      // then Gemini Flash-Lite with the Google AI Studio key.
+      ROUTER_MODEL: bindings.text("system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
+      // Which skills the agent is shown: before each message that starts a run, this System One classifier on Workers AI
+      // (by its id, as CALL_HINT_MODEL; through the AI binding) says which of the user's skills not shown in the chat yet the message
+      // needs; only those join the ones shown (worker/agent/skill-pick.ts). Empty: every enabled skill, always.
+      SKILLS_MODEL: bindings.text("typesafe/jev"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
       // picker does not list (no key in AI Gateway for their provider) are left out.
       AUTO_MODELS: bindings.json([

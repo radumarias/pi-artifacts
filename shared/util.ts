@@ -60,6 +60,19 @@ export function singleFlight<T>(fn: () => Promise<T>): () => Promise<T> {
     }));
 }
 
+/**
+ * `fn` run one call at a time, in the order called: a call waits for the one before it to settle, whether it resolved
+ * or rejected. Each call gets its own result.
+ */
+export function serial<A extends unknown[], T>(fn: (...args: A) => Promise<T>): (...args: A) => Promise<T> {
+  let last: Promise<unknown> = Promise.resolve();
+  return (...args) => {
+    const next = last.catch(() => {}).then(() => fn(...args));
+    last = next;
+    return next;
+  };
+}
+
 /** A size people read: "512 B", "2.0 KB", "10.0 MB". */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

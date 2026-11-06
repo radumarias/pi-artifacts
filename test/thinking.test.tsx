@@ -4,7 +4,7 @@ import { formatElapsed } from "../src/chat/elapsed.ts";
 import { THINKING_WORDS, Thinking, nextWord } from "../src/chat/Thinking.tsx";
 import { reduce, unansweredCalls, waitingOnModel, type ChatState } from "../src/chat/useChat.ts";
 
-const idle: ChatState = { entries: [], tools: [], busy: false, queued: [] };
+const idle: ChatState = { entries: [], tools: [], busy: false, queued: [], incoming: [] };
 const busy: ChatState = { ...idle, busy: true };
 const partial = (content: unknown[]) => ({ ...busy, partial: { role: "assistant", content } }) as unknown as ChatState;
 

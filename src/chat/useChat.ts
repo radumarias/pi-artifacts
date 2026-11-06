@@ -4,7 +4,19 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AttachmentInput } from "../../shared/attachments.ts";
 import type { MentionInput } from "../../shared/mentions.ts";
 import { modelKey } from "../../shared/models.ts";
-import { SOCKET_NOT_A_MEMBER, SOCKET_PING, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type Presence, type QueuedMessage } from "../../shared/protocol.ts";
+import {
+  CHAT_MESSAGE_KIND,
+  incomingKey,
+  SOCKET_NOT_A_MEMBER,
+  SOCKET_PING,
+  type ChatClientMessage,
+  type ChatMessageData,
+  type ChatPeopleView,
+  type ChatServerMessage,
+  type IncomingMessage,
+  type Presence,
+  type QueuedMessage,
+} from "../../shared/protocol.ts";
 import type { EntryReactions, Reaction, Reactions } from "../../shared/reactions.ts";
 import { api, keepAlive } from "../api.ts";
 
@@ -29,6 +41,12 @@ export interface ChatState {
   error?: string;
   /** Messages sent while the agent was busy, oldest first: they wait their turn in pi's inbox. */
   queued: QueuedMessage[];
+  /**
+   * Messages the chat is getting ready to put in, oldest first (see IncomingMessage). `arriving`: when one went in, by
+   * this browser's clock; it is kept until it shows in `entries` or `queued` (the chat says so on its own, and either
+   * can come first), or for ARRIVING_MS, should it never show (a Stop that withdrew it before the queue listed it).
+   */
+  incoming: (IncomingMessage & { arriving?: number })[];
   /** The model and effort the chat runs on, from pi's agent state. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -36,7 +54,10 @@ export interface ChatState {
   usage?: UsageState;
 }
 
-const initial: ChatState = { entries: [], tools: [], busy: false, queued: [] };
+/** How long an incoming message that went in is kept, at most, waiting to show in the transcript or the queue. */
+export const ARRIVING_MS = 10_000;
+
+const initial: ChatState = { entries: [], tools: [], busy: false, queued: [], incoming: [] };
 
 type Action =
   /**
@@ -45,6 +66,9 @@ type Action =
    * action, so one moves from queued to placed at once.
    */
   | (Omit<Extract<ChatServerMessage, { type: "events" }>, "events"> & { events: AgentEvent[]; at: number })
+  | (Extract<ChatServerMessage, { type: "incoming" }> & { at: number })
+  /** ARRIVING_MS passed since an incoming message went in. */
+  | { type: "expire"; at: number }
   | { type: "error"; message?: string }
   | { type: "reset" };
 
@@ -62,6 +86,20 @@ function addEntry(entries: EntryRecord[], entry: EntryRecord): EntryRecord[] {
 export function reduce(state: ChatState, action: Action): ChatState {
   if (action.type === "reset") return initial;
   if (action.type === "error") return { ...state, error: action.message };
+  if (action.type === "incoming") {
+    const coming = new Set(action.incoming.map(incomingKey));
+    const arriving = state.incoming.flatMap((message) => {
+      const key = incomingKey(message);
+      if (coming.has(key)) return [];
+      if (message.arriving !== undefined) return [message];
+      return key === action.placed ? [{ ...message, arriving: action.at }] : [];
+    });
+    return withoutShown({ ...state, incoming: [...action.incoming, ...arriving] });
+  }
+  if (action.type === "expire") {
+    const incoming = state.incoming.filter((message) => message.arriving === undefined || action.at - message.arriving < ARRIVING_MS);
+    return incoming.length === state.incoming.length ? state : { ...state, incoming };
+  }
   let next = state;
   for (const event of action.events) {
     switch (event.type) {
@@ -92,6 +130,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
             busy,
             runStartedAt: busy ? (started ?? action.at) : undefined,
             queued: next.queued,
+            incoming: next.incoming,
             usage: event.usage,
           },
           event.agent,
@@ -180,7 +219,19 @@ export function reduce(state: ChatState, action: Action): ChatState {
         break;
     }
   }
-  return action.queued ? { ...next, queued: action.queued } : next;
+  return withoutShown(action.queued ? { ...next, queued: action.queued } : next);
+}
+
+/** `state` without the incoming messages that are in its transcript or queue by now. */
+function withoutShown(state: ChatState): ChatState {
+  if (!state.incoming.length) return state;
+  const shown = (message: IncomingMessage) => {
+    const key = incomingKey(message);
+    const placed = (entry: EntryRecord) => entry.kind === CHAT_MESSAGE_KIND && incomingKey(entry.data as unknown as ChatMessageData) === key;
+    return state.queued.some((queued) => incomingKey(queued) === key) || state.entries.some(placed);
+  };
+  const incoming = state.incoming.filter((message) => !shown(message));
+  return incoming.length === state.incoming.length ? state : { ...state, incoming };
 }
 
 /**
@@ -249,6 +300,13 @@ export function useChat(chatId: string) {
   // The viewer's messages that did not call the agent but look meant for it: under each the app offers to call it.
   const [hints, setHints] = useState<ReadonlySet<number>>(NO_HINTS);
   const socket = useRef<WebSocket | null>(null);
+  // One that went in and never showed is let go after ARRIVING_MS (see ChatState.incoming).
+  const arrived = state.incoming.reduce((first, message) => Math.min(first, message.arriving ?? Infinity), Infinity);
+  useEffect(() => {
+    if (arrived === Infinity) return;
+    const timer = setTimeout(() => dispatch({ type: "expire", at: Date.now() }), Math.max(0, arrived + ARRIVING_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [arrived]);
 
   useEffect(() => {
     dispatch({ type: "reset" });
@@ -292,7 +350,8 @@ export function useChat(chatId: string) {
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();
-        } else dispatch({ type: "error", message: message.message });
+        } else if (message.type === "incoming") dispatch({ ...message, at: Date.now() });
+        else dispatch({ type: "error", message: message.message });
       };
       ws.onclose = (event) => {
         setConnected(false);
