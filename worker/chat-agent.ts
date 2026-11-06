@@ -13,8 +13,6 @@ import {
   isOwnedBy,
   isReadOnly,
   manifestOf,
-  RUNNING_WHEN_PICKED,
-  RUNNING_WHEN_SENT,
   secondSeat,
   secondSeatUid,
   SOCKET_NOT_A_MEMBER,
@@ -157,6 +155,9 @@ type OwnFile = Extract<MentionInput, { kind: "file" }>;
  * after, and the spinner should not blink between them.
  */
 const SETTLE_MS = 1_500;
+/** Why an Auto message kept the chat's model, when a reply was running as it came in, or started while the router thought. */
+const RUNNING_WHEN_SENT = "a reply was still running when it was sent, so the router was not asked";
+const RUNNING_WHEN_PICKED = "a reply started while the router picked, so the message went in on the model it runs on";
 /** How often pi commits a streaming answer and running tool output (see STREAM_STEP_MS). */
 const PROGRESS = { partialIntervalMs: STREAM_STEP_MS, outputIntervalMs: STREAM_STEP_MS };
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
@@ -482,11 +483,11 @@ export class ChatAgent extends DurableObject<Env> {
    */
   async #route(message: string, images: number, files: number, recent: RecentEntries): Promise<Routing | undefined> {
     const started = Date.now();
-    const kept = (failed: string): Routing => ({ kept: { failed, ms: Date.now() - started } });
+    const kept = (failed: string, running?: true): Routing => ({ kept: { failed, ...(running && { running }), ms: Date.now() - started } });
     let read;
     try {
       const [root, catalog, busy] = await Promise.all([this.#root(), this.#catalog(), this.#replying()]);
-      if (busy) return kept(RUNNING_WHEN_SENT);
+      if (busy) return kept(RUNNING_WHEN_SENT, true);
       const [agent, items] = await Promise.all([root.agent(BACKGROUND_CONTEXT), recent()]);
       if (!items) return undefined;
       read = { root, catalog, agent, items };
@@ -533,7 +534,7 @@ export class ChatAgent extends DurableObject<Env> {
     const { root, busy, agent } = await now();
     const current = this.#modelOf(agent);
     if ("kept" in routed || busy) {
-      const kept = "kept" in routed ? routed.kept : { failed: RUNNING_WHEN_PICKED, ms: routed.pick.ms };
+      const kept = "kept" in routed ? routed.kept : { failed: RUNNING_WHEN_PICKED, running: true as const, ms: routed.pick.ms };
       return { model: current, thinkingLevel: agent.thinkingLevel, ...kept };
     }
     if (current !== routed.choice.model || agent.thinkingLevel !== routed.choice.thinkingLevel) {
@@ -1912,7 +1913,7 @@ interface ChatNow {
 
 /** Auto's pick for a message, and the model and effort to run on when a router picked (see ChatAgent's #route). */
 /** What #route found: a router's pick and the model choice it names, or why the chat keeps its model, and how long that took. */
-type Routing = { pick: AutoPick; choice: ModelChoice } | { kept: { failed: string; ms: number } };
+type Routing = { pick: AutoPick; choice: ModelChoice } | { kept: { failed: string; running?: true; ms: number } };
 
 /** What the chat's sockets need from the chat. */
 interface ChatSession {

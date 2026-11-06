@@ -400,20 +400,18 @@ export type AutoPick = {
   missed?: string;
   /** With no router: why the chat kept its model, as the tooltip shows it (a running reply, or each router's error, cut short). */
   failed?: string;
+  /** With no router: it kept its model because a reply was running, which is no failure. */
+  running?: true;
   ms: number;
 };
 
-/** Why an Auto message kept the chat's model, when a reply was running as it came in, or started while the router thought. */
-export const RUNNING_WHEN_SENT = "a reply was still running when it was sent, so the router was not asked";
-export const RUNNING_WHEN_PICKED = "a reply started while the router picked, so the message went in on the model it runs on";
+/** What `failed` said of a running reply before picks had `running`: messages sent then keep it. */
+const LEGACY_RUNNING = /^a reply (was still running when it was sent|started while the router picked)/;
 
-/**
- * Whether a call behind Auto's pick failed: no router could pick, or one picked only after others failed. Keeping the
- * model because a reply was running is no failure.
- */
+/** Whether a call behind Auto's pick failed: no router could pick (not for a running reply), or one picked only after others failed. */
 export function autoPickFailed(pick: AutoPick): boolean {
   if (pick.router) return Boolean(pick.missed);
-  return pick.failed !== RUNNING_WHEN_SENT && pick.failed !== RUNNING_WHEN_PICKED;
+  return !pick.running && !LEGACY_RUNNING.test(pick.failed ?? "");
 }
 
 /** A router call: the router's picker id, and what the call cost, in dollars and tokens. */

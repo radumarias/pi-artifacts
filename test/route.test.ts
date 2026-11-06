@@ -21,7 +21,7 @@ import {
 } from "../worker/agent/route.ts";
 import { recordSpend } from "../worker/agent/ledger.ts";
 import { baseCatalog } from "../worker/models.ts";
-import { autoPickFailed, CHAT_MESSAGE_KIND, RUNNING_WHEN_PICKED, RUNNING_WHEN_SENT } from "../shared/protocol.ts";
+import { autoPickFailed, CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
 const models = baseCatalog().models;
 const WANTED = [
@@ -419,7 +419,9 @@ describe("a failed Auto pick", () => {
     expect(autoPickFailed({ ...pick, router, missed: "jev: 402 Insufficient balance" })).toBe(true);
     expect(autoPickFailed({ ...pick, failed: "no router could pick: jev: 402" })).toBe(true);
     expect(autoPickFailed(pick)).toBe(true);
-    expect(autoPickFailed({ ...pick, failed: RUNNING_WHEN_SENT })).toBe(false);
-    expect(autoPickFailed({ ...pick, failed: RUNNING_WHEN_PICKED })).toBe(false);
+    expect(autoPickFailed({ ...pick, failed: "a reply was running", running: true })).toBe(false);
+    // Sent before picks said so with `running`.
+    expect(autoPickFailed({ ...pick, failed: "a reply was still running when it was sent, so the router was not asked" })).toBe(false);
+    expect(autoPickFailed({ ...pick, failed: "a reply started while the router picked, so the message went in on the model it runs on" })).toBe(false);
   });
 });

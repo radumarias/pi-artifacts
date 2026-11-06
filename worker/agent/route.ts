@@ -367,6 +367,8 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
   const done = new AbortController();
   const signal = AbortSignal.any([done.signal, AbortSignal.timeout(timeoutMs)]);
   const errors: string[] = [];
+  /** Each router's error so far, in the routers' order, cut short. */
+  const failures = () => clip(errors.filter(Boolean).join("; "), MAX_ERRORS_CHARS);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<Routed>((resolve, reject) => {
@@ -384,8 +386,8 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
           abortable(router.ask(request, signal), signal).then(
             ({ pick, usage }) => {
               picked = true;
-              const missed = errors.filter(Boolean).join("; ");
-              resolve({ pick, router: routerSpend(router.id, usage), usage, ...(missed && { missed: clip(missed, MAX_ERRORS_CHARS) }) });
+              const missed = failures();
+              resolve({ pick, router: routerSpend(router.id, usage), usage, ...(missed && { missed }) });
             },
             (error) => {
               errors[i] = `${router.id}: ${clip(errorMessage(error), MAX_ERROR_CHARS)}`;
@@ -397,7 +399,7 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
         }
         if (asking === 0) {
           for (let i = next; i < routers.length; i++) errors[i] = `${routers[i].id}: out of time`;
-          reject(new Error(clip(errors.filter(Boolean).join("; "), MAX_ERRORS_CHARS)));
+          reject(new Error(failures()));
         }
       };
       ask();

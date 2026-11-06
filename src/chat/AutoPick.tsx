@@ -14,7 +14,7 @@ function pickedBy(name: string, ms: number, spend: RouterSpend): string {
  * A pick under a message: a tag and what was picked; its tooltip says why. A tap shows the same under it: phones have no
  * hover. When a call behind it failed (`failed`), a red dot before the tag says so while it is closed, and names it.
  */
-function PickChip({ tag, label, why, kept, failed }: { tag: string; label: string; why: string; kept: boolean; failed: boolean }) {
+function PickChip({ tag, label, why, kept, failed }: { tag: string; label: string; why: string; kept?: boolean; failed?: boolean }) {
   return (
     <details className={["auto-pick", kept && "kept", failed && "failed"].filter(Boolean).join(" ")}>
       <summary title={why}>
@@ -69,5 +69,5 @@ export const ToolsPicked = memo(function ToolsPicked({ note }: { note: ToolPickN
   ]
     .filter(Boolean)
     .join("\n");
-  return <PickChip tag="Tools" label={`${note.tools.length} of ${note.of}`} why={why} kept={false} failed={false} />;
+  return <PickChip tag="Tools" label={`${note.tools.length} of ${note.of}`} why={why} />;
 });
