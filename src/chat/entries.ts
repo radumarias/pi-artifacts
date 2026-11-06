@@ -27,7 +27,7 @@ export function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 /** Whether the viewer `uid` wrote the entry, or caused it (joined, left). A plain `pi.user` entry is the owner's (`isOwner`). */
-function byViewer(entry: EntryRecord, uid: string, isOwner: boolean): boolean {
+export function byViewer(entry: EntryRecord, uid: string, isOwner: boolean): boolean {
   if (entry.kind === "pi.user") return isOwner;
   if (entry.kind === CHAT_MESSAGE_KIND) return (entry.data as unknown as ChatMessageData).uid === uid;
   if (entry.kind === CHAT_PEOPLE_KIND) return (entry.data as unknown as ChatPeopleData).uid === uid;

@@ -257,7 +257,7 @@ body.resizing iframe { pointer-events: none; }
 .sidebar .file-row > a.file-name.active { background: none; color: var(--accent); }
 /* Search and select mode, above the tree. */
 .files-tools { display: flex; gap: 6px; padding: 2px 0 4px; }
-.files-tools input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 14px; }
+.files-tools input, .composer-history-head input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 14px; }
 .files-tools button { padding: 4px 10px; font-size: 13px; }
 .files-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 0 6px; font-size: 13px; }
 /* The count gives way first, so download, delete and Done stay on one line in a narrow sidebar. */
@@ -739,7 +739,6 @@ a.mention-chip:hover { text-decoration: underline; }
 .composer-history { display: flex; flex-direction: column; gap: 4px; width: min(440px, calc(100vw - 32px)); }
 .composer-history-head { display: flex; align-items: center; gap: 4px; }
 .composer-history-head .icon-button { flex: none; width: 30px; height: 30px; padding: 0; justify-content: center; }
-.composer-history-head input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-size: 14px; }
 .composer-history-list { max-height: min(340px, 50dvh); overflow-y: auto; overscroll-behavior: contain; }
 .composer-more-menu .composer-history-item { align-items: baseline; }
 .composer-history-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }

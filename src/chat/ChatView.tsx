@@ -98,7 +98,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   // known first: a plain `pi.user` entry is the owner's.
   const isOwner = people?.owner.uid === uid;
   const history = useMemo(() => (people ? ownMessages(state.entries, uid, isOwner) : []), [people, state.entries, uid, isOwner]);
-  const recalling = useHistory(history, draft, setDraft, input, (message) => mentions.restore(message.mentions));
+  const recalling = useHistory(history, draft, setDraft, input, (message) => mentions.restore(message.text, message.mentions));
   // The message the next one answers, quoted above the composer until it is sent or let go.
   const [replying, setReplying] = useState<ReplyQuote | null>(null);
   const reply = useCallback((quote: ReplyQuote) => {
@@ -196,10 +196,8 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   };
 
   // Enter sends, Shift+Enter adds a line. Not while an IME is composing (Enter then confirms the text). Escape lets go
-  // of the message being replied to. Up and Down bring back earlier messages (history.ts); while one brought back is
-  // not edited they go on stepping, even where an "@" in it opens the list.
+  // of the message being replied to. Up and Down bring back earlier messages (history.ts) when the "@" list is not open.
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (recalling.recalled && recalling.onKeyDown(event)) return;
     if (mentions.onKeyDown(event) || recalling.onKeyDown(event)) return;
     if (event.key === "Escape" && replying) {
       event.preventDefault();
@@ -441,6 +439,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                 onMention={mentions.insertAt}
                 history={history}
                 onRecall={recalling.recall}
+                compact={compact}
               />
               {/* The model and the context ring at the right. Stop and the transcript show a run; only an upload needs the spinner. */}
               <div className="composer-model">

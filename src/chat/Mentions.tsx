@@ -167,9 +167,14 @@ export function useMentions(
   /** The picks still named in `text`, to send with it; the list starts empty for the next message. */
   const take = (text: string): MentionInput[] => keptMentions(text, picked);
   const clear = () => setPicked([]);
-  /** A message brought back to send again: what it named counts as picked again, so it goes with the text as before. */
-  const restore = (mentions: readonly Mention[] = []) =>
+  /**
+   * A message brought back to send again (`text`, with the caret at its end): what it named counts as picked again, so
+   * it goes with the text as before, and an "@" at its end that named nothing does not open the list.
+   */
+  const restore = (text: string, mentions: readonly Mention[] = []) => {
     setPicked((current) => [...current, ...mentions.filter((mention) => !current.some((m) => sameMention(m, mention)))]);
+    setDismissedAt(activeQuery(text, text.length)?.start ?? null);
+  };
 
   // The agent and the people are there before the files and artifacts have loaded.
   return { open, loaded: options !== null || choices.length > 0, choices, active, setActive, pick, onKeyDown, track, insertAt, take, clear, restore };

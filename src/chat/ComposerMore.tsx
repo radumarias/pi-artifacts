@@ -1,7 +1,7 @@
-import { useCallback, useId, useMemo, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useId, useMemo, useState, type KeyboardEvent } from "react";
+import { searchWords } from "../../shared/util.ts";
 import { Icon } from "../Icon.tsx";
 import { useDismiss } from "../layout.tsx";
-import { useCompact } from "./gestures.ts";
 import type { Recalled } from "./history.ts";
 import { sentLabel } from "./SentTime.tsx";
 
@@ -9,25 +9,36 @@ import { sentLabel } from "./SentTime.tsx";
  * The small chevron after the composer's attach and dictation buttons: a menu above it with what else the composer
  * can do, so the row under the input stays a few icons wide. Naming something with "@", which typing "@" in the input
  * does too, and bringing back one of the viewer's earlier messages (`history`, newest first) to send again or edit,
- * which Up in an empty input does too. The menu closes as an action runs.
+ * which Up in an empty input does too. The menu closes as an action runs. `compact`: on a phone, which has no keyboard
+ * shortcut to show, and a keyboard that would cover the list.
  */
 export function ComposerMore({
   mentionLabel,
   onMention,
   history,
   onRecall,
+  compact,
 }: {
   mentionLabel: string;
   onMention: () => void;
   history: readonly Recalled[];
+  /** The same function from one render to the next, so the open list does not draw again as a reply streams in. */
   onRecall: (message: Recalled) => void;
+  compact: boolean;
 }) {
   // The menu, or in its place the list of earlier messages.
   const [open, setOpen] = useState<"menu" | "history" | null>(null);
   const close = useCallback(() => setOpen(null), []);
   const box = useDismiss<HTMLDivElement>(open !== null, close);
   const menu = useId();
-  const compact = useCompact();
+  const back = useCallback(() => setOpen("menu"), []);
+  const pick = useCallback(
+    (message: Recalled) => {
+      close();
+      onRecall(message);
+    },
+    [close, onRecall],
+  );
   return (
     <div className="composer-more" ref={box}>
       <button
@@ -49,7 +60,7 @@ export function ComposerMore({
           <button
             type="button"
             onClick={() => {
-              setOpen(null);
+              close();
               onMention();
             }}
           >
@@ -68,18 +79,7 @@ export function ComposerMore({
           </button>
         </div>
       )}
-      {open === "history" && (
-        <History
-          id={menu}
-          history={history}
-          compact={compact}
-          onBack={() => setOpen("menu")}
-          onPick={(message) => {
-            setOpen(null);
-            onRecall(message);
-          }}
-        />
-      )}
+      {open === "history" && <History id={menu} history={history} compact={compact} onBack={back} onPick={pick} />}
     </div>
   );
 }
@@ -96,7 +96,7 @@ const HistoryIcon = () => (
  * between the box and the messages, Enter or a click picks one. Not focused on a phone (`compact`): the keyboard would
  * cover the list.
  */
-function History({
+const History = memo(function History({
   id,
   history,
   compact,
@@ -110,10 +110,12 @@ function History({
   onPick: (message: Recalled) => void;
 }) {
   const [query, setQuery] = useState("");
+  // Lowercased once, not on every key typed in the search box.
+  const lower = useMemo(() => history.map((message) => message.text.toLowerCase()), [history]);
   const found = useMemo(() => {
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    return words.length ? history.filter((message) => words.every((word) => message.text.toLowerCase().includes(word))) : history;
-  }, [history, query]);
+    const words = searchWords(query);
+    return words.length ? history.filter((_, i) => words.every((word) => lower[i].includes(word))) : history;
+  }, [history, lower, query]);
   // Read once as the list opens: it is open for moments, not long enough for "now" to go stale.
   const [now] = useState(Date.now);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -164,4 +166,4 @@ function History({
       </div>
     </div>
   );
-}
+});

@@ -165,3 +165,8 @@ export function jsonIn(text: string): unknown {
   }
   return undefined;
 }
+
+/** A search box's text as the lowercase words every match must contain. */
+export function searchWords(query: string): string[] {
+  return query.toLowerCase().split(/\s+/).filter(Boolean);
+}

@@ -23,7 +23,7 @@ import {
   type ModelInfo,
   type ProviderId,
 } from "../../shared/models.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { errorMessage, searchWords } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
 import { useStoredState } from "../layout.tsx";
@@ -287,7 +287,7 @@ function ModelMenu({
   }, [catalog.models]);
 
   const sections = useMemo((): Section[] => {
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const words = searchWords(query);
     // While searching every group with a match is open; with one provider there is nothing to fold.
     const foldable = !words.length && byProvider.size > 1;
     const groups = [...byProvider].map(
