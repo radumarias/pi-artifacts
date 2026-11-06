@@ -430,22 +430,27 @@ interface RunTally {
   took: number;
 }
 
-/** How a run's line looks from its tally: like its active call, else done (with what failed), failed, or stopped. */
+/**
+ * How a run's line looks from its tally: like its active call, else done, failed, or stopped. Unless all failed, how many
+ * did shows in red after the status, so a closed run says it, running or ended.
+ */
 function runLook({ active, last, failed, succeeded, took }: RunTally): Pick<Parameters<typeof Panel>[0], "tone" | "icon" | "status" | "time"> {
+  const failures = failed > 0 && <span className="step-time step-failed">· {failed} failed</span>;
   if (active) {
-    return { tone: "active", icon: <Spark />, status: STATUS[active.status].text, time: active.startedAt !== undefined && <RunningFor since={active.startedAt} /> };
+    const time = (
+      <>
+        {active.startedAt !== undefined && <RunningFor since={active.startedAt} />}
+        {failures}
+      </>
+    );
+    return { tone: "active", icon: <Spark />, status: STATUS[active.status].text, time };
   }
   // Thoughts alone.
   if (!last) return { icon: "✻" };
-  if (last === "stopped") return { icon: STATUS.stopped.icon, status: STATUS.stopped.text };
+  if (last === "stopped") return { icon: STATUS.stopped.icon, status: STATUS.stopped.text, time: failures };
   // None of them did what it was called for (each failed, or stopped before it finished).
   if (succeeded === 0) return { tone: "error", icon: STATUS.error.icon, status: STATUS.error.text };
-  return {
-    tone: "done",
-    icon: STATUS.done.icon,
-    status: STATUS.done.text + (took ? ` · ${tookFor(took)}` : ""),
-    time: failed > 0 && <span className="step-time step-failed">· {failed} failed</span>,
-  };
+  return { tone: "done", icon: STATUS.done.icon, status: STATUS.done.text + (took ? ` · ${tookFor(took)}` : ""), time: failures };
 }
 
 /**

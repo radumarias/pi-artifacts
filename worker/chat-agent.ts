@@ -13,6 +13,8 @@ import {
   isOwnedBy,
   isReadOnly,
   manifestOf,
+  RUNNING_WHEN_PICKED,
+  RUNNING_WHEN_SENT,
   secondSeat,
   secondSeatUid,
   SOCKET_NOT_A_MEMBER,
@@ -155,9 +157,6 @@ type OwnFile = Extract<MentionInput, { kind: "file" }>;
  * after, and the spinner should not blink between them.
  */
 const SETTLE_MS = 1_500;
-/** Why an Auto message kept the chat's model, when a reply was running as it came in, or started while the router thought. */
-const RUNNING_WHEN_SENT = "a reply was still running when it was sent, so the router was not asked";
-const RUNNING_WHEN_PICKED = "a reply started while the router picked, so the message went in on the model it runs on";
 /** How often pi commits a streaming answer and running tool output (see STREAM_STEP_MS). */
 const PROGRESS = { partialIntervalMs: STREAM_STEP_MS, outputIntervalMs: STREAM_STEP_MS };
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
@@ -509,7 +508,13 @@ export class ChatAgent extends DurableObject<Env> {
       // An effort the model does not take moves to the nearest it does; none named asks for its usual one.
       const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
       if (!choice) return kept(`the router picked ${routed.pick.model}, which is not in the picker`);
-      const pick: AutoPick = { ...choice, ...(routed.pick.reason && { reason: routed.pick.reason }), router: routed.router, ms: Date.now() - started };
+      const pick: AutoPick = {
+        ...choice,
+        ...(routed.pick.reason && { reason: routed.pick.reason }),
+        router: routed.router,
+        ...(routed.missed && { missed: routed.missed }),
+        ms: Date.now() - started,
+      };
       return { pick, choice };
     } catch (error) {
       console.error("auto:", errorMessage(error));
