@@ -4,7 +4,19 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AttachmentInput } from "../../shared/attachments.ts";
 import type { MentionInput } from "../../shared/mentions.ts";
 import { modelKey } from "../../shared/models.ts";
-import { SOCKET_NOT_A_MEMBER, SOCKET_PING, type ChatClientMessage, type ChatPeopleView, type ChatServerMessage, type Presence, type QueuedMessage } from "../../shared/protocol.ts";
+import {
+  CHAT_MESSAGE_KIND,
+  incomingKey,
+  SOCKET_NOT_A_MEMBER,
+  SOCKET_PING,
+  type ChatClientMessage,
+  type ChatMessageData,
+  type ChatPeopleView,
+  type ChatServerMessage,
+  type IncomingMessage,
+  type Presence,
+  type QueuedMessage,
+} from "../../shared/protocol.ts";
 import type { EntryReactions, Reaction, Reactions } from "../../shared/reactions.ts";
 import { api, keepAlive } from "../api.ts";
 
@@ -29,6 +41,11 @@ export interface ChatState {
   error?: string;
   /** Messages sent while the agent was busy, oldest first: they wait their turn in pi's inbox. */
   queued: QueuedMessage[];
+  /**
+   * Messages the chat is getting ready to put in, oldest first (see IncomingMessage); `arriving`, one that went in, kept
+   * until it shows in `entries` or `queued`: the chat says so on its own, and either can come first.
+   */
+  incoming: (IncomingMessage & { arriving?: true })[];
   /** The model and effort the chat runs on, from pi's agent state. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -36,7 +53,7 @@ export interface ChatState {
   usage?: UsageState;
 }
 
-const initial: ChatState = { entries: [], tools: [], busy: false, queued: [] };
+const initial: ChatState = { entries: [], tools: [], busy: false, queued: [], incoming: [] };
 
 type Action =
   /**
@@ -45,6 +62,7 @@ type Action =
    * action, so one moves from queued to placed at once.
    */
   | (Omit<Extract<ChatServerMessage, { type: "events" }>, "events"> & { events: AgentEvent[]; at: number })
+  | Extract<ChatServerMessage, { type: "incoming" }>
   | { type: "error"; message?: string }
   | { type: "reset" };
 
@@ -62,6 +80,12 @@ function addEntry(entries: EntryRecord[], entry: EntryRecord): EntryRecord[] {
 export function reduce(state: ChatState, action: Action): ChatState {
   if (action.type === "reset") return initial;
   if (action.type === "error") return { ...state, error: action.message };
+  if (action.type === "incoming") {
+    const arriving = state.incoming.filter((message) => message.arriving || incomingKey(message) === action.placed);
+    const coming = new Set(action.incoming.map(incomingKey));
+    const incoming = [...action.incoming, ...arriving.filter((message) => !coming.has(incomingKey(message))).map((m) => ({ ...m, arriving: true as const }))];
+    return withoutShown({ ...state, incoming });
+  }
   let next = state;
   for (const event of action.events) {
     switch (event.type) {
@@ -92,6 +116,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
             busy,
             runStartedAt: busy ? (started ?? action.at) : undefined,
             queued: next.queued,
+            incoming: next.incoming,
             usage: event.usage,
           },
           event.agent,
@@ -180,7 +205,19 @@ export function reduce(state: ChatState, action: Action): ChatState {
         break;
     }
   }
-  return action.queued ? { ...next, queued: action.queued } : next;
+  return withoutShown(action.queued ? { ...next, queued: action.queued } : next);
+}
+
+/** `state` without the incoming messages that are in its transcript or queue by now. */
+function withoutShown(state: ChatState): ChatState {
+  if (!state.incoming.length) return state;
+  const shown = (message: IncomingMessage) => {
+    const key = incomingKey(message);
+    const placed = (entry: EntryRecord) => entry.kind === CHAT_MESSAGE_KIND && incomingKey(entry.data as unknown as ChatMessageData) === key;
+    return state.queued.some((queued) => incomingKey(queued) === key) || state.entries.findLast(placed) !== undefined;
+  };
+  const incoming = state.incoming.filter((message) => !shown(message));
+  return incoming.length === state.incoming.length ? state : { ...state, incoming };
 }
 
 /**
@@ -288,7 +325,8 @@ export function useChat(chatId: string) {
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();
-        } else dispatch({ type: "error", message: message.message });
+        } else if (message.type === "incoming") dispatch(message);
+        else dispatch({ type: "error", message: message.message });
       };
       ws.onclose = (event) => {
         setConnected(false);

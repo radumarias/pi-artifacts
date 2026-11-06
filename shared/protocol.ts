@@ -370,6 +370,27 @@ export interface QueuedMessage extends ChatMessageData {
   id: number;
 }
 
+/**
+ * A person's message the chat is getting ready to put in (its files read, the agent's tools refreshed, on Auto the
+ * model picked), which can take seconds: everyone sees it at once, faded, until it is in the transcript or the queue.
+ * `attachments`: their names, and thumbnails of images. `picking`: on Auto, the router is picking the model for it.
+ */
+export type IncomingMessage = Person & {
+  text: string;
+  sentAt: number;
+  attachments?: IncomingAttachment[];
+  replyTo?: ReplyQuote;
+  picking?: true;
+};
+
+/** What an incoming message shows of a file it attaches before the file is read. */
+export type IncomingAttachment = { path: string; thumb?: string };
+
+/** Which incoming message a `chat.message` (or one queued) is: its author's, sent at that time. */
+export function incomingKey(message: { uid: string; sentAt?: number }): string {
+  return `${message.uid}:${message.sentAt}`;
+}
+
 /** Someone with the chat open right now, and in how many windows (or devices). */
 export interface Presence {
   uid: string;
@@ -404,6 +425,11 @@ export type ChatServerMessage =
   | { type: "reacted"; entry: number; reactions: EntryReactions }
   /** Who has the chat open: whenever a window opens or closes. */
   | { type: "presence"; online: Presence[] }
+  /**
+   * The messages the chat is getting ready to put in, oldest first: on connect, and whenever one comes or goes.
+   * `placed`: the one that went, when it went in (it shows in the transcript or the queue next), not when it was dropped.
+   */
+  | { type: "incoming"; incoming: IncomingMessage[]; placed?: string }
   /** Whether the chat is on Auto (shared/models.ts AUTO_MODEL): on connect, and whenever someone turns it on or off. */
   | { type: "auto"; on: boolean }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */

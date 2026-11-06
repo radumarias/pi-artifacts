@@ -959,9 +959,9 @@ a.mention-chip:hover { text-decoration: underline; }
 .queued-label { margin-left: var(--gutter); color: var(--working); font-size: 12px; font-weight: 500; }
 .queued.mine .queued-label { align-self: flex-end; margin-left: 0; }
 /* A message on its way in (its files read, on Auto the model picked): faded like the queue, with no box, its label pulsing. */
-.queued.sending { border-color: transparent; }
-.queued.sending .queued-label { animation: notify-pulse 1.6s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .queued.sending .queued-label { animation: none; } }
+.queued.incoming { border-color: transparent; }
+.queued.incoming .queued-label { animation: notify-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .queued.incoming .queued-label { animation: none; } }
 /* What the model calls cost: per prompt under the agent's last reply to it, and for the whole chat in the header. */
 .prompt-cost { align-self: flex-start; padding-left: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chat-cost > button { font-variant-numeric: tabular-nums; }

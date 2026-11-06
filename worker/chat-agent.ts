@@ -37,8 +37,10 @@ import {
   type Presence,
   type ProxyRequest,
   type QueuedMessage,
+  type IncomingMessage,
   type ReplyQuote,
   clampStaleMs,
+  incomingKey,
   everyone,
 } from "../shared/protocol.ts";
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
@@ -225,6 +227,7 @@ export class ChatAgent extends DurableObject<Env> {
     admit: (person) => this.admit(person),
     peopleFor: (uid) => this.peopleFor(uid),
     queued: (ids) => this.queued(ids),
+    incoming: () => this.incoming(),
     prompt: (text, author, attachments, mentions, replyTo) => this.prompt(text, author, attachments, mentions, replyTo),
     abort: (by) => this.abort(by),
     setModel: (input, by) => this.setModel(input, by),
@@ -271,6 +274,8 @@ export class ChatAgent extends DurableObject<Env> {
   #oneShot: Models | undefined;
   /** See #placeAuto. */
   #autoPlacing: Promise<void> = Promise.resolve();
+  /** See incoming. In memory: a restart ends the prompts getting them ready too. */
+  readonly #incoming = new Map<string, IncomingMessage>();
   /** Set once the owner starts deleting the chat, and kept as its only record after: from then on nobody is in it. */
   #gone = this.#deleted();
 
@@ -430,31 +435,29 @@ export class ChatAgent extends DurableObject<Env> {
   /**
    * Auto's pick for a message about to start a run: the deployment's router (ROUTER_MODEL, the first the picker lists
    * that answers) reads the end of the conversation and the message (and how many images and other files it attaches),
-   * and picks one of AUTO_MODELS and an effort. The router call counts in pi's ledger like any model call. `choice`: the
-   * model and effort to run on, when a router picked. While a reply is running (as pi's own queue says: the sidebars'
-   * status lags behind it), the router is not asked: the message goes in on the model the chat runs on (#applyPick
-   * checks again). Undefined only when the conversation could not be read. Never throws: when no router picks in time
-   * (ROUTE_MS), the pick is the model the chat runs on, with no router, and why.
+   * and picks one of AUTO_MODELS and an effort. The router call counts in pi's ledger like any model call. While a
+   * reply is running (as pi's own queue says: the sidebars' status lags behind it) the router is not asked. Undefined
+   * only when the conversation could not be read. Never throws: when no router picks in time (ROUTE_MS), or one picks a
+   * model the picker does not list, the chat keeps its model, and the pick says why.
    */
   async #route(message: string, images: number, files: number): Promise<Routing | undefined> {
     const started = Date.now();
+    const kept = (failed: string): Routing => ({ kept: { failed, ms: Date.now() - started } });
     let read;
     try {
       const [root, catalog, busy] = await Promise.all([this.#root(), this.#catalog(), this.#replying()]);
+      if (busy) return kept(RUNNING_WHEN_SENT);
       const [agent, page] = await Promise.all([root.agent(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
-      read = { root, catalog, busy, agent, page };
+      read = { root, catalog, agent, page };
     } catch (error) {
       console.error("auto:", errorMessage(error));
       return undefined;
     }
-    const { root, catalog, busy, agent, page } = read;
-    const current = this.#modelOf(agent);
-    const kept = (failed: string) => ({ pick: { model: current, thinkingLevel: agent.thinkingLevel, failed, ms: Date.now() - started } });
-    if (busy) return kept(RUNNING_WHEN_SENT);
+    const { root, catalog, agent, page } = read;
     const tokens = contextTokens(page.items);
     try {
       const candidates = autoCandidates(catalog.models, this.env.AUTO_MODELS as AutoCandidate[], { images: images > 0, contextTokens: tokens });
-      const request = { message, history: routeHistory(page.items), images, files, contextTokens: tokens, current, candidates };
+      const request = { message, history: routeHistory(page.items), images, files, contextTokens: tokens, current: this.#modelOf(agent), candidates };
       const gateway = catalogSource(this.env, this.storage.models);
       const routed = await route(routersFrom(this.env.ROUTER_MODEL, catalog, { models: this.#oneShotModels, gateway }), request);
       // Paid for whether or not the pick is used. Only a record: a failure is logged.
@@ -474,18 +477,19 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * Run the chat on Auto's pick, unless a reply is running by now (someone else's message started one while the router
-   * thought), which the message then goes to on the model it runs on, as its pick says. The pick, as it stands.
-   * Compared with the model the chat runs on now, not when the router was asked: another message may have changed it
-   * since. Called only inside #placeAuto, so no other Auto message changes the model between this and its message going in.
+   * thought): the message then goes to it on the model it runs on, as does one the router did not pick for. The pick as
+   * it stands, against the model the chat runs on now: another message may have changed it since the router was asked.
+   * Called only inside #placeAuto, so no other Auto message changes the model between this and its message going in.
    */
   async #applyPick(routed: Routing | undefined): Promise<AutoPick | undefined> {
     if (!routed) return undefined;
     const root = await this.#root();
-    const [busy, agent] = await Promise.all([this.#replying(), root.agent(BACKGROUND_CONTEXT)]);
+    const [busy, agent] = await Promise.all(["pick" in routed && this.#replying(), root.agent(BACKGROUND_CONTEXT)]);
     const current = this.#modelOf(agent);
-    // Kept: the model it goes in on is the one the chat runs on now.
-    if (!routed.choice) return { ...routed.pick, model: current, thinkingLevel: agent.thinkingLevel };
-    if (busy) return { model: current, thinkingLevel: agent.thinkingLevel, failed: RUNNING_WHEN_PICKED, ms: routed.pick.ms };
+    if ("kept" in routed || busy) {
+      const kept = "kept" in routed ? routed.kept : { failed: RUNNING_WHEN_PICKED, ms: routed.pick.ms };
+      return { model: current, thinkingLevel: agent.thinkingLevel, ...kept };
+    }
     if (current !== routed.choice.model || agent.thinkingLevel !== routed.choice.thinkingLevel) {
       await root.configure(this.#agentChange(routed.choice), BACKGROUND_CONTEXT);
     }
@@ -765,6 +769,9 @@ export class ChatAgent extends DurableObject<Env> {
    *
    * In a shared chat only a message that calls the agent ("@pi") is a prompt; any other is people talking among
    * themselves (#aside), which the agent reads as context the next time it is called.
+   *
+   * Getting it ready (its files, the agent's tools, on Auto the model) can take seconds: everyone sees it as incoming
+   * meanwhile (#announce), until it is in.
    */
   async prompt(
     text: string,
@@ -775,6 +782,35 @@ export class ChatAgent extends DurableObject<Env> {
   ): Promise<void> {
     // When it came in: the refreshes and copies below can take seconds.
     const sentAt = Date.now();
+    let placed = false;
+    try {
+      placed = await this.#prompt(text, author, attachments, mentionInputs, replyTo, sentAt);
+    } finally {
+      const key = incomingKey({ uid: author.uid, sentAt });
+      if (this.#incoming.delete(key)) this.sockets.broadcast({ type: "incoming", incoming: this.incoming(), ...(placed && { placed: key }) });
+    }
+  }
+
+  /** The messages the chat is getting ready to put in, oldest first (see IncomingMessage). */
+  incoming(): IncomingMessage[] {
+    return [...this.#incoming.values()];
+  }
+
+  /** Show everyone `message` as incoming. */
+  #announce(message: IncomingMessage): void {
+    this.#incoming.set(incomingKey(message), message);
+    this.sockets.broadcast({ type: "incoming", incoming: this.incoming() });
+  }
+
+  /** See prompt. Whether the message went in: not when nothing was left of it. */
+  async #prompt(
+    text: string,
+    author: Person,
+    attachments: readonly AttachmentInput[],
+    mentionInputs: readonly MentionInput[],
+    replyTo: number | undefined,
+    sentAt: number,
+  ): Promise<boolean> {
     this.#requireInChat(author);
     const shared = this.members.hasAny();
     const quote = replyTo === undefined ? null : await this.#quote(replyTo);
@@ -793,6 +829,16 @@ export class ChatAgent extends DurableObject<Env> {
     // On Auto, the router picks the model while the rest gets ready. Its pick is used only if the message is a prompt.
     const images = attachments.filter((attachment) => attachment.image).length;
     const routing = calling && this.#auto() ? this.#route(text, images, attachments.length + own.length - images) : undefined;
+    this.#announce({
+      uid: author.uid,
+      name: author.name,
+      text,
+      sentAt,
+      // What it attaches as far as it is known yet: names, and thumbnails of images.
+      ...(attachments.length && { attachments: attachments.map(({ path, thumb }) => ({ path, ...(thumb && { thumb }) })) }),
+      ...(quote && { replyTo: quote }),
+      ...(routing && { picking: true }),
+    });
     const [[attached, title], { mentions, note, broughtIn }] = await Promise.all([
       // Named after its text, or its files when it has none: for the sidebars.
       attaching.then(async (inputs) => [
@@ -822,7 +868,7 @@ export class ChatAgent extends DurableObject<Env> {
     // Again after the refreshes, which can take seconds: the author may have been removed meanwhile.
     this.#requireInChat(author);
     // Nothing left to say: every attachment was one they may not attach.
-    if (!text && !attached) return;
+    if (!text && !attached) return false;
     this.#bringIn(broughtIn);
     const written = [quote && replyLine(quote), text, note].filter(Boolean).join("\n\n");
     const said = shared ? `${author.name}: ${written}` : written;
@@ -847,6 +893,7 @@ export class ChatAgent extends DurableObject<Env> {
     // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
     const tags = taggedPeople(keptMentions(text, mentions));
     void this.#touchIndexes(title, author, tags, text).catch((error) => console.error("chat index:", errorMessage(error)));
+    return true;
   }
 
   /** What a reply quotes of the message at transcript entry `id`; null for one it cannot quote. */
@@ -1389,7 +1436,7 @@ export class ChatAgent extends DurableObject<Env> {
   /** Stop the agent's run, and the messages queued for it. In a shared chat the others see who stopped it. */
   async abort(by: Person): Promise<void> {
     this.#requireInChat(by);
-    const running = this.#status() === "running";
+    const running = await this.#replying();
     await this.harness.abort();
     if (running && this.members.hasAny()) this.#notePeople(by, "stopped");
   }
@@ -1522,10 +1569,8 @@ export class ChatAgent extends DurableObject<Env> {
 }
 
 /** Auto's pick for a message, and the model and effort to run on when a router picked (see ChatAgent's #route). */
-interface Routing {
-  pick: AutoPick;
-  choice?: ModelChoice;
-}
+/** What #route found: a router's pick and the model choice it names, or why the chat keeps its model, and how long that took. */
+type Routing = { pick: AutoPick; choice: ModelChoice } | { kept: { failed: string; ms: number } };
 
 /** What the chat's sockets need from the chat. */
 interface ChatSession {
@@ -1535,6 +1580,7 @@ interface ChatSession {
   admit(person: Person): boolean;
   peopleFor(uid: string): ChatPeopleView;
   queued(ids: readonly number[]): Promise<QueuedMessage[]>;
+  incoming(): IncomingMessage[];
   prompt(text: string, author: Person, attachments: readonly AttachmentInput[], mentions: readonly MentionInput[], replyTo?: number): Promise<void>;
   abort(by: Person): Promise<void>;
   setModel(input: { model?: unknown; thinkingLevel?: unknown }, by: Person): Promise<void>;
@@ -1741,6 +1787,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       send(ws, { type: "reactions", reactions: this.#chat.reactions() });
       // After events(): a new chat that starts on Auto is set so as pi opens it.
       send(ws, { type: "auto", on: this.#chat.auto() });
+      send(ws, { type: "incoming", incoming: this.#chat.incoming() });
       // Timed only once it is to be sent: a wake attaches every socket again, and most find their snapshot already sent.
       const snapshot = await this.#events([events.snapshot], false);
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
