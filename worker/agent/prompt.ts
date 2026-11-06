@@ -81,27 +81,59 @@ export function userSystemPrompt({ user, chat }: UserPrompts): string {
   return parts.join("\n\n");
 }
 
-/** Who is in the chat, so the model can tell the people apart. */
-export function peopleExtension(people: () => ChatPeople): Extension {
+/** The agents of a chat's roster, as the people section names them to pi and to each other. */
+export interface PromptAgent {
+  name: string;
+  job: string;
+  /** Its pi session (PiSessionId): the conversation the section is rendered for tells which agent reads it. */
+  session: string;
+}
+
+/**
+ * Who is in the chat, so the model can tell the people apart, and which agents it holds. Rendered per conversation:
+ * pi (the root) reads that it may hand work to the agents, and each agent's session reads who it is among them.
+ */
+export function peopleExtension(people: () => ChatPeople, agents: () => readonly PromptAgent[] = () => []): Extension {
   return defineExtension({
     name: "people",
     sections: [
-      section("people", () => {
-        const { owner, members } = people();
-        // The same text whether or not the chat was ever shared: the prefix outlives the members who left.
-        const about = 'In a shared chat, each user message starts with its author\'s name ("name: text"); one without a name is the owner\'s.';
-        if (members.length === 0) return about;
-        return (
-          `${about} ${owner.name} owns this chat; ${members.map((m) => m.name).join(", ")} joined it by invite. ` +
-          `Here your name is ${AGENT_NAME}. The people also talk among themselves: you are called only by a message with ${AGENT_TOKEN} in it, and the others reach you only as context, ` +
-          "possibly while you work. Answer the message that called you, using the talk around it where it helps, and never reply to the talk itself. " +
-          "People tag each other with @ and a name; such a tag is for that person, not a call to you. " +
-          "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +
-          "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner."
-        );
+      section("people", ({ conversationId }) => {
+        const roster = agents();
+        const self = roster.find((agent) => agent.session === String(conversationId));
+        return self ? agentPeople(people(), roster, self) : piPeople(people(), roster);
       }),
     ],
   });
+}
+
+/** The people section as pi reads it. */
+function piPeople({ owner, members }: ChatPeople, roster: readonly PromptAgent[]): string {
+  // The same text whether or not the chat was ever shared: the prefix outlives the members who left.
+  const about = 'In a shared chat, each user message starts with its author\'s name ("name: text"); one without a name is the owner\'s.';
+  const others = roster.length
+    ? ` Other agents in this chat: ${roster.map((agent) => `@${agent.name} (${agent.job})`).join(", ")}. Each answers only when a message names it, and its replies reach you as context. ` +
+      "To hand work to one, name it with @ and its name in your reply, only when its help is needed."
+    : "";
+  if (members.length === 0) return `${about}${others}`;
+  return (
+    `${about} ${owner.name} owns this chat; ${members.map((m) => m.name).join(", ")} joined it by invite. ` +
+    `Here your name is ${AGENT_NAME}. The people also talk among themselves: you are called only by a message with ${AGENT_TOKEN} in it, and the others reach you only as context, ` +
+    "possibly while you work. Answer the message that called you, using the talk around it where it helps, and never reply to the talk itself. " +
+    "People tag each other with @ and a name; such a tag is for that person, not a call to you. " +
+    "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +
+    "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner." +
+    others
+  );
+}
+
+/** The people section as one of the roster's agents reads it. */
+function agentPeople({ owner, members }: ChatPeople, roster: readonly PromptAgent[], self: PromptAgent): string {
+  const agents = [`@${AGENT_NAME} (the chat's main assistant)`, ...roster.filter((agent) => agent !== self).map((agent) => `@${agent.name} (${agent.job})`)];
+  const people = members.length ? `${owner.name} owns this chat, and ${members.map((m) => m.name).join(", ")} joined it.` : `${owner.name} owns this chat and is alone in it.`;
+  return (
+    `${people} The other agents here: ${agents.join(", ")}. ` +
+    "Whoever asks, you work with the owner's MCP connections, files and skills, as far as your turn allows, and artifacts you publish belong to the owner."
+  );
 }
 
 /**

@@ -1,16 +1,21 @@
 import type { ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
+import { CHAT_AGENT_KIND, type ChatAgentReplyData } from "../../shared/agents.ts";
 import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, PUBLISH_TOOL, type ChatMessageData, type ChatPeopleData, type PublishedDetails } from "../../shared/protocol.ts";
 
 /** When an entry was sent, for one that has a time: messages from before chats kept `sentAt` have only the time pi wrote them, and asides not even that. */
 export function sentAt(entry: EntryRecord): number | undefined {
+  if (entry.kind === CHAT_AGENT_KIND) return (entry.data as unknown as ChatAgentReplyData).endedAt;
   const at = entry.kind === CHAT_MESSAGE_KIND ? (entry.data as unknown as ChatMessageData).sentAt : undefined;
   return at ?? entry.model?.[0]?.timestamp;
 }
 
-/** Entries the app shows something for; the others (such as asides for the model) do not end an agent's reply, or start one. */
+/**
+ * Entries the app shows something for; the others (such as asides for the model) do not end an agent's reply, or start
+ * one. Another agent's reply (`chat.agent`) shows as its own message.
+ */
 export function shown(entry: EntryRecord): boolean {
-  return entry.kind === CHAT_MESSAGE_KIND || entry.kind === CHAT_PEOPLE_KIND || entry.kind === "pi.user" || isAgent(entry);
+  return entry.kind === CHAT_MESSAGE_KIND || entry.kind === CHAT_PEOPLE_KIND || entry.kind === CHAT_AGENT_KIND || entry.kind === "pi.user" || isAgent(entry);
 }
 
 export function isAgent(entry: EntryRecord): boolean {

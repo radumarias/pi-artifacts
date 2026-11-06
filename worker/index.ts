@@ -14,6 +14,7 @@ import { chatRoute } from "./chat-routes.ts";
 import { mcpRoute } from "./mcp-routes.ts";
 import { catalogSource, loadCatalog } from "./models.ts";
 import { skillsRoute } from "./skills-routes.ts";
+import { agentsRoute } from "./agents-routes.ts";
 import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
 
@@ -183,6 +184,9 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   const skills = await skillsRoute(request, directory, () => storage.skillFiles(uid));
   if (skills) return skills;
+
+  const agents = await agentsRoute(request, directory);
+  if (agents) return agents;
 
   // A chat's Durable Object is named after its owner's verified uid; others reach it only once they joined by an invite.
   const chat = await chatRoute(request, directory, { uid, name: identity.email ?? uid }, (owner) => storage.userFiles(owner));

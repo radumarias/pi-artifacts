@@ -34,11 +34,13 @@ export function mcpExtension(
   unavailable: Map<string, string>,
   discover: () => Promise<string>,
   { deferred = false }: { deferred?: boolean } = {},
-): { extension: Extension; summary: string; listing: string } {
+): { extension: Extension; summary: string; listing: string; toolInfo: Map<string, { server: string; readOnly: boolean }> } {
   // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
   // and providers reject a request whose tool names repeat: number the later ones.
   const used = new Set<string>();
   const tools = [];
+  // Whose each agent tool is, and whether it only reads: what an agent's turn is limited by (worker/agents/turns.ts).
+  const toolInfo = new Map<string, { server: string; readOnly: boolean }>();
   const servers: string[] = [];
   for (const [server, { tools: serverTools, instructions }] of catalog) {
     const list: string[] = [];
@@ -48,6 +50,7 @@ export function mcpExtension(
       for (let n = 2; used.has(name); n++) name = `${base.slice(0, 64 - String(n).length - 1)}_${n}`;
       used.add(name);
       const readOnly = isReadOnly(tool);
+      toolInfo.set(name, { server, readOnly });
       list.push(`${tool.name}${readOnly ? " (read-only)" : ""} — agent tool ${name}`);
       tools.push(
         defineTool({
@@ -103,5 +106,5 @@ export function mcpExtension(
     }),
   );
   const extension = defineExtension({ name: "mcp", tools, sections: [section("mcp_servers", () => summary)] });
-  return { extension, summary, listing };
+  return { extension, summary, listing, toolInfo };
 }

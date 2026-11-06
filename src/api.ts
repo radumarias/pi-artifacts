@@ -1,3 +1,4 @@
+import type { AgentDefinition, AgentInput, ChatAgents, ChatAgentView } from "../shared/agents.ts";
 import type {
   ArtifactVersionImport,
   ChatDumpCursor,
@@ -186,6 +187,20 @@ export const api = {
   /** A chat's system prompt, which adds to its owner's own: everyone in the chat reads it, only the owner changes it. */
   chatSystemPrompt: (chatId: string) => request<ChatSystemPrompt>(chatPath(chatId, "/system-prompt")),
   setChatSystemPrompt: (chatId: string, text: string) => request<ChatSystemPrompt>(chatPath(chatId, "/system-prompt"), send("PUT", { text })),
+  /** The user's agents, which they bring into any of their chats. */
+  agents: () => request<AgentDefinition[]>("/api/agents"),
+  /** A new agent, turned on unless `enabled` is false. */
+  createAgent: (agent: AgentInput & { enabled?: boolean }) => request<AgentDefinition>("/api/agents", post(agent)),
+  /** Change one; `version` is the one the user read, and the server refuses when it changed since. */
+  saveAgent: (id: string, agent: AgentInput & { enabled?: boolean; version?: number }) => request<AgentDefinition>(`/api/agents/${id}`, send("PUT", agent)),
+  setAgentEnabled: (agent: Pick<AgentDefinition, "id" | "version">, enabled: boolean) =>
+    request<AgentDefinition>(`/api/agents/${agent.id}`, send("PATCH", { enabled, version: agent.version })),
+  deleteAgent: (id: string) => request<object>(`/api/agents/${id}`, { method: "DELETE" }),
+  /** A chat's agents besides pi, and each one's latest turns. */
+  chatAgents: (chatId: string) => request<ChatAgents>(chatPath(chatId, "/agents")),
+  /** (owner) Bring one of their agents into the chat. */
+  addChatAgent: (chatId: string, agentId: string) => request<ChatAgentView[]>(chatPath(chatId, "/agents"), post({ agentId })),
+  removeChatAgent: (chatId: string, agentId: string) => request<ChatAgentView[]>(chatPath(chatId, `/agents/${agentId}`), { method: "DELETE" }),
   skills: () => request<SkillInfo[]>("/api/skills"),
   /** Save one of the user's skills, from its fields or from a SKILL.md file's text. */
   saveSkill: (skill: (SkillInput | { markdown: string }) & { enabled?: boolean }) => request<SkillInfo>("/api/skills", post(skill)),

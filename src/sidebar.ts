@@ -5,7 +5,7 @@ import { api, keepAlive } from "./api.ts";
 
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
 const LOAD_DELAY_MS = 150;
-const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills"];
+const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills", "agents"];
 
 /**
  * A value read by `read`, and a stable `load` that reads it again. Reads can overlap: only the newest one's answer is
@@ -41,9 +41,9 @@ export function useLatest<T>(
  * The sidebar's socket: the server names a list whenever it changed (a chat named or working, an artifact published,
  * a skill proposed, in any window or by anyone in a shared chat), and `loaders` reads it again, at most once per short
  * burst of changes. Every (re)connect reads all of them: whatever changed while it was closed, or before it opened.
- * `onMention` hears when someone tags the user in a shared chat.
+ * A list with no loader is one this view does not show. `onMention` hears when someone tags the user in a shared chat.
  */
-export function useSidebarSocket(loaders: Record<SidebarList, () => void>, onMention?: (notice: MentionNotice) => void): void {
+export function useSidebarSocket(loaders: Partial<Record<SidebarList, () => void>>, onMention?: (notice: MentionNotice) => void): void {
   const current = useRef(loaders);
   current.current = loaders;
   const mentioned = useRef(onMention);
@@ -57,7 +57,7 @@ export function useSidebarSocket(loaders: Record<SidebarList, () => void>, onMen
         list,
         setTimeout(() => {
           pending.delete(list);
-          current.current[list]();
+          current.current[list]?.();
         }, LOAD_DELAY_MS),
       );
     };

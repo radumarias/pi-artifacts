@@ -1,6 +1,7 @@
 import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentEvent, AgentState, EntryRecord, JsonObject, UsageState } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import type { ChatAgentView } from "../../shared/agents.ts";
 import type { AttachmentInput } from "../../shared/attachments.ts";
 import type { MentionInput } from "../../shared/mentions.ts";
 import { modelKey } from "../../shared/models.ts";
@@ -299,6 +300,8 @@ export function useChat(chatId: string) {
   const [auto, setAuto] = useState(false);
   // The viewer's messages that did not call the agent but look meant for it: under each the app offers to call it.
   const [hints, setHints] = useState<ReadonlySet<number>>(NO_HINTS);
+  // The agents the owner brought into the chat besides pi, and whether each is working.
+  const [agents, setAgents] = useState<ChatAgentView[]>(NO_AGENTS);
   const socket = useRef<WebSocket | null>(null);
   // One that went in and never showed is let go after ARRIVING_MS (see ChatState.incoming).
   const arrived = state.incoming.reduce((first, message) => Math.min(first, message.arriving ?? Infinity), Infinity);
@@ -315,6 +318,7 @@ export function useChat(chatId: string) {
     setOnline([]);
     setAuto(false);
     setHints(NO_HINTS);
+    setAgents(NO_AGENTS);
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -347,6 +351,7 @@ export function useChat(chatId: string) {
         else if (message.type === "presence") setOnline(message.online);
         else if (message.type === "auto") setAuto(message.on);
         else if (message.type === "callHint") setHints((known) => new Set(known).add(message.entry));
+        else if (message.type === "agents") setAgents(message.agents);
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();
@@ -409,7 +414,10 @@ export function useChat(chatId: string) {
     /** Who has the chat open right now, and in how many windows. */
     online,
     prompt,
-    abort: () => send({ type: "abort" }),
+    /** Stop pi and every agent's turn, or with `agent` only that agent's. */
+    abort: (agent?: string) => send(agent ? { type: "abort", agent } : { type: "abort" }),
+    /** The chat's agents besides pi (its roster), as the chat last said. */
+    agents,
     setModel,
     /** Whether the chat is on Auto: a router picks the model and effort for each message. */
     auto,
@@ -424,6 +432,7 @@ export function useChat(chatId: string) {
 }
 
 const NO_HINTS: ReadonlySet<number> = new Set();
+const NO_AGENTS: ChatAgentView[] = [];
 
 /**
  * `next`, keeping `known`'s object for each entry whose reactions are the same: a socket is sent all of them again on

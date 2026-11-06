@@ -24,6 +24,14 @@
   --person-5: #5b5f9e;
   --person-6: #a35a2a;
   --person-7: #74742c;
+  /* The badge colours a user can give their agents (AGENT_COLORS in shared/agents.ts), text on them --on-tint. */
+  --agent-blue: #2f5f9a;
+  --agent-green: #2d7a4f;
+  --agent-purple: #6b4fa0;
+  --agent-orange: #a8571c;
+  --agent-teal: #1f7a7a;
+  --agent-pink: #a5466f;
+  --agent-slate: #55606b;
   --on-tint: #ffffff;
   --radius: 10px;
   --radius-lg: 12px;
@@ -64,6 +72,13 @@
     --person-5: #a6aaea;
     --person-6: #e8a272;
     --person-7: #c8c870;
+    --agent-blue: #8db8ea;
+    --agent-green: #7fcf9f;
+    --agent-purple: #bba2ee;
+    --agent-orange: #eca46e;
+    --agent-teal: #74d0cc;
+    --agent-pink: #ee9cbf;
+    --agent-slate: #a9b3bd;
     --on-tint: #101312;
     --shadow-pop: 0 16px 36px -18px rgb(0 0 0 / 0.8);
     --shadow-card: 0 14px 34px -24px rgb(0 0 0 / 0.75);
@@ -346,6 +361,11 @@ body.resizing iframe { pointer-events: none; }
 }
 /* The agent's badge: a rounded square, where people's are round. */
 .avatar.agent { border-radius: 30%; background: var(--accent); color: var(--accent-text); font-size: calc(var(--size) * 0.56); }
+/* Another agent's badge: its own colour (--tone) and up to three letters. */
+.avatar.agent.toned { background: var(--tone); color: var(--on-tint); font-size: calc(var(--size) * 0.4); letter-spacing: -0.02em; }
+/* Another agent's reply: its byline over its parts, indented like pi's. */
+.agent-reply { display: flex; flex-direction: column; gap: 4px; }
+.agent-reply > :not(.byline) { margin-left: var(--gutter); }
 /* Whether someone has the chat open: green while they do. On the agent's badge: rust at the top while it works. Its
    ring is the colour of what the badge sits on (--ring). */
 .presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--ring, var(--bg)); border-radius: 50%; background: var(--border); }

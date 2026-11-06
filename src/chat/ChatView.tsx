@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { CHAT_AGENT_KIND, type ChatAgentReplyData } from "../../shared/agents.ts";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -46,6 +47,7 @@ import { useChat, waitingOnModel } from "./useChat.ts";
 import { ComposerMore } from "./ComposerMore.tsx";
 import { Dictation } from "./Dictation.tsx";
 import { ownMessages, useHistory } from "./history.ts";
+import { AgentReply } from "./AgentReply.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
 import { NotifyButton } from "./notify.tsx";
@@ -523,8 +525,11 @@ const Entry = memo(function Entry({
   }
   if (entry.kind === CHAT_PEOPLE_KIND) {
     const data = entry.data as unknown as ChatPeopleData;
-    const [them, you] = PEOPLE_EVENTS[data.event];
+    const [them, you] = PEOPLE_EVENTS[data.event].map((said) => said.replace("{agent}", data.agent ?? "an agent"));
     return <div className="chat-notice">{data.uid === uid ? `You ${you}` : `${data.name} ${them}`}</div>;
+  }
+  if (entry.kind === CHAT_AGENT_KIND) {
+    return <AgentReply data={entry.data as unknown as ChatAgentReplyData} reactions={reactions} onReply={answer} onOpen={onOpen} />;
   }
   if (entry.kind === "pi.assistant" && message?.role === "assistant") {
     return <Assistant message={message} steps={steps} reactions={reactions} onReply={answer} />;
@@ -645,13 +650,18 @@ function PeopleBar({ people, online, uid, working }: { people: ChatPeople; onlin
   );
 }
 
-/** Each notice as said of someone else, and of the viewer (who may have been removed and invited back). */
+/**
+ * Each notice as said of someone else, and of the viewer (who may have been removed and invited back). `{agent}` is
+ * the agent an owner added or removed.
+ */
 const PEOPLE_EVENTS: Record<ChatPeopleData["event"], readonly [string, string]> = {
   joined: ["joined the chat", "joined the chat"],
   rejoined: ["joined again from another window or device", "joined again from another window or device"],
   left: ["left the chat", "left the chat"],
   removed: ["was removed from the chat", "were removed from the chat"],
   stopped: [`stopped ${AGENT_NAME}`, `stopped ${AGENT_NAME}`],
+  "agent-added": ["added @{agent} to the chat", "added @{agent} to the chat"],
+  "agent-removed": ["removed @{agent} from the chat", "removed @{agent} from the chat"],
 };
 
 /**

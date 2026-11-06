@@ -9,6 +9,8 @@ import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts"
 import { titleFromMessage, UNNAMED_CHAT } from "./agent/title.ts";
 import { applyAuthChange, type McpAuthChange, type McpAuthRecord, type McpAuthStore } from "./mcp/oauth.ts";
 import { mcpServers } from "./mcp/servers.ts";
+import { AgentStore, type AgentSave } from "./agents/store.ts";
+import type { AgentDefinition, AgentOrigin, AgentResult } from "../shared/agents.ts";
 
 /** One user's OAuth state for one MCP server. `uid` must come from a verified identity. */
 export function mcpAuthStore(uid: string, server: string): McpAuthStore {
@@ -61,8 +63,12 @@ export interface SkillPackageFiles {
  * The chats themselves live in ChatAgent objects, which decide who may open them.
  */
 export class UserDirectory extends DurableObject<Env> {
+  /** The user's agents (worker/agents/store.ts). */
+  readonly #agents: AgentStore;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.#agents = new AgentStore(ctx.storage.sql);
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, title TEXT NOT NULL, chat_id TEXT NOT NULL, latest INTEGER NOT NULL, updated_at INTEGER NOT NULL);
@@ -487,6 +493,44 @@ export class UserDirectory extends DurableObject<Env> {
     }
     if (written) this.#changed("skills");
     return this.getSkill(name) ?? { error: `No skill named "${name}".` };
+  }
+
+  /** The user's agents, by name. */
+  listAgents(): AgentDefinition[] {
+    return this.#agents.list();
+  }
+
+  getAgent(id: string): AgentDefinition | null {
+    return this.#agents.get(id);
+  }
+
+  /** A short string that changes whenever one of the user's agents does: a chat reads them again only on a change. */
+  agentsVersion(): string {
+    return this.#agents.version();
+  }
+
+  /**
+   * Save one of the user's agents (AgentStore.save): a new one, or with `save.id` a change to one. One the model
+   * proposes is saved off, for the user to review and turn on.
+   */
+  saveAgent(input: unknown, origin: AgentOrigin, enabled?: boolean, save?: AgentSave): AgentResult {
+    const saved = this.#agents.save(input, origin, enabled, save);
+    if (!("error" in saved)) this.#changed("agents");
+    return saved;
+  }
+
+  /** Turn one of the user's agents on or off; `version` is the one they read (see AgentStore.setEnabled). */
+  setAgentEnabled(id: string, enabled: boolean, version?: number): AgentResult {
+    const before = this.#agents.get(id)?.version;
+    const result = this.#agents.setEnabled(id, enabled, version);
+    if (!("error" in result) && result.version !== before) this.#changed("agents");
+    return result;
+  }
+
+  deleteAgent(id: string): { error: string } | null {
+    const refused = this.#agents.delete(id);
+    if (!refused) this.#changed("agents");
+    return refused;
   }
 
   /** Delete one of the user's skills. Built-in ones can only be turned off. */

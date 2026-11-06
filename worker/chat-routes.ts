@@ -40,6 +40,9 @@ import type { UserDirectory } from "./users.ts";
  *   GET    /api/chats/:id/files/<path>        one of the chat's files, served as GET /api/files/raw/ serves the user's own
  *   GET    /api/chats/:id/system-prompt       the chat's system prompt, which adds to the owner's own, for the people in it
  *   PUT    /api/chats/:id/system-prompt       (owner) {text}: change it; empty clears it
+ *   GET    /api/chats/:id/agents              the chat's agents and their latest turns, for the people in it
+ *   POST   /api/chats/:id/agents              (owner) {agentId}: bring one of their agents (turned on) into the chat
+ *   DELETE /api/chats/:id/agents/:agentId     (owner) take an agent out of the chat; its replies stay
  *   POST   /api/invites/accept                {token}: join the chat an invite link is for
  * With `?as=second`, a chat's routes (but its files) take the owner as their second seat in it, and refuse anyone else.
  * Returns null for any other path.
@@ -76,7 +79,7 @@ export async function chatRoute(
     );
   }
 
-  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen|seat|system-prompt)(?:\/([a-z0-9-]+))?)?$/);
+  const match = url.pathname.match(/^\/api\/chats\/([a-z0-9]+)(?:\/(ws|invites|members|attachments|mentions|contents|deletion|seen|seat|system-prompt|agents)(?:\/([a-z0-9-]+))?)?$/);
   if (!match || !ID_PATTERN.test(match[1])) return null;
   const [, chatId, what, item] = match;
   const isSocket = what === "ws" && !item;
@@ -163,6 +166,18 @@ export async function chatRoute(
     const result =
       method === "GET" ? await chat.chatSystemPrompt(person.uid) : await chat.setChatSystemPrompt(person, (await readJson<{ text?: unknown }>(request))?.text);
     return "status" in result ? answer(result) : json(result satisfies ChatSystemPrompt);
+  }
+  if (what === "agents") {
+    const result =
+      method === "GET" && !item
+        ? await chat.agentsFor(person.uid)
+        : method === "POST" && !item
+          ? await chat.addAgent(person, (await readJson<{ agentId?: unknown }>(request))?.agentId)
+          : method === "DELETE" && item
+            ? await chat.removeAgent(person, item)
+            : null;
+    if (!result) return null;
+    return "status" in result ? answer(result) : json(result);
   }
   if (what === "invites" && method === "DELETE" && item) return answer(await chat.revokeInvite(person, item));
   if (what === "members" && method === "DELETE" && item) return answer(await chat.removeMember(person, item));
