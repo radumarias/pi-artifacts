@@ -61,7 +61,7 @@ export default defineConfig({
       // those are offered to the model, which loads any other with tool_search (worker/agent/tool-pick.ts). Fewer tool
       // definitions per request, and fewer wrong calls. Only with more than 10 MCP tools; if it fails, every tool is
       // offered. Empty: every tool, always.
-      TOOL_PICK_MODEL: bindings.text("typesafe/jev"),
+      TOOL_PICK_MODEL: bindings.text("system-one:typesafe/jev"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
       // picker does not list (no key in AI Gateway for their provider) are left out.
       AUTO_MODELS: bindings.json([

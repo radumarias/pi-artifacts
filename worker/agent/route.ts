@@ -2,9 +2,11 @@ import {
   clampThinkingLevel,
   type Api,
   type ClassifierApi,
+  type ClassifierContext,
   type ClassifierFunction,
   type ClassifierModel,
   type ClassifierOptions,
+  type ClassifierResult,
   type Model,
   type Models,
   type ModelThinkingLevel,
@@ -285,11 +287,12 @@ function classifierRouter<A extends ClassifierApi>(model: ClassifierModel<A>, cl
     id: modelKey(model.provider, model.id),
     async ask(request, signal) {
       const efforts = ["none", ...new Set(request.candidates.flatMap((candidate) => candidate.efforts))];
-      const result = await classify(
+      const { answers, usage } = await askClassifier(
         model,
+        classify,
         {
           state: {
-            conversation: request.history.map(({ from, text }) => ({ from, text })),
+            conversation: conversationState(request.history),
             conversationTokens: request.contextTokens,
             message: clip(request.message, MAX_MESSAGE_CHARS),
             attached: { images: request.images, files: request.files },
@@ -304,15 +307,36 @@ function classifierRouter<A extends ClassifierApi>(model: ClassifierModel<A>, cl
             effort: { type: "choice", instructions: EFFORT_QUESTION, criteria: Object.fromEntries(efforts.map((effort) => [effort, ""])) },
           },
         },
-        { ...options, signal, maxRetries: 0 },
+        options,
+        signal,
       );
-      if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `stopped: ${result.stopReason}`);
-      const { model: chosen, effort } = result.answers;
+      const { model: chosen, effort } = answers;
       const pick = pickOf(request.candidates, chosen?.type === "choice" ? chosen.choice : undefined, effort?.type === "choice" ? effort.choice : undefined);
       if (!pick) throw new Error(`no listed model in its answer: ${JSON.stringify(chosen)}`);
-      return { pick, usage: result.usage ?? NO_USAGE };
+      return { pick, usage };
     },
   };
+}
+
+/** The conversation as a classifier's state holds it. */
+export function conversationState(history: readonly RouteTurn[]): { from: RouteTurn["from"]; text: string }[] {
+  return history.map(({ from, text }) => ({ from, text }));
+}
+
+/**
+ * One classifier call, once, within `signal`: its answers and usage, or a throw with the classifier's error. `options`:
+ * how `classify` reaches the model.
+ */
+export async function askClassifier<A extends ClassifierApi>(
+  model: ClassifierModel<A>,
+  classify: ClassifierFunction,
+  context: ClassifierContext,
+  options: ClassifierOptions,
+  signal: AbortSignal,
+): Promise<{ answers: ClassifierResult["answers"]; usage: Usage }> {
+  const result = await classify(model, context, { ...options, signal, maxRetries: 0 });
+  if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `stopped: ${result.stopReason}`);
+  return { answers: result.answers, usage: result.usage ?? NO_USAGE };
 }
 
 /**
@@ -372,8 +396,13 @@ export function workersAIOptions(ai: ModelRunner): ClassifierOptions {
   return { apiKey: "ai-binding", fetch: viaBinding };
 }
 
+/** What a router call (Auto's, or the tool picker's) cost, as a message's pick shows it. */
+export function routerSpend(id: string, usage: Usage): RouterSpend {
+  return { model: id, cost: usage.cost.total, input: usage.input + usage.cacheRead, output: usage.output };
+}
+
 /** A call that reported no usage. */
-export const NO_USAGE: Usage = {
+const NO_USAGE: Usage = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -408,8 +437,7 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
     }
     try {
       const { pick, usage } = await router.ask(request, AbortSignal.timeout(left));
-      const spend = { model: router.id, cost: usage.cost.total, input: usage.input + usage.cacheRead, output: usage.output };
-      return { pick, router: spend, usage };
+      return { pick, router: routerSpend(router.id, usage), usage };
     } catch (error) {
       errors.push(`${router.id}: ${clip(errorMessage(error), MAX_ERROR_CHARS)}`);
     }
@@ -437,13 +465,20 @@ export function routersFrom(spec: string, catalog: Catalog, use: { models: Model
       }
       if (id.startsWith(SYSTEM_ONE_PREFIX)) {
         const name = id.slice(SYSTEM_ONE_PREFIX.length);
-        const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
-        const model = Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
+        const model = systemOneModel(id);
         return model ? workersAIClassifierRouter(use.ai, model) : unavailable(name, "not a System One model on Workers AI");
       }
       const model = catalog.model(id);
       return model ? modelRouter(use.models, model) : unavailable(id, "not in the picker");
     });
+}
+
+/** The System One classifier on Workers AI that `spec` names, as `system-one:typesafe/jev`; undefined for none. */
+export function systemOneModel(spec: string): ClassifierModel<"cloudflare-workers-ai-system-one"> | undefined {
+  if (!spec.startsWith(SYSTEM_ONE_PREFIX)) return undefined;
+  const name = spec.slice(SYSTEM_ONE_PREFIX.length);
+  const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
+  return Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
 }
 
 /** A router ROUTER_MODEL names that cannot be asked: it fails at once, saying why. */
@@ -458,7 +493,8 @@ function unavailable(id: string, why: string): Router {
 /**
  * Add a router call's usage to the conversation's spend ledger (pi's `pi.usage`), under `tools` as `prefix` (Auto's
  * AUTO_LEDGER_PREFIX, or TOOL_PICK_LEDGER_PREFIX for the tool picker) and the router's picker id, as pi adds a tool's
- * spend: the cost panel then counts it, also after older messages are summarized. Not under `models`, whose rows the panel splits by the efforts of the replies in the transcript.
+ * spend: the cost panel then counts it, also after older messages are summarized. Not under `models`, whose rows the
+ * panel splits by the efforts of the replies in the transcript.
  */
 export async function recordRouterSpend(tx: Tx, conversationId: ConversationId, router: string, usage: Usage, prefix = AUTO_LEDGER_PREFIX): Promise<void> {
   const totals = (await tx.doc(UsageDoc, conversationId)).tools as Record<string, Usage>;
@@ -469,6 +505,11 @@ export async function recordRouterSpend(tx: Tx, conversationId: ConversationId, 
     totals[key] = JSON.parse(JSON.stringify(usage)) as Usage;
     return;
   }
+  addUsage(total, usage);
+}
+
+/** Add `usage` to `total`, counter by counter, as pi adds a call's usage to its ledger. */
+export function addUsage(total: Usage, usage: Usage): void {
   for (const counter of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[counter] += usage[counter];
   // Optional counters, as pi adds them: once either side reports one.
   for (const counter of ["cacheWrite1h", "reasoning"] as const) if (usage[counter] !== undefined) total[counter] = (total[counter] ?? 0) + usage[counter];

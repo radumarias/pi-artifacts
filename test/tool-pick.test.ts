@@ -7,13 +7,23 @@ import { createRegistry, Harness, MemoryStorage } from "@earendil-works/pi-durab
 import { createToolSearchExtension, TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 import { MCP_DISCOVER_TOOL } from "../shared/protocol.ts";
 import { mcpExtension } from "../worker/agent/mcp.ts";
-import { MAX_PICKED, NO_TOOL, pickerId, pickTools, selectTools, toolPicker, toolsToOffer, type PickableTool } from "../worker/agent/tool-pick.ts";
+import {
+  deferredTools,
+  MAX_PICKED,
+  NO_TOOL,
+  pickerId,
+  pickTools,
+  selectTools,
+  toolPicker,
+  toolsToOffer,
+  type PickableTool,
+} from "../worker/agent/tool-pick.ts";
 import { McpHub } from "../worker/mcp/hub.ts";
 
 const jev = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS["typesafe/jev"] as ClassifierModel<"cloudflare-workers-ai-system-one">;
 
 const tools = (n: number): PickableTool[] =>
-  Array.from({ length: n }, (_, i) => ({ name: `portal__tool_${i}`, server: "portal", description: `Tool number ${i}` }));
+  Array.from({ length: n }, (_, i) => ({ name: `portal__tool_${i}`, description: `[MCP server "portal", tool "tool_${i}"] Tool number ${i}` }));
 
 /** The AI binding, answering each run with `reply` (given the run's input). */
 const binding = (reply: (input: Record<string, unknown>) => unknown) => {
@@ -36,8 +46,9 @@ type Question = { type: string; instructions: string; criteria: Record<string, s
 
 describe("the tool picker", () => {
   it("is the System One model TOOL_PICK_MODEL names, or none", () => {
-    expect(toolPicker("typesafe/jev")).toBe(jev);
-    expect(toolPicker(" typesafe/jev ")).toBe(jev);
+    expect(toolPicker("system-one:typesafe/jev")).toBe(jev);
+    expect(toolPicker(" system-one:typesafe/jev ")).toBe(jev);
+    expect(toolPicker("typesafe/jev")).toBeUndefined();
     expect(toolPicker("")).toBeUndefined();
     expect(toolPicker(undefined)).toBeUndefined();
     expect(toolPicker("nobody/unlisted")).toBeUndefined();
@@ -61,7 +72,7 @@ describe("the tool picker", () => {
     const { tool } = runs[0].input.questions as { tool: Question };
     expect(tool.type).toBe("choice");
     expect(Object.keys(tool.criteria)).toEqual([NO_TOOL, ...tools(20).map((t) => t.name)]);
-    expect(tool.criteria.portal__tool_3).toBe('[server "portal"] Tool number 3');
+    expect(tool.criteria.portal__tool_3).toBe('[MCP server "portal", tool "tool_3"] Tool number 3');
     expect(runs[0].input.state).toEqual({ conversation: [{ from: "person", text: "hi" }], message: "sales by region" });
   });
 
@@ -112,7 +123,7 @@ describe("the tools picked", () => {
     expect(selectTools(Object.entries({ portal__tool_1: 0.9, portal__tool_2: 0.08, portal__tool_3: 0.02 }), names)).toEqual(["portal__tool_1"]);
   });
 
-  it("are offered in the registry's order, with a running reply's kept, and not again when nothing changes", () => {
+  it("are offered in the given order, with a running reply's kept, and not again when nothing changes", () => {
     const registered = tools(5);
     expect(toolsToOffer(registered, ["portal__tool_3", "portal__tool_1"], [], false)?.map((tool) => tool.name)).toEqual([
       "portal__tool_1",
@@ -138,12 +149,11 @@ describe("deferred MCP tools", () => {
   const discover = async () => "";
 
   it("are pi's deferred tools, which the prompt says to load with tool_search; mcp_discover is always offered", () => {
-    const { extension, summary, pickable } = mcpExtension(hub, catalog, new Map(), discover, { deferred: true });
+    const { extension, summary } = mcpExtension(hub, catalog, new Map(), discover, { deferred: true });
     const byName = new Map(extension.tools!.map((tool) => [tool.name, tool]));
     expect(byName.get("portal__reports_run")?.deferred).toBe(true);
     expect(byName.get(MCP_DISCOVER_TOOL)?.deferred).toBeUndefined();
     expect(summary).toContain(TOOL_SEARCH_TOOL_NAME);
-    expect(pickable).toEqual([{ name: "portal__reports_run", server: "portal", description: "Run a report" }]);
   });
 
   it("are offered as before without a picker", () => {
@@ -168,13 +178,11 @@ describe("pi, with the MCP tools deferred", () => {
       const root = await pi.root(BACKGROUND_CONTEXT);
       const offered = async () => (await root.agent(BACKGROUND_CONTEXT)).tools.map((tool) => tool.name);
       expect(await offered()).toEqual([MCP_DISCOVER_TOOL, TOOL_SEARCH_TOOL_NAME]);
-      const deferred = registry
-        .snapshot()
-        .tools()
-        .flatMap(({ tool }) => (tool.deferred ? [tool] : []));
+      // As the chat does it (#applyTools).
       const offer = async (picks: string[], busy = false) => {
-        const now = (await root.agent(BACKGROUND_CONTEXT)).tools.filter((tool) => tool.deferred).map((tool) => tool.name);
-        const tools = toolsToOffer(deferred, picks, now, busy);
+        const agent = await root.agent(BACKGROUND_CONTEXT);
+        const now = agent.tools.filter((tool) => tool.deferred).map((tool) => tool.name);
+        const tools = toolsToOffer(deferredTools(agent), picks, now, busy);
         if (tools) await root.configure({ modelTools: { add: tools } }, BACKGROUND_CONTEXT);
       };
       await offer(["portal__c", "portal__a"]);

@@ -2,7 +2,7 @@ import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { modelKey, modelKeyOfLedger } from "../../shared/models.ts";
-import { CHAT_MESSAGE_KIND, type AutoPick, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
+import { CHAT_MESSAGE_KIND, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
 
 /**
  * What model calls cost. pi-ai prices each model reply when it comes in, from its model's prices (worker/models.ts
@@ -25,11 +25,6 @@ function spendOf(usage: Usage): Spend {
   return { cost: usage.cost.total, input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite };
 }
 
-/** What Auto's router call for a message cost; nothing for a message not sent on Auto, or one no router picked for. */
-export function autoSpendOf(pick: AutoPick | undefined): Spend {
-  return routerSpendOf(pick?.router);
-}
-
 /** What one router call (Auto's, or the tool picker's) cost; nothing for none. */
 export function routerSpendOf(call: RouterSpend | undefined): Spend {
   return call ? { ...NONE, cost: call.cost, input: call.input, output: call.output } : NONE;
@@ -41,9 +36,9 @@ export function toolPickerName(id: string): string {
   return name ? name.charAt(0).toUpperCase() + name.slice(1) : id;
 }
 
-/** What the picks for a message cost: Auto's router call and the tool picker's. */
+/** What the picks for a message cost: Auto's router call and the tool picker's; nothing for a message with neither. */
 function pickSpendOf(data: Partial<ChatMessageData> | undefined): Spend {
-  return plus(autoSpendOf(data?.auto), routerSpendOf(data?.tools?.picker));
+  return plus(routerSpendOf(data?.auto?.router), routerSpendOf(data?.tools?.picker));
 }
 
 function plus(a: Spend, b: Spend): Spend {

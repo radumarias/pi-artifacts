@@ -4,7 +4,6 @@ import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 import { isReadOnly, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, type ToolInfo } from "../../shared/protocol.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import { clip, text } from "./output.ts";
-import type { PickableTool } from "./tool-pick.ts";
 
 /** Tool names the providers accept: the server's name as a slug, then the MCP tool's name. */
 export function mcpToolName(server: string, tool: string): string {
@@ -24,7 +23,7 @@ export interface ServerCatalog {
  * prompt with the reason, so the agent can tell the user. `discover` lists
  * every server afresh and returns the new listing: the agent's mcp_discover.
  * Returns the extension, the summary its prompt section shows, and the
- * listing mcp_discover answers with, and the tools as the tool picker reads them.
+ * listing mcp_discover answers with.
  *
  * `deferred`: the MCP tools are pi's deferred tools, offered to the model only once loaded: the tool picker loads the
  * few each message needs (worker/agent/tool-pick.ts), and the model loads others with tool_search.
@@ -35,12 +34,11 @@ export function mcpExtension(
   unavailable: Map<string, string>,
   discover: () => Promise<string>,
   { deferred = false }: { deferred?: boolean } = {},
-): { extension: Extension; summary: string; listing: string; pickable: PickableTool[] } {
+): { extension: Extension; summary: string; listing: string } {
   // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
   // and providers reject a request whose tool names repeat: number the later ones.
   const used = new Set<string>();
   const tools = [];
-  const pickable: PickableTool[] = [];
   const servers: string[] = [];
   for (const [server, { tools: serverTools, instructions }] of catalog) {
     const list: string[] = [];
@@ -51,7 +49,6 @@ export function mcpExtension(
       used.add(name);
       const readOnly = isReadOnly(tool);
       list.push(`${tool.name}${readOnly ? " (read-only)" : ""} — agent tool ${name}`);
-      pickable.push({ name, server, description: tool.description ?? "" });
       tools.push(
         defineTool({
           name,
@@ -104,5 +101,5 @@ export function mcpExtension(
     }),
   );
   const extension = defineExtension({ name: "mcp", tools, sections: [section("mcp_servers", () => summary)] });
-  return { extension, summary, listing, pickable };
+  return { extension, summary, listing };
 }

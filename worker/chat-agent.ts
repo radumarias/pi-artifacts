@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Models, Provider, UserMessage } from "@earendil-works/pi-ai";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentState, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentChange, type AgentState, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type Conversation, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
@@ -59,10 +59,10 @@ import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
-import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
+import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom, routerSpend } from "./agent/route.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
-import { MIN_TOOLS_TO_PICK, pickerId, pickFailure, pickTools, TOOL_PICK_MS, toolPicker, toolsToOffer, type PickableTool } from "./agent/tool-pick.ts";
+import { deferredTools, MIN_TOOLS_TO_PICK, pickerId, pickFailure, pickTools, TOOL_PICK_MS, toolPicker, toolsToOffer, type PickableTool } from "./agent/tool-pick.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
 import { ChatReactions } from "./reactions.ts";
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
@@ -247,10 +247,9 @@ export class ChatAgent extends DurableObject<Env> {
   /**
    * The servers whose tools the agent has now (`key`), so a refresh reinstalls only on a change, what mcp_discover
    * says about them, and which listing they came from (`generation`): a listing started later has lists at least as new, so one that
-   * finishes after it (a refresh racing a discovery, two discoveries) does not install over it. `pickable`: the tools
-   * the tool picker picks among, when they are deferred (empty when every tool is offered).
+   * finishes after it (a refresh racing a discovery, two discoveries) does not install over it.
    */
-  #mcp = { key: "", listing: "", generation: 0, pickable: [] as PickableTool[] };
+  #mcp = { key: "", listing: "", generation: 0 };
   #mcpListings = 0;
   /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
@@ -448,26 +447,28 @@ export class ChatAgent extends DurableObject<Env> {
    * and picks one of AUTO_MODELS and an effort. The router call counts in pi's ledger like any model call. While a
    * reply is running (as pi's own queue says: the sidebars' status lags behind it) the router is not asked. Undefined
    * only when the conversation could not be read. Never throws: when no router picks in time (ROUTE_MS), or one picks a
-   * model the picker does not list, the chat keeps its model, and the pick says why.
+   * model the picker does not list, the chat keeps its model, and the pick says why. `recent`: the newest entries
+   * (#recentEntries), which the tool picker reads too.
    */
-  async #route(message: string, images: number, files: number): Promise<Routing | undefined> {
+  async #route(message: string, images: number, files: number, recent: Promise<readonly EntryRecord[] | undefined>): Promise<Routing | undefined> {
     const started = Date.now();
     const kept = (failed: string): Routing => ({ kept: { failed, ms: Date.now() - started } });
     let read;
     try {
       const [root, catalog, busy] = await Promise.all([this.#root(), this.#catalog(), this.#replying()]);
       if (busy) return kept(RUNNING_WHEN_SENT);
-      const [agent, page] = await Promise.all([root.agent(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
-      read = { root, catalog, agent, page };
+      const [agent, items] = await Promise.all([root.agent(BACKGROUND_CONTEXT), recent]);
+      if (!items) return undefined;
+      read = { root, catalog, agent, items };
     } catch (error) {
       console.error("auto:", errorMessage(error));
       return undefined;
     }
-    const { root, catalog, agent, page } = read;
-    const tokens = contextTokens(page.items);
+    const { root, catalog, agent, items } = read;
+    const tokens = contextTokens(items);
     try {
       const candidates = autoCandidates(catalog.models, this.env.AUTO_MODELS as AutoCandidate[], { images: images > 0, contextTokens: tokens });
-      const request = { message, history: routeHistory(page.items), images, files, contextTokens: tokens, current: this.#modelOf(agent), candidates };
+      const request = { message, history: routeHistory(items), images, files, contextTokens: tokens, current: this.#modelOf(agent), candidates };
       const gateway = catalogSource(this.env, this.storage.models);
       const routed = await route(routersFrom(this.env.ROUTER_MODEL, catalog, { models: this.#oneShotModels, gateway, ai: this.env.AI }), request);
       // Paid for whether or not the pick is used. Only a record: a failure is logged.
@@ -491,10 +492,9 @@ export class ChatAgent extends DurableObject<Env> {
    * it stands, against the model the chat runs on now: another message may have changed it since the router was asked.
    * Called only inside #place, so no other message changes the model between this and its message going in.
    */
-  async #applyPick(routed: Routing | undefined): Promise<AutoPick | undefined> {
+  async #applyPick(routed: Routing | undefined, now: () => Promise<ChatNow>): Promise<AutoPick | undefined> {
     if (!routed) return undefined;
-    const root = await this.#root();
-    const [busy, agent] = await Promise.all(["pick" in routed && this.#replying(), root.agent(BACKGROUND_CONTEXT)]);
+    const { root, busy, agent } = await now();
     const current = this.#modelOf(agent);
     if ("kept" in routed || busy) {
       const kept = "kept" in routed ? routed.kept : { failed: RUNNING_WHEN_PICKED, ms: routed.pick.ms };
@@ -527,31 +527,49 @@ export class ChatAgent extends DurableObject<Env> {
     return placed;
   }
 
+  /** Whether a reply is running, and the agent as it stands: what #applyPick and #applyTools go by, read once. */
+  async #now(): Promise<ChatNow> {
+    const root = await this.#root();
+    const [busy, agent] = await Promise.all([this.#replying(), root.agent(BACKGROUND_CONTEXT)]);
+    return { root, busy, agent };
+  }
+
+  /** The newest transcript entries, which Auto's router and the tool picker read. Undefined when they could not be read. */
+  async #recentEntries(): Promise<readonly EntryRecord[] | undefined> {
+    try {
+      return (await (await this.#root()).entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)).items;
+    } catch (error) {
+      console.error("recent entries:", errorMessage(error));
+      return undefined;
+    }
+  }
+
   /**
-   * The tool picker's pick for a message about to start a run: the few MCP tools it needs, out of the deferred ones
-   * (#mcp.pickable, as the last refresh installed them). The call counts in pi's ledger like any model call. Undefined
-   * when the tools are not deferred (no picker, or too few tools to pick). Never throws: when the picker fails or takes
-   * longer than TOOL_PICK_MS, the note says why, and every tool is offered (#applyTools).
+   * The tool picker's pick for a message about to start a run: the few MCP tools it needs, out of the conversation's
+   * deferred ones. The call counts in pi's ledger like any model call. Undefined when no tool is deferred (no picker, or
+   * too few tools to pick). Never throws: when the picker fails or takes longer than TOOL_PICK_MS, the note says why,
+   * and every tool is offered (#applyTools). `recent`: the newest entries (#recentEntries).
    */
-  async #pickTools(message: string): Promise<ToolPickNote | undefined> {
+  async #pickTools(message: string, recent: Promise<readonly EntryRecord[] | undefined>): Promise<ToolPickNote | undefined> {
     const picker = this.#toolPicker;
-    const tools = this.#mcp.pickable;
-    if (!picker || !tools.length) return undefined;
+    if (!picker) return undefined;
     const started = Date.now();
+    let tools: PickableTool[] = [];
     try {
       const root = await this.#root();
-      const page = await root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT);
-      const picked = await pickTools(this.env.AI, picker, { message, history: routeHistory(page.items), tools }, AbortSignal.timeout(TOOL_PICK_MS));
+      tools = deferredTools(await root.agent(BACKGROUND_CONTEXT));
+      if (!tools.length) return undefined;
+      const history = routeHistory((await recent) ?? []);
+      const picked = await pickTools(this.env.AI, picker, { message, history, tools }, AbortSignal.timeout(TOOL_PICK_MS));
       const id = pickerId(picker);
-      // Paid for whether or not the pick is used. Only a record: a failure is logged.
-      await root
+      // Paid for whether or not the pick is used. Only a record, off the prompt's path: a failure is logged.
+      void root
         .commit((tx) => recordRouterSpend(tx, root.id, id, picked.usage, TOOL_PICK_LEDGER_PREFIX), BACKGROUND_CONTEXT)
         .catch((error: unknown) => console.error("tool pick spend:", errorMessage(error)));
-      const spend = { model: id, cost: picked.usage.cost.total, input: picked.usage.input + picked.usage.cacheRead, output: picked.usage.output };
-      return { tools: picked.tools, of: tools.length, picker: spend, ms: Date.now() - started };
+      return { tools: picked.tools, of: tools.length, picker: routerSpend(id, picked.usage), ms: Date.now() - started };
     } catch (error) {
       console.error("tool pick:", errorMessage(error));
-      return { tools: [], of: tools.length, failed: pickFailure(error), ms: Date.now() - started };
+      return tools.length ? { tools: [], of: tools.length, failed: pickFailure(error), ms: Date.now() - started } : undefined;
     }
   }
 
@@ -561,17 +579,13 @@ export class ChatAgent extends DurableObject<Env> {
    * has, never taking one away from it. Called only inside #place. Never throws: on a failure the model keeps the tools
    * it has, and can load others with tool_search. Returns the note as it went: `added` when a reply was running.
    */
-  async #applyTools(note: ToolPickNote | undefined): Promise<ToolPickNote | undefined> {
+  async #applyTools(note: ToolPickNote | undefined, now: () => Promise<ChatNow>): Promise<ToolPickNote | undefined> {
     if (!note) return undefined;
     try {
-      const root = await this.#root();
-      const [busy, agent] = await Promise.all([this.#replying(), root.agent(BACKGROUND_CONTEXT)]);
-      const wanted = note.failed ? this.#mcp.pickable.map((tool) => tool.name) : note.tools;
+      const { root, busy, agent } = await now();
+      const deferred = deferredTools(agent);
+      const wanted = note.failed ? deferred.map((tool) => tool.name) : note.tools;
       const offered = agent.tools.filter((tool) => tool.deferred).map((tool) => tool.name);
-      const deferred = this.registry
-        .snapshot()
-        .tools()
-        .flatMap(({ tool }) => (tool.deferred ? [tool] : []));
       const tools = toolsToOffer(deferred, wanted, offered, busy);
       if (tools) await root.configure({ modelTools: { add: tools } }, BACKGROUND_CONTEXT);
       return busy ? { ...note, added: true } : note;
@@ -754,11 +768,11 @@ export class ChatAgent extends DurableObject<Env> {
     // Everything the extension is built from: a server's new tool list, or a new reason it is unavailable, reinstalls it.
     const installed = JSON.stringify([deferred, [...catalog], [...unavailable]]);
     if (installed !== this.#mcp.key) {
-      const { extension, listing, pickable } = mcpExtension(this.hub, catalog, unavailable, () => this.discoverMcp(), { deferred });
+      const { extension, listing } = mcpExtension(this.hub, catalog, unavailable, () => this.discoverMcp(), { deferred });
       this.registry.install(extension);
       if (deferred) this.registry.install(this.#toolSearch);
       else this.registry.uninstall(this.#toolSearch);
-      this.#mcp = { key: installed, listing, generation, pickable: deferred ? pickable : [] };
+      this.#mcp = { key: installed, listing, generation };
     } else this.#mcp.generation = generation;
     return this.#mcp.listing;
   }
@@ -906,7 +920,9 @@ export class ChatAgent extends DurableObject<Env> {
     ]).then(([given, copied]) => [...given, ...copied]);
     // On Auto, the router picks the model while the rest gets ready. Its pick is used only if the message is a prompt.
     const images = attachments.filter((attachment) => attachment.image).length;
-    const routing = calling && this.#auto() ? this.#route(text, images, attachments.length + own.length - images) : undefined;
+    // Read once, for Auto's router and the tool picker.
+    const recent = calling ? this.#recentEntries() : Promise.resolve(undefined);
+    const routing = calling && this.#auto() ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
     this.#announce({
       uid: author.uid,
       name: author.name,
@@ -920,7 +936,11 @@ export class ChatAgent extends DurableObject<Env> {
     // Picked (or not): the rest may still take a while, and should not say the router is still at it.
     void routing?.then(() => this.#picked(incomingKey({ uid: author.uid, sentAt })));
     // The tool picker reads the tools the refresh installs, while the rest gets ready. Used only if the message is a prompt.
-    const tooling = calling ? this.refreshMcpTools().then(() => this.#pickTools(text), () => this.#pickTools(text)) : undefined;
+    const tooling = calling
+      ? this.refreshMcpTools()
+          .catch(() => {})
+          .then(() => this.#pickTools(text, recent))
+      : undefined;
     const [[attached, title], { mentions, note, broughtIn }] = await Promise.all([
       // Named after its text, or its files when it has none: for the sidebars.
       attaching.then(async (inputs) => [
@@ -971,8 +991,9 @@ export class ChatAgent extends DurableObject<Env> {
     // The model and the tools change before the message goes in, so the run it starts is on the picks.
     if (summoned) {
       await this.#place(async () => {
-        const auto = routing && (await this.#applyPick(await routing));
-        await summon(dataWith(auto, await this.#applyTools(await tooling)));
+        const now = memoAsync(() => this.#now());
+        const auto = routing && (await this.#applyPick(await routing, now));
+        await summon(dataWith(auto, await this.#applyTools(await tooling, now)));
       });
     } else await this.#aside(content, dataWith());
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
@@ -1653,6 +1674,13 @@ export class ChatAgent extends DurableObject<Env> {
     }
     return manifest;
   }
+}
+
+/** Whether a reply is running, and the agent as it stands (see ChatAgent's #now). */
+interface ChatNow {
+  root: Conversation;
+  busy: boolean;
+  agent: Agent;
 }
 
 /** Auto's pick for a message, and the model and effort to run on when a router picked (see ChatAgent's #route). */
