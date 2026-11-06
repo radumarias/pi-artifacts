@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { grownShown, SKILL_THRESHOLD, skillClassifier, skillMessage, SKILLS_PER_CALL, type SkillPickRequest } from "../worker/agent/skill-pick.ts";
-import { shownFingerprint, skillSource } from "../worker/agent/skills.ts";
+import { SKILL_THRESHOLD, skillClassifier, skillMessage, SKILLS_PER_CALL, type SkillPickRequest } from "../worker/agent/skill-pick.ts";
+import { skillSource } from "../worker/agent/skills.ts";
 import type { SkillInfo } from "../shared/skills.ts";
 
 /** The AI binding, answering each run with `reply` (given the run's questions). */
@@ -45,8 +45,7 @@ describe("the skill classifier", () => {
   it("asks Jev one yes-or-no question per skill, with the message and the conversation, and keeps the likely ones", async () => {
     const { ai, runs } = binding(answers((name) => (name === "analyze-files" ? 0.92 : name === "explore-mcp-server" ? SKILL_THRESHOLD : 0.05)));
     const pick = await skillClassifier("system-one:typesafe/jev", ai)!.pick(request());
-    expect(pick.picked).toEqual(["analyze-files", "explore-mcp-server"]);
-    expect(pick.unanswered).toEqual([]);
+    expect(pick.add).toEqual(["analyze-files", "explore-mcp-server"]);
     expect(pick.errors).toEqual([]);
     expect(pick.usage.input).toBe(500);
     expect(runs).toHaveLength(1);
@@ -63,7 +62,7 @@ describe("the skill classifier", () => {
     const { ai, runs } = binding(answers((name) => (name === "skill-17" ? 0.8 : 0)));
     const pick = await skillClassifier("system-one:typesafe/jev", ai)!.pick(request({ skills: many }));
     expect(runs.map((run) => Object.keys(run.input.questions as object).length)).toEqual([SKILLS_PER_CALL, 3]);
-    expect(pick.picked).toEqual(["skill-17"]);
+    expect(pick.add).toEqual(["skill-17"]);
     expect(pick.usage.input).toBe(1_000);
   });
 
@@ -72,31 +71,20 @@ describe("the skill classifier", () => {
       throw new Error("model not found");
     });
     const failed = await skillClassifier("system-one:typesafe/jev", failing.ai)!.pick(request());
-    expect(failed.picked).toEqual([]);
-    expect(failed.unanswered).toEqual(skills.map(({ name }) => name));
+    expect(failed.add).toEqual(skills.map(({ name }) => name));
     expect(failed.errors[0]).toMatch(/model not found/);
 
     const slow = { run: () => new Promise<never>(() => {}) };
     const late = await skillClassifier("system-one:typesafe/jev", slow)!.pick(request(), 30);
-    expect(late.unanswered).toHaveLength(skills.length);
+    expect(late.add).toHaveLength(skills.length);
 
     const odd = binding(() => ({ answers: {} }));
-    expect((await skillClassifier("system-one:typesafe/jev", odd.ai)!.pick(request())).unanswered).toHaveLength(skills.length);
+    expect((await skillClassifier("system-one:typesafe/jev", odd.ai)!.pick(request())).add).toHaveLength(skills.length);
   });
 });
 
 describe("the skills shown", () => {
-  it("only grow: those shown stay, the picked and the unanswered join them", () => {
-    expect(grownShown(undefined, { picked: ["analyze-files"], unanswered: [] })).toEqual(["analyze-files"]);
-    expect(grownShown(["analyze-files"], { picked: ["revise-artifact", "analyze-files"], unanswered: ["explore-mcp-server"] })).toEqual([
-      "analyze-files",
-      "revise-artifact",
-      "explore-mcp-server",
-    ]);
-    expect(grownShown(["analyze-files"], { picked: [], unanswered: [] })).toEqual(["analyze-files"]);
-  });
-
-  it("are all the agent's skill source lists, and change its fingerprint", async () => {
+  it("are all the agent's skill source lists, and they name its fingerprint", async () => {
     const info = (name: string): SkillInfo => ({
       name,
       description: `${name}.`,
@@ -108,12 +96,13 @@ describe("the skills shown", () => {
     });
     const listed = [info("analyze-files"), info("revise-artifact"), { ...info("drafted"), enabled: false }];
     const shown = new Set(["revise-artifact", "drafted"]);
-    const source = skillSource(listed, shownFingerprint("v1", shown), shown);
+    const source = skillSource(listed, "v1", shown);
     expect((await source.list()).map((skill) => skill.name)).toEqual(["revise-artifact"]);
     expect(await source.load("analyze-files")).toBeNull();
-    expect(source.fingerprint).toBe("v1|drafted,revise-artifact");
-    expect(shownFingerprint("v1")).toBe("v1");
-    expect(shownFingerprint("v1", new Set())).toBe("v1|");
+    // The names listed: one shown but turned off changes nothing.
+    expect(source.fingerprint).toBe("v1|revise-artifact");
+    expect(skillSource(listed, "v1").fingerprint).toBe("v1");
+    expect(skillSource(listed, "v1", new Set()).fingerprint).toBe("v1|");
   });
 
   it("are picked from the message's text and the names of the files it attaches", () => {
