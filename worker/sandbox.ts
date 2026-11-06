@@ -1,11 +1,16 @@
 import { Files } from "@cloudflare/sandbox";
 import { DurableObject } from "cloudflare:workers";
-import { mapLimit } from "../shared/util.ts";
+import { clipStart, mapLimit } from "../shared/util.ts";
 
 const WORKSPACE = "/workspace";
 const INACTIVITY_TIMEOUT_MS = 10 * 60_000;
 const RUN_TIMEOUT_SECONDS = 60;
-const MAX_OUTPUT_CHARS = 20_000;
+/**
+ * The most of a run's output the model reads: its end, where results and errors are. All of it stays in the
+ * conversation, which every later call sends again; a script that has more to show writes it to ./out.
+ */
+export const MAX_RUN_STDOUT = 10_000;
+export const MAX_RUN_STDERR = 4_000;
 /** How many files are written into the container at once. */
 const PARALLEL_WRITES = 16;
 
@@ -78,8 +83,8 @@ export class Sandbox extends DurableObject<Env> {
     const decoder = new TextDecoder();
     return {
       exitCode: output.exitCode,
-      stdout: decoder.decode(output.stdout).slice(-MAX_OUTPUT_CHARS),
-      stderr: decoder.decode(output.stderr).slice(-MAX_OUTPUT_CHARS),
+      stdout: clipStart(decoder.decode(output.stdout), MAX_RUN_STDOUT),
+      stderr: clipStart(decoder.decode(output.stderr), MAX_RUN_STDERR),
     };
   }
 

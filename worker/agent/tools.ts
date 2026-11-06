@@ -19,7 +19,7 @@ import { MAX_SKILL_DESCRIPTION, type SkillInput, type SkillResult } from "../../
 import { formatBytes, listSome, plural } from "../../shared/util.ts";
 import { describeReport, type CheckReport } from "../artifacts/check.ts";
 import { chatOutFolder, FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, savedReport, wroteReport } from "../chat-traces.ts";
-import type { SandboxFile, SandboxRun } from "../sandbox.ts";
+import { MAX_RUN_STDERR, MAX_RUN_STDOUT, type SandboxFile, type SandboxRun } from "../sandbox.ts";
 import { literalPath, MAX_DRAFTS, type FileEntry, type UserFiles } from "../storage/index.ts";
 import { checkDraft, draftLine, draftNamed, FailedChecks, publishDraft, readPageSource, writeDraft, type PublishScope } from "./publish.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, outputPaths, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
@@ -129,18 +129,6 @@ export function filesIndexExtension(index: string): Extension {
   return defineExtension({ name: "files-index", sections: [section("user_files", () => index)] });
 }
 
-/**
- * The most of a run's output the model reads: its end, where results and errors are. All of it stays in the
- * conversation, which every later call sends again; a script that has more to show writes it to ./out.
- */
-const MAX_RUN_STDOUT = 10_000;
-const MAX_RUN_STDERR = 4_000;
-
-/** The end of `value`, at most `max` characters, saying how many were cut from its start. */
-function tail(value: string, max: number): string {
-  return value.length <= max ? value : `[${value.length - max} earlier characters cut] …\n${value.slice(-max)}`;
-}
-
 const SANDBOX_FILES =
   "Files you name are copied from the user's files into ./files/, in their folders but without the leading uploads/ " +
   "(uploads/q3/sales.csv is ./files/q3/sales.csv, out/<chat>/report.csv is ./files/out/<chat>/report.csv). " +
@@ -214,8 +202,8 @@ async function runInSandbox(
     inputs.length && `copied in: ${listSome(inputs.map((input) => `./files/${input.name}`), 20)}`,
     skills.length && `skills copied in: ${[...new Set(args.skills)].map((name) => `./skills/${name}/`).join(", ")}`,
     `exit code ${result.exitCode}`,
-    `stdout:\n${tail(result.stdout, MAX_RUN_STDOUT)}`,
-    result.stderr && `stderr:\n${tail(result.stderr, MAX_RUN_STDERR)}`,
+    `stdout:\n${result.stdout}`,
+    result.stderr && `stderr:\n${result.stderr}`,
     ...savedReport(saved, skipped),
   ];
   return { output: text(clip(report.filter(Boolean).join("\n\n"))), details: { saved } satisfies SavedFilesDetails, isError: result.exitCode !== 0 };

@@ -21,6 +21,11 @@ export function clip(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}\n… [${value.length - max} more characters cut]`;
 }
 
+/** The end of `value`, at most `max` characters, saying how many were cut from its start. */
+export function clipStart(value: string, max: number): string {
+  return value.length <= max ? value : `[${value.length - max} earlier characters cut] …\n${value.slice(-max)}`;
+}
+
 /** Lowercase hex of some bytes. */
 export function toHex(bytes: ArrayBuffer | Uint8Array): string {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");

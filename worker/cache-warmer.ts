@@ -24,12 +24,14 @@ type Timers = { set: (run: () => void, ms: number) => unknown; clear: (timer: un
  * real call, sends it again with `max_tokens: 0`: Anthropic reads the cache, which keeps it, and writes nothing. A
  * 1-hour cache instead would write every new token at twice the price, which cost more than it saved on the logs.
  *
- * The pings are not in the chat's spend ledger (they are about 1% of the cost they save). They stop when the chat object
- * is put to sleep, which takes its timers; a ping that fails stops them until the next call.
+ * Only the conversation's own calls are kept: they carry its tools, which a summary, a title or a router pick does not,
+ * so a ping never warms a prompt nobody sends again. The pings are not in the chat's spend ledger (they are about 1% of
+ * the cost they save). They stop when the chat object is put to sleep, which takes its timers; a ping that fails stops
+ * them until the next call, and the kept request is let go once the chat has been quiet KEEP_WARM_MS.
  */
 export class CacheWarmer {
-  #last: { model: string; input: Record<string, unknown>; options: Record<string, unknown> } | undefined;
-  #lastCall = 0;
+  /** The last large conversation call, made ready to ping, and when it was made. */
+  #last: { model: string; input: Record<string, unknown>; options: Record<string, unknown>; at: number } | undefined;
   #timer: unknown;
 
   constructor(
@@ -55,8 +57,7 @@ export class CacheWarmer {
 
   #keep(run: Run, model: string, input: Record<string, unknown>, options: Record<string, unknown>): void {
     // The same request, answered with nothing: no output, no stream to read.
-    this.#last = { model, input: { ...input, max_tokens: 0, stream: false }, options: { ...options, signal: undefined } };
-    this.#lastCall = this.now();
+    this.#last = { model, input: { ...input, max_tokens: 0, stream: false }, options: { ...options, signal: undefined }, at: this.now() };
     this.#schedule(run);
   }
 
@@ -68,7 +69,11 @@ export class CacheWarmer {
   async #ping(run: Run): Promise<void> {
     this.#timer = undefined;
     const last = this.#last;
-    if (!last || this.now() - this.#lastCall >= KEEP_WARM_MS) return;
+    if (!last) return;
+    if (this.now() - last.at >= KEEP_WARM_MS) {
+      this.#last = undefined;
+      return;
+    }
     try {
       const response = await run(last.model, last.input, last.options);
       // returnRawResponse: the body is the provider's answer, unread; read it so the connection is let go.
@@ -85,8 +90,23 @@ export class CacheWarmer {
   }
 }
 
-/** A Claude request large enough that its cache is worth keeping, and not a ping or a call that writes nothing. */
+/** A Claude conversation call (it has tools) large enough that its cache is worth keeping, and not a ping. */
 function worthWarming(model: string, input: Record<string, unknown>): boolean {
-  if (!model.startsWith("anthropic/") || !Array.isArray(input.messages) || input.max_tokens === 0) return false;
-  return JSON.stringify(input).length >= MIN_WARM_CHARS;
+  if (!model.startsWith("anthropic/") || input.max_tokens === 0) return false;
+  if (!Array.isArray(input.messages) || !Array.isArray(input.tools) || input.tools.length === 0) return false;
+  return atLeastChars([input.system, input.tools, input.messages], MIN_WARM_CHARS);
+}
+
+/**
+ * Whether the strings in `value` add up to `min` characters: the size of a request without serializing it again on
+ * every call (the binding does that once to send it), stopping as soon as the count gets there.
+ */
+function atLeastChars(value: unknown, min: number): boolean {
+  let count = 0;
+  const walk = (node: unknown): boolean => {
+    if (typeof node === "string") return (count += node.length) >= min;
+    if (Array.isArray(node)) return node.some(walk);
+    return typeof node === "object" && node !== null && Object.values(node).some(walk);
+  };
+  return walk(value);
 }

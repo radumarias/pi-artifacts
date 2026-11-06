@@ -39,7 +39,8 @@ function binding(answer: () => Response = () => new Response("{}")) {
   return { ai, calls };
 }
 
-const large = { messages: [{ role: "user", content: "x".repeat(MIN_WARM_CHARS) }], max_tokens: 64_000, stream: true };
+const tools = [{ name: "artifact_read", description: "Reads a page.", input_schema: { type: "object" } }];
+const large = { messages: [{ role: "user", content: "x".repeat(MIN_WARM_CHARS) }], tools, max_tokens: 64_000, stream: true };
 
 describe("CacheWarmer", () => {
   it("sends a large Claude request again with max_tokens 0 and no stream, every PING_EVERY_MS until KEEP_WARM_MS", async () => {
@@ -71,13 +72,15 @@ describe("CacheWarmer", () => {
     expect(pings.at(-1)?.input.messages).toHaveLength(2);
   });
 
-  it("leaves small requests, other providers and its own pings alone", async () => {
+  it("leaves small requests, other providers, calls without tools and its own pings alone", async () => {
     const time = clock();
     const { ai } = binding();
     const warmed = new CacheWarmer(time.now, time.timers).binding(ai);
     await warmed.run("anthropic/claude-haiku-5.5", { messages: [{ role: "user", content: "name this chat" }], max_tokens: 40 });
     await warmed.run("openai/gpt-6-sol", large);
     await warmed.run("anthropic/claude-opus-5.5", { ...large, max_tokens: 0 });
+    // A summary of the conversation: as large, but no tools.
+    await warmed.run("anthropic/claude-opus-5.5", { messages: large.messages, max_tokens: 13_000 });
     expect(await time.next()).toBe(false);
   });
 

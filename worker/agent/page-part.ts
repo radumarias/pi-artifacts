@@ -9,7 +9,7 @@ const MAX_PARTS = 5;
  * occurs (at most MAX_PARTS of them), each run of lines under the numbers it spans.
  */
 export function pagePart(html: string, part?: string): string {
-  if (part === undefined || !part.trim()) return html;
+  if (!part?.trim()) return html;
   const lines = html.split("\n");
   const range = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(part);
   const runs: [number, number][] = [];

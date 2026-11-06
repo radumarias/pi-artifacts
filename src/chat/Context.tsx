@@ -25,10 +25,11 @@ export const ContextMeter = memo(function ContextMeter({ entries, model }: { ent
   if (!full) return null;
   // What a chat holds before a reply waits for a summary (CONTEXT_BUDGET, or less in a small window), plus that
   // reply's room: the ring is full there, not at a 1M window the chat never reaches.
-  const size = Math.min(full, compactionPoint(full) + COMPACTION.reserveTokens);
+  const point = compactionPoint(full);
+  const size = point + COMPACTION.reserveTokens;
   const share = Math.min(1, use.tokens / size);
   const percent = Math.round(share * 100);
-  const compactAt = Math.max(0, compactionPoint(full) - COMPACTION.backgroundTokens);
+  const compactAt = Math.max(0, point - COMPACTION.backgroundTokens);
   // Near the summary point, unless one was just made (the next reply starts from less). A window smaller than the
   // compaction margins has no such point (compactAt 0): only the share says how full it is.
   const nearCompaction = compactAt > 0 ? use.tokens >= compactAt : share >= 0.9;

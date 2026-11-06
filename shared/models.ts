@@ -146,8 +146,8 @@ export function compactionPoint(contextWindow: number): number {
  * to CONTEXT_BUDGET: pi summarizes above `contextWindow - reserveTokens`, so the reserve takes up the rest of the window.
  */
 export function compactionOverrides(models: readonly { provider: string; id: string; contextWindow: number }[]): Record<string, { reserveTokens: number }> {
-  const larger = models.filter((model) => model.contextWindow - COMPACTION.reserveTokens > CONTEXT_BUDGET);
-  return Object.fromEntries(larger.map((model) => [`${model.provider}/${model.id}`, { reserveTokens: model.contextWindow - CONTEXT_BUDGET }]));
+  const reserves = models.map((model) => [`${model.provider}/${model.id}`, model.contextWindow - compactionPoint(model.contextWindow)] as const);
+  return Object.fromEntries(reserves.filter(([, reserve]) => reserve > COMPACTION.reserveTokens).map(([key, reserveTokens]) => [key, { reserveTokens }]));
 }
 
 /** The picker's id for a pi ledger key (`provider/id`). */

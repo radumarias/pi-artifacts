@@ -238,10 +238,13 @@ export class ChatAgent extends DurableObject<Env> {
       const models = this.#models();
       // A failed run goes on to the messages queued behind it: in a shared chat they are other people's, and would
       // otherwise wait, shown as queued, until someone writes again. Compaction is set here, where the app reads it too:
-      // at most CONTEXT_BUDGET tokens, however large the model's window (a model listed later goes by its own window
-      // until the chat object starts again).
-      const compaction = { ...COMPACTION, modelOverrides: compactionOverrides(models.getModels()) };
-      const settings = { afterFailedRun: "continue" as const, progress: PROGRESS, compaction };
+      // at most CONTEXT_BUDGET tokens, however large the model's window. pi reads the settings at each use, so a model a
+      // provider lists later is held to the budget too.
+      const settings = () => ({
+        afterFailedRun: "continue" as const,
+        progress: PROGRESS,
+        compaction: { ...COMPACTION, modelOverrides: compactionOverrides(models.getModels()) },
+      });
       const pi = await Harness.open(storage, { models, registry: this.registry, onWake, settings }, context);
       try {
         // A new chat starts on its user's last pick, else on Auto (startingSetting); PiHarness then finds the root and
