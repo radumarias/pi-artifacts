@@ -46,6 +46,10 @@ export default defineConfig({
       THINKING_LEVEL: bindings.text("high"),
       // What names a chat after its first message: a small, fast model, as a pi-ai AI Gateway specifier or a Workers AI id.
       TITLE_MODEL: bindings.text("openai/gpt-4.1-nano"),
+      // In a shared chat, a message that does not call the agent ("@pi") may still be meant for it ("pi, can you…"):
+      // this System One classifier on Workers AI (worker/agent/call-hint.ts) says how likely, through the AI binding (no
+      // provider key), and the author is offered to call the agent on it. Empty turns it off.
+      CALL_HINT_MODEL: bindings.text("typesafe/jev"),
       // Auto, in the model picker: before each message that starts a run, a router model reads the end of the
       // conversation and the message, and picks one of AUTO_MODELS and an effort to answer it (worker/agent/route.ts).
       // ROUTER_MODEL: the router, a small, fast model; a comma-separated list is tried in order (the first the picker

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ModelRunner } from "../worker/ai-binding.ts";
+import type { ModelRunner } from "../worker/agent/workers-ai.ts";
 import { describeReport, type CheckReport } from "../worker/artifacts/check.ts";
 import { lookFrom, reviewLook, type Look, type LookVerdict } from "../worker/artifacts/look.ts";
 

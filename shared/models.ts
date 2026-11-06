@@ -88,6 +88,12 @@ export function isAuto(setting: { model: string } | null | undefined): setting i
  */
 export const AUTO_LEDGER_PREFIX = "auto:";
 
+/**
+ * pi's ledger key for what telling whether a message in a shared chat was meant for the agent costs (the deployment's
+ * CALL_HINT_MODEL, worker/agent/call-hint.ts): `hint:` and the classifier's id.
+ */
+export const HINT_LEDGER_PREFIX = "hint:";
+
 /** A model Auto may pick (the deployment's AUTO_MODELS): the picker's id, and what it is best at, which the router reads. */
 export interface AutoCandidate {
   id: string;

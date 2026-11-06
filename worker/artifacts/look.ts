@@ -1,8 +1,7 @@
 import type { ClassifierModel, Usage } from "@earendil-works/pi-ai";
 import { classify } from "@earendil-works/pi-ai/api/cloudflare-workers-ai-system-one";
-import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { clip, deadline, errorMessage } from "../../shared/util.ts";
-import { viaAIBinding, type ModelRunner } from "../ai-binding.ts";
+import { bindingClassifierOptions, systemOneModel, type ModelRunner } from "../agent/workers-ai.ts";
 import type { CheckReport } from "./check.ts";
 
 /**
@@ -76,8 +75,7 @@ export class LookFailed extends Error {
 
 /** The look of a System One classifier on Workers AI, through the AI binding. */
 export function classifierLook(ai: ModelRunner, model: ClassifierModel<"cloudflare-workers-ai-system-one">): Look {
-  // The binding needs no key; pi-ai only wants one to send.
-  const options = { apiKey: "ai-binding", fetch: viaAIBinding(ai), maxRetries: 0 };
+  const options = { ...bindingClassifierOptions(ai), maxRetries: 0 };
   return async (screenshot, text, signal) => {
     const result = await classify(
       model,
@@ -105,8 +103,7 @@ export function classifierLook(ai: ModelRunner, model: ClassifierModel<"cloudfla
 export function lookFrom(spec: string | undefined, ai: ModelRunner): Look | undefined {
   const id = spec?.trim();
   if (!id) return undefined;
-  const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
-  const model = Object.hasOwn(classifiers, id) ? classifiers[id] : undefined;
+  const model = systemOneModel(id);
   if (!model?.input.includes("image")) {
     console.warn(`CHECK_LOOK_MODEL: ${id} is not a System One model on Workers AI that sees images; checks go on without a look.`);
     return undefined;

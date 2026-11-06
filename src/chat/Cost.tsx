@@ -1,6 +1,7 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
-import { AUTO_LEDGER_PREFIX, effortLabel, type ModelInfo } from "../../shared/models.ts";
+import { AUTO_LEDGER_PREFIX, effortLabel, HINT_LEDGER_PREFIX, type ModelInfo } from "../../shared/models.ts";
+import { AGENT_NAME } from "../../shared/mentions.ts";
 import { stepLabel } from "./Steps.tsx";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
@@ -16,13 +17,15 @@ function describeTime(time: Timing): string {
 
 /**
  * A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name;
- * Auto's router ("Auto picks · GPT OSS 120B").
+ * Auto's router ("Auto picks · GPT OSS 120B"); what told whether messages were meant for the agent ("Spotting asks for
+ * pi · typesafe/jev").
  */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
   if (share.model.startsWith(AUTO_LEDGER_PREFIX)) {
     const router = share.model.slice(AUTO_LEDGER_PREFIX.length);
     return `Auto picks · ${models.get(router)?.name ?? router}`;
   }
+  if (share.model.startsWith(HINT_LEDGER_PREFIX)) return `Spotting asks for ${AGENT_NAME} · ${share.model.slice(HINT_LEDGER_PREFIX.length)}`;
   // Else a model's, or a tool's that reports a spend of its own (the page check's look at its screenshot).
   const name = models.get(share.model)?.name ?? stepLabel(share.model);
   return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;

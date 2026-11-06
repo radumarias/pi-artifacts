@@ -345,6 +345,13 @@ people: many people share one conversation with one agent, and their messages qu
   user message, which pi places at once when idle, or at its next step while it works. So the model reads the talk as
   context when it is next called, and a run starts only for `@pi`. A message that called pi shows 👀 once its run
   picked it up, and pi's answers carry its name. A chat nobody shares works as before: every message is a prompt.
+- **Spotting messages meant for pi:** an aside may still be for pi ("pi, can you…"). Once it is placed, a System One
+  classifier on Workers AI (`CALL_HINT_MODEL`, TypeSafe's Jev by default, through the AI binding with no provider key)
+  reads it with the end of the conversation and says how likely it is meant for pi (`worker/agent/call-hint.ts`). At
+  0.7 or more, only its author's windows are told (`callHint`), and show "Meant for pi? Ask pi" under it: Ask pi
+  replies to the message with `@pi`, which calls pi like any reply. The message itself stays an aside, nothing runs on
+  its own, and a failed or slow call (past 4 s) shows nothing. Each call is in the chat's AI cost ("Spotting asks for
+  pi"). The hint lives only in the open windows, and goes once pi has run since (it read the message then).
 - **Tagging people:** "@" also offers the others in the chat; a pick puts `@name` in the text and sends the person's
   uid with the message, which the chat keeps only for someone in it. The tagged person sees the tag in their colour
   and the message marked; their sidebar shows "@" on the chat until they open it, and every app window they have open
