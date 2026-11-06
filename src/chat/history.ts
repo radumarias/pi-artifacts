@@ -1,7 +1,7 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { useCallback, useLayoutEffect, useRef, type KeyboardEvent, type RefObject } from "react";
 import { CHAT_MESSAGE_KIND, type ChatMessageData } from "../../shared/protocol.ts";
-import type { Mention } from "../../shared/mentions.ts";
+import { AGENT_TOKEN, type Mention } from "../../shared/mentions.ts";
 import { byViewer, sentAt, userText } from "./entries.ts";
 
 /**
@@ -19,7 +19,7 @@ export interface Recalled {
 
 /**
  * What the viewer `uid` sent in the chat, newest first, each text once (where it was last sent). A plain `pi.user` entry
- * is the owner's (`isOwner`). A message with only files has no text to bring back, so it is left out.
+ * is the owner's (`isOwner`). A message with only files, or only "@pi", has no text worth bringing back, so it is left out.
  */
 export function ownMessages(entries: readonly EntryRecord[], uid: string, isOwner: boolean): Recalled[] {
   const seen = new Set<string>();
@@ -27,7 +27,8 @@ export function ownMessages(entries: readonly EntryRecord[], uid: string, isOwne
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     const message = recalled(entry, uid, isOwner);
-    if (!message || !/\S/.test(message.text) || seen.has(message.text)) continue;
+    // "@pi" alone is what Ask pi sends: nothing to bring back.
+    if (!message || !/\S/.test(message.text) || message.text.trim() === AGENT_TOKEN || seen.has(message.text)) continue;
     seen.add(message.text);
     out.push(message);
   }

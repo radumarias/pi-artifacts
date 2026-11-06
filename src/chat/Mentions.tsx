@@ -174,6 +174,8 @@ export function useMentions(
   const restore = (text: string, mentions: readonly Mention[] = []) => {
     setPicked((current) => [...current, ...mentions.filter((mention) => !current.some((m) => sameMention(m, mention)))]);
     setDismissedAt(activeQuery(text, text.length)?.start ?? null);
+    // Where the caret lands, so the list is not about the old draft's caret for a render (which could let go of the dismissal).
+    setCaret(text.length);
   };
 
   // The agent and the people are there before the files and artifacts have loaded.

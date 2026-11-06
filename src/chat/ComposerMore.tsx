@@ -130,7 +130,8 @@ const History = memo(function History({
   return (
     <div className="composer-more-menu composer-history" id={id} onKeyDown={onKeyDown}>
       <div className="composer-history-head">
-        <button type="button" className="icon-button" onClick={onBack} title="Back" aria-label="Back">
+        {/* On a phone focus goes here rather than to the search box, so it stays in the list without the keyboard. */}
+        <button type="button" className="icon-button" onClick={onBack} title="Back" aria-label="Back" autoFocus={compact}>
           <Icon size={16} stroke={2}>
             <path d="m15 6-6 6 6 6" />
           </Icon>
@@ -140,10 +141,11 @@ const History = memo(function History({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && found.length) {
-              e.preventDefault();
-              onPick(found[0]);
-            }
+            // Not while an IME is composing (Enter then confirms the text). Always taken: the box is in the composer's
+            // form, where an Enter left alone would send the draft.
+            if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+            e.preventDefault();
+            if (found.length) onPick(found[0]);
           }}
           placeholder="Search your messages"
           aria-label="Search your earlier messages"

@@ -13,7 +13,7 @@ const reply = () => entry("pi.assistant", { model: [{ role: "assistant", content
 
 describe("the viewer's earlier messages", () => {
   it("lists only the viewer's, newest first, each text once where it was last sent", () => {
-    const entries = [said("me", "one"), reply(), said("bob", "theirs"), said("me", "two"), said("me", "one"), said("me", "  ")];
+    const entries = [said("me", "one"), reply(), said("bob", "theirs"), said("me", "two"), said("me", "one"), said("me", "  "), said("me", "@pi")];
     const texts = ownMessages(entries, "me", true).map((message) => message.text);
     expect(texts).toEqual(["one", "two"]);
     expect(ownMessages(entries, "me", true)[0].id).toBe(entries[4].id);
