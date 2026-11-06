@@ -324,6 +324,8 @@ export type AutoPick = {
   /** The router's reason, a few words. */
   reason?: string;
   router?: RouterSpend;
+  /** With no router: why none picked, as the tooltip shows it (each router's error, cut short). */
+  failed?: string;
   ms: number;
 };
 

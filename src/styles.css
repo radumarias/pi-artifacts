@@ -357,7 +357,8 @@ body.resizing iframe { pointer-events: none; }
   mask: var(--wave);
 }
 /* Under a message sent on Auto: the model and effort picked to answer it. Always shown, small and muted. */
-.auto-pick { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0 4px; color: var(--muted); font-size: 12px; line-height: 16px; cursor: default; }
+.auto-pick { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0 4px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; line-height: 16px; cursor: pointer; }
+.auto-pick-why { max-width: min(100%, 420px); padding: 0 4px; color: var(--muted); font-size: 12px; line-height: 16px; white-space: pre-line; overflow-wrap: anywhere; text-align: right; }
 .auto-pick-tag { flex: none; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; font-weight: 600; }
 .auto-pick-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auto-pick.kept .auto-pick-model { font-style: italic; }

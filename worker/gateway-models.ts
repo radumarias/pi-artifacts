@@ -259,11 +259,26 @@ export interface GatewayFetcher {
   fetch(url: string, init?: RequestInit): Promise<Response>;
 }
 
-export interface DiscoverOptions {
+/** Where AI Gateway is: the AI binding, the gateway's id, and the alias of the provider keys to use, when not "default". */
+export interface GatewayOptions {
   ai: GatewayFetcher;
   gateway: string;
-  /** The alias of the provider keys to use, when not "default". */
   byokAlias?: string;
+}
+
+/** A request to a provider's `path` through AI Gateway, with the deployment's key for it, unlogged. */
+export function gatewayFetch(
+  options: GatewayOptions,
+  provider: string,
+  path: string,
+  init: Omit<RequestInit, "headers"> & { headers?: Record<string, string> },
+): Promise<Response> {
+  const headers: Record<string, string> = { ...init.headers, "cf-aig-collect-log": "false" };
+  if (options.byokAlias) headers["cf-aig-byok-alias"] = options.byokAlias;
+  return options.ai.fetch(`https://workers-binding.ai/ai-gateway/gateways/${encodeURIComponent(options.gateway)}/${provider}/${path}`, { ...init, headers });
+}
+
+export interface DiscoverOptions extends GatewayOptions {
   /** The last discovery: a provider whose list cannot be read now keeps the models it had. */
   previous?: Discovery | null;
 }
@@ -280,14 +295,7 @@ function refused(status: number, body: string): boolean {
 /** Read one provider's list through AI Gateway. */
 async function listProvider(id: GatewayProviderId, options: DiscoverOptions): Promise<ProviderListing> {
   const provider = GATEWAY_PROVIDERS[id];
-  const headers: Record<string, string> = { ...provider.headers, "cf-aig-collect-log": "false" };
-  if (options.byokAlias) headers["cf-aig-byok-alias"] = options.byokAlias;
-  const get = (path: string) =>
-    options.ai.fetch(`https://workers-binding.ai/ai-gateway/gateways/${encodeURIComponent(options.gateway)}/${id}/${path}`, {
-      method: "GET",
-      headers,
-      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
-    });
+  const get = (path: string) => gatewayFetch(options, id, path, { method: "GET", headers: provider.headers, signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
   try {
     const [response, check] = await Promise.all([get(provider.list), provider.keyCheck && get(provider.keyCheck)]);
     for (const answer of check ? [check, response] : [response]) {

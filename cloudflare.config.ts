@@ -50,7 +50,9 @@ export default defineConfig({
       // conversation and the message, and picks one of AUTO_MODELS and an effort to answer it (worker/agent/route.ts).
       // ROUTER_MODEL: the router, a small, fast model; a comma-separated list is tried in order (the first the picker
       // lists answers; the next if it fails), with ROUTE_MS for all of them. If none answers, the chat keeps its model.
-      ROUTER_MODEL: bindings.text("cerebras/gpt-oss-120b,openai/gpt-4.1-nano"),
+      // decisions:<model> asks that OpenAI model through OpenAI's Decisions API, which picks without writing a reply
+      // (input priced only), through AI Gateway with the OpenAI key.
+      ROUTER_MODEL: bindings.text("decisions:openai/gpt-6-luna,cerebras/gpt-oss-120b,openai/gpt-4.1-nano"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
       // picker does not list (no key in AI Gateway for their provider) are left out.
       AUTO_MODELS: bindings.json([

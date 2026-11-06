@@ -45,7 +45,7 @@ import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
 import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
-import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
+import { clip, deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
@@ -55,7 +55,7 @@ import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
-import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory } from "./agent/route.ts";
+import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
@@ -139,6 +139,8 @@ const SHARED_TOLD_KEY = "sharedTold";
 const AUTO_KEY = "auto";
 /** How many of the newest transcript entries the router is shown (routeHistory keeps the people's and agent's words). */
 const ROUTE_ENTRIES = 40;
+/** How much of why no router picked a message its pick keeps, for the tooltip. */
+const MAX_FAILED_CHARS = 300;
 
 /**
  * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
@@ -447,25 +449,25 @@ export class ChatAgent extends DurableObject<Env> {
     }
     const { root, catalog, agent, page } = read;
     const current = agent.model ? modelKey(agent.model.provider, agent.model.modelId) : this.env.MODEL;
-    const kept = () => ({ pick: { model: current, thinkingLevel: agent.thinkingLevel, ms: Date.now() - started } });
+    const kept = (failed: string) => ({ pick: { model: current, thinkingLevel: agent.thinkingLevel, failed: clip(failed, MAX_FAILED_CHARS), ms: Date.now() - started } });
     const tokens = contextTokens(page.items);
     try {
       const candidates = autoCandidates(catalog.models, this.env.AUTO_MODELS as AutoCandidate[], { images: images > 0, contextTokens: tokens });
-      const routers = this.env.ROUTER_MODEL.split(",").flatMap((id) => catalog.model(id.trim()) ?? []);
       const request = { message, history: routeHistory(page.items), images, files, contextTokens: tokens, current, candidates };
-      const routed = await route(this.#oneShotModels, routers, request);
+      const gateway = catalogSource(this.env, this.storage.models);
+      const routed = await route(routersFrom(this.env.ROUTER_MODEL, catalog, { models: this.#oneShotModels, gateway }), request);
       // Paid for whether or not the pick is used. Only a record: a failure is logged.
       await root
         .commit((tx) => recordRouterSpend(tx, root.id, routed.router.model, routed.usage), BACKGROUND_CONTEXT)
         .catch((error: unknown) => console.error("auto spend:", errorMessage(error)));
       // An effort the model does not take moves to the nearest it does; none named asks for its usual one.
       const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
-      if (!choice) return kept();
+      if (!choice) return kept(`${routed.pick.model} is not in the picker`);
       const pick: AutoPick = { ...choice, ...(routed.pick.reason && { reason: routed.pick.reason }), router: routed.router, ms: Date.now() - started };
       return { pick, choice };
     } catch (error) {
       console.error("auto:", errorMessage(error));
-      return kept();
+      return kept(errorMessage(error));
     }
   }
 

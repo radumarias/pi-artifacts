@@ -14,7 +14,7 @@ import {
   type ProviderId,
 } from "../shared/models.ts";
 import { errorMessage } from "../shared/util.ts";
-import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discovery, type GatewayFetcher, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
+import { discoverModels, GATEWAY_PROVIDERS, ROUTED_APIS, SNAPSHOT, type Discovery, type GatewayFetcher, type GatewayOptions, type GatewayProviderId, type ListedModel } from "./gateway-models.ts";
 import prices from "./prices.json";
 import { tapStream } from "./streams.ts";
 import type { ModelCache } from "./storage/model-cache.ts";
@@ -359,12 +359,9 @@ const MIN_REFRESH_MS = 60_000;
 /** How long an isolate keeps the catalog before reading the shared copy again, which another isolate may have renewed. */
 const REREAD_MS = 5 * 60_000;
 
-export interface CatalogSource {
+/** The AI binding, and the gateway and key alias the chats use. */
+export interface CatalogSource extends GatewayOptions {
   cache: ModelCache;
-  /** The AI binding, and the gateway and key alias the chats use. */
-  ai: GatewayFetcher;
-  gateway: string;
-  byokAlias?: string;
   /** Keeps a background refresh alive after the response (the Worker's waitUntil). */
   waitUntil?: (promise: Promise<unknown>) => void;
 }

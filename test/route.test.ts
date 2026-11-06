@@ -2,7 +2,20 @@ import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { ConversationId, EntryRecord, Tx } from "@earendil-works/pi-durable";
-import { autoCandidates, contextTokens, parsePick, recordRouterSpend, route, routeHistory, routePrompt, type RouteRequest } from "../worker/agent/route.ts";
+import {
+  autoCandidates,
+  contextTokens,
+  decisionOf,
+  decisionsRouter,
+  modelRouter,
+  parsePick,
+  recordRouterSpend,
+  route,
+  routeHistory,
+  routePrompt,
+  routersFrom,
+  type RouteRequest,
+} from "../worker/agent/route.ts";
 import { baseCatalog } from "../worker/models.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
@@ -131,43 +144,43 @@ describe("the router's pick", () => {
   });
 });
 
-describe("routing", () => {
-  const request = (): RouteRequest => ({
-    message: "hi",
-    history: [],
-    images: 0,
-    files: 0,
-    contextTokens: 0,
-    candidates: autoCandidates(models, WANTED, { images: false, contextTokens: 0 }),
-  });
-  /** Routers over a stand-in provider: `first` and `second`, answering in turn with `replies`. */
-  const routers = (...replies: (AssistantMessage | ((options?: SimpleStreamOptions) => AssistantMessage | Promise<AssistantMessage>))[]) => {
-    const faux = fauxProvider({ models: [{ id: "first", reasoning: true }, { id: "second" }] });
-    const asked: (SimpleStreamOptions | undefined)[] = [];
-    faux.setResponses(
-      replies.map((reply) => (_context, options) => {
-        asked.push(options);
-        return typeof reply === "function" ? reply(options) : reply;
-      }),
-    );
-    const piModels = createModels();
-    piModels.setProvider(faux.provider);
-    return { piModels, list: [faux.getModel("first")!, faux.getModel("second")!], asked };
-  };
+const request = (): RouteRequest => ({
+  message: "hi",
+  history: [],
+  images: 0,
+  files: 0,
+  contextTokens: 0,
+  candidates: autoCandidates(models, WANTED, { images: false, contextTokens: 0 }),
+});
+/** Routers over a stand-in provider: `first` and `second`, answering in turn with `replies`. */
+const routers = (...replies: (AssistantMessage | ((options?: SimpleStreamOptions) => AssistantMessage | Promise<AssistantMessage>))[]) => {
+  const faux = fauxProvider({ models: [{ id: "first", reasoning: true }, { id: "second" }] });
+  const asked: (SimpleStreamOptions | undefined)[] = [];
+  faux.setResponses(
+    replies.map((reply) => (_context, options) => {
+      asked.push(options);
+      return typeof reply === "function" ? reply(options) : reply;
+    }),
+  );
+  const piModels = createModels();
+  piModels.setProvider(faux.provider);
+  return { list: [modelRouter(piModels, faux.getModel("first")!), modelRouter(piModels, faux.getModel("second")!)], asked };
+};
 
+describe("routing", () => {
   it("takes the first router's pick, asked to reason as little as it can", async () => {
-    const { piModels, list, asked } = routers(fauxAssistantMessage('{"model":"anthropic/claude-haiku-5.5","effort":"low","reason":"greeting"}'));
-    const routed = await route(piModels, list, request());
+    const { list, asked } = routers(fauxAssistantMessage('{"model":"anthropic/claude-haiku-5.5","effort":"low","reason":"greeting"}'));
+    const routed = await route(list, request());
     expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low", reason: "greeting" });
     expect(routed.router).toMatchObject({ model: expect.stringMatching(/\/first$/), cost: 0 });
     expect(asked[0]?.reasoning).toBe("minimal");
   });
 
   it("asks the next router when one answers with no listed model, or fails", async () => {
-    const { piModels, list } = routers(fauxAssistantMessage("I think Haiku."), fauxAssistantMessage('{"model":"openai/gpt-4o"}'));
-    expect((await route(piModels, list, request())).router.model).toMatch(/\/second$/);
+    const { list } = routers(fauxAssistantMessage("I think Haiku."), fauxAssistantMessage('{"model":"openai/gpt-4o"}'));
+    expect((await route(list, request())).router.model).toMatch(/\/second$/);
     const failing = routers(fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded" }), fauxAssistantMessage('{"model":"openai/gpt-4o"}'));
-    expect((await route(failing.piModels, failing.list, request())).pick.model).toBe("openai/gpt-4o");
+    expect((await route(failing.list, request())).pick.model).toBe("openai/gpt-4o");
   });
 
   it("gives up when no router answers in time, saying why each failed", async () => {
@@ -179,14 +192,74 @@ describe("routing", () => {
           resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" }));
         });
       });
-    const { piModels, list } = routers(slow, slow);
-    await expect(route(piModels, list, request(), 50)).rejects.toThrow(/first: .*second: out of time|first: .*second: /);
+    const { list } = routers(slow, slow);
+    await expect(route(list, request(), 50)).rejects.toThrow(/first: .*second: out of time|first: .*second: /);
   });
 
   it("does not ask without routers or candidates", async () => {
-    const { piModels, list } = routers();
-    await expect(route(piModels, [], request())).rejects.toThrow("no router model");
-    await expect(route(piModels, list, { ...request(), candidates: [] })).rejects.toThrow("none of the models");
+    const { list } = routers();
+    await expect(route([], request())).rejects.toThrow("no router model");
+    await expect(route(list, { ...request(), candidates: [] })).rejects.toThrow("none of the models");
+  });
+});
+
+describe("the Decisions router", () => {
+  const luna = baseCatalog().model("openai/gpt-6-luna")!;
+  const answer = (model: string, effort = "low") => ({
+    answers: [
+      { type: "choice", name: "model", choice: model, confidence: 0.9 },
+      { type: "choice", name: "effort", choice: effort },
+    ],
+    usage: { input_tokens: 2_000 },
+  });
+
+  it("asks two choice questions through AI Gateway, priced as its model's input", async () => {
+    const sent: { url: string; init?: RequestInit }[] = [];
+    const ai = {
+      fetch: async (url: string, init?: RequestInit) => {
+        sent.push({ url, init });
+        return Response.json(answer("anthropic/claude-haiku-5.5"));
+      },
+    };
+    const routed = await route([decisionsRouter({ ai, gateway: "gw", byokAlias: "team" }, luna)], { ...request(), current: "openai/gpt-4o" });
+    expect(routed.pick).toEqual({ model: "anthropic/claude-haiku-5.5", thinkingLevel: "low" });
+    expect(routed.router).toEqual({ model: "openai/gpt-6-luna", cost: 0.0002, input: 2_000, output: 0 });
+    expect(sent[0].url).toBe("https://workers-binding.ai/ai-gateway/gateways/gw/openai/v1/decisions");
+    expect(sent[0].init?.headers).toMatchObject({ "cf-aig-byok-alias": "team", "cf-aig-collect-log": "false" });
+    const body = JSON.parse(sent[0].init?.body as string);
+    expect(body.model).toBe("gpt-6-luna");
+    expect(body.questions.map((question: { name: string }) => question.name)).toEqual(["model", "effort"]);
+    expect(body.questions[0].choices.map((choice: { value: string }) => choice.value)).toEqual(request().candidates.map((candidate) => candidate.id));
+    expect(body.questions[0].choices[2].description).toMatch(/^id: openai\/gpt-4o .*efforts: none.*\(current\)$/);
+    expect(body.questions[1].choices[0].value).toBe("none");
+    // The models are in the choices only, not again in the input.
+    expect(body.input[0].content[0].text).not.toContain("<models>");
+    expect(body.input[0].content[0].text).toContain("<message>\nhi\n</message>");
+  });
+
+  it("reads none as no effort, and refuses a refusal or a model not listed", () => {
+    const { candidates } = request();
+    expect(decisionOf(answer("openai/gpt-4o", "none"), candidates, luna).pick).toEqual({ model: "openai/gpt-4o", thinkingLevel: "off" });
+    expect(() => decisionOf({ answers: [{ type: "refusal", name: "model" }] }, candidates, luna)).toThrow("refused");
+    expect(() => decisionOf(answer("openai/gpt-9"), candidates, luna)).toThrow("no listed model");
+    expect(() => decisionOf("nonsense", candidates, luna)).toThrow("no listed model");
+  });
+
+  it("hands over to the next router when the API fails", async () => {
+    const ai = { fetch: async () => new Response("not found", { status: 404 }) };
+    const { list } = routers(fauxAssistantMessage('{"model":"anthropic/claude-opus-5.5","effort":"high"}'));
+    const routed = await route([decisionsRouter({ ai, gateway: "gw" }, luna), ...list], request());
+    expect(routed.pick.model).toBe("anthropic/claude-opus-5.5");
+    expect(routed.router.model).toMatch(/\/first$/);
+  });
+
+  it("is named in ROUTER_MODEL by decisions: and a listed model, in order with the others", () => {
+    const gateway = { ai: { fetch: async () => new Response() }, gateway: "gw" };
+    const found = routersFrom("decisions:openai/gpt-6-luna, openai/gpt-4o, nobody/unlisted, decisions:nobody/unlisted", baseCatalog(), {
+      models: createModels(),
+      gateway,
+    });
+    expect(found.map((router) => router.id)).toEqual(["openai/gpt-6-luna", "openai/gpt-4o"]);
   });
 });
 
