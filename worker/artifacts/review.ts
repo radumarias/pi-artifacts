@@ -1,4 +1,5 @@
 import type { Api, Model, Models, Usage } from "@earendil-works/pi-ai";
+import { modelKey } from "../../shared/models.ts";
 import type { ReviewFinding, ReviewFindingKind } from "../../shared/protocol.ts";
 import { clip, errorMessage, isObject } from "../../shared/util.ts";
 import { NO_USAGE } from "../agent/route.ts";
@@ -16,17 +17,18 @@ import { askPageModel } from "./page-features.ts";
  */
 
 /** How long a review may take, in all, and each model asked: the check waits for it. */
-export const REVIEW_MS = 45_000;
+const REVIEW_MS = 45_000;
 const ATTEMPT_MS = 30_000;
 /** As many findings as the agent is shown: the ones to fix first. */
 export const MAX_FINDINGS = 8;
-/** How much of the page the model reads: a page this long is mostly data, which a review need not read. */
-const MAX_PAGE_CHARS = 120_000;
+/** How much of the page the model reads (some 15K tokens): a page longer is mostly data, which a review need not read. */
+const MAX_PAGE_CHARS = 60_000;
 /** A line longer than this is data (inlined JSON, an image): the model reads its start. */
 const MAX_LINE_CHARS = 400;
 /** The answer: findings as JSON, short ones. Reasoning models get more room for their reasoning (page-features.ts). */
 const MAX_ANSWER_TOKENS = 2_000;
-const MAX_TEXT = 300;
+/** A finding's problem, and its fix, are a sentence each: they stay in the agent's context. */
+const MAX_TEXT = 200;
 
 const KINDS: readonly ReviewFindingKind[] = ["bug", "security", "performance", "simplify"];
 
@@ -51,7 +53,7 @@ Reply with JSON only: {"findings": [{"severity": "fix" | "suggest", "kind": "bug
 /** What a review came to: the findings, the model that answered, what it cost and how long it took; or why it failed. */
 export interface PageReview {
   findings: ReviewFinding[];
-  /** The model that answered, by its id. */
+  /** The model that answered, by the picker's id (modelKey). */
   by?: string;
   usage: Usage;
   ms: number;
@@ -113,7 +115,7 @@ export function modelReviewer(models: Pick<Models, "completeSimple">, candidates
       usage = answer.usage;
       if (signal?.aborted) throw signal.reason ?? new Error("Stopped.");
       if (!answer.ok) throw new Error(timeout.aborted ? `no answer in ${timeoutMs / 1000} s` : answer.error.message);
-      return { findings: findingsIn(answer.json), by: answer.model.id, usage, ms: Date.now() - started };
+      return { findings: findingsIn(answer.json), by: modelKey(answer.model.provider, answer.model.id), usage, ms: Date.now() - started };
     } catch (error) {
       if (signal?.aborted) throw error;
       console.warn("page review:", errorMessage(error));
@@ -123,7 +125,7 @@ export function modelReviewer(models: Pick<Models, "completeSimple">, candidates
 }
 
 /** One finding as the report says it: "Code review, security, line 42: … Fix: …". */
-export function findingLine(finding: ReviewFinding): string {
+function findingLine(finding: ReviewFinding): string {
   const at = finding.line ? `, line ${finding.line}` : "";
   return `Code review${finding.severity === "suggest" ? " suggestion" : ""} (${finding.kind}${at}): ${finding.problem}${finding.fix ? ` Fix: ${finding.fix}` : ""}`;
 }

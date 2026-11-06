@@ -506,6 +506,15 @@ async function retry(source: CatalogSource, discovery: Discovery, catalog: Catal
  * first call with no discovery anywhere asks the providers and waits; later, a discovery older than FRESH_MS is renewed
  * in the background while the old one serves. `refresh` asks again now, unless the last ask was under a minute ago.
  */
+/** The models a comma-separated list of the picker's ids names (PAGE_AI_MODEL, REVIEW_MODEL), in order: those `catalog` has. */
+export function modelsNamed(list: string, catalog: Catalog): Model<Api>[] {
+  return list
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .flatMap((id) => catalog.model(id) ?? []);
+}
+
 export async function loadCatalog(source: CatalogSource, { refresh = false } = {}): Promise<Catalog> {
   if (held && !refresh && Date.now() - held.readAt < REREAD_MS) return held.catalog;
   const discovery = await readCached(source.cache);

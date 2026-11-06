@@ -39,12 +39,15 @@ const PICKERS = [
  * typesafe/jev"); the tool picker ("Tool picks · cloudflare-workers-ai/typesafe/jev"); the review of pages' code ("Page
  * code reviews · GPT OSS 120B").
  */
+/** A ledger key's picker (its label, PICKERS) and model: the key itself, and no label, for a model's or a tool's own row. */
+function ledgerModel(key: string): { label?: string; model: string } {
+  const picker = PICKERS.find(([prefix]) => key.startsWith(prefix));
+  return picker ? { label: picker[1], model: key.slice(picker[0].length) } : { model: key };
+}
+
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
-  for (const [prefix, label] of PICKERS) {
-    if (!share.model.startsWith(prefix)) continue;
-    const picker = share.model.slice(prefix.length);
-    return `${label} · ${models.get(picker)?.name ?? picker}`;
-  }
+  const { label, model } = ledgerModel(share.model);
+  if (label) return `${label} · ${models.get(model)?.name ?? model}`;
   // Else a model's, or a tool's that reports a spend of its own (the page check's look at its screenshot).
   const name = models.get(share.model)?.name ?? stepLabel(share.model);
   return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;
@@ -76,8 +79,7 @@ export const ChatCost = memo(function ChatCost({ usage, entries, time }: { usage
   const box = useDismiss<HTMLDivElement>(open, setOpen);
   if (spend.models.length === 0) return null;
   // By id, not the catalog: a deployment's default can be a Workers AI model the picker does not list.
-  // Also under a prefix: a page code review on Workers AI ("review:@cf/…").
-  const workersAi = spend.models.some((share) => /(^|:)@cf\//.test(share.model));
+  const workersAi = spend.models.some((share) => ledgerModel(share.model).model.startsWith("@cf/"));
   // Listed models with no known price: their replies were priced at nothing.
   const unpriced = spend.models.filter((share) => models.has(share.model) && !models.get(share.model)!.price);
   return (

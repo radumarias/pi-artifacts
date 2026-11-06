@@ -29,7 +29,11 @@ export interface DraftPage {
   artifactId?: string;
   /** The skill files the page names are read from these sets, which never change: what was checked is what is published. */
   skillSets?: SkillSets;
-  /** A page edited from a reviewed draft: it is not reviewed again (DraftCheck.reviewed). */
+  /**
+   * The code review (worker/artifacts/review.ts) ran on this draft, or on the one it was edited from: a page is
+   * reviewed once, so a fix of what the review found is not reviewed again, nor a draft checked again unchanged. Kept in
+   * the index, like the check.
+   */
   reviewed?: true;
 }
 
@@ -39,11 +43,6 @@ export interface DraftCheck {
   warnings: number;
   /** What the look at a check's screenshot stopped this draft for (worker/artifacts/look.ts): it stops a draft once. */
   lookStopped?: string;
-  /**
-   * The code review (worker/artifacts/review.ts) ran on this draft, or on the one it was edited from: a page is
-   * reviewed once, so a fix of what the review found is not reviewed again, nor a draft checked again unchanged.
-   */
-  reviewed?: true;
 }
 
 /**
@@ -116,8 +115,8 @@ export class ChatDrafts {
     return this.#serial(() => this.#save(page, check));
   }
 
-  /** Keep what a check of a saved draft found: in the index only, where it stays in its place. A draft not listed is skipped. */
-  async recordCheck(id: string, check: DraftCheck): Promise<void> {
+  /** Keep what a check of a saved draft found (and whether it reviewed it): in the index only, where it stays in its place. A draft not listed is skipped. */
+  async recordCheck(id: string, check: DraftCheck & Pick<DraftPage, "reviewed">): Promise<void> {
     await this.#serial(async () => {
       const index = await this.#index();
       const entry = index.find((e) => e.id === id);
@@ -135,7 +134,7 @@ export class ChatDrafts {
       artifactId: page.artifactId ?? before?.artifactId,
       savedAt: Date.now(),
       ...(check ?? { errors: before?.errors ?? null, warnings: before?.warnings ?? 0, ...(before?.lookStopped && { lookStopped: before.lookStopped }) }),
-      ...((page.reviewed || check?.reviewed || before?.reviewed) && { reviewed: true }),
+      ...((page.reviewed || before?.reviewed) && { reviewed: true }),
     };
     const { html, manifest, skillSets, ...summary } = draft;
     const bytes = new TextEncoder().encode(html).byteLength;

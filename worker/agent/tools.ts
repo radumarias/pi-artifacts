@@ -12,6 +12,7 @@ import {
   type ArtifactMeta,
   type CheckedDetails,
   type CheckedResultDetails,
+  countFindings,
   type PublishedDetails,
   type ReviewedDetails,
   type SavedFilesDetails,
@@ -290,16 +291,14 @@ function checkOutput(headline: string, report: CheckReport) {
  * the findings that are real, and how it goes on when one to fix is not.
  */
 function reviewNote(review: PageReview, id: string): string {
-  if (review.failed) return " The code review of the page did not finish; it goes on without one.";
-  const fixes = review.findings.filter((finding) => finding.severity === "fix").length;
-  const suggestions = review.findings.length - fixes;
-  if (!review.findings.length) return " A code review of the page found nothing to change.";
+  if (review.failed) return " The page's code review did not finish; it goes on without one.";
+  const { fixes, suggestions } = countFindings(review.findings);
+  if (!fixes && !suggestions) return " A code review of the page found nothing to change.";
   const parts = [
     fixes &&
-      `A code review of the page (by a small model, which can be wrong) found ${plural(fixes, "thing")} to fix, among the errors: fix those that are ` +
-        `real in the same edits as the rest. The page is reviewed once: if every one left is wrong and the browser found no other error, check draft "${id}" ` +
-        "again unchanged, and it passes.",
-    suggestions && `It suggests ${plural(suggestions, "change")}, among the warnings: make those clearly worth it in the same edits, or leave them.`,
+      `A code review by a small model (it can be wrong) found ${plural(fixes, "thing")} to fix, among the errors: fix the real ones. It runs once: ` +
+        `if all left are wrong and nothing else failed, check draft "${id}" again unchanged.`,
+    suggestions && `Its ${plural(suggestions, "suggestion")}, among the warnings, are optional.`,
   ];
   return ` ${parts.filter(Boolean).join(" ")}`;
 }

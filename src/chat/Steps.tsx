@@ -10,6 +10,7 @@ import {
   WRITE_TOOL,
   type CheckedDetails,
   type CheckedResultDetails,
+  countFindings,
   type ReviewedDetails,
   type ReviewFindingKind,
 } from "../../shared/protocol.ts";
@@ -432,13 +433,11 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
       }}
     </Panel>
   );
-  return review ? (
+  return (
     <>
       {panel}
-      <ReviewStep openKey={`review:${call.id}`} review={review} />
+      {review && <ReviewStep openKey={`review:${call.id}`} review={review} />}
     </>
-  ) : (
-    panel
   );
 }
 
@@ -451,8 +450,7 @@ const KIND_LABELS: Record<ReviewFindingKind, string> = { bug: "Bug", security: "
 export function ReviewStep({ openKey, review }: { openKey: string; review: ReviewedDetails }) {
   const took = ` · ${tookFor(review.ms)}`;
   if (review.failed) return <Panel openKey={openKey} icon={STATUS.stopped.icon} label="Review code" hint={review.failed} status={`Did not finish${took}`} />;
-  const fixes = review.findings.filter((finding) => finding.severity === "fix").length;
-  const suggestions = review.findings.length - fixes;
+  const { fixes, suggestions } = countFindings(review.findings);
   const found = [fixes && `${fixes} to fix`, suggestions && plural(suggestions, "suggestion")].filter(Boolean).join(", ");
   const hint = `${found || "Nothing to change"} · ${formatCost(review.cost)}`;
   const props = fixes
@@ -555,9 +553,12 @@ function OneStep({ item }: { item: StepItem }) {
  */
 export function StepRun({ items }: { items: readonly StepItem[] }) {
   const { results } = use(ResultsContext);
-  // The same items until the run grows, and results until one lands: the line is worked out once for a finished run,
-  // and not for a step alone.
-  const label = useMemo(() => (items.length === 1 ? "" : runSummary(items, results)), [items, results]);
+  // Which of the run's checks had a code review: the results change with every entry, this only when one of the run's
+  // lands. With the items, which stay the same until the run grows, the line is worked out once for a finished run, and
+  // not for a step alone.
+  const reviewed = items.map((item) => (item.kind === "tool" && reviewOf(results.get(item.call.id)) ? 1 : 0)).join("");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const label = useMemo(() => (items.length === 1 ? "" : runSummary(items, results)), [items, reviewed]);
   if (items.length === 1) return <OneStep item={items[0]} />;
   const calls = items.flatMap((item) => (item.kind === "tool" ? [item] : []));
   // Read only while a call is unfinished, as ToolStep does.

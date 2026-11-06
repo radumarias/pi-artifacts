@@ -38,7 +38,7 @@ describe("numberedPage", () => {
     expect(numberedPage(data)).toMatch(/^1\| const rows = .{380,} …\(\d+ more characters\)$/);
     const long = Array.from({ length: 2_000 }, () => "x".repeat(300)).join("\n");
     const shown = numberedPage(long);
-    expect(shown.length).toBeLessThan(130_000);
+    expect(shown.length).toBeLessThan(70_000);
     expect(shown).toMatch(/left out: the page is too long to review whole\)$/);
   });
 });
@@ -98,7 +98,7 @@ describe("modelReviewer", () => {
     const review = await modelReviewer(models as never, [model("first"), model("second")])("<div id=app></div>");
     expect(asked).toEqual(["first", "second"]);
     expect(page).toBe("<page>\n1| <div id=app></div>\n</page>");
-    expect(review).toMatchObject({ by: "second", findings: [{ severity: "fix", kind: "bug", line: 1, problem: "Never renders." }] });
+    expect(review).toMatchObject({ by: "test/second", findings: [{ severity: "fix", kind: "bug", line: 1, problem: "Never renders." }] });
     expect(review.usage.input).toBe(2000);
     expect(review.failed).toBeUndefined();
   });

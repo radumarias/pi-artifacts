@@ -251,27 +251,34 @@ export async function checkDraft(
   const drafts = await scope.drafts();
   const draft = await draftNamed(drafts, id, "Not checked.");
   const { html, pageLine } = await pageToRun(scope, draft, "Not checked.");
+  // Stops the review when the check fails: it is no longer waited for, and a review costs.
+  const stop = new AbortController();
+  const both = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
   // The page as written, without the skill files it names: those are the skill's, not the page's code.
-  const reviewing = draft.reviewed ? undefined : scope.review?.().then((review) => review?.(draft.html, signal));
-  const [{ report, unchecked }, review] = await Promise.all([
-    checkInBrowser(scope, { html, manifest: draft.manifest, ...options, ...(html !== draft.html && { pageLine }) }, signal),
-    reviewing,
-  ]);
-  const looked: Partial<Reviewed> = report && scope.look ? await reviewLook(scope.look, report, { stoppedBefore: draft.lookStopped, signal }) : { report };
+  const reviewing = draft.reviewed ? undefined : scope.review?.().then((review) => review?.(draft.html, both));
+  // The look follows the browser check while the review runs: the check takes as long as the slower of the two.
+  const looking = checkInBrowser(scope, { html, manifest: draft.manifest, ...options, ...(html !== draft.html && { pageLine }) }, signal).then(
+    async ({ report, unchecked }): Promise<Partial<Reviewed> & { unchecked?: string }> =>
+      report && scope.look ? await reviewLook(scope.look, report, { stoppedBefore: draft.lookStopped, signal }) : { report, unchecked },
+  );
+  const [looked, review] = await Promise.all([looking, reviewing]).catch((error: unknown) => {
+    stop.abort();
+    throw error;
+  });
   // A page no browser checked gets its review with its first check that runs.
-  const reviewed = review && looked.report ? { report: withReview(looked.report, review), review } : undefined;
-  const check = draftCheck(reviewed?.report ?? looked.report);
+  const used = looked.report && review;
+  const report = used ? withReview(looked.report!, used) : looked.report;
+  const check = draftCheck(report);
   const stopped = looked.stopped ?? draft.lookStopped;
   if (check && stopped) check.lookStopped = stopped;
-  if (check && reviewed) check.reviewed = true;
-  if (check) await drafts.recordCheck(id, check);
+  if (check) await drafts.recordCheck(id, used ? { ...check, reviewed: true } : check);
   return {
-    draft: { ...draft, ...check },
-    report: reviewed?.report ?? looked.report,
-    unchecked,
+    draft: { ...draft, ...check, ...(used && { reviewed: true as const }) },
+    report,
+    unchecked: looked.unchecked,
     usage: looked.usage,
     lookStopped: looked.stopped,
-    review: reviewed?.review,
+    review: used || undefined,
   };
 }
 

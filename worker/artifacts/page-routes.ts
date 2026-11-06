@@ -3,7 +3,7 @@ import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { PageAiResponse, PageError, PageStorageResponse, PageValues } from "../../shared/protocol.ts";
 import { GeminiCompat } from "../gemini.ts";
 import { json, readJson } from "../http.ts";
-import { catalogSource, gatewayAI, loadCatalog, piModels } from "../models.ts";
+import { catalogSource, gatewayAI, loadCatalog, modelsNamed, piModels } from "../models.ts";
 import type { Storage } from "../storage/index.ts";
 import { askPageModel, checkChanges, checkPageAiRequest, mergeValues } from "./page-features.ts";
 
@@ -78,16 +78,16 @@ export async function pageAiRoute(request: Request, env: Env, storage: Storage, 
   return json({ ok: true, text: answer.text, ...(answer.json !== undefined && { json: answer.json }) } satisfies PageAiResponse);
 }
 
-/** The models pages ask, made once per isolate, as a chat makes its own (piModels), and the ids PAGE_AI_MODEL names. */
-let made: { models: Models; ids: string[] } | undefined;
+/** The models pages ask, made once per isolate, as a chat makes its own (piModels). */
+let made: Models | undefined;
 
 /** The models PAGE_AI_MODEL names, in order, that this deployment can run, and what runs them. */
 async function pageModels(env: Env, storage: Storage): Promise<[Models, Model<Api>[]]> {
   if (!made) {
     const gemini = new GeminiCompat();
     const ai = gatewayAI(env, gemini);
-    made = { models: piModels(ai.provider, gemini), ids: env.PAGE_AI_MODEL.split(",").map((id) => id.trim()).filter(Boolean) };
+    made = piModels(ai.provider, gemini);
   }
   const catalog = await loadCatalog(catalogSource(env, storage.models, waitUntil));
-  return [made.models, made.ids.flatMap((id) => catalog.model(id) ?? [])];
+  return [made, modelsNamed(env.PAGE_AI_MODEL, catalog)];
 }

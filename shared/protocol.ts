@@ -230,6 +230,12 @@ export type ReviewFinding = {
   fix?: string;
 };
 
+/** How many of `findings` are to fix, and how many are suggestions. */
+export function countFindings(findings: readonly ReviewFinding[]): { fixes: number; suggestions: number } {
+  const fixes = findings.filter((finding) => finding.severity === "fix").length;
+  return { fixes, suggestions: findings.length - fixes };
+}
+
 /** A check's code review as its result shows it in the chat: a step of its own under the check. */
 export type ReviewedDetails = {
   findings: ReviewFinding[];

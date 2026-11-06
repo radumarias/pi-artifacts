@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models, UserMessage } from "@earendil-works/pi-ai";
+import type { Api, Model, Models, UserMessage } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentChange, type AgentState, type Submission, type Conversation, type Cursor, type EntryId, type EntryRecord, type Extension, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { PiHarness, skills } from "agents/harness/pi";
@@ -114,6 +114,7 @@ import {
   piModels,
   loadCatalog,
   markFailing,
+  modelsNamed,
   type Catalog,
 } from "./models.ts";
 import { withFailuresReported } from "./model-health.ts";
@@ -775,34 +776,25 @@ export class ChatAgent extends DurableObject<Env> {
    * names none: pages then go unreviewed. Never throws.
    */
   async #pageReviewer(): Promise<PageReviewer | undefined> {
-    const ids = this.env.REVIEW_MODEL.split(",")
-      .map((id) => id.trim())
-      .filter(Boolean);
-    if (!ids.length) return undefined;
-    let catalog: Catalog;
+    if (!this.env.REVIEW_MODEL.trim()) return undefined;
+    let candidates: Model<Api>[];
     try {
-      catalog = await this.#catalog();
+      candidates = modelsNamed(this.env.REVIEW_MODEL, await this.#catalog());
     } catch (error) {
       console.error("page review:", errorMessage(error));
       return undefined;
     }
-    // Each model with the id REVIEW_MODEL names it by, which the cost panel finds its name by.
-    const named = new Map(
-      ids.flatMap((id) => {
-        const model = catalog.model(id);
-        return model ? [[model, id] as const] : [];
-      }),
-    );
-    if (!named.size) {
+    if (!candidates.length) {
       console.error(`page review: REVIEW_MODEL names no model this deployment can run: ${this.env.REVIEW_MODEL}`);
       return undefined;
     }
-    const review = modelReviewer(this.#oneShotModels, [...named.keys()]);
+    const review = modelReviewer(this.#oneShotModels, candidates);
     return async (html, signal) => {
       const reviewed = await review(html, signal);
       const { usage } = reviewed;
       if (usage.totalTokens > 0 || usage.cost.total > 0) {
-        const model = [...named].find(([candidate]) => candidate.id === reviewed.by)?.[1] ?? ids[0];
+        // A review that failed after a billed attempt counts under the first model asked.
+        const model = reviewed.by ?? modelKey(candidates[0].provider, candidates[0].id);
         void this.#root()
           .then((root) => root.commit((tx) => recordSpend(tx, root.id, `${REVIEW_LEDGER_PREFIX}${model}`, usage), BACKGROUND_CONTEXT))
           .catch((error: unknown) => console.error("page review spend:", errorMessage(error)));
