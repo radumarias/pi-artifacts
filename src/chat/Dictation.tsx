@@ -41,22 +41,24 @@ const ERRORS: Record<string, string> = {
 };
 
 /** getUserMedia's failures, named as the recognizer's. */
+const MIC_ERRORS: Record<string, string> = { NotAllowedError: "not-allowed", NotFoundError: "audio-capture" };
 const micError = (error: unknown) =>
-  error instanceof DOMException && error.name === "NotAllowedError"
-    ? ERRORS["not-allowed"]
-    : error instanceof DOMException && error.name === "NotFoundError"
-      ? ERRORS["audio-capture"]
-      : `Could not start the microphone (${errorMessage(error)})`;
+  ERRORS[MIC_ERRORS[(error as Error | undefined)?.name ?? ""]] ?? `Could not start the microphone (${errorMessage(error)})`;
+
+/** On-device recognition's state per language, once it is settled: "available" or "unavailable" stays so for the visit. */
+const localStatuses = new Map<string, LocalStatus>();
 
 /**
  * On-device recognition's state for `lang`; undefined where the browser cannot say. A language pack that can be
  * downloaded starts downloading, so a later dictation runs on the device.
  */
 async function localStatus(lang: string): Promise<LocalStatus | undefined> {
-  if (!Recognition?.available) return undefined;
+  const known = localStatuses.get(lang);
+  if (known || !Recognition?.available) return known;
   const options: LocalOptions = { langs: [lang], processLocally: true };
   try {
     const status = await Recognition.available(options);
+    if (status === "available" || status === "unavailable") localStatuses.set(lang, status);
     if (status === "downloadable") Recognition.install?.(options).catch(() => {});
     return status;
   } catch {
@@ -104,7 +106,6 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     next.interimResults = false;
     next.lang = lang;
     if (local) next.processLocally = true;
-    const handle: Session = { stop: () => next.stop(), abort: () => next.abort() };
     next.onresult = (event) => {
       // Without interim results, every result is final.
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -113,7 +114,7 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
       }
     };
     next.onerror = (event) => {
-      if (session.current !== handle) return;
+      if (session.current !== next) return;
       // No service or no model here: record for the Worker instead, now and for the rest of the visit.
       if (fallsBackToServer(event.error) && canRecord) {
         browserFailed = true;
@@ -124,8 +125,8 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
       // "aborted" and "no-speech" just end the session; anything else is shown next to the button.
       if (event.error !== "aborted" && event.error !== "no-speech") setError(ERRORS[event.error] ?? `Dictation stopped (${event.error})`);
     };
-    next.onend = () => finish(handle);
-    session.current = handle;
+    next.onend = () => finish(next);
+    session.current = next;
     next.start();
     setPhase("listening");
   };
@@ -137,10 +138,10 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     const release = () => stream?.getTracks().forEach((track) => track.stop());
     const handle: Session = {
       stop: () => recorder?.state === "recording" && recorder.stop(),
+      // Stopping releases the microphone (onstop); before the recorder exists, the aborted signal does.
       abort: () => {
         controller.abort();
-        if (recorder?.state === "recording") recorder.stop();
-        release();
+        handle.stop();
       },
     };
     session.current = handle;
@@ -187,8 +188,7 @@ export const Dictation = memo(function Dictation({ disabled, onText }: { disable
     const local = !browserFailed && Recognition ? await localStatus(lang) : undefined;
     const engine = pickEngine({ recognition: !!Recognition, local, browserFailed, record: canRecord });
     if (engine === "server") void startServer();
-    else if (engine) startBrowser(engine === "local");
-    else setPhase("idle");
+    else startBrowser(engine === "local");
   };
 
   const listening = phase === "listening";

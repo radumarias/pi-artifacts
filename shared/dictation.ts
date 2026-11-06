@@ -39,10 +39,10 @@ export function encodeWav(samples: Float32Array): Uint8Array<ArrayBuffer> {
   view.setUint16(34, 16, true); // bits per sample
   ascii(36, "data");
   view.setUint32(40, samples.length * 2, true);
-  samples.forEach((sample, i) => {
-    const clamped = Math.max(-1, Math.min(1, sample));
+  for (let i = 0; i < samples.length; i++) {
+    const clamped = Math.max(-1, Math.min(1, samples[i]));
     view.setInt16(HEADER_BYTES + i * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
-  });
+  }
   return bytes;
 }
 

@@ -16,12 +16,12 @@ export type LocalStatus = "available" | "downloadable" | "downloading" | "unavai
 
 /**
  * The engine for the next dictation: on-device recognition when it is ready, else the browser's own until it failed
- * this session (where it fails, it fails every time), else recording for the Worker. Undefined: no way to dictate.
+ * this session (where it fails, it fails every time), else recording for the Worker. Asked only where the browser
+ * has one of the two.
  */
-export function pickEngine(can: { recognition: boolean; local?: LocalStatus; browserFailed: boolean; record: boolean }): DictationEngine | undefined {
+export function pickEngine(can: { recognition: boolean; local?: LocalStatus; browserFailed: boolean; record: boolean }): DictationEngine {
   if (can.recognition && !can.browserFailed) return can.local === "available" ? "local" : "browser";
-  if (can.record) return "server";
-  return can.recognition ? "browser" : undefined;
+  return can.record ? "server" : "browser";
 }
 
 /**
@@ -35,19 +35,11 @@ export function fallsBackToServer(error: string): boolean {
 
 /** A recorded clip (WebM, Ogg or MP4, whatever the browser records) as the WAV the Worker takes: 16 kHz mono. */
 export async function clipToWav(clip: Blob): Promise<Uint8Array<ArrayBuffer>> {
-  const context = new AudioContext();
-  let decoded: AudioBuffer;
-  try {
-    decoded = await context.decodeAudioData(await clip.arrayBuffer());
-  } finally {
-    void context.close();
-  }
-  // OfflineAudioContext mixes the channels down to one and resamples.
-  const frames = Math.max(1, Math.ceil(decoded.duration * DICTATION_SAMPLE_RATE));
-  const offline = new OfflineAudioContext(1, frames, DICTATION_SAMPLE_RATE);
-  const source = offline.createBufferSource();
-  source.buffer = decoded;
-  source.connect(offline.destination);
-  source.start();
-  return encodeWav((await offline.startRendering()).getChannelData(0));
+  // Decoding resamples to the context's rate; an offline context opens no audio device.
+  const decoded = await new OfflineAudioContext(1, 1, DICTATION_SAMPLE_RATE).decodeAudioData(await clip.arrayBuffer());
+  if (decoded.numberOfChannels === 1) return encodeWav(decoded.getChannelData(0));
+  const channels = Array.from({ length: decoded.numberOfChannels }, (_, c) => decoded.getChannelData(c));
+  const mono = new Float32Array(decoded.length);
+  for (let i = 0; i < mono.length; i++) mono[i] = channels.reduce((sum, channel) => sum + channel[i], 0) / channels.length;
+  return encodeWav(mono);
 }

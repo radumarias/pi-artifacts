@@ -20,7 +20,7 @@ export interface DictationLedger {
 }
 
 export interface DictationEnv {
-  AI: unknown;
+  AI: ModelRunner;
   DICTATION_MODEL: string;
   DICTATION_DAILY_MINUTES: string;
   DICTATION: { limit(options: { key: string }): Promise<{ success: boolean }> };
@@ -29,7 +29,7 @@ export interface DictationEnv {
 export async function dictationRoute(request: Request, env: DictationEnv, uid: string, ledger: DictationLedger): Promise<Response> {
   const model = env.DICTATION_MODEL.trim();
   if (!model) return json({ error: "Dictation is not set up on this server." }, 503);
-  if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith(DICTATION_TYPE))
+  if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== DICTATION_TYPE)
     return json({ error: `Expected ${DICTATION_TYPE}.` }, 415);
   if (Number(request.headers.get("content-length") ?? 0) > DICTATION_MAX_BYTES) return tooLong();
 
@@ -40,16 +40,16 @@ export async function dictationRoute(request: Request, env: DictationEnv, uid: s
     return json({ error: "You used today's dictation minutes; they renew at midnight UTC." }, 429);
   }
 
-  const audio = await readCapped(request, DICTATION_MAX_BYTES);
-  if (!audio) return tooLong();
+  // The length the WAV header claims is never trusted past the bytes that came: the byte cap caps the minutes too.
+  const audio = new Uint8Array(await request.arrayBuffer());
+  if (audio.byteLength > DICTATION_MAX_BYTES) return tooLong();
   const seconds = wavSeconds(audio);
   if (typeof seconds === "string") return json({ error: seconds }, 400);
-  if (seconds > DICTATION_MAX_SECONDS + 1) return tooLong();
   if (seconds < 0.1) return json({ text: "" });
 
   const language = dictationLanguage(new URL(request.url).searchParams.get("lang"));
   try {
-    const text = await transcribe(env.AI as ModelRunner, model, audio, language);
+    const text = await transcribe(env.AI, model, audio, language);
     await ledger.recordDictation(seconds);
     return json({ text });
   } catch (error) {
@@ -59,29 +59,10 @@ export async function dictationRoute(request: Request, env: DictationEnv, uid: s
 }
 
 /** The text a speech-to-text model on Workers AI heard in a WAV clip. Silence (cut by its voice filter) is "". */
-export async function transcribe(ai: ModelRunner, model: string, wav: Uint8Array, language?: string): Promise<string> {
+async function transcribe(ai: ModelRunner, model: string, wav: Uint8Array, language?: string): Promise<string> {
   const answer = await ai.run(model, { audio: toBase64(wav), vad_filter: true, ...(language && { language }) });
   if (!isObject(answer) || typeof answer.text !== "string") throw new Error("the model answered with no text");
   return answer.text.trim();
 }
 
 const tooLong = () => json({ error: `A clip may be at most ${DICTATION_MAX_SECONDS / 60} minutes long.` }, 413);
-
-/** A request's body, or null once it passes `max` bytes (a missing or wrong Content-Length does not get it further). */
-async function readCapped(request: Request, max: number): Promise<Uint8Array | null> {
-  if (!request.body) return new Uint8Array();
-  const parts: Uint8Array[] = [];
-  let length = 0;
-  for await (const part of request.body as unknown as AsyncIterable<Uint8Array>) {
-    length += part.length;
-    if (length > max) return null;
-    parts.push(part);
-  }
-  const bytes = new Uint8Array(length);
-  let at = 0;
-  for (const part of parts) {
-    bytes.set(part, at);
-    at += part.length;
-  }
-  return bytes;
-}

@@ -54,7 +54,6 @@ describe("dictation engine", () => {
     expect(pickEngine({ recognition: true, local: "available", browserFailed: true, record: true })).toBe("server");
     expect(pickEngine({ recognition: false, browserFailed: false, record: true })).toBe("server");
     expect(pickEngine({ recognition: true, browserFailed: true, record: false })).toBe("browser");
-    expect(pickEngine({ recognition: false, browserFailed: false, record: false })).toBeUndefined();
   });
 
   it("hands over to the Worker only when the browser's recognition cannot work here", () => {
