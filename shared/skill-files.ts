@@ -47,6 +47,7 @@ const REF_TAG =
 // Any other tag (not a script's) with an attribute whose whole value names a skill file: an <img src>, a <video
 // poster>, a <link rel="icon"> href… The file goes in as a data: URL.
 const ANY_TAG = /<(?!script\b)[a-z][a-z0-9-]*\b[^>]*>/gi;
+const SCRIPT_TEXT = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi;
 const ATTRIBUTE_REF = /(\s)([a-z][a-z0-9-]*)\s*=\s*(["'])skill:([^"']+)\3/gi;
 // A quoted value naming a skill file (skill:<name>/…): each must be one of the references above.
 const ANY_REF = /["']skill:[a-z0-9-]+\//gi;
@@ -67,8 +68,11 @@ function refTags(html: string): RefTag[] {
     if (!script && !isStylesheet(attributes)) continue;
     tags.push({ index: match.index, tag: match[0], ref: script ? match[3] : match[7], kind: script ? "script" : "style", attributes });
   }
+  // A tag-like string in a script's text is text, not a tag (and a reference there is refused, skillRefs).
+  const scripts = [...html.matchAll(SCRIPT_TEXT)].map((match) => [match.index, match.index + match[0].length]);
   for (const element of html.matchAll(ANY_TAG)) {
     if (/^<link\b/i.test(element[0]) && isStylesheet(element[0])) continue;
+    if (scripts.some(([start, end]) => element.index > start && element.index < end)) continue;
     for (const match of element[0].matchAll(ATTRIBUTE_REF)) {
       tags.push({ index: element.index + match.index, tag: match[0], ref: match[4], kind: "attribute", attribute: match[2].toLowerCase() });
     }
@@ -142,16 +146,25 @@ const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 // A url() in a stylesheet, its value quoted or not.
 const CSS_URL = /url\(\s*(["']?)([^"')\s]+)\1\s*\)/gi;
 
-/** A url() of a skill's stylesheet `from` as a file of the skill (skill/path), or null when it names none: not relative, or outside the skill. */
+/** A url() of a skill's stylesheet `from` as a file of the skill (skill/path) to put in as a data: URL, or null when it names none: not relative, outside the skill, or a stylesheet or script. */
 function cssFile(from: string, url: string): string | null {
   if (/^[a-z][a-z0-9+.-]*:|^\/|^#/i.test(url)) return null;
+  // A url() is a URL: a file named "Inter Bold.woff2" is written Inter%20Bold.woff2.
+  let path: string;
+  try {
+    path = decodeURIComponent(url.replace(/[?#].*$/, ""));
+  } catch {
+    return null;
+  }
   const segments = from.split("/").slice(0, -1);
-  for (const segment of url.replace(/[?#].*$/, "").split("/")) {
+  for (const segment of path.split("/")) {
     if (segment === "..") segments.pop();
     else if (segment && segment !== ".") segments.push(segment);
   }
-  // The skill's name is the first segment: a path that climbs past it leaves the skill.
+  // The skill's name is the first segment: a path that climbs past it leaves the skill. A stylesheet or script it
+  // names (an @import) stays as written: the page's policy takes neither as a data: URL.
   const named = segments.join("/");
+  if (/^text\/(css|javascript)$/.test(contentType(named))) return null;
   return segments.length > 1 && parseSkillRef(named)?.skill === from.slice(0, from.indexOf("/")) ? named : null;
 }
 
@@ -177,16 +190,16 @@ export async function inlineSkillFiles(html: string, read: (ref: SkillFileRef) =
   if (missing.length) throw new Error(`No such skill file: ${missing.sort().join(", ")}.`);
 
   const texts = new Map<string, string>();
-  const notText: string[] = [];
+  const notText = new Set<string>();
   for (const tag of tags) {
     if (tag.kind === "attribute" || texts.has(tag.ref)) continue;
     try {
       texts.set(tag.ref, utf8.decode(bytes.get(tag.ref)!));
     } catch {
-      notText.push(`skill:${tag.ref}`);
+      notText.add(`skill:${tag.ref}`);
     }
   }
-  if (notText.length) throw new Error(`Not a text file, so not a script or stylesheet: ${notText.join(", ")}. Name an image or font as an <img> src, or from the skill's own stylesheet.`);
+  if (notText.size) throw new Error(`Not a text file, so not a script or stylesheet: ${[...notText].join(", ")}. Name an image or font as an <img> src, or from the skill's own stylesheet.`);
 
   // A data: URL per file, made once however often the page and its stylesheets name it.
   const urls = new Map<string, string>();
@@ -216,14 +229,15 @@ export async function inlineSkillFiles(html: string, read: (ref: SkillFileRef) =
     const before = html.slice(at, tag.index);
     line += newlines(before);
     at = tag.index + tag.tag.length;
+    let element: string;
     if (tag.kind === "attribute") {
       // The space before the attribute stays; the name it came from goes beside the data: URL for collapseSkillFiles.
-      out += `${before}${tag.tag[0]}${tag.attribute}="${dataUrl(tag.ref)}" data-skill-${tag.attribute}="${escapeAttribute(tag.ref)}"`;
-      continue;
+      element = `${tag.tag[0]}${tag.attribute}="${dataUrl(tag.ref)}" data-skill-${tag.attribute}="${escapeAttribute(tag.ref)}"`;
+    } else {
+      const text = escapeInline(tag.kind === "style" ? withAssets(tag.ref, texts.get(tag.ref)!) : texts.get(tag.ref)!);
+      const type = tag.kind === "script" ? typeOf(tag.attributes) : undefined;
+      element = tag.kind === "script" ? `<script ${marked(tag.ref)}${type ? ` type="${type}"` : ""}>${text}</script>` : `<style ${marked(tag.ref)}>${text}</style>`;
     }
-    const text = escapeInline(tag.kind === "style" ? withAssets(tag.ref, texts.get(tag.ref)!) : texts.get(tag.ref)!);
-    const type = tag.kind === "script" ? typeOf(tag.attributes) : undefined;
-    const element = tag.kind === "script" ? `<script ${marked(tag.ref)}${type ? ` type="${type}"` : ""}>${text}</script>` : `<style ${marked(tag.ref)}>${text}</style>`;
     out += before + element;
     const start = line + added;
     added += newlines(element) - newlines(tag.tag);

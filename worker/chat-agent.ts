@@ -805,17 +805,19 @@ export class ChatAgent extends DurableObject<Env> {
     const skills = await this.#skillsWithFiles(unique);
     const missing = unique.filter((name) => !skills.some((skill) => skill.name === name));
     if (missing.length) throw new Error(`No skill of the user's that is on and has files: ${missing.join(", ")}.`);
-    const bytes = skills.reduce((sum, { files }) => sum + files.reduce((total, file) => total + file.size, 0), 0);
+    // Each SKILL.md counts too: what the run's own files may take is what these leave.
+    const markdowns = skills.map((skill) => new TextEncoder().encode(formatSkillFile(skill)));
+    const bytes = skills.reduce((sum, { files }, i) => sum + markdowns[i].byteLength + files.reduce((total, file) => total + file.size, 0), 0);
     if (bytes > maxBytes) throw new Error(`Those skills hold ${formatBytes(bytes)}; one run takes at most ${formatBytes(maxBytes)} with its files.`);
     const store = await this.#skillFiles();
     const folders = await Promise.all(
-      skills.map(async (skill) => {
+      skills.map(async (skill, s) => {
         const read = await store.readAll(skill.name, skill.fileSet, skill.files.map((file) => file.path));
         const lost = skill.files.find((_, i) => !read[i]);
         if (lost) throw new Error(`The skill "${skill.name}" lost its file ${lost.path}: import it again.`);
         // SkillFiles.read gives each file a buffer of its own, so it goes as it is.
         const folder = skill.files.map((file, i) => ({ name: `${skill.name}/${file.path}`, bytes: read[i]!.buffer as ArrayBuffer }));
-        return [{ name: `${skill.name}/SKILL.md`, bytes: new TextEncoder().encode(formatSkillFile(skill)).buffer as ArrayBuffer }, ...folder];
+        return [{ name: `${skill.name}/SKILL.md`, bytes: markdowns[s].buffer as ArrayBuffer }, ...folder];
       }),
     );
     return folders.flat();

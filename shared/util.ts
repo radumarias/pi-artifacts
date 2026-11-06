@@ -36,14 +36,25 @@ export function randomHex(n: number): string {
   return toHex(crypto.getRandomValues(new Uint8Array(n)));
 }
 
-/** `fn` of each item, in order, with at most `limit` running at once. */
+/**
+ * `fn` of each item, in order, with at most `limit` running at once. Once one fails no more start, and it throws that
+ * failure only when those running have settled: nothing is still going when the caller cleans up after it.
+ */
 export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
+  let failed = false;
   const worker = async () => {
-    for (let i = next++; i < items.length; i = next++) results[i] = await fn(items[i]);
+    try {
+      for (let i = next++; i < items.length && !failed; i = next++) results[i] = await fn(items[i]);
+    } catch (error) {
+      failed = true;
+      throw error;
+    }
   };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(limit, items.length) }, worker));
+  const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (rejected) throw rejected.reason;
   return results;
 }
 

@@ -3,6 +3,7 @@ import { skillFilesNote, type SkillFileInfo } from "../../shared/skill-files.ts"
 import { contentType } from "../../shared/uploads.ts";
 import { isActive, type SkillInfo, type SkillInput } from "../../shared/skills.ts";
 import { formatBytes } from "../../shared/util.ts";
+import { FILES_WRITE_TOOL, RUN_BASH_TOOL } from "../chat-traces.ts";
 
 /** How much of one skill file the agent reads at once: a library a page names by reference need not fill its context. */
 export const MAX_SKILL_FILE_READ = 60_000;
@@ -80,14 +81,14 @@ function resource(file: SkillFileInfo): SkillResourceDescriptor {
 /** Claude Code's tools, as the tools here that do their work: a skill written for Claude Code names them. */
 const CLAUDE_CODE_TOOLS: Record<string, string> = {
   Read: "files_read",
-  Write: "files_write",
-  Edit: "files_write",
-  MultiEdit: "files_write",
-  NotebookEdit: "files_write",
+  Write: FILES_WRITE_TOOL,
+  Edit: FILES_WRITE_TOOL,
+  MultiEdit: FILES_WRITE_TOOL,
+  NotebookEdit: FILES_WRITE_TOOL,
   Glob: "files_list",
   Grep: "files_list",
   LS: "files_list",
-  Bash: "run_bash",
+  Bash: RUN_BASH_TOOL,
 };
 
 /** What `activate_skill` hands the agent: the instructions, then the tools the skill works with (a Claude Code tool with the one here that does its work). */

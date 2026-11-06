@@ -126,6 +126,7 @@ describe("skill file references", () => {
       { skill: "kit", path: "dist/ds.js" },
     ]);
     expect(() => skillRefs('<script>const logo = "skill:kit/logo.svg";</script>')).toThrow(/nowhere else/);
+    expect(() => skillRefs(`<script>el.innerHTML = '<img src="skill:kit/logo.svg">';</script>`)).toThrow(/nowhere else/);
     expect(() => skillRefs('<style>.x{background:url("skill:kit/logo.svg")}</style>')).toThrow(/nowhere else/);
     expect(skillRefs('<link rel="icon" href="skill:kit/logo.svg"><video poster=\'skill:kit/p.png\'></video>')).toEqual([
       { skill: "kit", path: "logo.svg" },
@@ -185,10 +186,12 @@ describe("skill file references", () => {
 describe("skill images, fonts and media in pages", () => {
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff]);
   const woff = new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0xfe]);
-  const css = '@font-face{src:url(../fonts/a.woff2) format("woff2")} .x{background:url("img/b.png")} .y{background:url(https://x.test/y.png)} .z{background:url(gone.png)}';
+  const css =
+    '@import url("theme.css"); @font-face{src:url(../fonts/a%20b.woff2) format("woff2")} .x{background:url("img/b.png")} .y{background:url(https://x.test/y.png)} .z{background:url(gone.png)}';
   const bytes: Record<string, Uint8Array> = {
     "kit/dist/ds.css": new TextEncoder().encode(css),
-    "kit/fonts/a.woff2": woff,
+    "kit/fonts/a b.woff2": woff,
+    "kit/dist/theme.css": new TextEncoder().encode("a{}"),
     "kit/dist/img/b.png": png,
     "kit/logo.png": png,
   };
@@ -211,6 +214,7 @@ describe("skill images, fonts and media in pages", () => {
     expect(html).toContain(`url("data:image/png;base64,${base64(png)}")`);
     expect(html).toContain("url(https://x.test/y.png)");
     expect(html).toContain("url(gone.png)");
+    expect(html).toContain('@import url("theme.css")');
     expect(collapseSkillFiles(html)).toBe('<link rel="stylesheet" href="skill:kit/dist/ds.css">');
   });
 

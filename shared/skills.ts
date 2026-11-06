@@ -75,19 +75,17 @@ export function splitTools(list: string): string[] {
   return list.match(/[^\s,(]+(?:\([^)]*\))?/g) ?? [];
 }
 
-/** The tools a SKILL.md's allowed-tools names, without what a Claude Code tool allows: "Bash(git:*)" is Bash. */
-export function skillTools(listed: readonly unknown[]): unknown[] {
-  return listed.map((tool) => (typeof tool === "string" ? tool.trim().replace(/\(.*\)$/s, "") : tool));
-}
-
-/** A skill's fields trimmed, with the tool list deduplicated. Throws with what to fix. */
+/**
+ * A skill's fields trimmed, with the tool list deduplicated: a Claude Code entry is its tool, without what it allows
+ * ("Bash(git:*)" is Bash), whether from a SKILL.md or typed in the app. Throws with what to fix.
+ */
 export function checkSkill(input: unknown): SkillInput {
   const value = (input ?? {}) as Partial<Record<keyof SkillInput, unknown>>;
   const name = typeof value.name === "string" ? value.name.trim() : "";
   const description = typeof value.description === "string" ? value.description.trim().replace(/\s+/g, " ") : "";
   const instructions = typeof value.instructions === "string" ? value.instructions.trim() : "";
   const listed = Array.isArray(value.tools) ? value.tools : value.tools === undefined ? [] : null;
-  const tools = listed && [...new Set(listed.map((tool) => (typeof tool === "string" ? tool.trim() : "")))];
+  const tools = listed && [...new Set(listed.map((tool) => (typeof tool === "string" ? tool.trim().replace(/\(.*\)$/s, "") : "")))];
   const problems: string[] = [];
   if (!SKILL_NAME_PATTERN.test(name) || name.length > MAX_SKILL_NAME) {
     problems.push(`The name must be up to ${MAX_SKILL_NAME} lowercase letters, digits and single hyphens, e.g. "weekly-report".`);

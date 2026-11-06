@@ -1,6 +1,6 @@
 import { parse, stringify } from "yaml";
 import { errorMessage } from "../../shared/util.ts";
-import { checkSkill, SkillError, skillTools, splitTools, type SkillInput } from "../../shared/skills.ts";
+import { checkSkill, SkillError, splitTools, type SkillInput } from "../../shared/skills.ts";
 import analyzeFiles from "./builtin/analyze-files/SKILL.md?raw";
 import exploreMcpServer from "./builtin/explore-mcp-server/SKILL.md?raw";
 import reviseArtifact from "./builtin/revise-artifact/SKILL.md?raw";
@@ -8,7 +8,7 @@ import reviseArtifact from "./builtin/revise-artifact/SKILL.md?raw";
 /**
  * A skill from a SKILL.md file (the Agent Skills format): YAML frontmatter with
  * `name`, `description` and an optional space-separated `allowed-tools` (a Claude
- * Code entry such as "Bash(git:*)" read as its tool, skillTools), then the
+ * Code entry such as "Bash(git:*)" read as its tool, checkSkill), then the
  * instructions; other fields are ignored. Throws with what to fix.
  */
 export function parseSkillFile(markdown: string): SkillInput {
@@ -22,8 +22,7 @@ export function parseSkillFile(markdown: string): SkillInput {
   }
   const front = (data && typeof data === "object" && !Array.isArray(data) ? data : {}) as Record<string, unknown>;
   const allowed = front["allowed-tools"];
-  const listed = typeof allowed === "string" ? splitTools(allowed) : Array.isArray(allowed) ? allowed : allowed == null ? [] : null;
-  const tools = listed && skillTools(listed);
+  const tools = typeof allowed === "string" ? splitTools(allowed) : Array.isArray(allowed) ? allowed : allowed == null ? [] : null;
   return checkSkill({ name: front.name, description: front.description, instructions: match[2] ?? "", tools });
 }
 
