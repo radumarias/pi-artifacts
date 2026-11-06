@@ -361,6 +361,9 @@ body.resizing iframe { pointer-events: none; }
 .auto-pick summary { display: flex; align-items: center; justify-content: flex-end; gap: 6px; list-style: none; cursor: pointer; }
 .auto-pick summary::-webkit-details-marker { display: none; }
 .auto-pick-why { white-space: pre-line; overflow-wrap: anywhere; text-align: right; }
+/* Under someone else's message, on the left like it. */
+.message.other .auto-pick summary { justify-content: flex-start; }
+.message.other .auto-pick-why { text-align: left; }
 .auto-pick-tag { flex: none; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; font-weight: 600; }
 .auto-pick-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auto-pick.kept .auto-pick-model { font-style: italic; }

@@ -54,6 +54,8 @@ export const ROUTE_MS = 5_000;
 const TRY_MS = 2_000;
 /** How much of each router's error a failed pick keeps. */
 const MAX_ERROR_CHARS = 120;
+/** And of all of them: what a message's failed pick keeps, for everyone in the chat to read. */
+const MAX_ERRORS_CHARS = 400;
 /** Enough for a reasoning router's few thoughts and the JSON line. */
 const MAX_ROUTER_TOKENS = 1_024;
 /** How much of the conversation the router reads: the newest turns, each cut, up to a total. */
@@ -221,6 +223,8 @@ function pickOf(candidates: readonly Candidate[], model: unknown, effort: unknow
 export interface Router {
   /** The picker's id of the model that picks: the ledger's key and the pick's tooltip name it. */
   id: string;
+  /** Set for one ROUTER_MODEL names that cannot be asked (it fails at once): it leaves the routers before it all the time. */
+  unavailable?: true;
   /** Its pick for `request`, or a throw; and the call's usage, for pi's ledger. */
   ask(request: RouteRequest, signal: AbortSignal): Promise<{ pick: RoutePick; usage: Usage }>;
 }
@@ -265,7 +269,8 @@ export function decisionsRouter(gateway: GatewayOptions, model: ClassifierModel<
   const viaGateway = (url: string | URL | Request, init?: RequestInit) => {
     const headers = Object.fromEntries(new Headers(init?.headers).entries());
     delete headers.authorization;
-    return gatewayFetch(gateway, "openai", new URL(String(url)).pathname.slice(1), { ...init, headers });
+    const { pathname, search } = new URL(url instanceof Request ? url.url : String(url));
+    return gatewayFetch(gateway, "openai", `${pathname.slice(1)}${search}`, { ...init, headers });
   };
   return {
     id: modelKey(model.provider, model.id),
@@ -328,8 +333,10 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
   if (!request.candidates.length) throw new Error("none of the models Auto picks among is available");
   const deadline = Date.now() + timeoutMs;
   const errors: string[] = [];
+  // The last router that can be asked has whatever time is left: those after it fail at once.
+  const last = routers.findLastIndex((router) => !router.unavailable);
   for (const [i, router] of routers.entries()) {
-    const left = Math.min(deadline - Date.now(), i < routers.length - 1 ? TRY_MS : Infinity);
+    const left = Math.min(deadline - Date.now(), i < last ? TRY_MS : Infinity);
     if (left <= 0) {
       errors.push(`${router.id}: out of time`);
       break;
@@ -342,7 +349,7 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
       errors.push(`${router.id}: ${clip(errorMessage(error), MAX_ERROR_CHARS)}`);
     }
   }
-  throw new Error(errors.join("; "));
+  throw new Error(clip(errors.join("; "), MAX_ERRORS_CHARS));
 }
 
 /**
@@ -357,9 +364,9 @@ export function routersFrom(spec: string, catalog: Catalog, use: { models: Model
     .map((id): Router => {
       if (id.startsWith(DECISIONS_PREFIX)) {
         const name = id.slice(DECISIONS_PREFIX.length);
-        const model = name.startsWith("openai/")
-          ? (OPENAI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"openai-decisions">>)[name.slice("openai/".length)]
-          : undefined;
+        const classifiers = OPENAI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"openai-decisions">>;
+        const key = name.startsWith("openai/") ? name.slice("openai/".length) : undefined;
+        const model = key !== undefined && Object.hasOwn(classifiers, key) ? classifiers[key] : undefined;
         return model ? decisionsRouter(use.gateway, model) : unavailable(name, "not an OpenAI Decisions model");
       }
       const model = catalog.model(id);
@@ -371,6 +378,7 @@ export function routersFrom(spec: string, catalog: Catalog, use: { models: Model
 function unavailable(id: string, why: string): Router {
   return {
     id,
+    unavailable: true,
     ask: () => Promise.reject(new Error(why)),
   };
 }
