@@ -951,6 +951,8 @@ a.mention-chip:hover { text-decoration: underline; }
   .composer { padding: 8px 12px max(10px, env(safe-area-inset-bottom)); }
   .mention-list { left: 12px; right: 12px; }
   .share-panel { margin: 8px 12px 0; }
+  /* Under the header's narrower padding. */
+  .chat-header .cost-panel { right: 12px; width: min(340px, calc(100% - 24px)); }
   .skills { padding: 20px 16px; }
 }
 /* After the rules above, which it overrides. */
@@ -970,8 +972,6 @@ a.mention-chip:hover { text-decoration: underline; }
   .composer-more:has(> .composer-history) { position: static; }
   .composer-history { left: 12px; right: 12px; bottom: calc(100% - 8px); width: auto; }
 }
-/* A phone's header has room for the name, the people and sharing; each answer's cost still shows under it. */
-@media (max-width: 480px) { .chat-header .chat-cost { display: none; } }
 /* Touch: targets big enough for a finger. */
 @media (pointer: coarse) {
   .icon-button { width: 40px; height: 40px; }
@@ -1038,7 +1038,24 @@ a.mention-chip:hover { text-decoration: underline; }
 .cost-panel .cost-amount { grid-row: 1 / 3; grid-column: 2; align-self: center; font-variant-numeric: tabular-nums; }
 .cost-panel > small, .context-panel > small { color: var(--muted); font-size: 12px; }
 .cost-panel .cost-time { padding-top: 8px; border-top: 1px solid var(--border); }
-@media (max-width: 480px) { .chat-time { display: none; } }
+/* A phone: the chat's cost on a small line under its name, which keeps its room beside the buttons. Grid rows rather
+   than a box around the two, so the header's order stays the same at every width: the rest spans both rows. */
+@media (max-width: 480px) {
+  .chat-header:has(> .chat-cost) { display: grid; grid-auto-flow: column; grid-template-columns: auto 1fr; row-gap: 0; }
+  /* "Open in 2 of your windows" takes what the name leaves, as its flex: 1 does above 480px. */
+  .chat-header:has(> .chat-cost):has(> .chat-people) { grid-template-columns: auto auto 1fr; }
+  .chat-header:has(> .chat-cost) > * { grid-row: 1 / 3; }
+  /* Its column's width, so it is cut there: an auto margin would size it to its badges. */
+  .chat-header:has(> .chat-cost) > .people-bar { margin-left: 0; }
+  .chat-header:has(> .chat-cost) > .chat-title { grid-area: 1 / 2; align-self: end; line-height: 1.25; }
+  /* Whole, its width the least the name's column gets: the people bar beside them is cut first. Flex: a block would
+     hold the button in a line box of the header's 16px text, a gap under the name. */
+  .chat-header:has(> .chat-cost) > .chat-cost { grid-area: 2 / 2; align-self: start; display: flex; }
+  /* Plain text with a finger-sized target around it, out to the gap and the header's bottom edge (clear of the name). */
+  .chat-cost > button { margin: -2px -6px -6px; padding: 2px 6px 6px; border: 0; background: none; color: var(--muted); font-size: 12px; line-height: 1.3; white-space: nowrap; }
+  /* Only the cost, so a shared chat's header fits a small phone; its panel has the time. */
+  .chat-time { display: none; }
+}
 
 /* Groups in a sidebar list (a shared chat's artifacts beside the user's own), and a list with nothing in it. */
 .sidebar .nav-group { margin: 6px 0 2px; padding: 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
