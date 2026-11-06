@@ -1,11 +1,12 @@
 import { CHECK_TOOL, DRAFTS_TOOL, manifestOf, WRITE_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary } from "../../shared/protocol.ts";
+import { collapseSkillFiles, inlinedSkillFiles, inlineSkillFiles, skillRefs, type InlinedPage, type SkillFileInfo } from "../../shared/skill-files.ts";
 import { errorMessage, formatBytes, plural } from "../../shared/util.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../artifacts/browser.ts";
 import { timedOutReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { ArtifactStore } from "../storage/artifacts.ts";
-import { draftId, passed, type ChatDrafts, type Draft, type DraftCheck, type DraftSummary } from "../storage/drafts.ts";
+import { draftId, passed, type ChatDrafts, type Draft, type DraftCheck, type DraftSummary, type SkillSets } from "../storage/drafts.ts";
 
 /** What publishing a page needs from the chat it is published in (and the tools, ChatScope, more). */
 export interface PublishScope {
@@ -25,6 +26,10 @@ export interface PublishScope {
   drafts: () => Promise<ChatDrafts>;
   /** Whether a page may be published unchecked when there is no browser to check it in: local development only. */
   publishUnchecked: boolean;
+  /** The files of those of the owner's skills named that are on and have any, by name: what a page may name (shared/skill-files.ts). */
+  skillSets(names: readonly string[]): Promise<Map<string, { set: string; files: SkillFileInfo[] }>>;
+  /** The text of one file of a set of a skill's files (SkillFiles), or null when the set has no such file, or is gone. */
+  readSkillFile(skill: string, set: string, path: string): Promise<string | null>;
 }
 
 /** Which artifact a publish goes to and what the version says (see artifactFor). */
@@ -48,6 +53,75 @@ export async function validPage(scope: PublishScope, html: string, mcp: McpDecla
   const problems = await checkManifest(scope.hub, manifest);
   if (problems.length) throw new Error(`${what} Fix the mcp declaration:\n${problems.join("\n")}`);
   return manifest;
+}
+
+/**
+ * The sets of skill files a page names files of (SkillSets): each file must be one of a skill of the owner's that is on,
+ * and the page with them under the size limit. Throws, starting with `what`, naming what it cannot find.
+ */
+async function pinSkillFiles(scope: PublishScope, html: string, what: string): Promise<SkillSets> {
+  let refs;
+  try {
+    refs = skillRefs(html);
+  } catch (error) {
+    throw new Error(`${what} ${errorMessage(error)}`);
+  }
+  if (!refs.length) return {};
+  const found = await scope.skillSets([...new Set(refs.map((ref) => ref.skill))]);
+  const sets: SkillSets = {};
+  const missing: string[] = [];
+  let bytes = new TextEncoder().encode(html).byteLength;
+  for (const ref of refs) {
+    const skill = found.get(ref.skill);
+    const file = skill?.files.find((f) => f.path === ref.path);
+    if (!skill || !file) {
+      missing.push(`skill:${ref.skill}/${ref.path}`);
+      continue;
+    }
+    sets[ref.skill] = skill.set;
+    bytes += file.size;
+  }
+  if (missing.length)
+    throw new Error(`${what} No such skill file: ${missing.join(", ")}. A skill lists its files when activated; only your skills that are on count.`);
+  if (bytes > MAX_HTML_BYTES) throw new Error(`${what} With the skill files it names, the page is over ${formatBytes(MAX_HTML_BYTES)}.`);
+  return sets;
+}
+
+/**
+ * The page as it runs: with the skill files it names read from the sets the draft was saved with (pinSkillFiles) and put
+ * in their place, and which line of the draft each of its lines is. A page that names none comes back as it is. Throws,
+ * starting with `what`, when a set is gone or the page with the files is over the size limit.
+ */
+async function pageToRun(scope: PublishScope, draft: Draft, what: string): Promise<InlinedPage> {
+  let page: InlinedPage;
+  try {
+    page = await inlineSkillFiles(draft.html, async ({ skill, path }) => {
+      const set = draft.skillSets?.[skill];
+      return set ? scope.readSkillFile(skill, set, path) : null;
+    });
+  } catch (error) {
+    throw new Error(
+      `${what} ${errorMessage(error)} The skill was imported again or deleted since this draft was saved: save it again with ${WRITE_TOOL}, ` +
+        `draft_id "${draft.id}" and no edits.`,
+    );
+  }
+  if (page.html !== draft.html && new TextEncoder().encode(page.html).byteLength > MAX_HTML_BYTES)
+    throw new Error(`${what} With the skill files it names, the page is over ${formatBytes(MAX_HTML_BYTES)}.`);
+  return page;
+}
+
+/**
+ * A published version's page as the agent reads and edits it: with the skill files publishing put in it turned back
+ * into the references it was written with, but for those no skill of the owner's that is on has any more, which stay
+ * inlined so that the page can still be edited and published.
+ */
+export async function readPageSource(scope: Pick<PublishScope, "artifacts" | "skillSets">, id: string, version: number): Promise<string | null> {
+  const html = await scope.artifacts.readHtml(id, version);
+  if (html === null) return null;
+  const inlined = inlinedSkillFiles(html);
+  if (!inlined.length) return html;
+  const found = await scope.skillSets([...new Set(inlined.map((ref) => ref.skill))]);
+  return collapseSkillFiles(html, ({ skill, path }) => found.get(skill)?.files.some((file) => file.path === path) === true);
 }
 
 /** Check a page in the headless browser: its report (one error, if it ran out of time), or why no browser could check it. */
@@ -127,14 +201,16 @@ export async function writeDraft(scope: PublishScope, input: WriteInput): Promis
       artifactId ??= draft.artifactId;
     } else if (artifact) {
       const at = version ?? artifact.latest;
-      const published = await scope.artifacts.readHtml(artifact.id, at);
+      const published = await readPageSource(scope, artifact.id, at);
       if (published === null) throw new Error(`Not saved: artifact ${artifact.id} has versions 1 to ${artifact.latest}.`);
       html = applyEdits(published, edits);
       mcp ??= manifestOf(artifact, at)?.mcp?.servers;
     } else throw new Error("Pass a new page as html, or edits with the draft_id or artifact_id they change.");
   }
   const manifest = await validPage(scope, html, mcp, "Not saved.");
-  return drafts.save({ id: await draftId(html, manifest), html, manifest, artifactId }, null);
+  const skillSets = await pinSkillFiles(scope, html, "Not saved.");
+  const id = await draftId(html, manifest, skillSets);
+  return drafts.save({ id, html, manifest, artifactId, ...(Object.keys(skillSets).length && { skillSets }) }, null);
 }
 
 /** What checking a draft came to: the draft, and the check's report, or why no browser checked it. */
@@ -153,7 +229,8 @@ export async function checkDraft(
 ): Promise<CheckedDraft> {
   const drafts = await scope.drafts();
   const draft = await draftNamed(drafts, id, "Not checked.");
-  const checked = await checkInBrowser(scope, { html: draft.html, manifest: draft.manifest, ...options }, signal);
+  const { html, pageLine } = await pageToRun(scope, draft, "Not checked.");
+  const checked = await checkInBrowser(scope, { html, manifest: draft.manifest, ...options, ...(html !== draft.html && { pageLine }) }, signal);
   const check = draftCheck(checked.report);
   if (check) await drafts.recordCheck(id, check);
   return { draft: { ...draft, ...check }, ...checked };
@@ -278,13 +355,15 @@ export async function publishDraft(scope: PublishScope, input: PublishInput, sig
   if (unchecked && !scope.publishUnchecked) throw new Error(`Not published: draft "${draft.id}" has not passed a check. Check it with ${CHECK_TOOL} first.`);
   // The chat's servers may have changed since the page was written.
   await validPage(scope, draft.html, draft.manifest.mcp?.servers, "Not published.");
+  // The version holds the skill files the check ran with: it never changes when the skill does.
+  const { html } = await pageToRun(scope, draft, "Not published.");
   const target = await artifactFor(scope, input, draft.artifactId);
   const meta = await scope.artifacts.publishVersion({
     id: target.id,
     ownerUid: scope.uid,
     chatId: scope.chatId,
     title: input.title,
-    html: draft.html,
+    html,
     manifest: draft.manifest,
     message: input.message,
   });

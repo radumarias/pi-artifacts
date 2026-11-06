@@ -1,7 +1,10 @@
 // Skills: named ways of working the agent picks for itself. Each one says
 // when to use it, how to work (instructions and guardrails) and which tools
 // it works with. Only names and descriptions are in the system prompt; the
-// agent activates a skill to read the rest.
+// agent activates a skill to read the rest. A skill imported as a package also
+// has files (shared/skill-files.ts).
+
+import type { SkillFileInfo } from "./skill-files.ts";
 
 /** Lowercase words joined by hyphens, as in the Agent Skills format. */
 export const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -43,6 +46,10 @@ export interface SkillInfo extends SkillInput {
   updatedAt: number;
   /** A built-in skill that one of the user's own, turned on, has the same name as: the agent gets the user's. */
   replaced?: true;
+  /** The files that came with a skill imported as a package, by path; none for others. */
+  files?: SkillFileInfo[];
+  /** Where those files are kept (SkillFiles): the set the last import wrote. */
+  fileSet?: string;
 }
 
 /** Whether the agent gets this skill: it is on, and no skill of the user's own with its name replaces it. */

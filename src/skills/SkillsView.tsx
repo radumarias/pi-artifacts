@@ -1,6 +1,7 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { MAX_SKILL_ZIP_BYTES } from "../../shared/skill-files.ts";
 import { isActive, MAX_SKILL_DESCRIPTION, MAX_SKILL_INSTRUCTIONS, splitTools, type SkillInfo } from "../../shared/skills.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { errorMessage, formatBytes, listSome, plural } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
 const ORIGIN_LABEL: Record<SkillInfo["origin"], string> = { builtin: "built-in", user: "yours", agent: "proposed in a chat" };
@@ -17,17 +18,21 @@ const EMPTY: Draft = { name: "", description: "", instructions: "", tools: "" };
 /**
  * The user's skills: what the agent can pick for itself in every chat. Built-in
  * ones can be turned off; the user's own can be written, imported from a
- * SKILL.md, edited and deleted. A skill the agent proposed waits here, off,
- * until the user reviews it and turns it on.
+ * SKILL.md or a package (a zip with its files), edited and deleted. A skill
+ * the agent proposed waits here, off, until the user reviews it and turns it on.
  */
 export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] | null; loadError: string | null; reload: () => void }) {
   const [error, setError] = useState<string | null>(null);
   // The skill being edited: a draft, and the name it had (undefined for a new one).
   const [editing, setEditing] = useState<{ draft: Draft; existing?: string } | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
+  // What the last package import said: the skill it saved and the files it left out.
+  const [imported, setImported] = useState<string | null>(null);
+  const packageInput = useRef<HTMLInputElement>(null);
 
   const run = async (action: () => Promise<unknown>) => {
     setError(null);
+    setImported(null);
     try {
       await action();
       return true;
@@ -59,6 +64,22 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
   const importMarkdown = async (event: FormEvent) => {
     event.preventDefault();
     if (importing !== null && (await run(() => api.saveSkill({ markdown: importing })))) setImporting(null);
+  };
+
+  const importPackage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const zip = event.target.files?.[0];
+    event.target.value = "";
+    if (!zip) return;
+    if (zip.size > MAX_SKILL_ZIP_BYTES) {
+      setError(`That zip is over ${formatBytes(MAX_SKILL_ZIP_BYTES)}.`);
+      return;
+    }
+    let saved: Awaited<ReturnType<typeof api.importSkillPackage>> | undefined;
+    if (!(await run(async () => (saved = await api.importSkillPackage(zip)))) || !saved) return;
+    const { name, files = [], skipped } = saved;
+    setImported(
+      `Imported "${name}" with ${plural(files.length, "file")}.` + (skipped.length ? ` Left out ${plural(skipped.length, "file")}: ${listSome(skipped, 5)}.` : ""),
+    );
   };
 
   const card = (skill: SkillInfo) => (
@@ -100,6 +121,20 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
         <summary>Instructions{skill.tools.length ? ` · tools: ${skill.tools.join(", ")}` : ""}</summary>
         <pre>{skill.instructions}</pre>
       </details>
+      {skill.files?.length ? (
+        <details>
+          <summary>
+            {plural(skill.files.length, "file")} · {formatBytes(skill.files.reduce((sum, file) => sum + file.size, 0))}
+          </summary>
+          <ul className="skill-files">
+            {skill.files.map((file) => (
+              <li key={file.path}>
+                <code>{file.path}</code> <small>{formatBytes(file.size)}</small>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </li>
   );
 
@@ -120,9 +155,14 @@ export function SkillsView({ skills, loadError, reload }: { skills: SkillInfo[] 
           <button type="button" onClick={() => setImporting("")}>
             Import SKILL.md
           </button>
+          <button type="button" onClick={() => packageInput.current?.click()} title="A zip of a skill's folder: its SKILL.md and the files it comes with">
+            Import package
+          </button>
+          <input ref={packageInput} type="file" accept=".zip,application/zip" hidden onChange={importPackage} />
         </div>
       </header>
       {error && <p className="form-error">{error}</p>}
+      {imported && <p className="skills-note">{imported}</p>}
 
       {importing !== null && (
         <form className="skill-form" onSubmit={importMarkdown}>

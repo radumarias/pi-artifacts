@@ -165,7 +165,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json(saved, "error" in saved ? 400 : 200);
   }
 
-  const skills = await skillsRoute(request, directory);
+  const skills = await skillsRoute(request, directory, () => storage.skillFiles(uid));
   if (skills) return skills;
 
   // A chat's Durable Object is named after its owner's verified uid; others reach it only once they joined by an invite.

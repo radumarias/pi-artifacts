@@ -165,6 +165,9 @@ export const api = {
     request<SkillInfo>(skillPath(skill), send("PATCH", { enabled, updatedAt: skill.updatedAt || undefined })),
   deleteSkill: (skill: SkillInfo) => request<object>(skillPath(skill), { method: "DELETE" }),
   skillMarkdownUrl: (skill: SkillInfo) => `${skillPath(skill)}/SKILL.md`,
+  /** Import a skill package: a zip with its SKILL.md and files. Says which files it left out, and why. */
+  importSkillPackage: (zip: File) =>
+    request<SkillInfo & { skipped: string[] }>("/api/skills/import", { method: "POST", headers: { "content-type": "application/zip" }, body: zip }),
   files: () => request<FileInfo[]>("/api/files"),
   /**
    * Where a user file is served: an image opens in the browser, anything else downloads. `base` is where the files are

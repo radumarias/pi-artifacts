@@ -44,7 +44,7 @@ export class FakeBucket {
 
   async put(key: string, body: unknown, options?: { ssecKey?: unknown }) {
     this.calls.push({ op: "put", key, ssecKey: options?.ssecKey });
-    this.objects.set(key, typeof body === "string" ? body : "");
+    this.objects.set(key, typeof body === "string" ? body : body instanceof Uint8Array ? new TextDecoder().decode(body) : "");
   }
 
   /** One key or several, as R2 takes them. */

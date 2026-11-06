@@ -47,7 +47,7 @@ const report = (errors: string[]): CheckReport => ({
 });
 
 /** A chat with no MCP servers whose browser answers with `check`, and the versions it published. */
-function chat(check: (html: string) => CheckReport | Error, publishUnchecked = false) {
+function chat(check: (html: string) => CheckReport | Error, publishUnchecked = false, skillFiles: Record<string, string> = {}, skillSet = { id: "0123456789abcdef" }) {
   const versions: { id?: string; html: string }[] = [];
   const checked: string[] = [];
   const drafts = new ChatDrafts(new FakeBucket().r2, "ada", "0123456789abcdef", new ArrayBuffer(32));
@@ -71,6 +71,14 @@ function chat(check: (html: string) => CheckReport | Error, publishUnchecked = f
     },
     chatArtifacts: async () => [],
     drafts: async () => drafts,
+    skillSets: async (names) =>
+      new Map(
+        names.flatMap((name) => {
+          const files = Object.keys(skillFiles).filter((key) => key.startsWith(`${name}/`));
+          return files.length ? [[name, { set: skillSet.id, files: files.map((key) => ({ path: key.slice(name.length + 1), size: skillFiles[key].length })) }] as const] : [];
+        }),
+      ),
+    readSkillFile: async (skill, set, path) => (set === skillSet.id ? (skillFiles[`${skill}/${path}`] ?? null) : null),
     publishUnchecked,
   };
   return { scope, versions, checked, drafts };
@@ -170,6 +178,72 @@ describe("writeDraft", () => {
     expect(await writeDraft(scope, { artifact: a1, edits: [{ old: "v2", new: "v3" }] })).toMatchObject({ html: "<p>v3</p>", artifactId: "a1" });
     expect(await writeDraft(scope, { artifact: a1, version: 1 })).toMatchObject({ html: "<p>v1</p>", artifactId: "a1" });
     await expect(writeDraft(scope, { artifact: a1, version: 5 })).rejects.toThrow("has versions 1 to 2");
+  });
+});
+
+describe("skill files in pages", () => {
+  const page = '<html><head><script src="skill:kit/dist/ds.js"></script></head><body><div id="app"></div></body></html>';
+  const files = { "kit/dist/ds.js": "window.DS = 1; // </script> inside" };
+
+  it("keeps the reference in the draft, checks and publishes the page with the file inlined", async () => {
+    const { scope, versions, checked } = chat(() => report([]), false, files);
+    const draft = await writeDraft(scope, { html: page });
+    expect(draft.html).toBe(page);
+    await checkDraft(scope, draft.id, {});
+    expect(checked[0]).toContain('<script data-skill-file="kit/dist/ds.js">window.DS = 1; // <\\/script> inside</script>');
+    await publishDraft(scope, { title: "Kit", draftId: draft.id });
+    expect(versions[0].html).toBe(checked[0]);
+  });
+
+  it("publishes the skill files the check ran with, or nothing once the skill was imported again", async () => {
+    const skillSet = { id: "0123456789abcdef" };
+    const { scope, versions } = chat(() => report([]), false, files, skillSet);
+    const draft = await writeDraft(scope, { html: page });
+    expect(draft.skillSets).toEqual({ kit: "0123456789abcdef" });
+    await checkDraft(scope, draft.id, {});
+    skillSet.id = "fedcba9876543210";
+    await expect(publishDraft(scope, { title: "Kit", draftId: draft.id })).rejects.toThrow(/imported again or deleted since this draft was saved/);
+    expect(versions).toEqual([]);
+    const again = await writeDraft(scope, { draftId: draft.id, edits: [] });
+    expect(again.id).not.toBe(draft.id);
+    expect(again.errors).toBeNull();
+  });
+
+  it("refuses to save a page naming a file the skill does not have", async () => {
+    const { scope } = chat(() => report([]), false, {});
+    await expect(writeDraft(scope, { html: page })).rejects.toThrow(/Not saved\. No such skill file: skill:kit\/dist\/ds\.js/);
+  });
+
+  it("edits a published version as the agent reads it: with references, not the inlined file", async () => {
+    const { scope, versions } = chat(() => report([]), true, files);
+    await publishDraft(scope, { title: "Kit", draftId: (await writeDraft(scope, { html: page })).id });
+    expect(versions[0].html).toContain("window.DS = 1");
+    (scope.artifacts as unknown as { readHtml: () => Promise<string> }).readHtml = async () => versions[0].html;
+    const edited = await writeDraft(scope, { artifact: a1, edits: [{ old: '<div id="app"></div>', new: '<div id="app" class="x"></div>' }] });
+    expect(edited.html).toBe(page.replace('<div id="app">', '<div id="app" class="x">'));
+  });
+
+  it("keeps a file inlined when its skill no longer has it, so the published page can still be edited", async () => {
+    const mine: Record<string, string> = { ...files };
+    const { scope, versions } = chat(() => report([]), true, mine);
+    await publishDraft(scope, { title: "Kit", draftId: (await writeDraft(scope, { html: page })).id });
+    (scope.artifacts as unknown as { readHtml: () => Promise<string> }).readHtml = async () => versions[0].html;
+    delete mine["kit/dist/ds.js"];
+    const edited = await writeDraft(scope, { artifact: a1, edits: [{ old: '<div id="app"></div>', new: '<div id="app" class="x"></div>' }] });
+    expect(edited.html).toContain('<script data-skill-file="kit/dist/ds.js">window.DS = 1;');
+    expect(edited.skillSets).toBeUndefined();
+  });
+
+  it("reports the check's errors at the lines of the draft, not of the page with the files in it", async () => {
+    const lines: number[] = [];
+    const { scope } = chat(() => report([]), false, { "kit/dist/ds.js": "a\nb\nc\nd" });
+    scope.checkPage = async (input) => {
+      lines.push(...[1, 3, 5, 6].map((line) => input.pageLine?.(line) ?? line));
+      return report([]);
+    };
+    const draft = await writeDraft(scope, { html: `<head>\n${page.slice("<html><head>".length)}\n<p>after</p>` });
+    await checkDraft(scope, draft.id, {});
+    expect(lines).toEqual([1, 2, 2, 3]);
   });
 });
 

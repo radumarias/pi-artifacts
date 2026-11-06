@@ -21,7 +21,7 @@ import { describeReport, type CheckReport } from "../artifacts/check.ts";
 import { chatOutFolder, FILES_WRITE_TOOL, RUN_BASH_TOOL, RUN_PYTHON_TOOL, savedReport, wroteReport } from "../chat-traces.ts";
 import type { SandboxFile, SandboxRun } from "../sandbox.ts";
 import { literalPath, MAX_DRAFTS, type FileEntry, type UserFiles } from "../storage/index.ts";
-import { checkDraft, draftLine, draftNamed, FailedChecks, publishDraft, writeDraft, type PublishScope } from "./publish.ts";
+import { checkDraft, draftLine, draftNamed, FailedChecks, publishDraft, readPageSource, writeDraft, type PublishScope } from "./publish.ts";
 import { FileRefError, MAX_SANDBOX_BYTES, outputPaths, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
@@ -414,7 +414,7 @@ export function artifactExtension(scope: ChatScope): Extension {
         execute: async (args) => {
           const meta = await ownArtifact(scope, args.artifact_id);
           const version = args.version ?? meta.latest;
-          const html = await scope.artifacts.readHtml(meta.id, version);
+          const html = await readPageSource(scope, meta.id, version);
           if (html === null) throw new Error(`Artifact ${meta.id} has no version ${version}.`);
           const declared = JSON.stringify(manifestOf(meta, version) ?? {});
           return { output: text(`Version ${version} of ${meta.latest}, manifest ${declared}:\n\n${html}`) };
@@ -440,7 +440,7 @@ export function artifactExtension(scope: ChatScope): Extension {
           const meta = await ownArtifact(scope, args.artifact_id);
           const to = args.to ?? meta.latest;
           const from = args.from ?? to - 1;
-          const [before, after] = await Promise.all([scope.artifacts.readHtml(meta.id, from), scope.artifacts.readHtml(meta.id, to)]);
+          const [before, after] = await Promise.all([readPageSource(scope, meta.id, from), readPageSource(scope, meta.id, to)]);
           if (before === null || after === null) throw new Error(`Artifact ${meta.id} has versions 1 to ${meta.latest}.`);
           const patch = createTwoFilesPatch(`v${from}/index.html`, `v${to}/index.html`, before, after, undefined, undefined, { context: 3 });
           return { output: text(clip(patch)) };

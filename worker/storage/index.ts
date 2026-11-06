@@ -3,12 +3,14 @@ import { ArtifactStore } from "./artifacts.ts";
 import { ChatDrafts } from "./drafts.ts";
 import { deriveUserKey } from "./keys.ts";
 import { ModelCache } from "./model-cache.ts";
+import { SkillFiles } from "./skill-files.ts";
 import { UserFiles } from "./user-files.ts";
 
 export { newId } from "./artifacts.ts";
 export type { ArtifactStore } from "./artifacts.ts";
-export { draftId, MAX_DRAFTS, passed, type ChatDrafts, type Draft, type DraftSummary } from "./drafts.ts";
+export { draftId, MAX_DRAFTS, passed, type ChatDrafts, type Draft, type DraftSummary, type SkillSets } from "./drafts.ts";
 export type { FileEntry, UserFiles } from "./user-files.ts";
+export type { SkillFiles } from "./skill-files.ts";
 export { literalPath, normalisePath, PathError } from "./paths.ts";
 
 /**
@@ -32,6 +34,11 @@ export class Storage {
   /** One user's files. `uid` must come from a verified identity, never from a request body or a model. */
   async userFiles(uid: string): Promise<UserFiles> {
     return new UserFiles(this.#env.FILES, uid, await this.#userKey(uid));
+  }
+
+  /** The files of one user's skills, encrypted with their key. `uid` as for userFiles. */
+  async skillFiles(uid: string): Promise<SkillFiles> {
+    return new SkillFiles(this.#env.FILES, uid, await this.#userKey(uid));
   }
 
   /** One chat's drafts, in its owner's folder and encrypted with the owner's key. `uid` as for userFiles. */

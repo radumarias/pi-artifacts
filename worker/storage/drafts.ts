@@ -9,10 +9,17 @@ export const MAX_DRAFTS = 20;
 const ID_LENGTH = 16;
 const DRAFT_ID = new RegExp(`^[0-9a-f]{${ID_LENGTH}}$`);
 
-/** The id a page is saved as a draft by: the start of a SHA-256 of its manifest and the page. */
-export async function draftId(html: string, manifest: ArtifactManifest): Promise<string> {
-  return (await sha256Hex(`${canonicalJson(manifest)}\u0000${html}`)).slice(0, ID_LENGTH);
+/**
+ * The id a page is saved as a draft by: the start of a SHA-256 of its manifest, the page and the sets of skill files
+ * it names, so the same page naming a skill imported again is another draft, with its own check.
+ */
+export async function draftId(html: string, manifest: ArtifactManifest, skillSets: SkillSets = {}): Promise<string> {
+  const sets = Object.keys(skillSets).length ? `\u0000${canonicalJson(skillSets)}` : "";
+  return (await sha256Hex(`${canonicalJson(manifest)}\u0000${html}${sets}`)).slice(0, ID_LENGTH);
 }
+
+/** The set of files (SkillFiles) of each skill a page names files of, by the skill's name: what checking and publishing it read. */
+export type SkillSets = Record<string, string>;
 
 /** A page as it is saved: by its draftId, with the artifact of this chat it is a new version of, when the agent said. */
 export interface DraftPage {
@@ -20,6 +27,8 @@ export interface DraftPage {
   html: string;
   manifest: ArtifactManifest;
   artifactId?: string;
+  /** The skill files the page names are read from these sets, which never change: what was checked is what is published. */
+  skillSets?: SkillSets;
 }
 
 /** What a page's check found: errors is null when no browser could check it. */
@@ -35,7 +44,7 @@ export interface DraftCheck {
  */
 export type Draft = DraftPage & DraftCheck & { savedAt: number };
 
-export type DraftSummary = Omit<Draft, "html" | "manifest"> & { bytes: number };
+export type DraftSummary = Omit<Draft, "html" | "manifest" | "skillSets"> & { bytes: number };
 
 /** Whether a draft passed its check: only those may be published by their id. */
 export const passed = (draft: Pick<DraftCheck, "errors">) => draft.errors === 0;
@@ -71,9 +80,9 @@ export class ChatDrafts {
     if (!DRAFT_ID.test(id)) return null;
     const [object, index] = await Promise.all([this.#bucket.get(this.#draftKey(id), { ssecKey: this.#key }), this.#index()]);
     if (!object) return null;
-    const { html, manifest, artifactId, savedAt } = (await object.json()) as Draft;
+    const { html, manifest, artifactId, skillSets, savedAt } = (await object.json()) as Draft;
     const entry = index.find((e) => e.id === id);
-    return { id, html, manifest, artifactId, savedAt, errors: entry?.errors ?? null, warnings: entry?.warnings ?? 0 };
+    return { id, html, manifest, artifactId, skillSets, savedAt, errors: entry?.errors ?? null, warnings: entry?.warnings ?? 0 };
   }
 
   /**
@@ -105,12 +114,12 @@ export class ChatDrafts {
       savedAt: Date.now(),
       ...(check ?? { errors: before?.errors ?? null, warnings: before?.warnings ?? 0 }),
     };
-    const { html, manifest, ...summary } = draft;
+    const { html, manifest, skillSets, ...summary } = draft;
     const bytes = new TextEncoder().encode(html).byteLength;
     const kept = [...index.filter((entry) => entry.id !== page.id), { ...summary, bytes }];
     const dropped = kept.splice(0, Math.max(0, kept.length - MAX_DRAFTS));
     await Promise.all([
-      this.#putJson(this.#draftKey(page.id), { id: page.id, html, manifest, artifactId: draft.artifactId, savedAt: draft.savedAt }),
+      this.#putJson(this.#draftKey(page.id), { id: page.id, html, manifest, artifactId: draft.artifactId, skillSets, savedAt: draft.savedAt }),
       this.#putJson(this.#indexKey, kept),
       dropped.length && this.#bucket.delete(dropped.map((entry) => this.#draftKey(entry.id))),
     ]);

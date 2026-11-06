@@ -47,6 +47,8 @@ import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
 import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
+import type { SkillFileInfo } from "../shared/skill-files.ts";
+import type { SkillInfo } from "../shared/skills.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
@@ -90,6 +92,8 @@ import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, type Tag } from "./us
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
+/** How much skill file text a chat object keeps in memory (characters): a design library or two. */
+const SKILL_FILE_CACHE_CHARS = 4_000_000;
 
 /** Why the chat refused a person's request, with the HTTP status the Worker answers it with. */
 export interface ChatRefusal {
@@ -291,6 +295,8 @@ export class ChatAgent extends DurableObject<Env> {
         this.#checkBrowser.withPage((page) => checkPage(page, input, this.#checkBridge(input.manifest)), { timeoutMs: CHECK_MS, signal }),
       chatArtifacts: () => this.#directory.listChatArtifacts(this.chatId),
       drafts: memoAsync(() => this.storage.chatDrafts(this.uid, this.chatId)),
+      skillSets: (names) => this.#skillSets(names),
+      readSkillFile: (skill, set, path) => this.#readSkillSetFile(skill, set, path),
       publishUnchecked: env.AUTH_MODE === "demo",
       failedChecks: new FailedChecks(),
       react: (emoji) => this.#agentReact(emoji),
@@ -566,12 +572,45 @@ export class ChatAgent extends DurableObject<Env> {
       const directory = this.#directory;
       const version = await directory.skillsVersion();
       if (version === this.#skillsInstalled) return;
-      this.registry.install(await skills([skillSource(await directory.listSkills(), version)]));
+      this.registry.install(await skills([skillSource(await directory.listSkills(), version, (skill, path) => this.#readSkillFile(skill, path))]));
       this.#skillsInstalled = version;
     } catch (error) {
       console.error("skills:", errorMessage(error));
     }
   });
+
+  /** The owner's skill files, encrypted with their key: deriving it is not free, so once per object. */
+  readonly #skillFiles = memoAsync(() => this.storage.skillFiles(this.uid));
+  /** Skill files read lately, by skill, set and path: a set never changes, so a write, its check and its publish read a file once. */
+  readonly #skillFileCache = new Map<string, string>();
+  #skillFileCacheSize = 0;
+
+  /** A file of one of the owner's skills, from the set its last import wrote; null when it has none by that path. */
+  #readSkillFile(skill: SkillInfo, path: string): Promise<string | null> {
+    if (!skill.fileSet || !skill.files?.some((file) => file.path === path)) return Promise.resolve(null);
+    return this.#readSkillSetFile(skill.name, skill.fileSet, path);
+  }
+
+  async #readSkillSetFile(skill: string, set: string, path: string): Promise<string | null> {
+    const key = `${skill}/${set}/${path}`;
+    const cached = this.#skillFileCache.get(key);
+    if (cached !== undefined) return cached;
+    const text = await (await this.#skillFiles()).read(skill, set, path);
+    if (text === null) return null;
+    if (this.#skillFileCacheSize + text.length > SKILL_FILE_CACHE_CHARS) {
+      this.#skillFileCache.clear();
+      this.#skillFileCacheSize = 0;
+    }
+    this.#skillFileCache.set(key, text);
+    this.#skillFileCacheSize += text.length;
+    return text;
+  }
+
+  /** The file sets of the owner's own skills named that are on and have files (PublishScope.skillSets). */
+  async #skillSets(names: readonly string[]): Promise<Map<string, { set: string; files: SkillFileInfo[] }>> {
+    const skills = await Promise.all(names.map((name) => this.#directory.getSkill(name)));
+    return new Map(skills.flatMap((skill) => (skill?.enabled && skill.fileSet && skill.files ? [[skill.name, { set: skill.fileSet, files: skill.files }] as const] : [])));
+  }
 
   /**
    * Read the owner's own system prompt again: runs before every prompt, so a change made in any chat, or in the

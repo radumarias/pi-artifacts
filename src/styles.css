@@ -926,6 +926,9 @@ a.mention-chip:hover { text-decoration: underline; }
 .skill-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; overflow-wrap: anywhere; }
 .skill-buttons { margin-left: auto; display: flex; gap: 6px; }
 .skill-buttons > * { font-size: 13px; padding: 3px 8px; }
+.skill-files { list-style: none; margin: 6px 0 0; padding: 0; max-height: 220px; overflow-y: auto; font-size: 13px; }
+.skill-files li { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; overflow-wrap: anywhere; }
+.skill-files small { color: var(--muted); white-space: nowrap; }
 .pill.review { border-color: transparent; background: var(--working-soft); color: var(--working); }
 /* A skill's on/off: a switch, as the mockups draw one. */
 .skill-toggle input[type="checkbox"] {

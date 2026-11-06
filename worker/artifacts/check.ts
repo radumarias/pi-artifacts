@@ -31,6 +31,8 @@ export interface CheckInput {
   tests?: readonly CheckTest[];
   /** Desktop by default. */
   viewport?: CheckViewport;
+  /** A line of `html` as a line of the page the agent wrote, when they differ (skill files put in it); the same line by default. */
+  pageLine?: (line: number) => number;
 }
 
 /** What the harness asks the Worker: one call from the page, or one tool's description. */
@@ -214,7 +216,7 @@ interface CallRecord {
 }
 
 /** The page as the check renders it: the page policy as a <meta>, the capture script, then the runtime, as when served. */
-export function renderForCheck(html: string): { document: string; mapLine: (line: number) => number | undefined } {
+export function renderForCheck(html: string, pageLine: (line: number) => number = (line) => line): { document: string; mapLine: (line: number) => number | undefined } {
   const prelude = `<meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY.replaceAll('"', "&quot;")}"><script>${CAPTURE}</script>`;
   const document = renderArtifact(html, prelude);
   // What renderArtifact added runs from the prelude to the end of the runtime's script, and starts on startLine.
@@ -223,7 +225,7 @@ export function renderForCheck(html: string): { document: string; mapLine: (line
   const startLine = document.slice(0, start).split("\n").length;
   const added = document.slice(start, end).split("\n").length - 1;
   // A line before it or after it is the page's; the last added line goes on with the page's line it was put into.
-  return { document, mapLine: (line) => (line <= startLine ? line : line >= startLine + added ? line - added : undefined) };
+  return { document, mapLine: (line) => (line <= startLine ? pageLine(line) : line >= startLine + added ? pageLine(line - added) : undefined) };
 }
 
 /** Waits for the frame to lay out and paint what changed (two animation frames), rather than a fixed time. */
@@ -235,7 +237,7 @@ export async function checkPage(page: Page, input: CheckInput, bridge: Bridge): 
   const tests = input.tests ?? [];
   await Promise.all([page.setViewport(viewport), page.exposeFunction("__piBridge", (request: BridgeRequest) => bridge(request))]);
   await page.setContent(HARNESS);
-  const { document, mapLine } = renderForCheck(input.html);
+  const { document, mapLine } = renderForCheck(input.html, input.pageLine);
   // The Worker has no DOM types, so what runs in the harness is written as strings.
   await page.evaluate(`window.__start(${JSON.stringify(document)}, ${JSON.stringify(input.manifest)})`);
   // One wait in the browser, which polls the harness itself.

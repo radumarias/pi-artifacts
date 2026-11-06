@@ -1,6 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelSetting } from "../shared/models.ts";
 import { SOCKET_PING, type ArtifactSummary, type ChatStatus, type ChatSummary, type MentionNotice, type SidebarList } from "../shared/protocol.ts";
+import type { SkillFileInfo } from "../shared/skill-files.ts";
 import { checkSystemPrompt, type ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { checkSkill, MAX_SKILL_PROPOSALS, MAX_USER_SKILLS, SkillError, type SavedSkillOrigin, type SkillInfo, type SkillInput, type SkillResult } from "../shared/skills.ts";
 import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts";
@@ -44,7 +45,15 @@ type SkillRow = {
   origin: SavedSkillOrigin;
   enabled: number;
   updated_at: number;
+  /** JSON {set, list} of a skill imported as a package (SkillPackageFiles); null for others. */
+  files: string | null;
 };
+
+/** The files of a skill imported as a package: the set SkillFiles wrote them as, and what is in it. */
+export interface SkillPackageFiles {
+  set: string;
+  list: SkillFileInfo[];
+}
 
 /**
  * One per user: the index of their chats, the chats others shared with them, their artifacts, skills and model.
@@ -72,6 +81,8 @@ export class UserDirectory extends DurableObject<Env> {
     }
     // Whether this user's own chat has members: the chat tells (setChatShared) when that changes, and when it opens.
     this.#addColumn("chats", "shared", "INTEGER NOT NULL DEFAULT 0");
+    // The files of a skill imported as a package (SkillPackageFiles as JSON).
+    this.#addColumn("skills", "files", "TEXT");
     // The newest version of each artifact its owner opened. Artifacts from before count as seen.
     if (this.#addColumn("artifacts", "seen", "INTEGER NOT NULL DEFAULT 0")) ctx.storage.sql.exec("UPDATE artifacts SET seen = latest");
     // A sidebar's socket stays open for hours: answer its keep-alive pings without waking this object.
@@ -393,9 +404,10 @@ export class UserDirectory extends DurableObject<Env> {
    * replacing any of theirs with that name. A skill the agent proposes is always
    * saved off, and may replace only another proposal that is still off: text from
    * a tool result or a file must not become standing instructions in every chat
-   * without the user turning it on.
+   * without the user turning it on. `files` are the files of a skill imported as a package, which replace the ones it
+   * had (`replacedFileSet`, for the caller to delete); without them, a skill keeps the files it has.
    */
-  saveSkill(input: unknown, origin: SavedSkillOrigin, enabled: boolean): SkillResult {
+  saveSkill(input: unknown, origin: SavedSkillOrigin, enabled: boolean, files?: SkillPackageFiles): (SkillInfo & { replacedFileSet?: string }) | { error: string } {
     let skill: SkillInput;
     try {
       const markdown = (input as { markdown?: unknown } | null)?.markdown;
@@ -419,10 +431,12 @@ export class UserDirectory extends DurableObject<Env> {
     const on = origin === "user" && enabled;
     // Strictly newer than the version it replaces, even within one millisecond: turning a skill on checks it.
     const now = Math.max(Date.now(), (existing?.updated_at ?? 0) + 1);
+    const had = packageFiles(existing);
+    const kept = files ?? had;
     this.ctx.storage.sql.exec(
-      `INSERT INTO skills (name, description, instructions, tools, origin, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO skills (name, description, instructions, tools, origin, enabled, updated_at, files) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET description = excluded.description, instructions = excluded.instructions, tools = excluded.tools,
-         origin = excluded.origin, enabled = excluded.enabled, updated_at = excluded.updated_at`,
+         origin = excluded.origin, enabled = excluded.enabled, updated_at = excluded.updated_at, files = excluded.files`,
       skill.name,
       skill.description,
       skill.instructions,
@@ -430,9 +444,11 @@ export class UserDirectory extends DurableObject<Env> {
       origin,
       on ? 1 : 0,
       now,
+      kept && JSON.stringify(kept),
     );
     this.#changed("skills");
-    return { ...skill, origin, enabled: on, updatedAt: now };
+    const replaced = files && had && had.set !== files.set ? { replacedFileSet: had.set } : {};
+    return { ...skill, origin, enabled: on, updatedAt: now, ...(kept && { files: kept.list, fileSet: kept.set }), ...replaced };
   }
 
   setBuiltinSkillEnabled(name: string, enabled: boolean): SkillResult {
@@ -493,7 +509,10 @@ export class UserDirectory extends DurableObject<Env> {
   }
 }
 
+const packageFiles = (row: Pick<SkillRow, "files"> | undefined) => (row?.files ? (JSON.parse(row.files) as SkillPackageFiles) : null);
+
 function skillInfo(row: SkillRow): SkillInfo {
+  const files = packageFiles(row);
   return {
     name: row.name,
     description: row.description,
@@ -502,6 +521,7 @@ function skillInfo(row: SkillRow): SkillInfo {
     origin: row.origin,
     enabled: row.enabled === 1,
     updatedAt: row.updated_at,
+    ...(files && { files: files.list, fileSet: files.set }),
   };
 }
 
