@@ -145,10 +145,12 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     onArtifact(latest, loading);
   }, [state.entries, onArtifact]);
 
+  // Something to send: what Send and Enter take, and what turns Stop into Send while the agent works.
+  const hasMessage = /\S/.test(draft) || attachments.pending.length > 0;
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (attachments.sending || !hasMessage) return;
     const text = draft.trim();
-    if (attachments.sending || (!text && attachments.pending.length === 0)) return;
     const named = mentions.take(text);
     const replyTo = replying?.id;
     if (attachments.pending.length === 0) {
@@ -332,8 +334,12 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   }
                   rows={1}
                 />
-                {state.busy ? (
-                  <button type="button" className="icon-button" onClick={abort} title="Stop" aria-label="Stop">
+                {/* While the agent works the button stops it, until something is typed or attached: then it sends, and a
+                    message for the agent waits its turn in the queue. Emptying the box brings Stop back. */}
+                {state.busy && !hasMessage ? (
+                  // Sending empties the box, so Stop takes Send's place under the pointer: a double click's second
+                  // click (detail 2 on the same button) is not a Stop.
+                  <button type="button" className="icon-button" onClick={(e) => e.detail <= 1 && abort()} title="Stop" aria-label="Stop">
                     <Icon>
                       <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" stroke="none" />
                     </Icon>
@@ -342,7 +348,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   <button
                     type="submit"
                     className="icon-button primary"
-                    disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
+                    disabled={!connected || attachments.sending || !hasMessage}
                     title={sendLabel}
                     aria-label={sendLabel}
                   >
