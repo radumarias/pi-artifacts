@@ -221,7 +221,8 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
   // The owner's second seat sees the chat as they do.
   const guestChat = chatId && (secondSeat || chats.some((chat) => chat.id === chatId && chat.sharedBy)) ? chatId : undefined;
   const [contents, loadContents, setContents] = useLatest<ChatContents | null>(() => (guestChat ? api.chatContents(guestChat) : Promise.resolve(null)), null);
-  const [chatFilesOpen, setChatFilesOpen] = useStoredState("layout.chatFilesOpen", true, isBoolean);
+  // Sidebar sections start closed, so the chat list gets the room.
+  const [chatFilesOpen, setChatFilesOpen] = useStoredState("layout.chatFilesOpen", false, isBoolean);
   // The chat whose deletion is being confirmed.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useStoredState("layout.sidebarCollapsed", false, isBoolean);
@@ -230,7 +231,7 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
   const [menuOpen, setMenuOpen] = useState(false);
   const rail = collapsed && !narrow;
   const chatFilter = useChatFilter(chats, chatId);
-  const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", true, isBoolean);
+  const [artifactsOpen, setArtifactsOpen] = useStoredState("layout.artifactsOpen", false, isBoolean);
   const [sidebarWidth, setSidebarWidth] = useStoredState("layout.sidebarWidth", SIDEBAR_DEFAULT);
   // The chat column's width beside an open preview; null splits the space 40/60.
   const [chatWidth, setChatWidth] = useStoredState<number | null>("layout.chatWidth", null);

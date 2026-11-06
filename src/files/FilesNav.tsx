@@ -3,6 +3,7 @@ import { baseName } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES, MAX_LISTED, underUploads, uploadBatches, uploadTargets, ZIP_ROUTE, zipRefusal } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes, listSome } from "../../shared/util.ts";
 import { api, type FileInfo } from "../api.ts";
+import { UnreadDot } from "../chat/ChatList.tsx";
 import { Icon } from "../Icon.tsx";
 import { isBoolean, opensElsewhere, SectionHead, useStoredState } from "../layout.tsx";
 import { fromInput, type Picked } from "./pick.ts";
@@ -318,7 +319,12 @@ export const FilesNav = memo(function FilesNav({
   openFile: string | null;
   onOpenFile: (path: string) => void;
 }) {
-  const [open, setOpen] = useStoredState("layout.filesOpen", true, isBoolean);
+  const [open, setOpen] = useStoredState("layout.filesOpen", false, isBoolean);
+  // The last status the user saw with the panel open: one that went wrong while it was closed is marked on its head.
+  const [seen, setSeen] = useState<UploadStatus | null>(null);
+  useEffect(() => {
+    if (open) setSeen(status);
+  }, [open, status]);
   const [query, setQuery] = useState("");
   // Filtering and drawing up to MAX_LISTED rows can lag behind typing; the box keeps up, the tree follows.
   const search = useDeferredValue(query).trim();
@@ -356,8 +362,9 @@ export const FilesNav = memo(function FilesNav({
   return (
     <section className={open ? "files-panel open" : "files-panel"}>
       <SectionHead name="Files" count={files.length} open={open} onToggle={setOpen} upward>
-        {/* Closed, the panel still shows that an upload is going. */}
+        {/* Closed, the panel still shows that an upload is going, or that one went wrong. */}
         {!open && status?.busy && <span className="spinner" />}
+        {!open && status?.error && status !== seen && <UnreadDot label="An upload went wrong; open Files to see why" />}
       </SectionHead>
       {open && (
         <>
