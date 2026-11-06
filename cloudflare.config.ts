@@ -56,6 +56,10 @@ export default defineConfig({
       // Cloudflare's own network, with no provider key and no hop to another provider: Jev first, then gpt-oss-120b there,
       // then Gemini Flash-Lite with the Google AI Studio key.
       ROUTER_MODEL: bindings.text("system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
+      // Which skills the agent is shown: before each message that starts a run, this System One classifier on Workers AI
+      // (system-one:<model>, through the AI binding) says which of the user's skills not shown in the chat yet the message
+      // needs; only those join the ones shown (worker/agent/skill-pick.ts). Empty: every enabled skill, always.
+      SKILLS_MODEL: bindings.text("system-one:typesafe/jev"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
       // picker does not list (no key in AI Gateway for their provider) are left out.
       AUTO_MODELS: bindings.json([

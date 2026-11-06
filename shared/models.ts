@@ -88,6 +88,12 @@ export function isAuto(setting: { model: string } | null | undefined): setting i
  */
 export const AUTO_LEDGER_PREFIX = "auto:";
 
+/**
+ * pi's ledger key for what picking a chat's skills cost: `skills:` and the classifier's id (SKILLS_MODEL,
+ * worker/agent/skill-pick.ts), counted like Auto's router.
+ */
+export const SKILLS_LEDGER_PREFIX = "skills:";
+
 /** A model Auto may pick (the deployment's AUTO_MODELS): the picker's id, and what it is best at, which the router reads. */
 export interface AutoCandidate {
   id: string;
