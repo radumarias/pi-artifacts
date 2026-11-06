@@ -2,12 +2,13 @@ import { clampThinkingLevel, type Api, type ClassifierModel, type Model, type Mo
 import { classify } from "@earendil-works/pi-ai/api/openai-decisions";
 import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { UsageDoc, type ConversationId, type EntryRecord, type Tx } from "@earendil-works/pi-durable";
+import type { ConversationId, EntryRecord, Tx } from "@earendil-works/pi-durable";
 import { textOf } from "../../shared/canonical.ts";
 import { AUTO_LEDGER_PREFIX, COMPACTION, modelKey, pricePerMillion, type AutoCandidate, type ModelInfo } from "../../shared/models.ts";
 import { CHAT_MESSAGE_KIND, type ChatMessageData, type RouterSpend } from "../../shared/protocol.ts";
 import { clip, errorMessage, isObject, plural } from "../../shared/util.ts";
 import { gatewayFetch, type GatewayOptions } from "../gateway-models.ts";
+import { recordSpend } from "./ledger.ts";
 import { DEFAULT_CONTEXT_WINDOW, thinkingLevelOf, type Catalog } from "../models.ts";
 
 /**
@@ -390,19 +391,4 @@ function unavailable(id: string, why: string): Router {
  */
 export function recordRouterSpend(tx: Tx, conversationId: ConversationId, router: string, usage: Usage): Promise<void> {
   return recordSpend(tx, conversationId, `${AUTO_LEDGER_PREFIX}${router}`, usage);
-}
-
-/** Add a call's usage to the conversation's spend ledger under `tools` as `key`, as pi adds a tool's spend. */
-export async function recordSpend(tx: Tx, conversationId: ConversationId, key: string, usage: Usage): Promise<void> {
-  const totals = (await tx.doc(UsageDoc, conversationId)).tools as Record<string, Usage>;
-  const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
-  // Drafts take strict JSON: no undefined counters.
-  if (!total) {
-    totals[key] = JSON.parse(JSON.stringify(usage)) as Usage;
-    return;
-  }
-  for (const counter of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[counter] += usage[counter];
-  // Optional counters, as pi adds them: once either side reports one.
-  for (const counter of ["cacheWrite1h", "reasoning"] as const) if (usage[counter] !== undefined) total[counter] = (total[counter] ?? 0) + usage[counter];
-  for (const counter of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[counter] += usage.cost[counter];
 }

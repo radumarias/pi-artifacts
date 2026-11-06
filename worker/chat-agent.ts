@@ -55,8 +55,10 @@ import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
-import { autoCandidates, contextTokens, recordRouterSpend, recordSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
-import { callHinter, HINT_MS, HINT_THRESHOLD, worthAsking, type ModelRunner } from "./agent/call-hint.ts";
+import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
+import { callHinter, HINT_MS, HINT_THRESHOLD, worthAsking, type CallHinter } from "./agent/call-hint.ts";
+import { recordSpend } from "./agent/ledger.ts";
+import type { ModelRunner } from "./agent/workers-ai.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
@@ -267,6 +269,8 @@ export class ChatAgent extends DurableObject<Env> {
   #seen: { through: number; traces: ChatTraces } = { through: -1, traces: chatTraces([]) };
   /** See #oneShotModels. */
   #oneShot: Models | undefined;
+  /** The hinter #hinter made; null until it is first asked for (undefined then means hints are off). */
+  #callHinter: CallHinter | undefined | null = null;
   /** See #placeAuto. */
   #autoPlacing: Promise<void> = Promise.resolve();
   /** Set once the owner starts deleting the chat, and kept as its only record after: from then on nobody is in it. */
@@ -833,7 +837,11 @@ export class ChatAgent extends DurableObject<Env> {
     else {
       const written = await this.#aside(content, dataWith());
       // Meant for the agent, though it did not call it? Its author may be offered to (#hintCall). Off the prompt's path.
-      if (text && worthAsking(text)) void this.#hintCall(written, author, text).catch((error) => console.error("call hint:", errorMessage(error)));
+      // Not while the agent works: it reads the message at its next step.
+      const hinter = this.#hinter;
+      if (hinter && this.#status() !== "running" && worthAsking(text)) {
+        void this.#hintCall(hinter, written, author, text).catch((error) => console.error("call hint:", errorMessage(error)));
+      }
     }
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
@@ -881,15 +889,19 @@ export class ChatAgent extends DurableObject<Env> {
     return written;
   }
 
+  /** What tells whether an aside is meant for the agent (CALL_HINT_MODEL); undefined when hints are off. Made once. */
+  get #hinter(): CallHinter | undefined {
+    if (this.#callHinter === null) this.#callHinter = callHinter(this.env.AI as unknown as ModelRunner, this.env.CALL_HINT_MODEL);
+    return this.#callHinter;
+  }
+
   /**
    * An aside someone wrote (`written`, its `chat.message`) that may still be meant for the agent ("pi, can you…"): the
    * deployment's CALL_HINT_MODEL reads it with the end of the conversation, and when it is likely enough
    * (HINT_THRESHOLD) for the agent, its author's windows are told, and show them Ask pi under it. The call counts in
-   * pi's ledger like the router's. Nothing for no CALL_HINT_MODEL, and nothing on a failure or past HINT_MS.
+   * pi's ledger like the router's. Nothing on a failure or past HINT_MS.
    */
-  async #hintCall(written: Submission, author: Person, text: string): Promise<void> {
-    const hinter = callHinter(this.env.AI as unknown as ModelRunner, this.env.CALL_HINT_MODEL);
-    if (!hinter) return;
+  async #hintCall(hinter: CallHinter, written: Submission, author: Person, text: string): Promise<void> {
     const root = await this.#root();
     const [placed, page] = await Promise.all([written.wait(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
     if (placed.status !== "done") return;

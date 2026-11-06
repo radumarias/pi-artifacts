@@ -289,7 +289,9 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                           ownerName={ownerName}
                           onOpen={onArtifact}
                           onReply={reply}
-                          {...(hinted.has(entry.id as number) && { onAskAgent: askAgent, onNoHint: dropHint })}
+                          hinted={hinted.has(entry.id as number)}
+                          onAskAgent={askAgent}
+                          onNoHint={dropHint}
                         />
                         {spend && <PromptCost spend={spend} />}
                       </Fragment>
@@ -434,6 +436,7 @@ const Entry = memo(function Entry({
   ownerName,
   onOpen,
   onReply,
+  hinted,
   onAskAgent,
   onNoHint,
 }: {
@@ -445,9 +448,10 @@ const Entry = memo(function Entry({
   ownerName?: string;
   onOpen: (artifact: PublishedDetails) => void;
   onReply: (quote: ReplyQuote) => void;
-  /** Set for a message of the viewer's that looks meant for the agent: Ask pi under it calls the agent on it. */
-  onAskAgent?: (entry: number) => void;
-  onNoHint?: (entry: number) => void;
+  /** A message of the viewer's that looks meant for the agent: Ask pi under it calls the agent on it (onAskAgent). */
+  hinted: boolean;
+  onAskAgent: (entry: number) => void;
+  onNoHint: (entry: number) => void;
 }) {
   const people = useSharedChat();
   const reactions = useMessageReactions(isReactable(entry) ? entry.id : undefined, byEmoji);
@@ -475,7 +479,7 @@ const Entry = memo(function Entry({
         auto={data.auto}
         reactions={reactions}
         onReply={answer}
-        hint={onAskAgent && onNoHint && <CallHint onAsk={() => onAskAgent(entry.id as number)} onNo={() => onNoHint(entry.id as number)} />}
+        hint={hinted && <CallHint onAsk={() => onAskAgent(entry.id as number)} onNo={() => onNoHint(entry.id as number)} />}
       />
     );
   }

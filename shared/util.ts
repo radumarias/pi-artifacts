@@ -81,15 +81,20 @@ export function plural(n: number, noun: string): string {
 /** `promise`, or a rejection once `ms` passed or `signal` aborted, whichever comes first. */
 export function deadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error, signal?: AbortSignal): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(onTimeout()), ms);
+  });
+  return abortable(Promise.race([promise, timeout]), signal).finally(() => clearTimeout(timer));
+}
+
+/** `promise`, or a rejection once `signal` aborted (at once for one already aborted), whichever comes first. */
+export function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
   let onAbort: (() => void) | undefined;
   const stop = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(onTimeout()), ms);
-    onAbort = () => reject(signal!.reason ?? new Error("Stopped."));
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
+    onAbort = () => reject(signal.reason ?? new Error("Stopped."));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
   });
-  return Promise.race([promise, stop]).finally(() => {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort!);
-  });
+  return Promise.race([promise, stop]).finally(() => signal.removeEventListener("abort", onAbort!));
 }

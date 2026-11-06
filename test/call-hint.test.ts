@@ -102,8 +102,5 @@ describe("the hints the app still shows", () => {
     const entries = [message(), reply(), message({ aside: true }), message({ aside: true }), message({ summoned: true }), message({ aside: true })];
     const hints = new Set([0, 2, 3, 5]);
     expect([...openHints(hints, entries)]).toEqual([5]);
-    // The same set while nothing changed, so the transcript draws nothing again.
-    const later = new Set([5]);
-    expect(openHints(later, entries)).toBe(later);
   });
 });

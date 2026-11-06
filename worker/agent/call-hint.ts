@@ -1,9 +1,9 @@
-import type { ClassifierModel, Usage } from "@earendil-works/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import { classify } from "@earendil-works/pi-ai/api/cloudflare-workers-ai-system-one";
-import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
 import { clip } from "../../shared/util.ts";
 import type { RouteTurn } from "./route.ts";
+import { bindingClassifierOptions, systemOneModel, type ModelRunner } from "./workers-ai.ts";
 
 /**
  * In a shared chat only a message with "@pi" (or a reply to pi) calls the agent; any other is people talking among
@@ -55,39 +55,14 @@ const QUESTION = {
   },
 } as const;
 
-/** What a binding runs a Workers AI model with: the AI binding. */
-export interface ModelRunner {
-  run(model: string, input: object, options?: { signal?: AbortSignal }): Promise<unknown>;
-}
-
 /**
  * The classifier CALL_HINT_MODEL names (a System One model on Workers AI, by its id: `typesafe/jev`), run through the AI
- * binding: on Cloudflare's own network, with no provider key. Undefined for an empty name (hints are off) or one that is
- * not such a model.
+ * binding. Undefined for an empty name (hints are off) or one that is not such a model.
  */
 export function callHinter(ai: ModelRunner, name: string): CallHinter | undefined {
-  const classifiers = CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS as Record<string, ClassifierModel<"cloudflare-workers-ai-system-one">>;
-  const model = name && Object.hasOwn(classifiers, name) ? classifiers[name] : undefined;
+  const model = name ? systemOneModel(name) : undefined;
   if (!model) return undefined;
-  // pi-ai posts `{ model, input }` to Workers AI's REST API; the binding runs it instead, and its answer goes back in
-  // the REST API's envelope.
-  const viaBinding = async (_url: string | URL | Request, init?: RequestInit) => {
-    const { model: id, input } = JSON.parse(String(init?.body)) as { model: string; input: object };
-    const signal = init?.signal ?? undefined;
-    signal?.throwIfAborted();
-    // The binding is handed the signal, so a call out of time stops; the race covers a binding that does not stop on it.
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<never>((_, reject) => {
-      onAbort = () => reject(signal!.reason);
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      const result = await Promise.race([ai.run(id, input, { signal }), aborted]);
-      return Response.json({ success: true, result });
-    } finally {
-      signal?.removeEventListener("abort", onAbort!);
-    }
-  };
+  const options = bindingClassifierOptions(ai);
   return {
     id: model.id,
     async ask(request, signal) {
@@ -102,8 +77,7 @@ export function callHinter(ai: ModelRunner, name: string): CallHinter | undefine
           },
           questions: { forAgent: QUESTION },
         },
-        // The binding needs no key; pi-ai only wants one to send.
-        { apiKey: "ai-binding", fetch: viaBinding, signal, maxRetries: 0 },
+        { ...options, signal, maxRetries: 0 },
       );
       if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `stopped: ${result.stopReason}`);
       const answer = result.answers.forAgent;
@@ -113,10 +87,7 @@ export function callHinter(ai: ModelRunner, name: string): CallHinter | undefine
   };
 }
 
-/**
- * Whether a message is worth asking about: one with words in it, that does not already call the agent. A message of
- * only emoji or punctuation is never for the agent.
- */
+/** Whether a message is worth asking about: one with words in it. A message of only emoji or punctuation is never for the agent. */
 export function worthAsking(text: string): boolean {
   return /\p{L}{2}/u.test(text);
 }
