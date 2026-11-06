@@ -29,9 +29,10 @@ import { checkDraft, draftLine, draftNamed, FailedChecks, publishDraft, readPage
 import { FileRefError, MAX_SANDBOX_BYTES, outputPaths, resolveFile, resolveRef, sandboxLayout } from "./file-refs.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 import { pagePart } from "./page-part.ts";
+import type { AgentsScope } from "../agents/tools.ts";
 
 /** What the tools need from the chat they run in. */
-export interface ChatScope extends PublishScope {
+export interface ChatScope extends PublishScope, AgentsScope {
   /** This chat's user's files: scoped to the uid and encrypted with that user's key. */
   files: () => Promise<UserFiles>;
   /** Whether the owner named this artifact from another of their chats with "@" here, so the agent may read it. */

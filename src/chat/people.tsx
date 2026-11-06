@@ -1,4 +1,5 @@
 import { createContext, useContext, type CSSProperties } from "react";
+import type { AgentColor } from "../../shared/agents.ts";
 import { AGENT_NAME } from "../../shared/mentions.ts";
 import { everyone, type ChatPeople } from "../../shared/protocol.ts";
 
@@ -39,22 +40,33 @@ export function Avatar({ name, tint, online }: { name: string; tint: number; onl
   );
 }
 
-/** The agent's badge: square-cornered where a person's is round. `working` adds a dot while it runs. */
-export function AgentAvatar({ working = false }: { working?: boolean }) {
+/** Another agent's badge than pi's: its own letters on its own colour. */
+export interface AgentBadge {
+  avatar: string;
+  color: AgentColor;
+}
+
+/** An agent's badge, pi's unless `badge` says another's: square-cornered where a person's is round. `working` adds a dot while it runs. */
+export function AgentAvatar({ working = false, badge }: { working?: boolean; badge?: AgentBadge }) {
   return (
-    <span className="avatar agent" aria-hidden="true">
-      π{working && <i className="presence working" />}
+    <span
+      className={badge ? "avatar agent toned" : "avatar agent"}
+      style={badge && ({ "--tone": `var(--agent-${badge.color})` } as CSSProperties)}
+      aria-hidden="true"
+    >
+      {badge ? badge.avatar : "π"}
+      {working && <i className="presence working" />}
     </span>
   );
 }
 
-/** The agent's badge and name, over its replies. */
-export function AgentByline() {
+/** An agent's badge and name, over its replies: pi's, or another's with `badge` and what `note` says of the reply. */
+export function AgentByline({ name = AGENT_NAME, badge, note = "agent" }: { name?: string; badge?: AgentBadge; note?: string }) {
   return (
     <div className="byline agent">
-      <AgentAvatar />
-      <strong>{AGENT_NAME}</strong>
-      <small>agent</small>
+      <AgentAvatar badge={badge} />
+      <strong>{badge ? `@${name}` : name}</strong>
+      <small>{note}</small>
     </div>
   );
 }

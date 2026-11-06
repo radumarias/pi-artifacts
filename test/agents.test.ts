@@ -13,17 +13,15 @@ import {
   RESERVED_AGENT_NAMES,
   STEP_KINDS,
   WEEKDAYS,
-  calledNames,
   checkAgent,
   defaultAvatar,
   defaultColor,
   isDraftAgent,
   isTimeZone,
   speakerLabel,
-  splitAgentCalls,
   type AgentDefinition,
 } from "../shared/agents.ts";
-import { AGENT_NAME } from "../shared/mentions.ts";
+import { AGENT_NAME, calledNames, summonsAgent } from "../shared/mentions.ts";
 
 const base = { name: "research", job: "Finds sources", instructions: "1. Search.\n2. Summarise." };
 const read = { server: "crm", tool: "list_deals", input: { stage: "open" } };
@@ -569,37 +567,26 @@ describe("calledNames", () => {
   });
 });
 
-describe("splitAgentCalls", () => {
+describe("calledNames: the files, artifacts and people a message names", () => {
   const roster = ["research", "finance"];
 
-  it("splits the text into plain parts and calls, keeping the text as written", () => {
-    const text = "Hi @Research, ask @finance.";
-    const parts = splitAgentCalls(text, roster);
-    expect(parts).toEqual([
-      { text: "Hi " },
-      { text: "@Research", agent: "research" },
-      { text: ", ask " },
-      { text: "@finance", agent: "finance" },
-      { text: "." },
-    ]);
-    expect(parts.map((part) => part.text).join("")).toBe(text);
+  it("calls no one inside a mention's token, and still finds the calls around it", () => {
+    const artifact = { kind: "artifact" as const, id: "a1", title: "research" };
+    expect(calledNames("see @research", roster, [artifact])).toEqual([]);
+    expect(calledNames("@finance, see @research", roster, [artifact])).toEqual(["finance"]);
+    const person = { kind: "person" as const, uid: "u1", name: "finance" };
+    expect(calledNames("@finance meet @research", roster, [person])).toEqual(["research"]);
   });
 
-  it("marks every call of a name, at the start and the end of the text", () => {
-    expect(splitAgentCalls("@research and @research", roster)).toEqual([
-      { text: "@research", agent: "research" },
-      { text: " and " },
-      { text: "@research", agent: "research" },
-    ]);
+  it("keeps the order of the calls across the mentions between them", () => {
+    const file = { kind: "file" as const, path: "notes" };
+    expect(calledNames("@finance @notes then @research", ["research", "finance"], [file])).toEqual(["finance", "research"]);
+    expect(calledNames("@notes @research and @finance", ["finance", "research"], [file])).toEqual(["research", "finance"]);
   });
 
-  it("leaves addresses and longer names as plain text, and gives no parts for empty text", () => {
-    expect(splitAgentCalls("mail ann@research.com or @researcher", roster)).toEqual([{ text: "mail ann@research.com or @researcher" }]);
-    expect(splitAgentCalls("", roster)).toEqual([]);
-  });
-
-  it("marks a call once when the list names an agent twice", () => {
-    expect(splitAgentCalls("@finance!", ["finance", "finance"])).toEqual([{ text: "@finance", agent: "finance" }, { text: "!" }]);
+  it("is how a message calls pi", () => {
+    expect(summonsAgent(`hey @${AGENT_NAME}`)).toBe(true);
+    expect(summonsAgent(`@${AGENT_NAME}`, [{ kind: "file", path: AGENT_NAME }])).toBe(false);
   });
 });
 

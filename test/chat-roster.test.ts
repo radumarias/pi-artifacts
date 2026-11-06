@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CHAT_AGENTS, type AgentColor } from "../shared/agents.ts";
+import { MAX_CHAT_AGENTS, type AgentColor, type ChatAgentReplyData } from "../shared/agents.ts";
 import { ChatRoster, type RosterEntry } from "../worker/agents/roster.ts";
 import { memorySql } from "./fakes.ts";
 
@@ -33,7 +33,7 @@ function withAgents(...names: string[]) {
 function agent(name: string, over: Partial<Added> = {}): Added {
   const id = name.toLowerCase();
   const job = `Helps with ${id}.`;
-  return { agentId: `id-${id}`, ownerUid: "owner", name, session: `session-${id}`, addedBy: "owner", avatar: "B", color: "blue", job, ...over };
+  return { agentId: `id-${id}`, ownerUid: "owner", name, session: `session-${id}`, avatar: "B", color: "blue", job, ...over };
 }
 
 /** A turn a person (ann) asks of an agent, unless `over` says otherwise. */
@@ -47,6 +47,22 @@ function viewOf(entry: RosterEntry | null): View {
   return { name: entry.name, avatar: entry.avatar, color: entry.color, job: entry.job, off: entry.off };
 }
 
+/** The turn an agent runs now, if any. */
+function runningOf(roster: ChatRoster, agentId: string) {
+  return roster.allRunning().find((turn) => turn.agentId === agentId) ?? null;
+}
+
+/** How many turns wait for each agent, as everyone's view says. */
+function queuedOf(roster: ChatRoster): Map<string, number> {
+  return new Map(roster.views(() => "").flatMap((view): [string, number][] => (view.queued ? [[view.id, view.queued]] : [])));
+}
+
+/** A reply as an ended turn keeps it to deliver. */
+function replyTo(turn: { id: number; agentId: string }, text = "Done."): ChatAgentReplyData {
+  const name = turn.agentId.replace("id-", "");
+  return { agentId: turn.agentId, name, avatar: "B", color: "blue", ownerUid: "owner", text, calledBy: ann, turn: turn.id, hop: 0, startedAt: T0, endedAt: T0 };
+}
+
 /** Queue a turn for an agent and start it at once. */
 function started(roster: ChatRoster, turn: Queued) {
   const queued = roster.enqueue(turn);
@@ -56,24 +72,20 @@ function started(roster: ChatRoster, turn: Queued) {
 }
 
 describe("ChatRoster: its agents", () => {
-  it("adds an agent under its name in lower case, with the clock's time and nothing applied or read yet", () => {
+  it("adds an agent under its name in lower case, with nothing read yet", () => {
     const { roster } = setup();
     expect(roster.hasAny()).toBe(false);
-    expect(roster.add(agent("Bob", { color: "green", addedBy: "ann" }))).toBeNull();
+    expect(roster.add(agent("Bob", { color: "green" }))).toBeNull();
     const entry: RosterEntry = {
       agentId: "id-bob",
       ownerUid: "owner",
       name: "bob",
       session: "session-bob",
-      addedBy: "ann",
-      addedAt: T0,
       avatar: "B",
       color: "green",
       job: "Helps with bob.",
-      applied: 0,
       mirrored: -1,
       off: false,
-      tools: null,
     };
     expect(roster.get("id-bob")).toEqual(entry);
     expect(roster.list()).toEqual([entry]);
@@ -117,15 +129,12 @@ describe("ChatRoster: its agents", () => {
     expect(roster.list().map((entry) => entry.name)).toEqual(["alice", "carol", "aaron"]);
   });
 
-  it("finds an agent by id, by name in any case and by session", () => {
+  it("finds an agent by id, and by name in any case", () => {
     const { roster } = withAgents("bob", "carol");
     expect(roster.get("id-carol")?.name).toBe("carol");
     expect(roster.get("id-nobody")).toBeNull();
     expect(roster.byName("BoB")?.agentId).toBe("id-bob");
     expect(roster.byName("nobody")).toBeNull();
-    expect(roster.bySession("session-carol")?.agentId).toBe("id-carol");
-    expect(roster.bySession("session-nobody")).toBeNull();
-    expect(roster.bySession("id-bob")).toBeNull();
   });
 
   it("removes an agent and stops its turns not ended, leaving its ended turns and other agents' as they are", () => {
@@ -164,9 +173,11 @@ describe("ChatRoster: refresh and setMirrored", () => {
   it("keeps what the definition now says, and says whether anything everyone sees changed", () => {
     const { roster } = withAgents("bob");
     const next: View = { name: "bob", avatar: "R", color: "orange", job: "Writes the weekly numbers.", off: false };
-    expect(roster.refresh("id-bob", next)).toBe(true);
+    const refreshed = roster.refresh("id-bob", next);
+    expect(refreshed?.changed).toBe(true);
     expect(roster.get("id-bob")).toEqual(expect.objectContaining({ avatar: "R", color: "orange", job: "Writes the weekly numbers.", off: false }));
-    expect(roster.refresh("id-bob", next)).toBe(false);
+    expect(refreshed?.entry).toEqual(roster.get("id-bob"));
+    expect(roster.refresh("id-bob", next)).toEqual({ entry: roster.get("id-bob"), changed: false });
   });
 
   it.each<[string, Partial<View>]>([
@@ -178,54 +189,43 @@ describe("ChatRoster: refresh and setMirrored", () => {
   ])("counts %s as a change", (_, change) => {
     const { roster } = withAgents("bob");
     const before = roster.get("id-bob");
-    expect(roster.refresh("id-bob", { ...viewOf(before), ...change })).toBe(true);
+    expect(roster.refresh("id-bob", { ...viewOf(before), ...change })?.changed).toBe(true);
     expect(roster.get("id-bob")).toEqual({ ...before, ...change });
   });
 
   it("turns an agent off and on again", () => {
     const { roster } = withAgents("bob");
-    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), off: true })).toBe(true);
+    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), off: true })?.changed).toBe(true);
     expect(roster.get("id-bob")?.off).toBe(true);
-    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), off: false })).toBe(true);
+    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), off: false })?.changed).toBe(true);
     expect(roster.get("id-bob")?.off).toBe(false);
-  });
-
-  it("keeps the version applied when given one, and a new version alone is no change anyone sees", () => {
-    const { roster } = withAgents("bob");
-    const same = viewOf(roster.get("id-bob"));
-    expect(roster.refresh("id-bob", same, 3)).toBe(false);
-    expect(roster.get("id-bob")?.applied).toBe(3);
-    expect(roster.refresh("id-bob", same)).toBe(false);
-    expect(roster.get("id-bob")?.applied).toBe(3);
-    expect(roster.refresh("id-bob", { ...same, job: "New." }, 4)).toBe(true);
-    expect(roster.get("id-bob")).toEqual(expect.objectContaining({ applied: 4, job: "New." }));
   });
 
   it("takes a free new name in lower case, and keeps the old one when another agent here has it", () => {
     const { roster } = withAgents("bob", "carol");
-    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "Robert" })).toBe(true);
+    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "Robert" })?.changed).toBe(true);
     expect(roster.get("id-bob")?.name).toBe("robert");
     expect(roster.byName("robert")?.agentId).toBe("id-bob");
     expect(roster.byName("bob")).toBeNull();
 
-    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "Carol" })).toBe(false);
+    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "Carol" })?.changed).toBe(false);
     expect(roster.get("id-bob")?.name).toBe("robert");
     expect(roster.byName("carol")?.agentId).toBe("id-carol");
 
     // Its own name in another case is its own name still.
-    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "ROBERT" })).toBe(false);
+    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "ROBERT" })?.changed).toBe(false);
     expect(roster.get("id-bob")?.name).toBe("robert");
   });
 
   it("keeps the old name but the rest of the view when the new name is taken", () => {
     const { roster } = withAgents("bob", "carol");
-    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "carol", job: "Renamed." })).toBe(true);
+    expect(roster.refresh("id-bob", { ...viewOf(roster.get("id-bob")), name: "carol", job: "Renamed." })?.changed).toBe(true);
     expect(roster.get("id-bob")).toEqual(expect.objectContaining({ name: "bob", job: "Renamed." }));
   });
 
   it("does nothing for an agent not in the roster", () => {
     const { roster } = withAgents("bob");
-    expect(roster.refresh("id-nobody", { name: "nobody", avatar: "N", color: "pink", job: "None.", off: false }, 2)).toBe(false);
+    expect(roster.refresh("id-nobody", { name: "nobody", avatar: "N", color: "pink", job: "None.", off: false })).toBeNull();
     expect(roster.list().map((entry) => entry.agentId)).toEqual(["id-bob"]);
     expect(roster.byName("nobody")).toBeNull();
   });
@@ -265,16 +265,15 @@ describe("ChatRoster: queueing turns", () => {
     expect(roster.turn(turn.id + 1)).toBeNull();
   });
 
-  it("keeps a hand-off's hop, root, caller, the entry it answers and its ask key", () => {
+  it("keeps a hand-off's hop, root, caller and ask key", () => {
     const { roster, clock } = withAgents("bob", "carol");
-    const first = roster.enqueue(ask("id-bob", { answers: 7, askKey: "entry:7" }));
+    const first = roster.enqueue(ask("id-bob", { askKey: "entry:7" }));
     clock.now = T0 + 3;
     const handOff = roster.enqueue({
       agentId: "id-carol",
       hop: 1,
       root: first.id,
       calledBy: { name: "bob", agentId: "id-bob" },
-      answers: 7,
       byOwner: false,
       ask: "@bob: carol, check this",
       askKey: `turn:${first.id}`,
@@ -285,24 +284,24 @@ describe("ChatRoster: queueing turns", () => {
       status: "queued",
       hop: 1,
       calledBy: { name: "bob", agentId: "id-bob" },
-      answers: 7,
       byOwner: false,
       root: first.id,
       ask: "@bob: carol, check this",
-      askKey: `turn:${first.id}`,
       createdAt: T0 + 3,
     });
     expect(roster.turn(handOff.id)).toStrictEqual(handOff);
+    expect(roster.askKeys("id-carol", handOff.id)).toEqual(new Set([`turn:${first.id}`]));
     expect(handOff.id).toBeGreaterThan(first.id);
   });
 
-  it("keeps falsy values that are values: entry 0, an empty ask key, root 0 and a schedule as caller", () => {
+  it("keeps falsy values that are values: an empty ask key, root 0 and a schedule as caller", () => {
     const { roster } = withAgents("bob");
-    const turn = roster.enqueue(ask("id-bob", { calledBy: { name: "schedule", schedule: true }, byOwner: false, answers: 0, askKey: "", root: 0 }));
+    const turn = roster.enqueue(ask("id-bob", { calledBy: { name: "schedule", schedule: true }, byOwner: false, askKey: "", root: 0 }));
     const read = roster.turn(turn.id);
     expect(read).toStrictEqual(turn);
-    expect(read).toEqual(expect.objectContaining({ answers: 0, askKey: "", root: 0, byOwner: false }));
+    expect(read).toEqual(expect.objectContaining({ root: 0, byOwner: false }));
     expect(read?.calledBy).toStrictEqual({ name: "schedule", schedule: true });
+    expect(roster.askKeys("id-bob", turn.id)).toEqual(new Set([""]));
   });
 
   it("gives every turn a new id, in the order they were queued, across agents", () => {
@@ -320,13 +319,13 @@ describe("ChatRoster: running turns", () => {
     clock.now = T0 + 5;
     const first = roster.startNext("id-bob");
     expect(first).toEqual({ ...turns[0], status: "running", startedAt: T0 + 5 });
-    expect(roster.running("id-bob")).toEqual(first);
+    expect(runningOf(roster, "id-bob")).toEqual(first);
     expect(roster.startNext("id-bob")).toBeNull();
     expect(roster.turn(turns[1].id)?.status).toBe("queued");
 
     clock.now = T0 + 6;
     roster.end(turns[0].id, "done");
-    expect(roster.running("id-bob")).toBeNull();
+    expect(runningOf(roster, "id-bob")).toBeNull();
     expect(roster.startNext("id-bob")?.id).toBe(turns[1].id);
     roster.end(turns[1].id, "failed");
     expect(roster.startNext("id-bob")?.id).toBe(turns[2].id);
@@ -343,7 +342,7 @@ describe("ChatRoster: running turns", () => {
     expect(roster.startNext("id-carol")).toBeNull();
     expect(roster.allRunning().map((turn) => turn.id)).toEqual([bobs[0].id, carols.id]);
     roster.end(carols.id, "done");
-    expect(roster.running("id-bob")?.id).toBe(bobs[0].id);
+    expect(runningOf(roster, "id-bob")?.id).toBe(bobs[0].id);
     expect(roster.startNext("id-bob")).toBeNull();
   });
 
@@ -351,7 +350,7 @@ describe("ChatRoster: running turns", () => {
     const { roster } = withAgents("bob");
     expect(roster.startNext("id-bob")).toBeNull();
     expect(roster.startNext("id-nobody")).toBeNull();
-    expect(roster.running("id-bob")).toBeNull();
+    expect(runningOf(roster, "id-bob")).toBeNull();
   });
 
   it("ends a running turn once: a second end leaves it as it ended and returns null", () => {
@@ -362,7 +361,7 @@ describe("ChatRoster: running turns", () => {
     clock.now = T0 + 30;
     expect(roster.end(turn.id, "failed")).toBeNull();
     expect(roster.turn(turn.id)).toEqual(expect.objectContaining({ status: "done", endedAt: T0 + 20 }));
-    expect(roster.running("id-bob")).toBeNull();
+    expect(runningOf(roster, "id-bob")).toBeNull();
   });
 
   it("does not end a turn that was stopped meanwhile, nor one it does not know", () => {
@@ -443,7 +442,7 @@ describe("ChatRoster: running turns", () => {
         .map((turn) => turn.id)
         .sort((a, b) => a - b),
     ).toEqual(bobs.map((turn) => turn.id));
-    expect(roster.running("id-carol")?.id).toBe(carolRunning.id);
+    expect(runningOf(roster, "id-carol")?.id).toBe(carolRunning.id);
     expect(roster.turn(carolWaiting.id)?.status).toBe("queued");
     expect(roster.stopAll("id-bob")).toEqual([]);
     expect(roster.stopAll("id-nobody")).toEqual([]);
@@ -453,23 +452,23 @@ describe("ChatRoster: running turns", () => {
     const { roster } = withAgents("bob", "carol", "dave");
     expect(roster.allRunning()).toEqual([]);
     expect(roster.waitingAgents()).toEqual([]);
-    expect(roster.queuedCounts()).toEqual(new Map());
+    expect(queuedOf(roster)).toEqual(new Map());
 
     const carols = [roster.enqueue(ask("id-carol")), roster.enqueue(ask("id-carol"))];
     const bobs = [started(roster, ask("id-bob")), roster.enqueue(ask("id-bob"))];
     expect(roster.waitingAgents()).toEqual(["id-bob", "id-carol"]);
-    expect(roster.queuedCounts()).toEqual(
+    expect(queuedOf(roster)).toEqual(
       new Map([
         ["id-bob", 1],
         ["id-carol", 2],
       ]),
     );
-    expect(roster.running("id-bob")?.id).toBe(bobs[0].id);
-    expect(roster.running("id-carol")).toBeNull();
+    expect(runningOf(roster, "id-bob")?.id).toBe(bobs[0].id);
+    expect(runningOf(roster, "id-carol")).toBeNull();
 
     roster.startNext("id-carol");
     expect(roster.allRunning().map((turn) => turn.id)).toEqual([carols[0].id, bobs[0].id]);
-    expect(roster.queuedCounts()).toEqual(
+    expect(queuedOf(roster)).toEqual(
       new Map([
         ["id-bob", 1],
         ["id-carol", 1],
@@ -478,7 +477,7 @@ describe("ChatRoster: running turns", () => {
     roster.end(carols[0].id, "done");
     roster.startNext("id-carol");
     expect(roster.waitingAgents()).toEqual(["id-bob"]);
-    expect(roster.queuedCounts().has("id-carol")).toBe(false);
+    expect(queuedOf(roster).has("id-carol")).toBe(false);
   });
 
   it("reads the same roster and turns again after the object restarts", () => {
@@ -551,37 +550,11 @@ describe("ChatRoster: chains, ask keys and who asked", () => {
     const setUp = started(roster, ask("id-bob"));
     const given = started(roster, ask("id-carol"));
     roster.markSubmitted(given.id);
-    expect(roster.requeueUnsubmitted()).toBe(1);
+    roster.requeueUnsubmitted();
     expect(roster.turn(setUp.id)).toMatchObject({ status: "queued" });
     expect(roster.turn(setUp.id)).not.toHaveProperty("startedAt");
     expect(roster.turn(given.id)).toMatchObject({ status: "running", submitted: true });
     expect(roster.startNext("id-bob")?.id).toBe(setUp.id);
-  });
-
-  it("holds an agent's calls to the tools its session was set up with, and refuses any other session", () => {
-    const { roster } = withAgents("bob");
-    const session = roster.get("id-bob")!.session;
-    expect(roster.mayCall(session, "crm__list")).toBe(false);
-    roster.setTools("id-bob", ["crm__list", "artifact_read"]);
-    expect(roster.get("id-bob")?.tools).toEqual(["crm__list", "artifact_read"]);
-    expect(roster.mayCall(session, "crm__list")).toBe(true);
-    expect(roster.mayCall(session, "crm__update")).toBe(false);
-    expect(roster.mayCall("some-other-session", "crm__list")).toBe(false);
-    roster.setTools("id-bob", []);
-    expect(roster.mayCall(session, "crm__list")).toBe(false);
-  });
-
-  it("keeps the turns handed to pi apart from the agents': counted in their chain, never started as an agent's", () => {
-    const { roster } = withAgents("bob");
-    const root = started(roster, ask("id-bob"));
-    const piTurn = roster.queuePiTurn({ hop: 1, root: root.id, calledBy: { name: "bob", agentId: "id-bob" }, ask: "[bob · agent]: @pi build it" });
-    expect(piTurn).toMatchObject({ agentId: "pi", status: "queued", hop: 1, root: root.id, byOwner: false });
-    expect(roster.handOffsFrom(root.id)).toBe(1);
-    expect(roster.waitingAgents()).toEqual([]);
-    expect(roster.queuedPiTurns().map((turn) => turn.id)).toEqual([piTurn.id]);
-    roster.end(piTurn.id, "done");
-    expect(roster.queuedPiTurns()).toEqual([]);
-    expect(roster.handOffsFrom(root.id)).toBe(1);
   });
 
   it("drops only the waiting turns of the person who left, and says whether any went", () => {
@@ -600,10 +573,95 @@ describe("ChatRoster: chains, ask keys and who asked", () => {
     expect(roster.turn(running.id)?.status).toBe("running");
     expect(roster.turn(beas.id)?.status).toBe("queued");
     expect(roster.turn(handOff.id)?.status).toBe("queued");
-    expect(roster.queuedCounts()).toEqual(new Map([["id-bob", 2]]));
+    expect(queuedOf(roster)).toEqual(new Map([["id-bob", 2]]));
 
     expect(roster.dropQueuedBy("ann")).toBe(false);
     expect(roster.dropQueuedBy("nobody")).toBe(false);
+  });
+});
+
+describe("ChatRoster: replies to deliver", () => {
+  it("keeps an ended turn's reply until it is delivered, oldest first, and lets it go after", () => {
+    const { roster } = withAgents("bob", "carol");
+    const bobs = started(roster, ask("id-bob"));
+    const carols = started(roster, ask("id-carol"));
+    expect(roster.hasWork()).toBe(true);
+    roster.end(carols.id, "done", { reply: replyTo(carols), toPi: false });
+    roster.end(bobs.id, "failed", { reply: replyTo(bobs, ""), toPi: true });
+    expect(roster.undelivered()).toEqual([bobs.id, carols.id]);
+    expect(roster.outbox(bobs.id)).toEqual({ reply: replyTo(bobs, ""), toPi: true });
+    expect(roster.outbox(carols.id)).toEqual({ reply: replyTo(carols), toPi: false });
+    expect(roster.hasWork()).toBe(true);
+
+    roster.markDelivered(bobs.id);
+    expect(roster.outbox(bobs.id)).toBeNull();
+    expect(roster.undelivered()).toEqual([carols.id]);
+    roster.markDelivered(carols.id);
+    expect(roster.undelivered()).toEqual([]);
+    expect(roster.hasWork()).toBe(false);
+    // The turns stay as they ended, for the runs list.
+    expect(roster.turn(bobs.id)?.status).toBe("failed");
+  });
+
+  it("has nothing to deliver for a turn that ended without a reply, or one it does not know", () => {
+    const { roster } = withAgents("bob");
+    const turn = started(roster, ask("id-bob"));
+    roster.end(turn.id, "done");
+    expect(roster.outbox(turn.id)).toBeNull();
+    expect(roster.outbox(9999)).toBeNull();
+    expect(roster.undelivered()).toEqual([]);
+    expect(roster.hasWork()).toBe(false);
+  });
+
+  it("keeps the reply of a turn that ended once only: a second end changes nothing", () => {
+    const { roster } = withAgents("bob");
+    const turn = started(roster, ask("id-bob"));
+    roster.end(turn.id, "done", { reply: replyTo(turn, "first"), toPi: false });
+    expect(roster.end(turn.id, "done", { reply: replyTo(turn, "second"), toPi: true })).toBeNull();
+    expect(roster.outbox(turn.id)).toEqual({ reply: replyTo(turn, "first"), toPi: false });
+  });
+
+  it("counts a turn that handed pi one in its chain's hand-offs, delivered or not", () => {
+    const { roster } = withAgents("bob");
+    const root = started(roster, ask("id-bob"));
+    roster.end(root.id, "done", { reply: replyTo(root, "@pi build it"), toPi: true });
+    expect(roster.handOffsFrom(root.id)).toBe(1);
+    roster.markDelivered(root.id);
+    expect(roster.handOffsFrom(root.id)).toBe(1);
+  });
+
+  it("hands pi no turn after a Stop, but still delivers the reply", () => {
+    const { roster } = withAgents("bob", "carol");
+    const bobs = started(roster, ask("id-bob"));
+    const carols = started(roster, ask("id-carol"));
+    roster.end(bobs.id, "done", { reply: replyTo(bobs, "@pi go"), toPi: true });
+    roster.end(carols.id, "done", { reply: replyTo(carols, "@pi go"), toPi: true });
+    roster.stopAll("id-carol");
+    expect(roster.outbox(carols.id)).toEqual({ reply: replyTo(carols, "@pi go"), toPi: false });
+    expect(roster.outbox(bobs.id)?.toPi).toBe(true);
+    roster.stopAll();
+    expect(roster.outbox(bobs.id)).toEqual({ reply: replyTo(bobs, "@pi go"), toPi: false });
+    expect(roster.undelivered()).toEqual([bobs.id, carols.id]);
+  });
+
+  it("never prunes a reply not delivered yet", () => {
+    const { roster } = withAgents("bob");
+    const first = started(roster, ask("id-bob"));
+    roster.end(first.id, "done", { reply: replyTo(first), toPi: false });
+    for (let n = 0; n < KEPT_TURNS + 5; n++) roster.end(started(roster, ask("id-bob")).id, "done");
+    expect(roster.outbox(first.id)).toEqual({ reply: replyTo(first), toPi: false });
+    roster.markDelivered(first.id);
+    roster.end(started(roster, ask("id-bob")).id, "done");
+    expect(roster.turn(first.id)).toBeNull();
+  });
+
+  it("reads the replies to deliver again after the object restarts", () => {
+    const { sql, roster } = withAgents("bob");
+    const turn = started(roster, ask("id-bob"));
+    roster.end(turn.id, "done", { reply: replyTo(turn), toPi: true });
+    const again = new ChatRoster(sql);
+    expect(again.undelivered()).toEqual([turn.id]);
+    expect(again.outbox(turn.id)).toEqual({ reply: replyTo(turn), toPi: true });
   });
 });
 

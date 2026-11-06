@@ -36,20 +36,47 @@ export interface MentionOptions {
 export const AGENT_NAME = "pi";
 /** How a message in a shared chat calls the agent; any other message there is people talking among themselves. */
 export const AGENT_TOKEN = `@${AGENT_NAME}`;
-/** "@pi" as a word: not inside an address ("x@pi.dev"), a longer name ("@pierre") or a path ("@pi/notes.md"). */
-const AGENT_PATTERN = `(^|[^\\w@.])${AGENT_TOKEN}(?![\\w/@-]|\\.\\w)`;
+/**
+ * "@name" as a word: not inside an address ("x@pi.dev"), a longer name ("@pierre") or a path ("@pi/notes.md"). The
+ * first group is what comes before the "@". How "@pi" is found, and the chat's other agents by their names.
+ */
+export function callPattern(name: string, flags = "i"): RegExp {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+  return new RegExp(`(^|[^\\w@.])@${escaped}(?![\\w/@-]|\\.\\w)`, flags);
+}
+
+/**
+ * The names among `names` the text calls with "@name", outside the files and artifacts it names (a file "pi notes.md"
+ * calls no one), in the order it first calls them.
+ */
+export function calledNames(text: string, names: readonly string[], mentions: readonly Mention[] = []): string[] {
+  const found: { name: string; at: number }[] = [];
+  let offset = 0;
+  for (const part of splitMentions(text, mentions)) {
+    if (typeof part !== "string") {
+      offset += mentionToken(part).length;
+      continue;
+    }
+    for (const name of names) {
+      if (found.some((hit) => hit.name === name)) continue;
+      const match = callPattern(name).exec(part);
+      if (match) found.push({ name, at: offset + match.index + match[1].length });
+    }
+    offset += part.length;
+  }
+  return found.sort((a, b) => a.at - b.at).map(({ name }) => name);
+}
 
 /** Whether a message calls the agent ("@pi"), outside the files and artifacts it names (a file "pi notes.md" is not it). */
 export function summonsAgent(text: string, mentions: readonly Mention[] = []): boolean {
-  const call = new RegExp(AGENT_PATTERN, "i");
-  return splitMentions(text, mentions).some((part) => typeof part === "string" && call.test(part));
+  return calledNames(text, [AGENT_NAME], mentions).length > 0;
 }
 
 /** The text split into plain runs and the "@pi"s in it (as typed: "@PI" stays so), for the transcript to show them as chips. */
 export function splitAgent(text: string): { text: string; call: boolean }[] {
   const parts: { text: string; call: boolean }[] = [];
   let plain = 0;
-  for (const match of text.matchAll(new RegExp(AGENT_PATTERN, "gi"))) {
+  for (const match of text.matchAll(callPattern(AGENT_NAME, "gi"))) {
     const at = match.index + match[1].length;
     if (at > plain) parts.push({ text: text.slice(plain, at), call: false });
     plain = at + AGENT_TOKEN.length;

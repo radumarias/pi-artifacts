@@ -2,7 +2,8 @@
 // The MCP shapes mirror the contract Claude's artifacts use, so pages written
 // for one read naturally against the other.
 
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { EntryReactions, Reactions } from "./reactions.ts";
 import type { Attachment, AttachmentInput } from "./attachments.ts";
 import type { Mention, MentionInput } from "./mentions.ts";
@@ -210,6 +211,15 @@ export type PublishedDetails = {
   title: string;
   check?: CheckedDetails;
 };
+
+/** The artifact a publish's result made (pi's, or an agent's in its own session), which shows as a card. */
+export function publishedBy(entry: EntryRecord): PublishedDetails | undefined {
+  if (entry.kind !== "pi.tool-result") return undefined;
+  const message = entry.model?.[0] as ToolResultMessage | undefined;
+  if (message?.toolName !== PUBLISH_TOOL || message.isError) return undefined;
+  const details = message.details as Partial<PublishedDetails> | undefined;
+  return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
+}
 
 /** The tool that renders a page in a headless browser before it is published, and what its result shows in the chat. */
 export const CHECK_TOOL = "artifact_check";

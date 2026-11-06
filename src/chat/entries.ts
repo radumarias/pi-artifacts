@@ -1,7 +1,7 @@
-import type { ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { CHAT_AGENT_KIND, type ChatAgentReplyData } from "../../shared/agents.ts";
-import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, PUBLISH_TOOL, type ChatMessageData, type ChatPeopleData, type PublishedDetails } from "../../shared/protocol.ts";
+import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, publishedBy, type ChatMessageData, type ChatPeopleData } from "../../shared/protocol.ts";
 
 /** When an entry was sent, for one that has a time: messages from before chats kept `sentAt` have only the time pi wrote them, and asides not even that. */
 export function sentAt(entry: EntryRecord): number | undefined {
@@ -23,13 +23,7 @@ export function isAgent(entry: EntryRecord): boolean {
 }
 
 /** The artifact a publish's result made, which shows as a card. */
-export function published(entry: EntryRecord): PublishedDetails | undefined {
-  if (entry.kind !== "pi.tool-result") return undefined;
-  const message = entry.model?.[0] as ToolResultMessage | undefined;
-  if (message?.toolName !== PUBLISH_TOOL || message.isError) return undefined;
-  const details = message.details as Partial<PublishedDetails> | undefined;
-  return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
-}
+export const published = publishedBy;
 
 /** Whether the viewer `uid` wrote the entry, or caused it (joined, left). A plain `pi.user` entry is the owner's (`isOwner`). */
 export function byViewer(entry: EntryRecord, uid: string, isOwner: boolean): boolean {

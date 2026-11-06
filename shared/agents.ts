@@ -6,6 +6,8 @@
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { AGENT_NAME } from "./mentions.ts";
+import { EFFORT_LABELS } from "./models.ts";
+import { isObject } from "./util.ts";
 
 /** An agent's handle, as "@name" calls it: a lowercase letter, then letters, digits or hyphens. */
 export const AGENT_NAME_PATTERN = /^[a-z][a-z0-9-]{1,23}$/;
@@ -27,7 +29,10 @@ export const MAX_HOPS = 3;
 export const AGENT_COLORS = ["blue", "green", "purple", "orange", "teal", "pink", "slate"] as const;
 export type AgentColor = (typeof AGENT_COLORS)[number];
 
-const EFFORTS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+/** The efforts an agent may name: the model picker's. */
+export const AGENT_EFFORTS = Object.keys(EFFORT_LABELS) as ModelThinkingLevel[];
+/** An agent's id, as its owner's directory makes it (randomHex(8)). */
+export const AGENT_ID_PATTERN = /^[a-f0-9]{16}$/;
 
 /**
  * How far an agent may go on its own: 1 inform (read, work out, tell its owner), 2 recommend (propose actions as
@@ -172,10 +177,6 @@ function names(value: unknown, field: string): string[] | undefined {
   return [...new Set((value as string[]).map((item) => item.trim()))];
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function checkTime(value: unknown): string {
   if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) fail('A schedule\'s time is "HH:MM", 24-hour, such as "07:00".');
   return value;
@@ -293,7 +294,7 @@ export function checkAgent(input: unknown): AgentInput {
   const color = input.color ?? undefined;
   if (color !== undefined && !(AGENT_COLORS as readonly unknown[]).includes(color)) fail(`An agent's colour is one of ${AGENT_COLORS.join(", ")}.`);
   const effort = input.effort ?? undefined;
-  if (effort !== undefined && !EFFORTS.includes(effort as ModelThinkingLevel)) fail(`An agent's effort is one of ${EFFORTS.join(", ")}.`);
+  if (effort !== undefined && !AGENT_EFFORTS.includes(effort as ModelThinkingLevel)) fail(`An agent's effort is one of ${AGENT_EFFORTS.join(", ")}.`);
   const autonomy = input.autonomy ?? undefined;
   if (autonomy !== undefined && autonomy !== 1 && autonomy !== 2 && autonomy !== 3 && autonomy !== 4) fail("An agent's autonomy is 1 (inform) to 4 (run).");
   const model = str(input.model, field("An agent", "a", "model"), 200, { required: false });
@@ -378,12 +379,8 @@ export type ChatAgentReplyData = {
   endedAt: number;
   /** Why it ended with no answer (failed, stopped). */
   failed?: string;
-  /** The transcript entry of the message it answered, when there is one. */
-  answers?: number;
   /** Artifacts it published in this turn, for the app to show their cards. */
   published?: { artifactId: string; title: string; version: number }[];
-  /** Files it saved in this turn (paths in its owner's files): the chat's files, as pi's are. */
-  saved?: string[];
 };
 
 export type AgentTurnStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -396,8 +393,6 @@ export interface AgentTurnView {
   /** How many hand-offs led to it: 0 when a person or its schedule called it. */
   hop: number;
   calledBy: ChatAgentReplyData["calledBy"];
-  /** The log entry of the message that called it, if any. */
-  answers?: number;
   /** Whether its owner asked for it (directly): only such a turn may use the owner's private servers and write tools. */
   byOwner: boolean;
   createdAt: number;
@@ -413,48 +408,11 @@ export interface ChatAgents {
 
 /**
  * What a turn is placed as in an agent's own session: a one-line input naming who asked, in place of pi's `pi.user`,
- * so its step panel shows where the turn came from. Also how pi itself is handed a turn by another agent.
+ * so its step panel shows where the turn came from. Also how pi itself is handed a turn by another agent: `turn` is
+ * then the turn that named pi, and `root` the chain it is in, which pi's answer carries on.
  */
 export const CHAT_TURN_KIND = "chat.turn";
-export type ChatTurnData = { turn: number; calledBy: ChatAgentReplyData["calledBy"]; hop: number };
-
-/** "@name" as a word, the way AGENT_PATTERN in mentions.ts finds "@pi": not in an address, a longer name or a path. */
-function callPattern(name: string, flags: string): RegExp {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
-  return new RegExp(`(^|[^\\w@.])@${escaped}(?![\\w/@-]|\\.\\w)`, flags);
-}
-
-/** The names among `names` the text calls with "@name", in the order it first calls them. */
-export function calledNames(text: string, names: readonly string[]): string[] {
-  const found: { name: string; at: number }[] = [];
-  for (const name of names) {
-    const match = callPattern(name, "i").exec(text);
-    if (match) found.push({ name, at: match.index + match[1].length });
-  }
-  return found.sort((a, b) => a.at - b.at).map(({ name }) => name);
-}
-
-/** Each "@name" of an agent in the text, for the transcript to show as chips. */
-export function splitAgentCalls(text: string, names: readonly string[]): { text: string; agent?: string }[] {
-  const hits: { at: number; end: number; agent: string }[] = [];
-  for (const name of names) {
-    for (const match of text.matchAll(callPattern(name, "gi"))) {
-      const at = match.index + match[1].length;
-      hits.push({ at, end: at + name.length + 1, agent: name });
-    }
-  }
-  hits.sort((a, b) => a.at - b.at);
-  const parts: { text: string; agent?: string }[] = [];
-  let plain = 0;
-  for (const hit of hits) {
-    if (hit.at < plain) continue;
-    if (hit.at > plain) parts.push({ text: text.slice(plain, hit.at) });
-    parts.push({ text: text.slice(hit.at, hit.end), agent: hit.agent });
-    plain = hit.end;
-  }
-  if (plain < text.length) parts.push({ text: text.slice(plain) });
-  return parts;
-}
+export type ChatTurnData = { turn: number; calledBy: ChatAgentReplyData["calledBy"]; hop: number; root?: number };
 
 /** How an agent is labelled in the lines its sessions read: "[research · agent]", "[Ana · person · your owner]". */
 export function speakerLabel(speaker: { name: string; kind: "person" | "agent"; owner?: boolean }): string {

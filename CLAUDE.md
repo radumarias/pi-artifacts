@@ -47,9 +47,11 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
 - Agents (`shared/agents.ts`, `worker/agents/`): definitions per user in `UserDirectory` (`AgentStore`); a chat's roster
   and durable turn queue (`ChatRoster`) and the turn controller (`AgentTurns`) run each roster agent in its own pi
   session of the chat object, configured per turn (`#configureAgent`: the session's tools are an allow-list,
-  `allowedTools`, and a turn its owner did not ask for gets only read tools: the shared servers' and `READ_TOOLS`; MCP
-  calls are checked again as they start, `ChatRoster.mayCall`); keep both. Replies are `chat.agent` entries, posted
-  before their turn ends; `@name` hands off (MAX_HOPS per person's message, pi's hand-offs counted as turn rows).
+  `allowedTools`, and a turn its owner did not ask for gets only read tools: the shared servers' and `READ_TOOLS`; the
+  harness offers and runs no tool off that list); keep it that way. A turn ends with its reply in its row (an outbox),
+  together with the hand-offs it queues; the reply is then posted as a `chat.agent` entry. `@name` hands off (MAX_HOPS
+  per person's message, a hand-off to pi counted on the handing turn); pi's own answers are read from its log for the
+  agents they name (`#piScan`, from a cursor).
   A DO method's return type must not contain `unknown` (the RPC type turns `never`) or recursive JSON types (too deep).
 - Before a page becomes a version it is checked in a headless browser (`BROWSER` binding, `worker/artifacts/check.ts`):
   the agent saves a page with `artifact_write` (then changes it only by edits), and `artifact_check` and `artifact_publish` take it by draft id and report console errors, failed calls, a screenshot and the agent's tests, and

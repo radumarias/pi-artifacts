@@ -11,14 +11,15 @@ import {
   askOf,
   assistantText,
   allowedTools,
+  CatchUp,
   handOffs,
   messageAskKey,
   mirrorText,
   publishedIn,
   speakersFor,
   turnInput,
-  type McpToolInfo,
 } from "../worker/agents/turns.ts";
+import type { McpToolInfo } from "../worker/agent/mcp.ts";
 
 const ana = { uid: "ana", name: "Ana" };
 const radu = { uid: "radu", name: "Radu" };
@@ -329,7 +330,7 @@ describe("mirrorText", () => {
     const entries = Array.from({ length: 11 }, (_, i) => exact(i));
     const { text: mirrored, through } = mirrorText(entries, SELF, OWNER);
     expect(mirrored).toBe(
-      `${HEADING}(1 earlier messages left out.)\n\n` +
+      `${HEADING}(Earlier messages are left out.)\n\n` +
         entries
           .slice(1)
           .map((_, i) => lineOf(i + 1))
@@ -343,11 +344,44 @@ describe("mirrorText", () => {
     const tiny = said(ana, "tiny", 0);
     const big = Array.from({ length: 10 }, (_, i) => said(ana, `${i}${"y".repeat(5_999)}`, i + 1));
     const { text: mirrored } = mirrorText([tiny, ...big], SELF, OWNER);
-    expect(mirrored.startsWith(`${HEADING}(2 earlier messages left out.)\n\n[Ana · person]: 1y`)).toBe(true);
+    expect(mirrored.startsWith(`${HEADING}(Earlier messages are left out.)\n\n[Ana · person]: 1y`)).toBe(true);
     expect(mirrored).not.toContain("tiny");
     expect(mirrored).not.toContain(CUT);
     expect(mirrored.endsWith(`[Ana · person]: 9${"y".repeat(5_999)}`)).toBe(true);
     expect(mirrored.split("\n\n")).toHaveLength(2 + 9);
+  });
+});
+
+describe("CatchUp", () => {
+  // As in mirrorText's tests: lines of 6000 characters, ten of them the whole budget.
+  const exact = (i: number) => said(ana, `${String(i).padStart(2, "0")}${"x".repeat(5_982)}`, i);
+  const lineOf = (i: number) => `[Ana · person]: ${String(i).padStart(2, "0")}${"x".repeat(5_982)}`;
+
+  it("reads the log newest first, page by page, and says when older entries would be left out", () => {
+    const entries = Array.from({ length: 12 }, (_, i) => exact(i));
+    const pages = [entries.slice(8).reverse(), entries.slice(4, 8).reverse(), entries.slice(0, 4).reverse()];
+    const catchUp = new CatchUp(SELF, OWNER);
+    expect(catchUp.add(pages[0])).toBe(true);
+    expect(catchUp.add(pages[1])).toBe(true);
+    // Two more lines fit the budget of ten; the third does not, so a reader stops here.
+    expect(catchUp.add(pages[2])).toBe(false);
+    expect(catchUp.result()).toEqual({
+      text:
+        `${HEADING}(Earlier messages are left out.)\n\n` +
+        entries
+          .slice(2)
+          .map((_, i) => lineOf(i + 2))
+          .join("\n\n"),
+      through: entries.at(-1)!.id,
+    });
+    expect(catchUp.add([exact(0)])).toBe(false);
+  });
+
+  it("covers the newest entry it was given, even one it does not read", () => {
+    const catchUp = new CatchUp(SELF, OWNER);
+    expect(catchUp.add([{ id: 9, kind: CHAT_ASIDE_KIND } as unknown as EntryRecord])).toBe(true);
+    expect(catchUp.result()).toEqual({ text: "", through: 9 });
+    expect(new CatchUp(SELF, OWNER).result()).toEqual({ text: "", through: -1 });
   });
 });
 

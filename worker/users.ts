@@ -504,11 +504,6 @@ export class UserDirectory extends DurableObject<Env> {
     return this.#agents.get(id);
   }
 
-  /** A short string that changes whenever one of the user's agents does: a chat reads them again only on a change. */
-  agentsVersion(): string {
-    return this.#agents.version();
-  }
-
   /**
    * Save one of the user's agents (AgentStore.save): a new one, or with `save.id` a change to one. One the model
    * proposes is saved off, for the user to review and turn on.

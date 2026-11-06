@@ -15,7 +15,7 @@ const [A, B, C, D, E] = ["atlas", "bard", "cora", "dex", "echo"];
 
 type Person = { uid: string; name: string };
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void };
-type Handed = Parameters<TurnHost["handToPi"]>[0];
+type Handed = { input: string; data: ChatTurnData };
 type View = Parameters<ChatRoster["refresh"]>[1];
 
 function deferred<T>(): Deferred<T> {
@@ -81,6 +81,10 @@ class FakeChat implements TurnHost {
   readonly aborts: string[] = [];
   readonly asked: { session: string; turn: number }[] = [];
   readonly posts: { reply: ChatAgentReplyData; forPi: boolean }[] = [];
+  /** The turns whose replies were also written for pi to read, once each. */
+  readonly asides: number[] = [];
+  /** How many pages of the log the catch-ups read. */
+  pagesRead = 0;
   readonly toPi: Handed[] = [];
   readonly kept: Promise<unknown>[] = [];
   changes = 0;
@@ -98,7 +102,6 @@ class FakeChat implements TurnHost {
         ownerUid: OWNER.uid,
         name,
         session: sessionOf(name),
-        addedBy: OWNER.uid,
         avatar: agent.avatar,
         color: agent.color,
         job: agent.job,
@@ -111,19 +114,20 @@ class FakeChat implements TurnHost {
     return this.definitions.get(entry.agentId) ?? null;
   }
 
-  ownerName(uid: string): string {
-    return uid === OWNER.uid ? OWNER.name : uid;
-  }
-
   async configure(entry: RosterEntry, agent: AgentDefinition, turn: AgentTurn): Promise<void> {
     this.calls.push(`configure ${entry.name}`);
     this.configured.push({ entry, agent, turn });
   }
 
-  async logAfter(after: number): Promise<readonly EntryRecord[]> {
+  /** The log after `after`, newest first, two entries a page. */
+  async *logSince(after: number): AsyncGenerator<readonly EntryRecord[]> {
     this.calls.push("read");
     this.reads.push(after);
-    return this.log.filter((entry) => (entry.id as number) > after);
+    const newer = this.log.filter((entry) => (entry.id as number) > after).reverse();
+    for (let at = 0; at < newer.length; at += 2) {
+      this.pagesRead++;
+      yield newer.slice(at, at + 2);
+    }
   }
 
   async write(session: string, text: string, requestId: string): Promise<void> {
@@ -153,15 +157,17 @@ class FakeChat implements TurnHost {
 
   async post(reply: ChatAgentReplyData, forPi: boolean): Promise<void> {
     this.calls.push(`post ${reply.name}`);
-    // Placed once, as the chat object's request id for a reply does.
+    // Placed once, as the chat object's request ids for a reply and its copy for pi do.
+    if (forPi && reply.text && !this.asides.includes(reply.turn)) this.asides.push(reply.turn);
     if (this.posts.some((post) => post.reply.turn === reply.turn)) return;
     this.posts.push({ reply, forPi });
     this.#append({ kind: CHAT_AGENT_KIND, data: reply });
   }
 
-  async handToPi(turn: Handed): Promise<void> {
+  async handToPi(input: string, data: ChatTurnData): Promise<void> {
     this.calls.push("hand to pi");
-    this.toPi.push(turn);
+    // Placed once, as pi's operation id for the handing turn does.
+    if (!this.toPi.some((handed) => handed.data.turn === data.turn)) this.toPi.push({ input, data });
   }
 
   changed(): void {
@@ -207,6 +213,11 @@ class FakeChat implements TurnHost {
 
   replies(): ChatAgentReplyData[] {
     return this.posts.map(({ reply }) => reply);
+  }
+
+  /** The turn an agent runs now, if any. */
+  runningOf(name: string): AgentTurn | null {
+    return this.roster.allRunning().find((turn) => turn.agentId === idOf(name)) ?? null;
   }
 
   /** An agent's newest turn. */
@@ -275,16 +286,17 @@ afterEach(() => {
 });
 
 describe("AgentTurns: a turn", () => {
-  it("catches the session up, sets it up, then submits the turn's input under its operation id", async () => {
+  it("catches the session up and sets it up, then submits the turn's input under its operation id", async () => {
     const chat = new FakeChat([A]);
     chat.definitions.set(idOf(A), definition(A, { version: 4 }));
     chat.say(MIA, "Lunch at noon?");
     const caller = chat.say(OWNER, "@atlas sum up the week");
     const [turn] = chat.turns.call([idOf(A)], caller);
-    expect(turn).toMatchObject({ agentId: idOf(A), status: "queued", hop: 0, byOwner: true, root: turn.id, ask: caller.ask, askKey: caller.askKey });
+    expect(turn).toMatchObject({ agentId: idOf(A), status: "queued", hop: 0, byOwner: true, root: turn.id, ask: caller.ask });
     await chat.flush();
 
-    expect(chat.calls).toEqual(["read", `write ${sessionOf(A)}`, `configure ${A}`, `submit ${sessionOf(A)}`, `wait ${sessionOf(A)}`]);
+    // The catch-up and the set-up go at once; the input only after both.
+    expect(chat.calls).toEqual(["read", `configure ${A}`, `write ${sessionOf(A)}`, `submit ${sessionOf(A)}`, `wait ${sessionOf(A)}`]);
     // The asking message is left out of the catch-up: the turn's input carries it.
     expect(chat.writes).toEqual([{ session: sessionOf(A), requestId: `mirror:${idOf(A)}:2`, text: expect.stringContaining("[Mia · person]: Lunch at noon?") }]);
     expect(chat.writes[0].text).not.toContain("sum up the week");
@@ -302,8 +314,8 @@ describe("AgentTurns: a turn", () => {
     expect(chat.submits[0].input).toContain(caller.ask);
     expect(operationId(turn.id)).toBe(`turn:${turn.id}`);
     expect(chat.waits).toEqual([{ session: sessionOf(A), operationId: `turn:${turn.id}` }]);
-    expect(chat.roster.get(idOf(A))).toMatchObject({ mirrored: 2, applied: 4 });
-    expect(chat.roster.running(idOf(A))?.id).toBe(turn.id);
+    expect(chat.roster.get(idOf(A))).toMatchObject({ mirrored: 2 });
+    expect(chat.runningOf(A)?.id).toBe(turn.id);
     expect(chat.posts).toEqual([]);
   });
 
@@ -329,7 +341,7 @@ describe("AgentTurns: a turn", () => {
   it("posts the reply with its text, who called it, its hop, its times and the pages it published", async () => {
     const chat = new FakeChat([A]);
     const caller = chat.say(OWNER, "@atlas chart the sales");
-    const [turn] = chat.turns.call([idOf(A)], { ...caller, answers: 1 });
+    const [turn] = chat.turns.call([idOf(A)], caller);
     chat.clock.now = T0 + 5;
     await chat.flush();
     chat.pages.set(turn.id, [
@@ -357,13 +369,12 @@ describe("AgentTurns: a turn", () => {
           hop: 0,
           startedAt: T0 + 5,
           endedAt: T0 + 90,
-          answers: 1,
           published: [{ artifactId: "art-1", title: "Sales", version: 2 }],
         },
       },
     ]);
     expect(chat.roster.turn(turn.id)).toMatchObject({ status: "done", startedAt: T0 + 5, endedAt: T0 + 90 });
-    expect(chat.roster.running(idOf(A))).toBeNull();
+    expect(chat.runningOf(A)).toBeNull();
   });
 
   it("leaves what the turn did not have out of its reply", async () => {
@@ -372,7 +383,6 @@ describe("AgentTurns: a turn", () => {
     await chat.flush();
     const [reply] = chat.replies();
     expect(reply.text).toBe("");
-    expect(Object.keys(reply)).not.toContain("answers");
     expect(Object.keys(reply)).not.toContain("published");
     expect(Object.keys(reply)).not.toContain("failed");
   });
@@ -405,14 +415,14 @@ describe("AgentTurns: a turn", () => {
     expect(chat.toPi).toEqual([]);
   });
 
-  it("shows the agent as its definition now says, and sets its session from that version", async () => {
+  it("shows the agent as its definition now says", async () => {
     const chat = new FakeChat([A]);
     chat.definitions.set(idOf(A), definition(A, { name: "astra", avatar: "AS", color: "green", job: "Maps things.", version: 3 }));
     const [turn] = chat.turns.call([idOf(A)], chat.say(OWNER, "@atlas go"));
     await chat.flush();
 
     expect(chat.configured[0].entry).toMatchObject({ name: "astra", avatar: "AS", color: "green", job: "Maps things." });
-    expect(chat.roster.get(idOf(A))).toMatchObject({ name: "astra", applied: 3 });
+    expect(chat.roster.get(idOf(A))).toMatchObject({ name: "astra" });
     expect(chat.roster.byName("astra")?.agentId).toBe(idOf(A));
     chat.finish(turn.id, done("Mapped."));
     await chat.flush();
@@ -428,7 +438,7 @@ describe("AgentTurns: the queue", () => {
     await chat.flush();
     expect(chat.submits.map((submit) => submit.operationId)).toEqual([`turn:${first.id}`]);
     expect(chat.roster.turn(second.id)?.status).toBe("queued");
-    expect(chat.roster.queuedCounts().get(idOf(A))).toBe(1);
+    expect(chat.roster.views(() => "")[0].queued).toBe(1);
 
     chat.finish(first.id, done("First."));
     await chat.flush();
@@ -439,7 +449,7 @@ describe("AgentTurns: the queue", () => {
     chat.finish(second.id, done("Second."));
     await chat.flush();
     expect(chat.replies().map((reply) => reply.text)).toEqual(["First.", "Second."]);
-    expect(chat.roster.running(idOf(A))).toBeNull();
+    expect(chat.runningOf(A)).toBeNull();
     expect(chat.roster.waitingAgents()).toEqual([]);
   });
 
@@ -453,7 +463,7 @@ describe("AgentTurns: the queue", () => {
     chat.finish(tb.id, done("Bard here."));
     await chat.flush();
     expect(chat.replies().map((reply) => reply.name)).toEqual([B]);
-    expect(chat.roster.running(idOf(A))?.id).toBe(ta.id);
+    expect(chat.runningOf(A)?.id).toBe(ta.id);
 
     chat.finish(ta.id, done("Atlas here."));
     await chat.flush();
@@ -492,7 +502,7 @@ describe("AgentTurns: hand-offs", () => {
   it("gives an agent a reply names a read-only turn in the same chain, its catch-up leaving the reply out", async () => {
     const chat = new FakeChat([A, B]);
     const caller = chat.say(OWNER, "@atlas find the numbers");
-    const [ta] = chat.turns.call([idOf(A)], { ...caller, answers: 1 });
+    const [ta] = chat.turns.call([idOf(A)], caller);
     await chat.flush();
     const text = "I found them; @bard can you chart them?";
     chat.finish(ta.id, done(text));
@@ -507,9 +517,8 @@ describe("AgentTurns: hand-offs", () => {
       root: ta.id,
       calledBy: { name: A, agentId: idOf(A) },
       ask: `[atlas · agent]: ${text}`,
-      askKey: `turn:${ta.id}`,
-      answers: 1,
     });
+    expect(chat.roster.askKeys(idOf(B), tb.id)).toEqual(new Set([`turn:${ta.id}`]));
     expect(chat.configured.at(-1)?.turn).toMatchObject({ id: tb.id, byOwner: false });
     expect(chat.submits.at(-1)).toMatchObject({
       session: sessionOf(B),
@@ -530,7 +539,7 @@ describe("AgentTurns: hand-offs", () => {
 
     chat.finish(tb.id, done("Charted."));
     await chat.flush();
-    expect(chat.replies()[1]).toMatchObject({ agentId: idOf(B), hop: 1, calledBy: { name: A, agentId: idOf(A) }, answers: 1 });
+    expect(chat.replies()[1]).toMatchObject({ agentId: idOf(B), hop: 1, calledBy: { name: A, agentId: idOf(A) } });
   });
 
   it("hands pi a turn when a reply names it, and then does not post the reply for pi to read as well", async () => {
@@ -540,7 +549,11 @@ describe("AgentTurns: hand-offs", () => {
     await chat.flush();
 
     expect(chat.posts).toEqual([{ forPi: false, reply: expect.objectContaining({ text }) }]);
-    expect(chat.toPi).toEqual([expect.objectContaining({ hop: 1, root: turn.id, calledBy: { name: A, agentId: idOf(A) }, ask: `[atlas · agent]: ${text}` })]);
+    const calledBy = { name: A, agentId: idOf(A) };
+    expect(chat.toPi).toEqual([
+      { input: turnInput({ calledBy, hop: 1, ask: `[atlas · agent]: ${text}` }), data: { turn: turn.id, calledBy, hop: 1, root: turn.id } },
+    ]);
+    expect(chat.asides).toEqual([]);
     expect(chat.calls.slice(-2)).toEqual([`post ${A}`, "hand to pi"]);
     expect(chat.roster.recentTurns(idOf(A))).toHaveLength(1);
     expect(chat.submits).toHaveLength(1);
@@ -553,7 +566,7 @@ describe("AgentTurns: hand-offs", () => {
 
     expect(chat.posts[0].forPi).toBe(false);
     expect(chat.latest(B)).toMatchObject({ hop: 1, root: turn.id, status: "running" });
-    expect(chat.toPi).toEqual([expect.objectContaining({ hop: 1, root: turn.id })]);
+    expect(chat.toPi).toEqual([expect.objectContaining({ data: expect.objectContaining({ hop: 1, root: turn.id }) })]);
   });
 
   it("lets one reply hand off at most MAX_HOPS times, pi taking one of them when named in time", async () => {
@@ -680,6 +693,8 @@ describe("AgentTurns: an agent's definition", () => {
     expect(chat.configured).toEqual([]);
     expect(chat.submits).toEqual([]);
     expect(chat.waits).toEqual([]);
+    // Its input never went in: its session has no outputs to look for.
+    expect(chat.asked).toEqual([]);
   });
 });
 
@@ -708,7 +723,7 @@ describe("AgentTurns: errors", () => {
     expect(chat.replies()).toEqual([expect.objectContaining({ turn: first.id, failed: "the inbox is full" })]);
     expect(chat.submits.map((submit) => submit.operationId)).toEqual([`turn:${second.id}`]);
     expect(chat.waits.map((wait) => wait.operationId)).toEqual([`turn:${second.id}`]);
-    expect(chat.roster.running(idOf(A))?.id).toBe(second.id);
+    expect(chat.runningOf(A)?.id).toBe(second.id);
   });
 
   it("fails the turn when the owner's directory cannot be read", async () => {
@@ -771,9 +786,10 @@ describe("AgentTurns: errors", () => {
     chat.finish(turn.id, done("@pi your turn"));
     await chat.flush();
 
-    expect(error).toHaveBeenCalledWith("hand to pi:", "pi is busy");
+    expect(error).toHaveBeenCalledWith("agent reply:", "pi is busy");
+    expect(chat.roster.outbox(turn.id)).toBeNull();
     expect(chat.posts).toEqual([{ forPi: false, reply: expect.objectContaining({ turn: turn.id }) }]);
-    expect(chat.roster.running(idOf(A))?.id).toBe(next.id);
+    expect(chat.runningOf(A)?.id).toBe(next.id);
   });
 });
 
@@ -947,32 +963,80 @@ describe("AgentTurns: resume", () => {
     expect(chat.replies().map((reply) => reply.text)).toEqual(["Started again."]);
   });
 
-  it("hands pi again a turn its inbox may not have, once, and then counts it handed", async () => {
+  it("delivers again a reply a restart cut off, handing pi its turn once", async () => {
     const chat = new FakeChat([A]);
     const root = runningBefore(chat, A);
-    const piTurn = chat.roster.queuePiTurn({ hop: 1, root: root.id, calledBy: { name: A, agentId: idOf(A) }, ask: "[atlas · agent]: @pi go" });
+    const reply: ChatAgentReplyData = {
+      agentId: idOf(A),
+      name: A,
+      avatar: "at",
+      color: "blue",
+      ownerUid: OWNER.uid,
+      text: "@pi go",
+      calledBy: { name: OWNER.name, uid: OWNER.uid },
+      turn: root.id,
+      hop: 0,
+      startedAt: T0,
+      endedAt: T0,
+    };
+    chat.roster.end(root.id, "done", { reply, toPi: true });
     new AgentTurns(chat).resume();
     await chat.flush();
 
-    expect(chat.toPi).toEqual([expect.objectContaining({ id: piTurn.id, hop: 1, root: root.id })]);
-    expect(chat.roster.turn(piTurn.id)?.status).toBe("done");
+    expect(chat.posts).toEqual([{ reply, forPi: false }]);
+    expect(chat.toPi).toEqual([expect.objectContaining({ data: { turn: root.id, calledBy: { name: A, agentId: idOf(A) }, hop: 1, root: root.id } })]);
+    expect(chat.roster.outbox(root.id)).toBeNull();
     new AgentTurns(chat).resume();
     await chat.flush();
+    expect(chat.posts).toHaveLength(1);
     expect(chat.toPi).toHaveLength(1);
   });
 
-  it("posts a reply before it ends the turn, so a restart in between posts it again rather than losing it", async () => {
+  it("ends the turn, with its reply to deliver, before it posts the reply: a restart in between delivers it then", async () => {
     const { chat, turn } = await called([A]);
-    const statusAtPost: (string | undefined)[] = [];
+    const atPost: { status?: string; undelivered: number[] }[] = [];
     const post = chat.post.bind(chat);
     vi.spyOn(chat, "post").mockImplementation(async (reply, forPi) => {
-      statusAtPost.push(chat.roster.turn(reply.turn)?.status);
+      atPost.push({ status: chat.roster.turn(reply.turn)?.status, undelivered: chat.roster.undelivered() });
       await post(reply, forPi);
     });
     chat.finish(turn.id, done("Done."));
     await chat.flush();
-    expect(statusAtPost).toEqual(["running"]);
-    expect(chat.roster.turn(turn.id)?.status).toBe("done");
+    expect(atPost).toEqual([{ status: "done", undelivered: [turn.id] }]);
+    expect(chat.roster.undelivered()).toEqual([]);
+  });
+
+  it("hands pi nothing when a Stop comes while the reply is posted, and pi reads the reply instead", async () => {
+    const { chat, turn } = await called([A]);
+    const posted = deferred<void>();
+    const post = chat.post.bind(chat);
+    vi.spyOn(chat, "post").mockImplementationOnce(async (reply, forPi) => {
+      await posted.promise;
+      await post(reply, forPi);
+    });
+    chat.finish(turn.id, done("@pi build it"));
+    await chat.flush();
+    await chat.turns.stop();
+    posted.resolve();
+    await chat.flush();
+
+    expect(chat.posts).toEqual([{ forPi: false, reply: expect.objectContaining({ turn: turn.id }) }]);
+    expect(chat.asides).toEqual([turn.id]);
+    expect(chat.toPi).toEqual([]);
+    expect(chat.roster.outbox(turn.id)).toBeNull();
+  });
+
+  it("reads the log for a catch-up newest first, and only as far back as it keeps", async () => {
+    const chat = new FakeChat([A]);
+    // Twenty messages of 6000 characters: the catch-up keeps ten of them, and needs no more than six pages of two.
+    for (let n = 0; n < 20; n++) chat.say(MIA, `${String(n).padStart(2, "0")}${"x".repeat(5_982)}`);
+    chat.turns.call([idOf(A)], chat.say(OWNER, "@atlas sum it up"));
+    await chat.flush();
+    expect(chat.pagesRead).toBeLessThanOrEqual(6);
+    expect(chat.writes[0].text).toContain("(Earlier messages are left out.)");
+    expect(chat.writes[0].text).toContain("[Mia · person]: 19x");
+    expect(chat.writes[0].text).not.toContain("[Mia · person]: 09x");
+    expect(chat.roster.get(idOf(A))?.mirrored).toBe(21);
   });
 
   it("does nothing on a wake with no turns", async () => {
@@ -1011,10 +1075,10 @@ describe("AgentTurns: pi's replies", () => {
       root: tb.id,
       calledBy: { name: AGENT_NAME, agentId: AGENT_NAME },
       ask: `[pi · agent]: ${text}`,
-      askKey: `entry:${entry}`,
     };
     expect(tb).toMatchObject(handOff);
     expect(ta).toMatchObject(handOff);
+    expect(chat.roster.askKeys(idOf(B), tb.id)).toEqual(new Set([`entry:${entry}`]));
     expect(chat.submits.map((submit) => submit.session)).toEqual([sessionOf(B), sessionOf(A)]);
     expect(chat.submits[0].input).toContain("pi (an agent) asked you");
     expect(chat.submits[0].input).toContain("This is hand-off 1");
@@ -1039,10 +1103,10 @@ describe("AgentTurns: pi's replies", () => {
     chat.finish(turn.id, done("@pi can you look?"));
     await chat.flush();
     const [handed] = chat.toPi;
-    expect(handed).toMatchObject({ hop: 1, root: turn.id });
+    expect(handed.data).toMatchObject({ hop: 1, root: turn.id });
 
     const text = "Looked. @bard take it from here.";
-    chat.turns.fromPi(text, chat.piSays(text), { hop: handed.hop, root: handed.root });
+    chat.turns.fromPi(text, chat.piSays(text), { hop: handed.data.hop, root: handed.data.root });
     await chat.flush();
     const tb = chat.latest(B);
     expect(tb).toMatchObject({ hop: 2, root: turn.id, calledBy: { name: AGENT_NAME, agentId: AGENT_NAME } });
@@ -1086,7 +1150,7 @@ describe("AgentTurns: pi's replies", () => {
     const [handed] = chat.toPi;
 
     const text = "Built. @bard @cora @dex please review.";
-    chat.turns.fromPi(text, chat.piSays(text), { hop: handed.hop, root: handed.root });
+    chat.turns.fromPi(text, chat.piSays(text), { hop: handed.data.hop, root: handed.data.root });
     await chat.flush();
     // pi took one of the chain's hand-offs: two are left.
     expect(chat.roster.allRunning().map((running) => running.agentId)).toEqual([idOf(B), idOf(C)]);

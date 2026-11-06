@@ -54,8 +54,8 @@ export interface AgentSave {
 
 /**
  * One user's agent definitions, in their UserDirectory's SQLite, shaped like their skills: the model may propose one,
- * saved off until its owner turns it on. Each change counts the version up, which a chat compares with the one it last
- * applied. Names are unique per user, so "@name" means one agent of theirs.
+ * saved off until its owner turns it on. Each change counts the agent's version up, so two editors never undo each
+ * other. Names are unique per user, so "@name" means one agent of theirs.
  */
 export class AgentStore {
   readonly #sql: Sql;
@@ -69,8 +69,6 @@ export class AgentStore {
         id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, definition TEXT NOT NULL, origin TEXT NOT NULL, enabled INTEGER NOT NULL,
         version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, copied_from TEXT
       );
-      CREATE TABLE IF NOT EXISTS agents_changes (id INTEGER PRIMARY KEY CHECK (id = 1), n INTEGER NOT NULL);
-      INSERT OR IGNORE INTO agents_changes (id, n) VALUES (1, 0);
     `);
   }
 
@@ -86,16 +84,6 @@ export class AgentStore {
   byName(name: string): AgentDefinition | null {
     const row = this.#sql.exec("SELECT * FROM agents WHERE name = ?", name.toLowerCase()).toArray()[0] as AgentRow | undefined;
     return row ? definitionOf(row) : null;
-  }
-
-  /** A short string that changes whenever any definition does: a chat reads definitions again only on a change. */
-  version(): string {
-    return String(this.#sql.exec("SELECT n FROM agents_changes WHERE id = 1").toArray()[0].n as number);
-  }
-
-  /** Count a change of any definition, for version(). */
-  #changed(): void {
-    this.#sql.exec("UPDATE agents_changes SET n = n + 1 WHERE id = 1");
   }
 
   /**
@@ -144,7 +132,6 @@ export class AgentStore {
         now,
         existing.id,
       );
-      this.#changed();
       return this.get(existing.id)!;
     }
     const newId = randomHex(8);
@@ -159,7 +146,6 @@ export class AgentStore {
       now,
       kept ? JSON.stringify(kept) : null,
     );
-    this.#changed();
     return this.get(newId)!;
   }
 
@@ -181,14 +167,12 @@ export class AgentStore {
       now,
       id,
     );
-    this.#changed();
     return this.get(id)!;
   }
 
   /** Delete an agent; null when it was there. */
   delete(id: string): { error: string } | null {
     if (this.#sql.exec("DELETE FROM agents WHERE id = ?", id).rowsWritten === 0) return { error: "No such agent." };
-    this.#changed();
     return null;
   }
 }

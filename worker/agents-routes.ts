@@ -1,9 +1,6 @@
-import type { AgentResult } from "../shared/agents.ts";
+import { AGENT_ID_PATTERN, type AgentResult } from "../shared/agents.ts";
 import { json, readJson } from "./http.ts";
 import type { UserDirectory } from "./users.ts";
-
-/** Agent ids, as AgentStore makes them. */
-const AGENT_ID = /^[a-f0-9]{16}$/;
 
 /**
  * The agents of a verified user (`directory` is their UserDirectory), which they bring into any of their chats:
@@ -28,7 +25,7 @@ export async function agentsRoute(request: Request, directory: DurableObjectStub
     return answer(await directory.saveAgent(body, "user", body.enabled !== false), 201);
   }
   const one = path.match(/^\/api\/agents\/([a-f0-9]+)$/);
-  if (!one || !AGENT_ID.test(one[1])) return null;
+  if (!one || !AGENT_ID_PATTERN.test(one[1])) return null;
   const id = one[1];
   if (method === "GET") {
     const agent = await directory.getAgent(id);

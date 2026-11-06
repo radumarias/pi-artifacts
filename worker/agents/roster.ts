@@ -1,5 +1,11 @@
-import { AGENT_NAME } from "../../shared/mentions.ts";
-import { MAX_CHAT_AGENTS, type AgentColor, type AgentTurnStatus, type AgentTurnView, type ChatAgentView } from "../../shared/agents.ts";
+import {
+  MAX_CHAT_AGENTS,
+  type AgentColor,
+  type AgentTurnStatus,
+  type AgentTurnView,
+  type ChatAgentReplyData,
+  type ChatAgentView,
+} from "../../shared/agents.ts";
 import type { Sql } from "../members.ts";
 
 /** One agent of a chat's roster: which definition it points at, and the pi session it runs in. */
@@ -10,35 +16,40 @@ export interface RosterEntry {
   name: string;
   /** Its pi session (PiSessionId), made when it was added. */
   session: string;
-  addedBy: string;
-  addedAt: number;
   /** What everyone sees of it, as its definition last read: refreshed at each of its turns. */
   avatar: string;
   color: AgentColor;
   job: string;
-  /** The definition's version the session was last configured from; 0 before its first turn. */
-  applied: number;
-  /** The newest entry of the chat's log its session has read (see ChatRoster.mirrored). */
+  /** The newest entry of the chat's log its session has read (see ChatRoster.setMirrored). */
   mirrored: number;
   /** Its owner turned it off since: it takes no turns until they turn it on. */
   off: boolean;
-  /** The tools its session was last set up with, by name: what its calls are held to. Null before its first turn. */
-  tools: string[] | null;
 }
 
-/** A turn an agent was given, as the chat keeps it: who called it, its chain of hand-offs, and what it answers. */
+/** What everyone sees of an agent, as its definition says now. */
+export type RosterView = Pick<RosterEntry, "name" | "avatar" | "color" | "job" | "off">;
+
+/** A turn an agent was given, as the chat keeps it: who called it, and the chain of hand-offs it is in. */
 export interface AgentTurn extends AgentTurnView {
-  /** The turn that started the chain of hand-offs this one is in (its own id for a turn a person or schedule gave). */
+  /** The turn that started the chain of hand-offs this one is in (its own id for a turn a person gave). */
   root: number;
   /** The message it answers, as its session reads it: one labelled line, which the turn's input carries. */
   ask: string;
-  /**
-   * Which log entry `ask` is (see askKey in turns.ts), so the catch-up before a turn leaves out what the input already
-   * says. Absent when it is no entry of the log.
-   */
-  askKey?: string;
   /** Its input reached its session (see ChatRoster.markSubmitted). */
   submitted?: true;
+}
+
+/**
+ * A turn to queue. `askKey` says which log entry `ask` is (see askKey in turns.ts), so the catch-up before a turn
+ * leaves out what its input already says; absent when it is no entry of the log. Without a `root`, the turn starts a
+ * chain of hand-offs of its own.
+ */
+export type TurnRequest = Pick<AgentTurn, "agentId" | "hop" | "calledBy" | "byOwner" | "ask"> & { root?: number; askKey?: string };
+
+/** What an ended turn still has to deliver: its reply to the log, and whether pi is handed a turn for it. */
+export interface Outbox {
+  reply: ChatAgentReplyData;
+  toPi: boolean;
 }
 
 type RosterRow = {
@@ -46,15 +57,12 @@ type RosterRow = {
   owner_uid: string;
   name: string;
   session: string;
-  added_by: string;
   added_at: number;
   avatar: string;
   color: string;
   job: string;
-  applied: number;
   mirrored: number;
   off: number;
-  tools: string | null;
 };
 
 type TurnRow = {
@@ -63,7 +71,6 @@ type TurnRow = {
   status: AgentTurnStatus;
   hop: number;
   called_by: string;
-  answers: number | null;
   by_owner: number;
   root: number | null;
   ask: string;
@@ -72,6 +79,9 @@ type TurnRow = {
   started_at: number | null;
   submitted_at: number | null;
   ended_at: number | null;
+  reply: string | null;
+  to_pi: number;
+  delivered_at: number | null;
 };
 
 function entryOf(row: RosterRow): RosterEntry {
@@ -80,15 +90,11 @@ function entryOf(row: RosterRow): RosterEntry {
     ownerUid: row.owner_uid,
     name: row.name,
     session: row.session,
-    addedBy: row.added_by,
-    addedAt: row.added_at,
     avatar: row.avatar,
     color: row.color as AgentColor,
     job: row.job,
-    applied: row.applied,
     mirrored: row.mirrored,
     off: row.off === 1,
-    tools: row.tools === null ? null : (JSON.parse(row.tools) as string[]),
   };
 }
 
@@ -99,11 +105,9 @@ function turnOf(row: TurnRow): AgentTurn {
     status: row.status,
     hop: row.hop,
     calledBy: JSON.parse(row.called_by) as AgentTurn["calledBy"],
-    ...(row.answers !== null && { answers: row.answers }),
     byOwner: row.by_owner === 1,
     root: row.root ?? row.id,
     ask: row.ask,
-    ...(row.ask_key !== null && { askKey: row.ask_key }),
     createdAt: row.created_at,
     ...(row.started_at !== null && { startedAt: row.started_at }),
     ...(row.submitted_at !== null && { submitted: true }),
@@ -113,12 +117,17 @@ function turnOf(row: TurnRow): AgentTurn {
 
 /** Turns kept per agent once ended: the newest, for the runs list; older ones go. */
 const KEPT_TURNS = 200;
+/** A turn not ended yet. */
+const OPEN = "status IN ('queued', 'running')";
+/** An ended turn whose reply is not delivered yet. */
+const UNDELIVERED = "reply IS NOT NULL AND delivered_at IS NULL";
 
 /**
  * One chat's agents and their turns, in the chat object's own SQLite. The roster points at definitions in their
  * owners' directories and never copies one: only what everyone sees of an agent (name, badge, job line) is kept, to
  * show without asking the owner's directory. Turns are queued per agent and run one at a time, so the session's tools
- * can be set for who asked before each one starts.
+ * can be set for who asked before each one starts. An ended turn keeps its reply until it is delivered (its outbox),
+ * so a restart in between delivers it then.
  */
 export class ChatRoster {
   readonly #sql: Sql;
@@ -129,16 +138,17 @@ export class ChatRoster {
     this.#now = now;
     sql.exec(`
       CREATE TABLE IF NOT EXISTS chat_agents (
-        agent_id TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, name TEXT NOT NULL UNIQUE, session TEXT NOT NULL, added_by TEXT NOT NULL,
-        added_at INTEGER NOT NULL, avatar TEXT NOT NULL, color TEXT NOT NULL, job TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 0,
-        mirrored INTEGER NOT NULL DEFAULT -1, off INTEGER NOT NULL DEFAULT 0, tools TEXT
+        agent_id TEXT PRIMARY KEY, owner_uid TEXT NOT NULL, name TEXT NOT NULL UNIQUE, session TEXT NOT NULL, added_at INTEGER NOT NULL,
+        avatar TEXT NOT NULL, color TEXT NOT NULL, job TEXT NOT NULL, mirrored INTEGER NOT NULL DEFAULT -1, off INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS chat_agent_turns (
         id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, status TEXT NOT NULL, hop INTEGER NOT NULL, called_by TEXT NOT NULL,
-        answers INTEGER, by_owner INTEGER NOT NULL, root INTEGER, ask TEXT NOT NULL, ask_key TEXT, created_at INTEGER NOT NULL,
-        started_at INTEGER, submitted_at INTEGER, ended_at INTEGER
+        by_owner INTEGER NOT NULL, root INTEGER, ask TEXT NOT NULL, ask_key TEXT, created_at INTEGER NOT NULL, started_at INTEGER,
+        submitted_at INTEGER, ended_at INTEGER, reply TEXT, to_pi INTEGER NOT NULL DEFAULT 0, delivered_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS chat_agent_turns_by_agent ON chat_agent_turns (agent_id, status, id);
+      CREATE INDEX IF NOT EXISTS chat_agent_turns_by_status ON chat_agent_turns (status);
+      CREATE INDEX IF NOT EXISTS chat_agent_turns_by_root ON chat_agent_turns (root);
     `);
   }
 
@@ -147,24 +157,24 @@ export class ChatRoster {
     return this.#now();
   }
 
+  #entries(where = "", ...params: (string | number)[]): RosterEntry[] {
+    return (this.#sql.exec(`SELECT * FROM chat_agents ${where} ORDER BY added_at, name`, ...params).toArray() as RosterRow[]).map(entryOf);
+  }
+
+  #turns(where: string, ...params: (string | number)[]): AgentTurn[] {
+    return (this.#sql.exec(`SELECT * FROM chat_agent_turns WHERE ${where}`, ...params).toArray() as TurnRow[]).map(turnOf);
+  }
+
   list(): RosterEntry[] {
-    return (this.#sql.exec("SELECT * FROM chat_agents ORDER BY added_at, name").toArray() as RosterRow[]).map(entryOf);
+    return this.#entries();
   }
 
   get(agentId: string): RosterEntry | null {
-    const row = this.#sql.exec("SELECT * FROM chat_agents WHERE agent_id = ?", agentId).toArray()[0] as RosterRow | undefined;
-    return row ? entryOf(row) : null;
+    return this.#entries("WHERE agent_id = ?", agentId)[0] ?? null;
   }
 
   byName(name: string): RosterEntry | null {
-    const row = this.#sql.exec("SELECT * FROM chat_agents WHERE name = ?", name.toLowerCase()).toArray()[0] as RosterRow | undefined;
-    return row ? entryOf(row) : null;
-  }
-
-  /** The agent whose session `session` is, if any. */
-  bySession(session: string): RosterEntry | null {
-    const row = this.#sql.exec("SELECT * FROM chat_agents WHERE session = ?", session).toArray()[0] as RosterRow | undefined;
-    return row ? entryOf(row) : null;
+    return this.#entries("WHERE name = ?", name.toLowerCase())[0] ?? null;
   }
 
   hasAny(): boolean {
@@ -175,18 +185,17 @@ export class ChatRoster {
    * Add an agent, in the session made for it. Refused when the chat holds MAX_CHAT_AGENTS, or another agent has its
    * name here. Adding one already in the roster changes nothing.
    */
-  add(entry: Pick<RosterEntry, "agentId" | "ownerUid" | "name" | "session" | "addedBy" | "avatar" | "color" | "job">): { error: string } | null {
+  add(entry: Pick<RosterEntry, "agentId" | "ownerUid" | "name" | "session" | "avatar" | "color" | "job">): { error: string } | null {
     if (this.get(entry.agentId)) return null;
     const n = this.#sql.exec("SELECT COUNT(*) AS n FROM chat_agents").toArray()[0].n as number;
     if (n >= MAX_CHAT_AGENTS) return { error: `A chat holds at most ${MAX_CHAT_AGENTS} agents besides pi; remove one first.` };
     if (this.byName(entry.name)) return { error: `This chat already has an agent named "${entry.name}".` };
     this.#sql.exec(
-      "INSERT INTO chat_agents (agent_id, owner_uid, name, session, added_by, added_at, avatar, color, job) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO chat_agents (agent_id, owner_uid, name, session, added_at, avatar, color, job) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       entry.agentId,
       entry.ownerUid,
       entry.name.toLowerCase(),
       entry.session,
-      entry.addedBy,
       this.#now(),
       entry.avatar,
       entry.color,
@@ -200,40 +209,32 @@ export class ChatRoster {
     const entry = this.get(agentId);
     if (!entry) return null;
     this.#sql.exec("DELETE FROM chat_agents WHERE agent_id = ?", agentId);
-    this.#sql.exec("UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE agent_id = ? AND status IN ('queued', 'running')", this.#now(), agentId);
+    this.stopAll(agentId);
     return entry;
   }
 
   /**
-   * Keep what everyone sees of an agent as its definition now says, and the version its session was set from. A
-   * rename that another agent here has taken keeps the old name. Returns whether anything everyone sees changed.
+   * Keep what everyone sees of an agent as its definition now says. A rename that another agent here has taken keeps
+   * the old name. The entry as it is now, and whether anything everyone sees changed; null when it is not here.
    */
-  refresh(agentId: string, view: { name: string; avatar: string; color: AgentColor; job: string; off: boolean }, applied?: number): boolean {
+  refresh(agentId: string, view: RosterView): { entry: RosterEntry; changed: boolean } | null {
     const before = this.get(agentId);
-    if (!before) return false;
+    if (!before) return null;
     const taken = view.name !== before.name && this.byName(view.name) !== null;
-    const name = taken ? before.name : view.name.toLowerCase();
-    this.#sql.exec(
-      "UPDATE chat_agents SET name = ?, avatar = ?, color = ?, job = ?, off = ?, applied = ? WHERE agent_id = ?",
-      name,
-      view.avatar,
-      view.color,
-      view.job,
-      view.off ? 1 : 0,
-      applied ?? before.applied,
-      agentId,
-    );
-    return name !== before.name || view.avatar !== before.avatar || view.color !== before.color || view.job !== before.job || view.off !== before.off;
-  }
-
-  /** The tools an agent's session was set up with for its turn now (see RosterEntry.tools). */
-  setTools(agentId: string, tools: readonly string[]): void {
-    this.#sql.exec("UPDATE chat_agents SET tools = ? WHERE agent_id = ?", JSON.stringify(tools), agentId);
-  }
-
-  /** Whether an agent's session `session` may call `tool` now: only a tool it was set up with. No for any other session. */
-  mayCall(session: string, tool: string): boolean {
-    return this.bySession(session)?.tools?.includes(tool) ?? false;
+    const entry = { ...before, ...view, name: taken ? before.name : view.name.toLowerCase() };
+    const changed = (["name", "avatar", "color", "job", "off"] as const).some((field) => entry[field] !== before[field]);
+    if (changed) {
+      this.#sql.exec(
+        "UPDATE chat_agents SET name = ?, avatar = ?, color = ?, job = ?, off = ? WHERE agent_id = ?",
+        entry.name,
+        entry.avatar,
+        entry.color,
+        entry.job,
+        entry.off ? 1 : 0,
+        agentId,
+      );
+    }
+    return { entry, changed };
   }
 
   /** The newest log entry an agent's session has read: what it is sent next starts after it. */
@@ -241,16 +242,15 @@ export class ChatRoster {
     this.#sql.exec("UPDATE chat_agents SET mirrored = MAX(mirrored, ?) WHERE agent_id = ?", through, agentId);
   }
 
-  /** Queue a turn for an agent. Without a `root`, it starts a chain of hand-offs of its own. */
-  enqueue(turn: Pick<AgentTurn, "agentId" | "hop" | "calledBy" | "answers" | "byOwner" | "ask" | "askKey"> & { root?: number }): AgentTurn {
+  /** Queue a turn for an agent. */
+  enqueue(turn: TurnRequest): AgentTurn {
     const row = this.#sql
       .exec(
-        `INSERT INTO chat_agent_turns (agent_id, status, hop, called_by, answers, by_owner, root, ask, ask_key, created_at)
-         VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        `INSERT INTO chat_agent_turns (agent_id, status, hop, called_by, by_owner, root, ask, ask_key, created_at)
+         VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
         turn.agentId,
         turn.hop,
         JSON.stringify(turn.calledBy),
-        turn.answers ?? null,
         turn.byOwner ? 1 : 0,
         turn.root ?? null,
         turn.ask,
@@ -271,9 +271,13 @@ export class ChatRoster {
     return dropped.rowsWritten > 0;
   }
 
-  /** How many hand-offs the chain that `root` started has made: they stay within MAX_HOPS, however they branch. */
+  /**
+   * How many hand-offs the chain that `root` started has made, pi's among them (a turn that handed pi one): they stay
+   * within MAX_HOPS, however they branch.
+   */
   handOffsFrom(root: number): number {
-    return this.#sql.exec("SELECT COUNT(*) AS n FROM chat_agent_turns WHERE hop > 0 AND (root = ? OR id = ?)", root, root).toArray()[0].n as number;
+    return this.#sql.exec("SELECT COALESCE(SUM((hop > 0) + to_pi), 0) AS n FROM chat_agent_turns WHERE root = ? OR id = ?", root, root).toArray()[0]
+      .n as number;
   }
 
   /**
@@ -297,62 +301,31 @@ export class ChatRoster {
     this.#sql.exec("UPDATE chat_agent_turns SET submitted_at = ? WHERE id = ? AND submitted_at IS NULL", this.#now(), id);
   }
 
-  /**
-   * After a restart: the running turns whose input never reached their session go back to the queue, at their place, to
-   * start again. Returns how many.
-   */
-  requeueUnsubmitted(): number {
-    return this.#sql.exec(
-      "UPDATE chat_agent_turns SET status = 'queued', started_at = NULL WHERE status = 'running' AND submitted_at IS NULL AND agent_id != ?",
-      AGENT_NAME,
-    ).rowsWritten;
+  /** After a restart: the running turns whose input never reached their session go back to the queue, at their place. */
+  requeueUnsubmitted(): void {
+    this.#sql.exec("UPDATE chat_agent_turns SET status = 'queued', started_at = NULL WHERE status = 'running' AND submitted_at IS NULL");
   }
 
-  /**
-   * Record a turn handed to pi (agent id AGENT_NAME), queued until pi's inbox has it: it counts in its chain's hand-offs,
-   * and its id names pi's input, so a retry places it once.
-   */
-  queuePiTurn(turn: Pick<AgentTurn, "hop" | "calledBy" | "answers" | "ask"> & { root: number }): AgentTurn {
-    return this.enqueue({ agentId: AGENT_NAME, byOwner: false, ...turn });
-  }
-
-  /** The turns handed to pi that its inbox may not have yet: what a restart hands it again. */
-  queuedPiTurns(): AgentTurn[] {
-    return (this.#sql.exec("SELECT * FROM chat_agent_turns WHERE agent_id = ? AND status = 'queued' ORDER BY id", AGENT_NAME).toArray() as TurnRow[]).map(
-      turnOf,
-    );
+  /** Whether any turn waits, runs or has a reply to deliver: what a restarted object picks up again. */
+  hasWork(): boolean {
+    return this.#sql.exec(`SELECT 1 FROM chat_agent_turns WHERE ${OPEN} OR (${UNDELIVERED}) LIMIT 1`).toArray().length > 0;
   }
 
   turn(id: number): AgentTurn | null {
-    const row = this.#sql.exec("SELECT * FROM chat_agent_turns WHERE id = ?", id).toArray()[0] as TurnRow | undefined;
-    return row ? turnOf(row) : null;
-  }
-
-  /** The turn an agent runs now, if any. */
-  running(agentId: string): AgentTurn | null {
-    const row = this.#sql.exec("SELECT * FROM chat_agent_turns WHERE agent_id = ? AND status = 'running' ORDER BY id LIMIT 1", agentId).toArray()[0] as
-      | TurnRow
-      | undefined;
-    return row ? turnOf(row) : null;
+    return this.#turns("id = ?", id)[0] ?? null;
   }
 
   /** Every turn running now, in every agent: what a restarted object waits on again. */
   allRunning(): AgentTurn[] {
-    return (this.#sql.exec("SELECT * FROM chat_agent_turns WHERE status = 'running' ORDER BY id").toArray() as TurnRow[]).map(turnOf);
+    return this.#turns("status = 'running' ORDER BY id");
   }
 
-  /** The agents that have turns waiting (not pi, whose turns are its inbox's). */
+  /** The agents that have turns waiting. */
   waitingAgents(): string[] {
     return this.#sql
-      .exec("SELECT DISTINCT agent_id FROM chat_agent_turns WHERE status = 'queued' AND agent_id != ? ORDER BY agent_id", AGENT_NAME)
+      .exec("SELECT DISTINCT agent_id FROM chat_agent_turns WHERE status = 'queued' ORDER BY agent_id")
       .toArray()
       .map((row) => row.agent_id as string);
-  }
-
-  /** How many turns wait for each agent. */
-  queuedCounts(): Map<string, number> {
-    const rows = this.#sql.exec("SELECT agent_id, COUNT(*) AS n FROM chat_agent_turns WHERE status = 'queued' GROUP BY agent_id").toArray();
-    return new Map(rows.map((row) => [row.agent_id as string, row.n as number]));
   }
 
   /**
@@ -360,51 +333,83 @@ export class ChatRoster {
    * when nothing starts.
    */
   startNext(agentId: string): AgentTurn | null {
-    if (this.running(agentId)) return null;
-    const next = this.#sql.exec("SELECT id FROM chat_agent_turns WHERE agent_id = ? AND status = 'queued' ORDER BY id LIMIT 1", agentId).toArray()[0];
-    if (!next) return null;
+    if (this.#turns("agent_id = ? AND status = 'running' LIMIT 1", agentId).length) return null;
     const row = this.#sql
-      .exec("UPDATE chat_agent_turns SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued' RETURNING *", this.#now(), next.id as number)
+      .exec(
+        `UPDATE chat_agent_turns SET status = 'running', started_at = ?
+         WHERE id = (SELECT id FROM chat_agent_turns WHERE agent_id = ? AND status = 'queued' ORDER BY id LIMIT 1) RETURNING *`,
+        this.#now(),
+        agentId,
+      )
       .toArray()[0] as TurnRow | undefined;
     return row ? turnOf(row) : null;
   }
 
   /**
-   * End a running turn. Only once: a turn that ended already (a second wait on it, a stop meanwhile) stays as it
-   * ended, and null says so, so its reply is posted once.
+   * End a turn not ended yet, with what it still has to deliver. Only once: a turn that ended already (a second wait on
+   * it, a stop meanwhile) stays as it ended, and null says so, so its reply is delivered once.
    */
-  end(id: number, status: Exclude<AgentTurnStatus, "queued" | "running">): AgentTurn | null {
+  end(id: number, status: Exclude<AgentTurnStatus, "queued" | "running">, outbox?: Outbox): AgentTurn | null {
     const row = this.#sql
-      .exec("UPDATE chat_agent_turns SET status = ?, ended_at = ? WHERE id = ? AND status IN ('queued', 'running') RETURNING *", status, this.#now(), id)
+      .exec(
+        `UPDATE chat_agent_turns SET status = ?, ended_at = ?, reply = ?, to_pi = ? WHERE id = ? AND ${OPEN} RETURNING *`,
+        status,
+        this.#now(),
+        outbox ? JSON.stringify(outbox.reply) : null,
+        outbox?.toPi ? 1 : 0,
+        id,
+      )
       .toArray()[0] as TurnRow | undefined;
     if (!row) return null;
     this.#prune(row.agent_id);
     return turnOf(row);
   }
 
-  /** Stop every turn of every agent, or of one, that has not ended: what a person's Stop does. The ones stopped. */
+  /** What an ended turn has still to deliver; null once delivered (or for a turn with nothing to). */
+  outbox(id: number): Outbox | null {
+    const row = this.#sql.exec(`SELECT reply, to_pi FROM chat_agent_turns WHERE id = ? AND ${UNDELIVERED}`, id).toArray()[0] as
+      | Pick<TurnRow, "reply" | "to_pi">
+      | undefined;
+    return row?.reply ? { reply: JSON.parse(row.reply) as ChatAgentReplyData, toPi: row.to_pi === 1 } : null;
+  }
+
+  /** The ended turns whose replies are not delivered yet, oldest first: what a restart delivers. */
+  undelivered(): number[] {
+    return this.#sql
+      .exec(`SELECT id FROM chat_agent_turns WHERE ${UNDELIVERED} ORDER BY id`)
+      .toArray()
+      .map((row) => row.id as number);
+  }
+
+  /** A turn's reply is delivered: it is in the log now, so the row lets it go. */
+  markDelivered(id: number): void {
+    this.#sql.exec("UPDATE chat_agent_turns SET delivered_at = ?, reply = NULL WHERE id = ?", this.#now(), id);
+  }
+
+  /**
+   * Stop every turn of every agent, or of one, that has not ended: what a person's Stop does. A reply not delivered yet
+   * still is, but hands pi no turn. The ones stopped.
+   */
   stopAll(agentId?: string): AgentTurn[] {
-    const rows = (
-      agentId === undefined
-        ? this.#sql.exec("UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE status IN ('queued', 'running') RETURNING *", this.#now())
-        : this.#sql.exec(
-            "UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE agent_id = ? AND status IN ('queued', 'running') RETURNING *",
-            this.#now(),
-            agentId,
-          )
-    ).toArray() as TurnRow[];
+    const which = agentId === undefined ? "" : "agent_id = ? AND ";
+    const params = agentId === undefined ? [] : [agentId];
+    this.#sql.exec(`UPDATE chat_agent_turns SET to_pi = 0 WHERE ${which}to_pi = 1 AND ${UNDELIVERED}`, ...params);
+    const rows = this.#sql
+      .exec(`UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE ${which}${OPEN} RETURNING *`, this.#now(), ...params)
+      .toArray() as TurnRow[];
     return rows.map(turnOf);
   }
 
   /** The newest turns, for a runs list. */
   recentTurns(agentId: string, limit = 20): AgentTurn[] {
-    return (this.#sql.exec("SELECT * FROM chat_agent_turns WHERE agent_id = ? ORDER BY id DESC LIMIT ?", agentId, limit).toArray() as TurnRow[]).map(turnOf);
+    return this.#turns("agent_id = ? ORDER BY id DESC LIMIT ?", agentId, limit);
   }
 
   /** What everyone sees of the roster, with who is working and how many turns wait. `ownerName` names an owner. */
   views(ownerName: (uid: string) => string): ChatAgentView[] {
-    const queued = this.queuedCounts();
-    const busy = new Set(this.allRunning().map((turn) => turn.agentId));
+    const counts = this.#sql.exec(`SELECT agent_id, status, COUNT(*) AS n FROM chat_agent_turns WHERE ${OPEN} GROUP BY agent_id, status`).toArray();
+    const count = (agentId: string, status: AgentTurnStatus) =>
+      (counts.find((row) => row.agent_id === agentId && row.status === status)?.n as number | undefined) ?? 0;
     return this.list().map((entry) => ({
       id: entry.agentId,
       name: entry.name,
@@ -413,15 +418,15 @@ export class ChatRoster {
       job: entry.job,
       ownerUid: entry.ownerUid,
       ownerName: ownerName(entry.ownerUid),
-      ...(busy.has(entry.agentId) && { busy: true as const }),
-      ...(queued.get(entry.agentId) && { queued: queued.get(entry.agentId) }),
+      ...(count(entry.agentId, "running") && { busy: true as const }),
+      ...(count(entry.agentId, "queued") && { queued: count(entry.agentId, "queued") }),
       ...(entry.off && { off: true as const }),
     }));
   }
 
   #prune(agentId: string): void {
     this.#sql.exec(
-      `DELETE FROM chat_agent_turns WHERE agent_id = ? AND status NOT IN ('queued', 'running') AND id NOT IN (
+      `DELETE FROM chat_agent_turns WHERE agent_id = ? AND NOT (${OPEN}) AND NOT (${UNDELIVERED}) AND id NOT IN (
          SELECT id FROM chat_agent_turns WHERE agent_id = ? ORDER BY id DESC LIMIT ?
        )`,
       agentId,

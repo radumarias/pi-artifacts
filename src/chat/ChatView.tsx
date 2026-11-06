@@ -48,6 +48,7 @@ import { ComposerMore } from "./ComposerMore.tsx";
 import { Dictation } from "./Dictation.tsx";
 import { ownMessages, useHistory } from "./history.ts";
 import { AgentReply } from "./AgentReply.tsx";
+import { ArtifactCard } from "./ArtifactCard.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
 import { NotifyButton } from "./notify.tsx";
@@ -540,17 +541,7 @@ const Entry = memo(function Entry({
   }
   if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
     const artifact = published(entry);
-    if (artifact) {
-      return (
-        <button type="button" className="artifact-card" onClick={() => onOpen(artifact)}>
-          <span className="artifact-card-icon">▦</span>
-          <span>
-            <strong>{artifact.title}</strong>
-            <small>Artifact · version {artifact.version} · open preview</small>
-          </span>
-        </button>
-      );
-    }
+    if (artifact) return <ArtifactCard artifact={artifact} onOpen={onOpen} />;
     return <OrphanResult message={message} />;
   }
   return null;

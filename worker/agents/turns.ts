@@ -1,13 +1,14 @@
 // The turn controller's rules, in plain functions the tests run: who speaks for a message, what an agent's session
 // reads of the chat's log before its turn, which tools a turn may use, and what an agent's own prompt says.
 
-import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
-import { calledNames, CHAT_AGENT_KIND, MAX_HOPS, speakerLabel, type AgentDefinition, type ChatAgentReplyData } from "../../shared/agents.ts";
-import { AGENT_NAME } from "../../shared/mentions.ts";
-import { CHAT_MESSAGE_KIND, incomingKey, PUBLISH_TOOL, type ChatMessageData, type PublishedDetails } from "../../shared/protocol.ts";
-import { chatTraces } from "../chat-traces.ts";
+import { CHAT_AGENT_KIND, MAX_HOPS, speakerLabel, type AgentDefinition, type ChatAgentReplyData } from "../../shared/agents.ts";
+import { textOf } from "../../shared/canonical.ts";
+import { AGENT_NAME, calledNames, type Mention } from "../../shared/mentions.ts";
+import { CHAT_MESSAGE_KIND, incomingKey, publishedBy, type ChatMessageData } from "../../shared/protocol.ts";
+import type { McpToolInfo } from "../agent/mcp.ts";
 import type { AgentTurn, RosterEntry } from "./roster.ts";
 
 /** How much of one message an agent's session reads in a catch-up: a long reply is cut, and the rest is in the log. */
@@ -18,15 +19,22 @@ const MIRROR_TOTAL_CHARS = 60_000;
 export const MAX_ASK_CHARS = 30_000;
 
 /**
- * Who speaks for a message: the agents of the roster it calls, in the order named, then the one it replies to. One the
- * roster shows as off is called too: its turn reads its definition again, and says so if its owner has not turned it
- * on since.
+ * Who speaks for a message: the agents of the roster it calls, in the order named, outside the files and artifacts it
+ * names, then the one it replies to. One the roster shows as off is called too: its turn reads its definition again,
+ * and says so if its owner has not turned it on since.
  */
-export function speakersFor(text: string, roster: readonly Pick<RosterEntry, "agentId" | "name">[], replyToAgent?: string): string[] {
-  const named = calledNames(
+export function speakersFor(
+  text: string,
+  roster: readonly Pick<RosterEntry, "agentId" | "name">[],
+  replyToAgent?: string,
+  mentions: readonly Mention[] = [],
+): string[] {
+  const names = calledNames(
     text,
     roster.map((entry) => entry.name),
-  ).map((name) => roster.find((entry) => entry.name === name)!.agentId);
+    mentions,
+  );
+  const named = names.map((name) => roster.find((entry) => entry.name === name)!.agentId);
   if (replyToAgent && roster.some((entry) => entry.agentId === replyToAgent) && !named.includes(replyToAgent)) named.push(replyToAgent);
   return named;
 }
@@ -44,50 +52,100 @@ export function handOffs(text: string, from: string, hop: number, roster: readon
 
 /** The text of an assistant message: its text blocks, without its thinking or tool calls. */
 export function assistantText(message: AssistantMessage): string {
-  return message.content
-    .flatMap((block) => (block?.type === "text" ? [block.text] : []))
-    .join("")
-    .trim();
+  return textOf(message.content.filter(Boolean), "").trim();
 }
 
+function userText(message: UserMessage): string {
+  return typeof message.content === "string" ? message.content : textOf(message.content, "");
+}
+
+/** Any line break, so a message's text can never start a line of its own. */
+const LINE_BREAK = /\r\n|[\n\r\u000b\u000c\u0085\u2028\u2029]/g;
+/** "your owner]" as a label ends, also with spaces, invisible characters or a full-width bracket between. */
+const OWNER_LABEL_END = /your[\s\u200b-\u200f\u2060\ufeff]+owner[\s\u200b-\u200f\u2060\ufeff]*[\]\uff3d]/gi;
+
 /**
- * A message's text as it follows its label: cut to what a session reads of one, its lines after the first indented,
- * and anything in it shaped like an owner's label marked as quoted, so no message can pass for another speaker's line.
+ * A message's text as it follows its label: cut to what a session reads of one, every line after the first indented,
+ * so only a label starts a line, and anything in it shaped like an owner's label marked as quoted.
  */
 function said(text: string, max = MIRROR_CHARS): string {
   const cut = text.length > max ? `${text.slice(0, max)}… (cut; the rest is in the chat)` : text;
-  return cut.replace(/your owner\s*\]/gi, "your owner (quoted)]").replace(/\r?\n/g, "\n  ");
+  return cut.replace(OWNER_LABEL_END, "your owner (quoted)]").replace(LINE_BREAK, "\n  ");
+}
+
+/** What a message's line adds for the files attached to it. */
+export function attachedNote(paths: readonly string[]): string {
+  return paths.length ? said(` (attached: ${paths.join(", ")})`) : "";
 }
 
 /**
- * What one agent's session reads of the chat's log before its turn: each person's message, pi's replies and the other
- * agents' since it last read, one labelled line each, oldest first ("[Ana · person]: …"). Its own replies are already
- * in its session. Asides, notices and tool calls are left out. `ownerUid` marks its owner's lines, which are the only
- * ones that are instructions. Returns the text (empty when there is nothing new) and the newest entry it covers.
+ * What one agent's session reads of the chat's log before its turn, built from the log read newest first, so a long
+ * history is read only as far back as the catch-up keeps: each person's message, pi's replies and the other agents'
+ * since it last read, one labelled message each, oldest first ("[Ana · person]: …"). Its own replies are already in
+ * its session. Asides, notices and tool calls are left out, and so are the entries `skip` names (askKey: what turns'
+ * inputs carry). `ownerUid` marks its owner's lines, which are the only ones that are instructions.
  */
-export function mirrorText(
-  entries: readonly EntryRecord[],
-  self: string,
-  ownerUid: string,
-  skip: ReadonlySet<string> = new Set(),
-): { text: string; through: number } {
-  const lines: string[] = [];
-  let through = -1;
-  for (const entry of entries) {
-    through = Math.max(through, entry.id as number);
-    const key = askKey(entry);
-    if (key && skip.has(key)) continue;
-    const line = askLine(entry, self, ownerUid);
-    if (line) lines.push(line);
+export class CatchUp {
+  /** Newest first. */
+  readonly #lines: string[] = [];
+  #size = 0;
+  #through = -1;
+  #full = false;
+
+  constructor(
+    readonly self: string,
+    readonly ownerUid: string,
+    readonly skip: ReadonlySet<string> = new Set(),
+  ) {}
+
+  /** Add entries of the log, newest first. False once it holds all it keeps: older entries would be left out. */
+  add(entries: readonly EntryRecord[]): boolean {
+    for (const entry of entries) {
+      this.#through = Math.max(this.#through, entry.id as number);
+      if (this.#full) return false;
+      const key = askKey(entry);
+      if (key && this.skip.has(key)) continue;
+      const line = askLine(entry, this.self, this.ownerUid);
+      if (!line) continue;
+      // The newest lines matter most: past the budget, the older ones are left out, even a short one.
+      if (this.#size + line.length > MIRROR_TOTAL_CHARS) {
+        this.#full = true;
+        return false;
+      }
+      this.#lines.push(line);
+      this.#size += line.length;
+    }
+    return !this.#full;
   }
-  // The newest lines matter most: past the budget, the oldest are left out.
-  let total = 0;
-  let start = lines.length;
-  while (start > 0 && total + lines[start - 1].length <= MIRROR_TOTAL_CHARS) total += lines[--start].length;
-  const kept = lines.slice(start);
-  if (!kept.length) return { text: "", through };
-  const skipped = start > 0 ? `(${start} earlier messages left out.)\n\n` : "";
-  return { text: `What was said in the chat since your last turn:\n\n${skipped}${kept.join("\n\n")}`, through };
+
+  /** The text to write (empty when there is nothing new), and the newest entry it covers. */
+  result(): { text: string; through: number } {
+    if (!this.#lines.length) return { text: "", through: this.#through };
+    const skipped = this.#full ? "(Earlier messages are left out.)\n\n" : "";
+    return { text: `What was said in the chat since your last turn:\n\n${skipped}${[...this.#lines].reverse().join("\n\n")}`, through: this.#through };
+  }
+}
+
+/** CatchUp over `entries`, oldest first. */
+export function mirrorText(entries: readonly EntryRecord[], self: string, ownerUid: string, skip?: ReadonlySet<string>): { text: string; through: number } {
+  const catchUp = new CatchUp(self, ownerUid, skip);
+  catchUp.add([...entries].reverse());
+  return catchUp.result();
+}
+
+/** The ask key of another agent's reply, by its turn. */
+export function turnAskKey(turn: number): string {
+  return `turn:${turn}`;
+}
+
+/** The ask key of one of pi's replies, by its entry. */
+export function entryAskKey(entry: number): string {
+  return `entry:${entry}`;
+}
+
+/** The ask key of a person's message from its author and sentAt, before it is in the log. */
+export function messageAskKey(message: Parameters<typeof incomingKey>[0]): string {
+  return `message:${incomingKey(message)}`;
 }
 
 /**
@@ -95,15 +153,10 @@ export function mirrorText(
  * message by its author and sentAt, another agent's reply by its turn, one of pi's replies by its entry.
  */
 export function askKey(entry: Pick<EntryRecord, "id" | "kind" | "data">): string | undefined {
-  if (entry.kind === CHAT_MESSAGE_KIND) return `message:${incomingKey(entry.data as unknown as ChatMessageData)}`;
-  if (entry.kind === CHAT_AGENT_KIND) return `turn:${(entry.data as unknown as ChatAgentReplyData).turn}`;
-  if (entry.kind === "pi.assistant") return `entry:${entry.id as number}`;
+  if (entry.kind === CHAT_MESSAGE_KIND) return messageAskKey(entry.data as unknown as ChatMessageData);
+  if (entry.kind === CHAT_AGENT_KIND) return turnAskKey((entry.data as unknown as ChatAgentReplyData).turn);
+  if (entry.kind === "pi.assistant") return entryAskKey(entry.id as number);
   return undefined;
-}
-
-/** The ask key of a person's message from its author and sentAt, before it is in the log. */
-export function messageAskKey(message: { uid: string; sentAt: number }): string {
-  return `message:${incomingKey(message)}`;
 }
 
 /**
@@ -113,26 +166,23 @@ export function messageAskKey(message: { uid: string; sentAt: number }): string 
 export function askLine(entry: EntryRecord, self: string, ownerUid: string): string | undefined {
   if (entry.kind === CHAT_MESSAGE_KIND) {
     const data = entry.data as unknown as ChatMessageData;
-    const files = data.attachments?.length ? ` (attached: ${data.attachments.map((a) => a.path).join(", ")})` : "";
+    const files = attachedNote(data.attachments?.map((attachment) => attachment.path) ?? []);
     if (!data.text && !files) return undefined;
-    return `${speakerLabel({ name: data.name, kind: "person", owner: data.uid === ownerUid })}: ${said(data.text)}${said(files)}`;
+    return `${speakerLabel({ name: data.name, kind: "person", owner: data.uid === ownerUid })}: ${said(data.text)}${files}`;
   }
   if (entry.kind === CHAT_AGENT_KIND) {
     const data = entry.data as unknown as ChatAgentReplyData;
     if (data.agentId === self || !data.text) return undefined;
-    return `${speakerLabel({ name: data.name, kind: "agent" })}: ${said(data.text)}`;
+    return askOf({ name: data.name, kind: "agent" }, data.text);
   }
-  if (entry.kind === "pi.assistant") {
-    const message = entry.model?.[0];
-    if (message?.role !== "assistant") return undefined;
+  const message = entry.model?.[0];
+  if (entry.kind === "pi.assistant" && message?.role === "assistant") {
     const text = assistantText(message);
-    return text ? `${speakerLabel({ name: AGENT_NAME, kind: "agent" })}: ${said(text)}` : undefined;
+    return text ? askOf({ name: AGENT_NAME, kind: "agent" }, text) : undefined;
   }
-  if (entry.kind === "pi.user") {
-    const message = entry.model?.[0];
-    if (message?.role !== "user") return undefined;
-    const text = typeof message.content === "string" ? message.content : message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
-    return text ? `${speakerLabel({ name: "the owner", kind: "person", owner: true })}: ${said(text)}` : undefined;
+  if (entry.kind === "pi.user" && message?.role === "user") {
+    const text = userText(message);
+    return text ? askOf({ name: "the owner", kind: "person", owner: true }, text) : undefined;
   }
   return undefined;
 }
@@ -148,12 +198,6 @@ export function turnInput(turn: Pick<AgentTurn, "calledBy" | "hop" | "ask">): st
 /** A message as a turn's `ask`: its labelled line, cut to `max` (what a catch-up reads of one, by default). */
 export function askOf(speaker: Parameters<typeof speakerLabel>[0], text: string, max = MIRROR_CHARS): string {
   return `${speakerLabel(speaker)}: ${said(text, max)}`;
-}
-
-/** What the hub says about one agent tool of an MCP server: whose it is, and whether it only reads. */
-export interface McpToolInfo {
-  server: string;
-  readOnly: boolean;
 }
 
 /** Tools an agent's session never has: they act for pi in the log (reactions). */
@@ -210,21 +254,10 @@ export function agentInstructions(agent: Pick<AgentDefinition, "name" | "job" | 
   ].join("\n\n");
 }
 
-/**
- * What a turn left outside its session, from `entries` (its session's, from the turn on): the artifacts it published,
- * and the files it saved, which the chat counts as its own (who may open them, what deleting the chat deletes).
- */
-export function turnOutputs(entries: readonly EntryRecord[]): { published: NonNullable<ChatAgentReplyData["published"]>; saved: string[] } {
-  return { published: publishedIn(entries), saved: [...chatTraces(entries).files] };
-}
-
 /** The artifacts a turn published: the results of artifact_publish among `entries` (its session's, from the turn on). */
 export function publishedIn(entries: readonly EntryRecord[]): NonNullable<ChatAgentReplyData["published"]> {
   return entries.flatMap((entry) => {
-    if (entry.kind !== "pi.tool-result") return [];
-    const message = entry.model?.[0] as ToolResultMessage | undefined;
-    if (message?.toolName !== PUBLISH_TOOL || message.isError) return [];
-    const details = message.details as Partial<PublishedDetails> | undefined;
-    return details?.artifactId && details.version ? [{ artifactId: details.artifactId, title: details.title ?? "", version: details.version }] : [];
+    const page = publishedBy(entry);
+    return page ? [{ artifactId: page.artifactId, title: page.title ?? "", version: page.version }] : [];
   });
 }

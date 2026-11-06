@@ -359,46 +359,6 @@ describe("AgentStore: reading and deleting", () => {
   });
 });
 
-describe("AgentStore.version", () => {
-  it("changes with every save, switch and delete, and with nothing that changed no agent", () => {
-    const clock = testClock();
-    const store = newStore(clock.now);
-    let last = store.version();
-    expect(last).toBe("0");
-    const changed = () => {
-      const now = store.version();
-      expect(now).not.toBe(last);
-      last = now;
-    };
-    const agent = saved(store.save(research, "user", undefined));
-    changed();
-    saved(store.save(fields("research", { job: "Edited." }), "user", undefined, { id: agent.id }));
-    changed();
-    saved(store.setEnabled(agent.id, false));
-    changed();
-    const other = saved(store.save(fields("scout"), "agent", undefined));
-    changed();
-    expect(store.delete(other.id)).toBeNull();
-    changed();
-    // A refused save, a switch to what it already is and a delete of nothing leave it as it was.
-    clock.set(T0 + 1_000);
-    store.save(research, "user", undefined);
-    store.save({ name: "x" }, "user", undefined);
-    store.setEnabled(agent.id, false);
-    store.delete(MISSING_ID);
-    expect(store.version()).toBe(last);
-  });
-
-  it("changes when one agent is replaced by another within one millisecond", () => {
-    const store = newStore(() => T0);
-    const agent = saved(store.save(research, "user", undefined));
-    const before = store.version();
-    expect(store.delete(agent.id)).toBeNull();
-    saved(store.save(fields("scout"), "user", undefined));
-    expect(store.version()).not.toBe(before);
-  });
-});
-
 /** What the routes call on a user's UserDirectory stub. */
 interface AgentDirectory {
   listAgents(): Promise<AgentDefinition[]>;

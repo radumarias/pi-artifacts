@@ -10,6 +10,12 @@ export function mcpToolName(server: string, tool: string): string {
   return `${server.toLowerCase().replace(/[^a-z0-9]+/g, "_")}${MCP_TOOL_SEPARATOR}${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`.slice(0, 64);
 }
 
+/** What the hub says about one agent tool of an MCP server: whose it is, and whether it only reads. */
+export interface McpToolInfo {
+  server: string;
+  readOnly: boolean;
+}
+
 /** What one MCP server told the chat about itself. */
 export interface ServerCatalog {
   tools: ToolInfo[];
@@ -27,23 +33,20 @@ export interface ServerCatalog {
  *
  * `deferred`: the MCP tools are pi's deferred tools, offered to the model only once loaded: the tool picker loads the
  * few each message needs (worker/agent/tool-pick.ts), and the model loads others with tool_search.
- *
- * `mayCall`: checked as each call starts, with the calling conversation's id (a pi session's id is its number): false
- * refuses the call. The tools a session is offered are its first limit; this one holds whatever it was offered.
  */
 export function mcpExtension(
   hub: McpHub,
   catalog: Map<string, ServerCatalog>,
   unavailable: Map<string, string>,
   discover: () => Promise<string>,
-  { deferred = false, mayCall }: { deferred?: boolean; mayCall?: (conversationId: string, tool: string) => boolean } = {},
-): { extension: Extension; summary: string; listing: string; toolInfo: Map<string, { server: string; readOnly: boolean }> } {
+  { deferred = false }: { deferred?: boolean } = {},
+): { extension: Extension; summary: string; listing: string; toolInfo: Map<string, McpToolInfo> } {
   // Slugging and the 64-character cut can map two tools to one name ("My Server" and "my-server", "a.b" and "a_b"),
   // and providers reject a request whose tool names repeat: number the later ones.
   const used = new Set<string>();
   const tools = [];
   // Whose each agent tool is, and whether it only reads: what an agent's turn is limited by (worker/agents/turns.ts).
-  const toolInfo = new Map<string, { server: string; readOnly: boolean }>();
+  const toolInfo = new Map<string, McpToolInfo>();
   const servers: string[] = [];
   for (const [server, { tools: serverTools, instructions }] of catalog) {
     const list: string[] = [];
@@ -62,8 +65,7 @@ export function mcpExtension(
           parameters: Type.Unsafe<Record<string, unknown>>((tool.inputSchema as object) ?? { type: "object" }),
           replay: readOnly ? "safe" : "unsafe",
           ...(deferred && { deferred: true as const }),
-          execute: async (args, api) => {
-            if (mayCall && !mayCall(String(api.conversationId), name)) throw new Error(`This turn may not use ${name}.`);
+          execute: async (args) => {
             const result = await hub.call(server, tool.name, args);
             const payload = result.payload ?? result.content;
             // Compact JSON: the result stays in the conversation, which every later call sends again, and indenting
@@ -106,10 +108,7 @@ export function mcpExtension(
         "Use it when the user asks what is available, after they sign in, or when a tool you expected is missing.",
       parameters: Type.Object({}),
       replay: "safe",
-      execute: async (_args, api) => {
-        if (mayCall && !mayCall(String(api.conversationId), MCP_DISCOVER_TOOL)) throw new Error(`This turn may not use ${MCP_DISCOVER_TOOL}.`);
-        return { output: text(clip(await discover())) };
-      },
+      execute: async () => ({ output: text(clip(await discover())) }),
     }),
   );
   const extension = defineExtension({ name: "mcp", tools, sections: [section("mcp_servers", () => summary)] });

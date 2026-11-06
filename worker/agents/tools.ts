@@ -1,9 +1,17 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
-import { AGENT_COLORS, AGENT_PROPOSE_TOOL, MAX_AGENT_INSTRUCTIONS, MAX_AGENT_JOB, type AgentProposedDetails, type AgentResult } from "../../shared/agents.ts";
+import {
+  AGENT_COLORS,
+  AGENT_EFFORTS,
+  AGENT_PROPOSE_TOOL,
+  MAX_AGENT_INSTRUCTIONS,
+  MAX_AGENT_JOB,
+  type AgentProposedDetails,
+  type AgentResult,
+} from "../../shared/agents.ts";
 import { text } from "../agent/output.ts";
 
-/** What the agent tools need from the chat. */
+/** What the agent tools need from the chat (part of ChatScope). */
 export interface AgentsScope {
   /** Save an agent for the chat's owner, turned off until they turn it on. */
   proposeAgent(input: Record<string, unknown>): Promise<AgentResult>;
@@ -31,7 +39,7 @@ export function agentsExtension(scope: AgentsScope): Extension {
           job: Type.String({ description: `One line on what it is for. Up to ${MAX_AGENT_JOB} characters.` }),
           instructions: Type.String({ description: `Markdown: numbered steps, then the rules it follows. Up to ${MAX_AGENT_INSTRUCTIONS} characters.` }),
           model: Type.Optional(Type.String({ description: "A model id from the picker; leave it out for the chat's default." })),
-          effort: Type.Optional(Type.Union(["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((level) => Type.Literal(level)))),
+          effort: Type.Optional(Type.Union(AGENT_EFFORTS.map((level) => Type.Literal(level)))),
           servers: Type.Optional(Type.Array(Type.String(), { description: "The MCP servers it may use, by name; leave it out for all of them." })),
           sharedServers: Type.Optional(Type.Array(Type.String(), { description: "Of those, the ones others in a shared chat can make it use, read-only." })),
           color: Type.Optional(Type.Union(AGENT_COLORS.map((color) => Type.Literal(color)))),

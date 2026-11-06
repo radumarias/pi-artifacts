@@ -532,21 +532,23 @@ instructions, model and effort, and the MCP servers it may use.
   the chat object, set up afresh from its definition before each turn.
 - **Who speaks:** a message that names agents with `@name` gives each a turn, in the order named; a reply to an agent's
   message gives it one too. Turns wait in a queue in the chat's SQLite (`chat_agent_turns`), one at a time per agent,
-  and survive a restart: a turn whose input never reached its session starts again, and a reply is posted before its
-  turn ends, under a request id, so it is placed once. An agent's reply naming another agent (or `@pi`) hands the work
+  and survive a restart: a turn whose input never reached its session starts again, and a turn ends with its reply kept
+  in its row and its hand-offs queued, in one write, then posts the reply under a request id, so a restart in between
+  posts it then, once. An agent's reply naming another agent (or `@pi`) hands the work
   on, at most three hand-offs per person's message however many agents it named (`MAX_HOPS`), a hand-off to pi counted
   too; an agent never calls itself. One its owner turned off says so when it is called. Stop stops pi and every agent.
 - **What an agent reads:** before each turn, its session gets one passive write with what was said in the chat since its
   last turn, one labelled message each (`[Ana · person]`, `[research · agent]`, `[Radu · person · your owner]`), its
   further lines indented and anything in it shaped like an owner's label marked as quoted; then the turn's input names
   who asked and quotes the message. Its tool calls stay in its own session; only its final text is posted to the chat
-  (a `chat.agent` entry, with the pages it published and the files it saved), which pi also reads as context.
+  (a `chat.agent` entry, with the pages it published), which pi also reads as context. The pages it publishes and the
+  files it saves are the chat's, as pi's are: the chat's traces read every session.
 - **Who decides its tools:** a turn its owner asked for may use the agent's servers (`servers`, all when unset). Any
   other turn (a member's message, a hand-off, pi naming it) gets only read-only tools of the servers it may use in
   shared chats (`sharedServers`; by default those that don't sign in each user), and of the app's own tools only those
   that read the chat's pages and the owner's skills: no writes, code, private files or sign-in links. The tools are an
-  allow-list set on the session before each turn (`allowedTools` in `worker/agents/turns.ts`), and each MCP call is
-  checked against it again as it starts. Only the owner's messages are instructions to it (its own prompt says so); the
+  allow-list set on the session before each turn (`allowedTools` in `worker/agents/turns.ts`): the harness offers the
+  model no other tool, and refuses a call to one. Only the owner's messages are instructions to it (its own prompt says so); the
   others are information. Like pi, it acts as the owner: their sign-ins, files, skills, and pages owned by them.
 
 ## Models

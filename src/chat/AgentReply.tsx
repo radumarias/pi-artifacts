@@ -1,20 +1,12 @@
-import { useRef, type CSSProperties } from "react";
-import type { AgentColor, ChatAgentReplyData } from "../../shared/agents.ts";
+import { useRef } from "react";
+import type { ChatAgentReplyData } from "../../shared/agents.ts";
 import type { PublishedDetails } from "../../shared/protocol.ts";
+import { ArtifactCard } from "./ArtifactCard.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageActions } from "./MessageActions.tsx";
+import { AgentByline } from "./people.tsx";
 import { ReactionChips, type MessageReactions } from "./Reactions.tsx";
 import { SentTime } from "./SentTime.tsx";
-
-/** An agent's badge besides pi's: its own letters on its colour, square-cornered as pi's is. `working` adds a dot. */
-export function AgentBadge({ avatar, color, working = false }: { avatar: string; color: AgentColor; working?: boolean }) {
-  return (
-    <span className="avatar agent toned" style={{ "--tone": `var(--agent-${color})` } as CSSProperties} aria-hidden="true">
-      {avatar}
-      {working && <i className="presence working" />}
-    </span>
-  );
-}
 
 /** Who gave an agent the turn it answers, as its byline says it. */
 function calledByLabel(calledBy: ChatAgentReplyData["calledBy"]): string {
@@ -40,24 +32,14 @@ export function AgentReply({
   const content = useRef<HTMLDivElement>(null);
   return (
     <div className="agent-reply" ref={content}>
-      <div className="byline agent">
-        <AgentBadge avatar={data.avatar} color={data.color} />
-        <strong>@{data.name}</strong>
-        <small>agent · {calledByLabel(data.calledBy)}</small>
-      </div>
+      <AgentByline name={data.name} badge={data} note={`agent · ${calledByLabel(data.calledBy)}`} />
       {data.text && (
         <div className="bubble markdown">
           <Markdown text={data.text} />
         </div>
       )}
       {data.published?.map((artifact) => (
-        <button key={`${artifact.artifactId}:${artifact.version}`} type="button" className="artifact-card" onClick={() => onOpen(artifact)}>
-          <span className="artifact-card-icon">▦</span>
-          <span>
-            <strong>{artifact.title}</strong>
-            <small>Artifact · version {artifact.version} · open preview</small>
-          </span>
-        </button>
+        <ArtifactCard key={`${artifact.artifactId}:${artifact.version}`} artifact={artifact} onOpen={onOpen} />
       ))}
       {data.failed && <div className="chat-error">{data.failed}</div>}
       {data.text && (
