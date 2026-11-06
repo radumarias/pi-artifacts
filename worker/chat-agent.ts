@@ -98,7 +98,7 @@ import { Storage } from "./storage/index.ts";
 import { literalPath } from "./storage/paths.ts";
 import { newestFirst, type FileEntry } from "./storage/user-files.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
-import { McpOAuthClient } from "./mcp/oauth.ts";
+import { chatOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
 import { mcpServers, sharesResults, type McpServerConfig } from "./mcp/servers.ts";
 import { CacheWarmer } from "./cache-warmer.ts";
@@ -1030,10 +1030,9 @@ export class ChatAgent extends DurableObject<Env> {
   /** Public servers connect as they are; a server with `auth: "oauth"` connects with this chat's user's own tokens. */
   async #connect(server: McpServerConfig) {
     if (server.auth !== "oauth") return connectStreamableHttp(server);
-    const store = mcpAuthStore(this.uid, server.name);
-    const { tokens, redirectUrl } = await store.get();
-    if (!tokens || !redirectUrl) throw signInRequired(server.name);
-    return connectStreamableHttp(server, new McpOAuthClient(store, server.name, { redirectUrl, interactive: false }));
+    const client = await chatOAuthClient(mcpAuthStore(this.uid, server.name), server.name);
+    if (!client) throw signInRequired(server.name);
+    return connectStreamableHttp(server, client);
   }
 
   /** The owner, or a member: who may open this chat, prompt it and load its pages' per-user data. */

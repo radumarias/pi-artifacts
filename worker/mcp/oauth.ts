@@ -1,4 +1,4 @@
-import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { auth, UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { errorMessage, randomHex } from "../../shared/util.ts";
 
@@ -8,11 +8,9 @@ import { errorMessage, randomHex } from "../../shared/util.ts";
  * other user can reach it.
  */
 export interface McpAuthRecord {
-  /** What dynamic client registration returned. */
+  /** What dynamic client registration returned, its redirect URIs included: the one record of where sign-ins return. */
   client?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
-  /** The redirect URL the client was registered with; refreshes reuse it. */
-  redirectUrl?: string;
   /** A sign-in in progress: its PKCE verifier and state. */
   verifier?: string;
   state?: string;
@@ -32,8 +30,10 @@ export type McpAuthChange =
   | { clearTokensIf: OAuthTokens }
   /**
    * Start a sign-in for this redirect URL: drop any sign-in in progress, and
-   * keep the client registered for the same URL with its tokens (they stay in
-   * use until the new sign-in replaces them).
+   * keep the client registration with its tokens (they stay in use until the
+   * new sign-in replaces them) only if it was registered for this URL. One
+   * registered for another, such as the app's address before it moved, is
+   * dropped, so the sign-in registers again.
    */
   | { restart: string };
 
@@ -46,8 +46,7 @@ export interface McpAuthStore {
 export function applyAuthChange(stored: McpAuthRecord, change: McpAuthChange): McpAuthRecord {
   if ("set" in change) return { ...stored, ...change.set };
   if ("restart" in change) {
-    const redirectUrl = change.restart;
-    return stored.client && stored.redirectUrl === redirectUrl ? { client: stored.client, tokens: stored.tokens, redirectUrl } : { redirectUrl };
+    return registeredFor(stored.client, change.restart) ? { client: stored.client, tokens: stored.tokens } : {};
   }
   if ("clear" in change) {
     if (change.clear === "all") return {};
@@ -57,6 +56,38 @@ export function applyAuthChange(stored: McpAuthRecord, change: McpAuthChange): M
   }
   const { tokens, ...rest } = stored;
   return sameTokens(tokens, change.clearTokensIf) ? rest : stored;
+}
+
+/**
+ * Whether `client` was registered with `redirectUrl` among its redirect URIs. An authorization server sends the
+ * browser back only to those, so a sign-in with any other client fails on the server's sign-in page.
+ */
+function registeredFor(client: OAuthClientInformationMixed | undefined, redirectUrl: string): boolean {
+  return registeredRedirects(client).some((uri) => sameUrl(uri, redirectUrl));
+}
+
+/** Compared as URLs, so a server that echoes a redirect URI in another spelling (host case, default port) still matches. */
+function sameUrl(a: string, b: string): boolean {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return a === b;
+  }
+}
+
+function registeredRedirects(client: OAuthClientInformationMixed | undefined): string[] {
+  return client && "redirect_uris" in client && Array.isArray(client.redirect_uris) ? client.redirect_uris : [];
+}
+
+/**
+ * The OAuth client a chat's connection uses: the user's stored sign-in, at the redirect URL its client was registered
+ * with (refreshes need none, but the SDK takes a missing one for a machine-to-machine flow). Undefined until the user
+ * has signed in.
+ */
+export async function chatOAuthClient(store: McpAuthStore, server: string): Promise<McpOAuthClient | undefined> {
+  const { client, tokens } = await store.get();
+  const [redirectUrl] = registeredRedirects(client);
+  return tokens && redirectUrl ? new McpOAuthClient(store, server, { redirectUrl, interactive: false }) : undefined;
 }
 
 /** The callback path the authorization server sends the browser back to. */
@@ -82,7 +113,9 @@ export function serverOfState(state: string): string | undefined {
  * `redirectToAuthorization` only records the URL, and the sign-in route
  * redirects the browser to it. A chat's connection is not `interactive`: if
  * its refresh fails, it records nothing, so it cannot overwrite a sign-in the
- * user has open, and the call fails with auth_required.
+ * user has open, and the call fails with auth_required. Nor does it ever
+ * save a client registration: only a sign-in does, for the address the user
+ * signed in at, so a chat cannot leave behind one for another address.
  */
 export class McpOAuthClient implements OAuthClientProvider {
   authorizationUrl: URL | undefined;
@@ -120,16 +153,26 @@ export class McpOAuthClient implements OAuthClientProvider {
 
   async state(): Promise<string> {
     const state = `${this.#server}~${randomHex(16)}`;
-    if (this.#interactive) await this.#store.update({ set: { state, redirectUrl: this.#redirectUrl } });
+    if (this.#interactive) await this.#store.update({ set: { state } });
     return state;
   }
 
+  /**
+   * For a sign-in, the stored registration if it was made for this redirect URL; otherwise the sign-in registers
+   * again. A chat's connection only refreshes, which needs no redirect URL, so it takes whatever registration is
+   * stored now (a sign-in at another address may have replaced the one it started with); with none, it cannot
+   * register one, and needs a new sign-in.
+   */
   async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
-    return (await this.#store.get()).client;
+    const { client } = await this.#store.get();
+    if (this.#interactive) return registeredFor(client, this.#redirectUrl) ? client : undefined;
+    if (!client) throw new UnauthorizedError(`No client registration for ${this.#server}.`);
+    return client;
   }
 
+  /** Only a sign-in saves a registration. A chat's connection may only be asked to re-save the one it read, which can wait. */
   async saveClientInformation(client: OAuthClientInformationMixed): Promise<void> {
-    await this.#store.update({ set: { client } });
+    if (this.#interactive) await this.#store.update({ set: { client } });
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
@@ -174,7 +217,8 @@ function sameTokens(a: OAuthTokens | undefined, b: OAuthTokens | undefined): boo
  * server authorized without one. Stored tokens are ignored, so the user always
  * gets the login screen, but kept until the new sign-in replaces them: anyone
  * can link to the sign-in route, and following such a link signs no one out.
- * A client registration made for this same redirect URL is kept.
+ * A client registration is kept only if it was made for this same redirect
+ * URL; otherwise the server registers the app again.
  */
 export async function startSignIn(serverUrl: string, server: string, store: McpAuthStore, redirectUrl: string): Promise<{ url: string } | { signedIn: true }> {
   await store.update({ restart: redirectUrl });
@@ -186,11 +230,16 @@ export async function startSignIn(serverUrl: string, server: string, store: McpA
   return { url: client.authorizationUrl.href };
 }
 
-/** Finish a sign-in from the callback: check the state, exchange the code for tokens, clear the sign-in in progress. */
-export async function finishSignIn(serverUrl: string, server: string, store: McpAuthStore, code: string, state: string): Promise<void> {
+/**
+ * Finish a sign-in from the callback at `redirectUrl`, the address the server sent the browser back to: check the
+ * state, exchange the code for tokens, clear the sign-in in progress.
+ */
+export async function finishSignIn(serverUrl: string, server: string, store: McpAuthStore, code: string, state: string, redirectUrl: string): Promise<void> {
   const record = await store.get();
-  if (!record.state || record.state !== state || !record.redirectUrl) throw new Error("This sign-in did not start here, or a newer one replaced it. Open the sign-in link again.");
-  const client = new McpOAuthClient(store, server, { redirectUrl: record.redirectUrl, interactive: true });
+  if (!record.state || record.state !== state) throw new Error("This sign-in did not start here, or a newer one replaced it. Open the sign-in link again.");
+  // The code is exchanged with the redirect URL the sign-in started with, which its registration names.
+  if (!registeredFor(record.client, redirectUrl)) throw new Error("This sign-in started at another address of this app. Open the sign-in link again.");
+  const client = new McpOAuthClient(store, server, { redirectUrl, interactive: true });
   const trace = tracedFetch();
   await auth(client, { serverUrl, authorizationCode: code, fetchFn: trace.fetch }).catch(trace.explain);
   await store.update({ clear: ["state", "verifier"] });

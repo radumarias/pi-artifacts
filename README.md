@@ -133,6 +133,11 @@ Where things live and who can use them:
   into it; see [Shared chats](#shared-chats)). A page calls through its author's chat, so it would otherwise show the
   author's data to anyone with the link. Other viewers get `not_granted`, and the page's tool list leaves that server's
   tools out for them. Claude's artifacts instead use each viewer's own connectors.
+- **Moving the app to another address** needs nothing done by hand. The callback is the address the sign-in link
+  was opened at, so a client registration names it, and the next sign-in at the new address registers the app again
+  for it (a registration is kept only while the callback is among its redirect URIs). Until then chats keep
+  refreshing with the old registration; only a sign-in saves one, so a chat cannot store a registration for the old
+  address under the new one.
 - **Removing a server** from the list also removes everyone's stored sign-in for it, tokens included. This happens the
   next time each user's directory loads.
 - **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then. To end the portal's own session, sign out on the portal's home
@@ -144,6 +149,7 @@ Where things live and who can use them:
 - a forged `state` refused;
 - refresh on expiry;
 - `auth_required` when refresh fails, leaving an open sign-in untouched.
+- a new registration after the app moves to another address, and none from a chat's connection.
 
 Locally, `PI_MCP_SERVERS='[…]' pnpm dev` uses another list, for example with a local stand-in portal.
 

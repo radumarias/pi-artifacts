@@ -13,13 +13,15 @@ export async function mcpRoute(request: Request, env: Env, uid: string): Promise
   const url = new URL(request.url);
   if (request.method !== "GET") return null;
   const servers = mcpServers(env).filter((server) => server.auth === "oauth");
+  // Where the server sends the browser back: this app at the address the user opened it at, so it follows the app when it moves.
+  const callback = `${url.origin}${OAUTH_CALLBACK_PATH}`;
 
   const name = url.pathname.startsWith(SIGN_IN_PATH) ? url.pathname.slice(SIGN_IN_PATH.length) : undefined;
   if (name && !name.includes("/")) {
     const server = servers.find((s) => s.name === decodeURIComponent(name));
     if (!server) return page("Sign-in failed", "This app has no server by that name to sign in to.", 404);
     try {
-      const started = await startSignIn(server.url, server.name, mcpAuthStore(uid, server.name), `${url.origin}${OAUTH_CALLBACK_PATH}`);
+      const started = await startSignIn(server.url, server.name, mcpAuthStore(uid, server.name), callback);
       if ("url" in started) return Response.redirect(started.url, 302);
       return page(`Signed in to ${server.name}`, "You already were. Go back to the chat and ask again.");
     } catch (error) {
@@ -36,7 +38,7 @@ export async function mcpRoute(request: Request, env: Env, uid: string): Promise
     if (!server) return page("Sign-in failed", "This sign-in link is not for a server this app knows.", 400);
     if (denied || !code) return page("Sign-in failed", denied ?? "The sign-in returned no code.", 400);
     try {
-      await finishSignIn(server.url, server.name, mcpAuthStore(uid, server.name), code, state);
+      await finishSignIn(server.url, server.name, mcpAuthStore(uid, server.name), code, state, callback);
       return page(`Signed in to ${server.name}`, "Go back to the chat and ask again. You can close this tab.");
     } catch (error) {
       return page("Sign-in failed", errorMessage(error), 400);

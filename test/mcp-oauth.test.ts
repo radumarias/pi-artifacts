@@ -3,9 +3,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { connectStreamableHttp } from "../worker/mcp/connect.ts";
+import { connectStreamableHttp, signInRequired } from "../worker/mcp/connect.ts";
 import { McpFailure } from "../worker/mcp/hub.ts";
-import { applyAuthChange, finishSignIn, McpOAuthClient, serverOfState, startSignIn, type McpAuthChange, type McpAuthRecord, type McpAuthStore } from "../worker/mcp/oauth.ts";
+import { applyAuthChange, chatOAuthClient, finishSignIn, serverOfState, startSignIn, type McpAuthChange, type McpAuthRecord, type McpAuthStore } from "../worker/mcp/oauth.ts";
 import type { McpServerConfig } from "../worker/mcp/servers.ts";
 import { listen } from "./fakes.ts";
 
@@ -40,9 +40,13 @@ class FakePortal {
     return { access_token: accessToken, token_type: "Bearer", expires_in: Math.floor(this.ttlMs / 1000), refresh_token: refreshToken };
   }
 
-  /** The user approves the sign-in in the browser: the portal redirects back with a code. */
+  /**
+   * The user approves the sign-in in the browser: the portal redirects back with a code. Like a real portal, it
+   * refuses a redirect URI the client was not registered with.
+   */
   approve(authorizationUrl: string, user: string): { code: string; state: string } {
     const url = new URL(authorizationUrl);
+    if (!this.clients.get(url.searchParams.get("client_id")!)?.includes(url.searchParams.get("redirect_uri")!)) throw new Error("invalid redirect_uri");
     const code = `code-${crypto.randomUUID()}`;
     this.codes.set(code, {
       user,
@@ -135,6 +139,8 @@ class MemoryStore implements McpAuthStore {
 }
 
 const REDIRECT = "https://app.example/api/mcp/oauth/callback";
+/** Where the app was before it moved. */
+const OLD_REDIRECT = "https://app.old.example/api/mcp/oauth/callback";
 let portal: FakePortal;
 let server: Server;
 let origin: string;
@@ -153,7 +159,9 @@ beforeEach(() => {
 
 /** What a chat does: connect with the user's stored tokens, non-interactively. */
 async function whoami(store: MemoryStore) {
-  const connection = await connectStreamableHttp(config, new McpOAuthClient(store, "Portal", { redirectUrl: store.record.redirectUrl ?? REDIRECT, interactive: false }));
+  const client = await chatOAuthClient(store, "Portal");
+  if (!client) throw signInRequired("Portal");
+  const connection = await connectStreamableHttp(config, client);
   try {
     const result = await connection.callTool("data_whoami", {});
     return JSON.parse((result.content[0] as { text: string }).text).user as string;
@@ -162,11 +170,11 @@ async function whoami(store: MemoryStore) {
   }
 }
 
-async function signIn(store: MemoryStore, user: string) {
-  const started = await startSignIn(config.url, "Portal", store, REDIRECT);
+async function signIn(store: MemoryStore, user: string, redirect = REDIRECT) {
+  const started = await startSignIn(config.url, "Portal", store, redirect);
   if (!("url" in started)) throw new Error("expected a sign-in page");
   const { code, state } = portal.approve(started.url, user);
-  await finishSignIn(config.url, "Portal", store, code, state);
+  await finishSignIn(config.url, "Portal", store, code, state, redirect);
 }
 
 describe("per-user MCP sign-in", () => {
@@ -181,7 +189,7 @@ describe("per-user MCP sign-in", () => {
     expect(portal.clients.get(ada.record.client!.client_id)).toEqual([REDIRECT]);
 
     const { code, state } = portal.approve(url.href, "ada@example.com");
-    await finishSignIn(config.url, "Portal", ada, code, state);
+    await finishSignIn(config.url, "Portal", ada, code, state, REDIRECT);
     expect(ada.record.tokens?.access_token).toMatch(/^at-/);
     expect(ada.record.state).toBeUndefined();
     expect(ada.record.verifier).toBeUndefined();
@@ -201,7 +209,7 @@ describe("per-user MCP sign-in", () => {
     const ada = new MemoryStore();
     const started = await startSignIn(config.url, "Portal", ada, REDIRECT);
     const { code } = portal.approve((started as { url: string }).url, "ada@example.com");
-    await expect(finishSignIn(config.url, "Portal", ada, code, "Portal~forged")).rejects.toThrow(/did not start here/);
+    await expect(finishSignIn(config.url, "Portal", ada, code, "Portal~forged", REDIRECT)).rejects.toThrow(/did not start here/);
     expect(ada.record.tokens).toBeUndefined();
   });
 
@@ -240,8 +248,45 @@ describe("per-user MCP sign-in", () => {
     expect(ada.record.client!.client_id).toBe(clientId);
     expect(portal.clients.size).toBe(1);
     const { code, state } = portal.approve((started as { url: string }).url, "ada@example.com");
-    await finishSignIn(config.url, "Portal", ada, code, state);
+    await finishSignIn(config.url, "Portal", ada, code, state, REDIRECT);
     expect(ada.record.tokens!.access_token).not.toBe(tokens!.access_token);
+  });
+
+  it("registers again when the app signs in from another address", async () => {
+    const ada = new MemoryStore();
+    await signIn(ada, "ada@example.com", OLD_REDIRECT);
+    const old = ada.record.client!.client_id;
+    await signIn(ada, "ada@example.com");
+    expect(ada.record.client!.client_id).not.toBe(old);
+    expect(portal.clients.get(ada.record.client!.client_id)).toEqual([REDIRECT]);
+    expect(await whoami(ada)).toBe("ada@example.com");
+  });
+
+  it("keeps a chat signed in at the old address until the user signs in again", async () => {
+    const ada = new MemoryStore();
+    await signIn(ada, "ada@example.com", OLD_REDIRECT);
+    portal.access.get(ada.record.tokens!.access_token)!.expires = 0;
+    expect(await whoami(ada)).toBe("ada@example.com");
+    expect(portal.clients.size).toBe(1);
+  });
+
+  it("refreshes a chat's connection held from before the user signed in at the new address", async () => {
+    const ada = new MemoryStore();
+    await signIn(ada, "ada@example.com", OLD_REDIRECT);
+    const chat = (await chatOAuthClient(ada, "Portal"))!;
+    await signIn(ada, "ada@example.com");
+    expect(await chat.clientInformation()).toEqual(ada.record.client);
+  });
+
+  it("never registers a client from a chat's connection", async () => {
+    const ada = new MemoryStore();
+    await signIn(ada, "ada@example.com");
+    // A sign-in started elsewhere dropped the registration while this chat held its connection.
+    const chat = (await chatOAuthClient(ada, "Portal"))!;
+    delete ada.record.client;
+    await expect(chat.clientInformation()).rejects.toThrow(/No client registration/);
+    await chat.saveClientInformation({ client_id: "from-a-chat", redirect_uris: [REDIRECT] });
+    expect(ada.record.client).toBeUndefined();
   });
 
   it("names the request that failed when the code exchange is refused", async () => {
@@ -249,7 +294,7 @@ describe("per-user MCP sign-in", () => {
     const started = await startSignIn(config.url, "Portal", ada, REDIRECT);
     const { code, state } = portal.approve((started as { url: string }).url, "ada@example.com");
     portal.tokenBlocked = true;
-    await expect(finishSignIn(config.url, "Portal", ada, code, state)).rejects.toThrow(/error code: 1014.*\[POST http:\/\/127\.0\.0\.1:\d+\/token answered 403 \(Cloudflare Ray ID abc123-ARN\)\]/);
+    await expect(finishSignIn(config.url, "Portal", ada, code, state, REDIRECT)).rejects.toThrow(/error code: 1014.*\[POST http:\/\/127\.0\.0\.1:\d+\/token answered 403 \(Cloudflare Ray ID abc123-ARN\)\]/);
   });
 
   it("keeps tokens another chat refreshed when this chat's refresh is rejected", async () => {
@@ -257,13 +302,13 @@ describe("per-user MCP sign-in", () => {
     await signIn(ada, "ada@example.com");
     const stale = ada.record.tokens!;
     // Chat A reads the tokens; chat B refreshes them; then A's refresh with the old refresh token is rejected.
-    const chatA = new McpOAuthClient(ada, "Portal", { redirectUrl: REDIRECT, interactive: false });
+    const chatA = (await chatOAuthClient(ada, "Portal"))!;
     await chatA.tokens();
     await ada.update({ set: { tokens: { ...stale, access_token: "at-refreshed-by-b", refresh_token: "rt-b" } } });
     await chatA.invalidateCredentials("tokens");
     expect(ada.record.tokens?.access_token).toBe("at-refreshed-by-b");
     // With no newer tokens, the rejected ones are cleared.
-    const chatB = new McpOAuthClient(ada, "Portal", { redirectUrl: REDIRECT, interactive: false });
+    const chatB = (await chatOAuthClient(ada, "Portal"))!;
     await chatB.tokens();
     await chatB.invalidateCredentials("tokens");
     expect(ada.record.tokens).toBeUndefined();
@@ -271,18 +316,19 @@ describe("per-user MCP sign-in", () => {
 });
 
 describe("applyAuthChange", () => {
-  const record: McpAuthRecord = { redirectUrl: "r", state: "s", verifier: "v", tokens: { access_token: "a", token_type: "Bearer" } };
+  const record: McpAuthRecord = { state: "s", verifier: "v", tokens: { access_token: "a", token_type: "Bearer" } };
   it("applies one change at a time", () => {
     expect(applyAuthChange(record, { set: { state: "s2" } })).toEqual({ ...record, state: "s2" });
-    expect(applyAuthChange(record, { clear: ["verifier", "state"] })).toEqual({ redirectUrl: "r", tokens: record.tokens });
+    expect(applyAuthChange(record, { clear: ["verifier", "state"] })).toEqual({ tokens: record.tokens });
     expect(applyAuthChange(record, { clear: "all" })).toEqual({});
     expect(applyAuthChange(record, { clearTokensIf: { access_token: "other", token_type: "Bearer" } }).tokens).toEqual(record.tokens);
     expect(applyAuthChange(record, { clearTokensIf: { access_token: "a", token_type: "Bearer" } }).tokens).toBeUndefined();
   });
 
-  it("keeps a client registration only for a sign-in to the same redirect URL", () => {
-    const client = { client_id: "c" };
-    expect(applyAuthChange({ ...record, client }, { restart: "r" })).toEqual({ client, tokens: record.tokens, redirectUrl: "r" });
-    expect(applyAuthChange({ ...record, client }, { restart: "elsewhere" })).toEqual({ redirectUrl: "elsewhere" });
+  it("keeps a client registration only for a sign-in to a redirect URL it was registered with", () => {
+    const client = { client_id: "c", redirect_uris: ["r"] };
+    expect(applyAuthChange({ ...record, client }, { restart: "r" })).toEqual({ client, tokens: record.tokens });
+    expect(applyAuthChange({ ...record, client }, { restart: "elsewhere" })).toEqual({});
+    expect(applyAuthChange({ ...record, client: { client_id: "c" } }, { restart: "r" })).toEqual({});
   });
 });
