@@ -31,4 +31,3 @@ export function skillBody(skill: SkillInput): string {
   if (!skill.tools.length) return skill.instructions;
   return `${skill.instructions}\n\nTools this skill works with: ${skill.tools.join(", ")}. Prefer these; a tool not in this chat is unavailable, so say so instead of guessing.`;
 }
-
