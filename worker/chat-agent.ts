@@ -1088,7 +1088,9 @@ export class ChatAgent extends DurableObject<Env> {
     const images = attachments.filter((attachment) => attachment.image).length;
     // What the router, the skill classifier and the tool picker read of the conversation: read once for all, and only if one asks.
     const recent = calling ? memoAsync(() => this.#recentEntries()) : undefined;
-    const routing = recent && this.#auto() ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
+    // A new chat is put on Auto as it opens (startingSetting), which its first message may come before: wait for that.
+    const onAuto = recent && (this.#auto() || ((await this.harness.pi()) && this.#auto()));
+    const routing = onAuto ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
     this.#announce({
       uid: author.uid,
       name: author.name,

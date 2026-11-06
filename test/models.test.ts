@@ -75,7 +75,8 @@ describe("default model", () => {
     expect(defaultModelChoice("anthropic/claude-opus-5.5", "off")).toEqual({ model: "anthropic/claude-opus-5.5", thinkingLevel: "low" });
     expect(defaultModelChoice("anthropic/claude-opus-5.5", "high")).toEqual({ model: "anthropic/claude-opus-5.5", thinkingLevel: "high" });
     // The deployment's default (MODEL) is one AI Gateway's catalog lists, so it is checked like a pick.
-    expect(baseCatalog().check({ model: "anthropic/claude-sonnet-5.5", thinkingLevel: "high" })).toEqual({ model: "anthropic/claude-sonnet-5.5", thinkingLevel: "high" });
+    expect(defaultModelChoice("anthropic/claude-sonnet-5.5", "off")).toEqual({ model: "anthropic/claude-sonnet-5.5", thinkingLevel: "low" });
+    expect(defaultModelChoice("anthropic/claude-sonnet-5.5", "high")).toEqual({ model: "anthropic/claude-sonnet-5.5", thinkingLevel: "high" });
     expect(defaultModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "high")).toEqual({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", thinkingLevel: "high" });
     expect(defaultModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "hgih").thinkingLevel).toBe("medium");
   });
@@ -86,6 +87,8 @@ describe("default model", () => {
     expect(startingSetting({ model: AUTO_MODEL }, "")).toEqual({ model: AUTO_MODEL });
     expect(startingSetting(null, "system-one:typesafe/jev")).toEqual({ model: AUTO_MODEL });
     expect(startingSetting(null, " ")).toBeNull();
+    // A list that names no router, as routersFrom reads it, is no router.
+    expect(startingSetting(null, " , ")).toBeNull();
   });
 });
 

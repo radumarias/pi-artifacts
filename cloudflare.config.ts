@@ -60,8 +60,11 @@ export default defineConfig({
       // (input priced only), through AI Gateway with the OpenAI key; system-one:<model> asks a System One classifier on
       // Workers AI (typesafe/jev, @cf/cloudflare/clef-flash) the same way, through the AI binding. Workers AI runs on
       // Cloudflare's own network, with no provider key and no hop to another provider: Jev first, then gpt-oss-120b there,
-      // then Gemini Flash-Lite with the Google AI Studio key.
-      ROUTER_MODEL: bindings.text("system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
+      // then Gemini Flash-Lite with the Google AI Studio key. Empty (as with PI_OFFLINE=1, where no router can be reached):
+      // no Auto for new chats, which start on MODEL.
+      ROUTER_MODEL: bindings.text(
+        process.env.PI_OFFLINE === "1" ? "" : "system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest",
+      ),
       // The tool picker: before each message that starts a run, a System One classifier on Workers AI (by its id, as
       // CALL_HINT_MODEL; through the AI binding, no key) reads the end of the conversation and the message, and picks
       // the few MCP tools it needs; only those are offered to the model, which loads any other with tool_search

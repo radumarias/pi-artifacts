@@ -331,11 +331,11 @@ export function checkSetting(catalog: Catalog, input: { model?: unknown; thinkin
 }
 
 /**
- * What a new chat starts on: its user's last pick (`saved`), else Auto when the deployment has a router (`ROUTER_MODEL`),
- * else null, the deployment's default.
+ * What a new chat starts on: its user's last pick (`saved`), else Auto when the deployment names a router
+ * (`ROUTER_MODEL`, a comma-separated list, read as routersFrom reads it), else null, the deployment's default.
  */
 export function startingSetting(saved: ModelSetting | null, routers: string): ModelSetting | null {
-  return saved ?? (routers.trim() ? { model: AUTO_MODEL } : null);
+  return saved ?? (routers.split(",").some((id) => id.trim()) ? { model: AUTO_MODEL } : null);
 }
 
 /**
