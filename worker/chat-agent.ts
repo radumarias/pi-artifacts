@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Models, Provider, UserMessage } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentState, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -39,6 +40,7 @@ import {
   type QueuedMessage,
   type IncomingMessage,
   type ReplyQuote,
+  type ToolPickNote,
   clampStaleMs,
   incomingKey,
   everyone,
@@ -46,7 +48,7 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
-import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
+import { AUTO_MODEL, COMPACTION, isAuto, modelKey, TOOL_PICK_LEDGER_PREFIX, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -60,6 +62,7 @@ import { titleFor } from "./agent/title.ts";
 import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
+import { MIN_TOOLS_TO_PICK, pickerId, pickFailure, pickTools, TOOL_PICK_MS, toolPicker, toolsToOffer, type PickableTool } from "./agent/tool-pick.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
 import { ChatReactions } from "./reactions.ts";
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
@@ -244,9 +247,10 @@ export class ChatAgent extends DurableObject<Env> {
   /**
    * The servers whose tools the agent has now (`key`), so a refresh reinstalls only on a change, what mcp_discover
    * says about them, and which listing they came from (`generation`): a listing started later has lists at least as new, so one that
-   * finishes after it (a refresh racing a discovery, two discoveries) does not install over it.
+   * finishes after it (a refresh racing a discovery, two discoveries) does not install over it. `pickable`: the tools
+   * the tool picker picks among, when they are deferred (empty when every tool is offered).
    */
-  #mcp = { key: "", listing: "", generation: 0 };
+  #mcp = { key: "", listing: "", generation: 0, pickable: [] as PickableTool[] };
   #mcpListings = 0;
   /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
@@ -272,8 +276,12 @@ export class ChatAgent extends DurableObject<Env> {
   #seen: { through: number; traces: ChatTraces } = { through: -1, traces: chatTraces([]) };
   /** See #oneShotModels. */
   #oneShot: Models | undefined;
-  /** See #placeAuto. */
-  #autoPlacing: Promise<void> = Promise.resolve();
+  /** See #place. */
+  #placing: Promise<void> = Promise.resolve();
+  /** The deployment's tool picker (TOOL_PICK_MODEL); undefined: every MCP tool is offered with every message. */
+  readonly #toolPicker = toolPicker(this.env.TOOL_PICK_MODEL);
+  /** tool_search, which loads a deferred MCP tool the picker left out: installed while the MCP tools are deferred. */
+  readonly #toolSearch = createToolSearchExtension();
   /** See incoming. In memory: a restart ends the prompts getting them ready too. */
   readonly #incoming = new Map<string, IncomingMessage>();
   /** The last message's sentAt (see prompt). */
@@ -481,7 +489,7 @@ export class ChatAgent extends DurableObject<Env> {
    * Run the chat on Auto's pick, unless a reply is running by now (someone else's message started one while the router
    * thought): the message then goes to it on the model it runs on, as does one the router did not pick for. The pick as
    * it stands, against the model the chat runs on now: another message may have changed it since the router was asked.
-   * Called only inside #placeAuto, so no other Auto message changes the model between this and its message going in.
+   * Called only inside #place, so no other message changes the model between this and its message going in.
    */
   async #applyPick(routed: Routing | undefined): Promise<AutoPick | undefined> {
     if (!routed) return undefined;
@@ -509,13 +517,68 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /**
-   * Apply an Auto message's pick and put the message in, one message at a time: two picked at once would each change
-   * the model before either went in, and the run would start on the last one's pick while the first one's says another.
+   * Apply a message's picks (Auto's model, the tool picker's tools) and put the message in, one message at a time: two
+   * picked at once would each change the model or the tools before either went in, and the run would start on the last
+   * one's picks while the first one's say others.
    */
-  #placeAuto(place: () => Promise<void>): Promise<void> {
-    const placed = this.#autoPlacing.then(place);
-    this.#autoPlacing = placed.catch(() => {});
+  #place(place: () => Promise<void>): Promise<void> {
+    const placed = this.#placing.then(place);
+    this.#placing = placed.catch(() => {});
     return placed;
+  }
+
+  /**
+   * The tool picker's pick for a message about to start a run: the few MCP tools it needs, out of the deferred ones
+   * (#mcp.pickable, as the last refresh installed them). The call counts in pi's ledger like any model call. Undefined
+   * when the tools are not deferred (no picker, or too few tools to pick). Never throws: when the picker fails or takes
+   * longer than TOOL_PICK_MS, the note says why, and every tool is offered (#applyTools).
+   */
+  async #pickTools(message: string): Promise<ToolPickNote | undefined> {
+    const picker = this.#toolPicker;
+    const tools = this.#mcp.pickable;
+    if (!picker || !tools.length) return undefined;
+    const started = Date.now();
+    try {
+      const root = await this.#root();
+      const page = await root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT);
+      const picked = await pickTools(this.env.AI, picker, { message, history: routeHistory(page.items), tools }, AbortSignal.timeout(TOOL_PICK_MS));
+      const id = pickerId(picker);
+      // Paid for whether or not the pick is used. Only a record: a failure is logged.
+      await root
+        .commit((tx) => recordRouterSpend(tx, root.id, id, picked.usage, TOOL_PICK_LEDGER_PREFIX), BACKGROUND_CONTEXT)
+        .catch((error: unknown) => console.error("tool pick spend:", errorMessage(error)));
+      const spend = { model: id, cost: picked.usage.cost.total, input: picked.usage.input + picked.usage.cacheRead, output: picked.usage.output };
+      return { tools: picked.tools, of: tools.length, picker: spend, ms: Date.now() - started };
+    } catch (error) {
+      console.error("tool pick:", errorMessage(error));
+      return { tools: [], of: tools.length, failed: pickFailure(error), ms: Date.now() - started };
+    }
+  }
+
+  /**
+   * Offer the model the tools `note` picked, from the message's run on, by the conversation's `modelTools` (which loads
+   * deferred tools); every MCP tool when the pick failed. While a reply is running, the picks are added to the tools it
+   * has, never taking one away from it. Called only inside #place. Never throws: on a failure the model keeps the tools
+   * it has, and can load others with tool_search. Returns the note as it went: `added` when a reply was running.
+   */
+  async #applyTools(note: ToolPickNote | undefined): Promise<ToolPickNote | undefined> {
+    if (!note) return undefined;
+    try {
+      const root = await this.#root();
+      const [busy, agent] = await Promise.all([this.#replying(), root.agent(BACKGROUND_CONTEXT)]);
+      const wanted = note.failed ? this.#mcp.pickable.map((tool) => tool.name) : note.tools;
+      const offered = agent.tools.filter((tool) => tool.deferred).map((tool) => tool.name);
+      const deferred = this.registry
+        .snapshot()
+        .tools()
+        .flatMap(({ tool }) => (tool.deferred ? [tool] : []));
+      const tools = toolsToOffer(deferred, wanted, offered, busy);
+      if (tools) await root.configure({ modelTools: { add: tools } }, BACKGROUND_CONTEXT);
+      return busy ? { ...note, added: true } : note;
+    } catch (error) {
+      console.error("tool pick:", errorMessage(error));
+      return { ...note, failed: pickFailure(error) };
+    }
   }
 
   /** pi-ai's models for the chat's calls outside its runs (Auto's router, the chat's title): made once. */
@@ -686,12 +749,16 @@ export class ChatAgent extends DurableObject<Env> {
       else catalog.set(server.name, entry);
     });
     if (generation < this.#mcp.generation) return this.#mcp.listing;
+    // With a tool picker and enough tools, they are deferred: each message is offered the few the picker picks for it.
+    const deferred = this.#toolPicker !== undefined && [...catalog.values()].reduce((n, { tools }) => n + tools.length, 0) > MIN_TOOLS_TO_PICK;
     // Everything the extension is built from: a server's new tool list, or a new reason it is unavailable, reinstalls it.
-    const installed = JSON.stringify([[...catalog], [...unavailable]]);
+    const installed = JSON.stringify([deferred, [...catalog], [...unavailable]]);
     if (installed !== this.#mcp.key) {
-      const { extension, listing } = mcpExtension(this.hub, catalog, unavailable, () => this.discoverMcp());
+      const { extension, listing, pickable } = mcpExtension(this.hub, catalog, unavailable, () => this.discoverMcp(), { deferred });
       this.registry.install(extension);
-      this.#mcp = { key: installed, listing, generation };
+      if (deferred) this.registry.install(this.#toolSearch);
+      else this.registry.uninstall(this.#toolSearch);
+      this.#mcp = { key: installed, listing, generation, pickable: deferred ? pickable : [] };
     } else this.#mcp.generation = generation;
     return this.#mcp.listing;
   }
@@ -852,6 +919,8 @@ export class ChatAgent extends DurableObject<Env> {
     });
     // Picked (or not): the rest may still take a while, and should not say the router is still at it.
     void routing?.then(() => this.#picked(incomingKey({ uid: author.uid, sentAt })));
+    // The tool picker reads the tools the refresh installs, while the rest gets ready. Used only if the message is a prompt.
+    const tooling = calling ? this.refreshMcpTools().then(() => this.#pickTools(text), () => this.#pickTools(text)) : undefined;
     const [[attached, title], { mentions, note, broughtIn }] = await Promise.all([
       // Named after its text, or its files when it has none: for the sidebars.
       attaching.then(async (inputs) => [
@@ -871,7 +940,7 @@ export class ChatAgent extends DurableObject<Env> {
         },
       ),
       // A message to the people in the chat starts no run: the agent needs its tools only when it is called.
-      calling && this.refreshMcpTools().catch(() => {}),
+      tooling,
       calling && this.refreshSkills(),
       calling && this.refreshFiles(),
       calling && this.refreshUserPrompt(),
@@ -886,7 +955,7 @@ export class ChatAgent extends DurableObject<Env> {
     const written = [quote && replyLine(quote), text, note].filter(Boolean).join("\n\n");
     const said = shared ? `${author.name}: ${written}` : written;
     const content = attached ? [...attached.content, ...(written ? [{ type: "text" as const, text: said }] : [])] : said;
-    const dataWith = (auto?: AutoPick) =>
+    const dataWith = (auto?: AutoPick, tools?: ToolPickNote) =>
       ({
         uid: author.uid,
         name: author.name,
@@ -896,12 +965,16 @@ export class ChatAgent extends DurableObject<Env> {
         ...(quote && { replyTo: quote }),
         sentAt,
         ...(auto && { auto }),
+        ...(tools && { tools }),
       }) satisfies ChatMessageData;
     const summon = (data: ReturnType<typeof dataWith>) => this.#summon(content, shared ? ({ ...data, summoned: true } satisfies ChatMessageData) : data);
-    // The model changes before the message goes in, so the run it starts is on the pick.
-    if (summoned && routing) await this.#placeAuto(async () => summon(dataWith(await this.#applyPick(await routing))));
-    else if (summoned) await summon(dataWith());
-    else await this.#aside(content, dataWith());
+    // The model and the tools change before the message goes in, so the run it starts is on the picks.
+    if (summoned) {
+      await this.#place(async () => {
+        const auto = routing && (await this.#applyPick(await routing));
+        await summon(dataWith(auto, await this.#applyTools(await tooling)));
+      });
+    } else await this.#aside(content, dataWith());
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
     const tags = taggedPeople(keptMentions(text, mentions));

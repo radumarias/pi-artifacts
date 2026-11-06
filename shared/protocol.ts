@@ -311,7 +311,24 @@ export interface ChatMessageData extends Person {
   sentAt?: number;
   /** In a chat on Auto, the model and effort picked to answer it. */
   auto?: AutoPick;
+  /** Which MCP tools were offered to answer it, when the chat has enough of them to pick (worker/agent/tool-pick.ts). */
+  tools?: ToolPickNote;
 }
+
+/**
+ * The tool picker's pick for a message: the agent tool names offered (none for a message that needs no MCP tool), the
+ * picker and what its call cost, and how long it took. With no picker, it failed (`failed` says why), and every tool
+ * was offered. `added`: a reply was running, so the picks were added to the tools it has. A type, so pi can store it.
+ */
+export type ToolPickNote = {
+  tools: string[];
+  /** How many MCP tools there were to pick from. */
+  of: number;
+  picker?: RouterSpend;
+  failed?: string;
+  added?: true;
+  ms: number;
+};
 
 /**
  * What Auto picked for a message that called the agent: a model (the picker's id) and an effort, why, and the router

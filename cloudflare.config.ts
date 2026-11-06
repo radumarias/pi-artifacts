@@ -56,6 +56,12 @@ export default defineConfig({
       // Cloudflare's own network, with no provider key and no hop to another provider: Jev first, then gpt-oss-120b there,
       // then Gemini Flash-Lite with the Google AI Studio key.
       ROUTER_MODEL: bindings.text("system-one:typesafe/jev,@cf/openai/gpt-oss-120b,google-ai-studio/gemini-flash-lite-latest"),
+      // The tool picker: before each message that starts a run, a System One classifier on Workers AI (through the AI
+      // binding, no key) reads the end of the conversation and the message, and picks the few MCP tools it needs; only
+      // those are offered to the model, which loads any other with tool_search (worker/agent/tool-pick.ts). Fewer tool
+      // definitions per request, and fewer wrong calls. Only with more than 10 MCP tools; if it fails, every tool is
+      // offered. Empty: every tool, always.
+      TOOL_PICK_MODEL: bindings.text("typesafe/jev"),
       // The models Auto picks among, by the picker's id, each with what it is best at, which the router reads. Those the
       // picker does not list (no key in AI Gateway for their provider) are left out.
       AUTO_MODELS: bindings.json([

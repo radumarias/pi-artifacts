@@ -88,6 +88,9 @@ export function isAuto(setting: { model: string } | null | undefined): setting i
  */
 export const AUTO_LEDGER_PREFIX = "auto:";
 
+/** The same for the tool picker (worker/agent/tool-pick.ts): `tool-pick:` and the classifier's id. */
+export const TOOL_PICK_LEDGER_PREFIX = "tool-pick:";
+
 /** A model Auto may pick (the deployment's AUTO_MODELS): the picker's id, and what it is best at, which the router reads. */
 export interface AutoCandidate {
   id: string;

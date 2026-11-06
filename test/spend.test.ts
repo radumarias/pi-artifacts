@@ -1,7 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { chatSpend, contextUse, formatCost, promptSpend, totalTime } from "../src/chat/spend.ts";
+import { chatSpend, contextUse, formatCost, promptSpend, toolPickerName, totalTime } from "../src/chat/spend.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
 /** A reply's usage: `tokens`, at `total` dollars. */
@@ -173,6 +173,23 @@ describe("Auto's spend", () => {
     const { total, models: rows } = chatSpend(ledger);
     expect(total.cost).toBeCloseTo(0.013);
     expect(rows.map((row) => row.model)).toEqual(["m", "auto:cerebras/gpt-oss-120b"]);
+  });
+});
+
+describe("the tool picker's spend", () => {
+  it("counts in its prompt, with Auto's router", () => {
+    const message = prompt();
+    const picker = { model: "cloudflare-workers-ai/typesafe/jev", cost: 0.0001, input: 2_000, output: 0 };
+    const auto = { model: "m", thinkingLevel: "low", ms: 400, router: { model: "cerebras/gpt-oss-120b", cost: 0.001, input: 1_000, output: 20 } };
+    (message as { data?: unknown }).data = { uid: "u", name: "U", text: "hi", auto, tools: { tools: [], of: 20, picker, ms: 300 } };
+    const entries = [message, reply(0.01)];
+    const spend = promptSpend(entries, false);
+    expect(spend.get(entries[1].id)).toMatchObject({ input: 3_100, output: 30 });
+    expect(spend.get(entries[1].id)!.cost).toBeCloseTo(0.0111);
+  });
+
+  it("is named after its picker in the chat's rows", () => {
+    expect(toolPickerName("cloudflare-workers-ai/typesafe/jev")).toBe("Jev");
   });
 });
 

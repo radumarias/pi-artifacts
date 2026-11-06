@@ -1,9 +1,9 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
-import { AUTO_LEDGER_PREFIX, effortLabel, type ModelInfo } from "../../shared/models.ts";
+import { AUTO_LEDGER_PREFIX, effortLabel, TOOL_PICK_LEDGER_PREFIX, type ModelInfo } from "../../shared/models.ts";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
-import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
+import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing, toolPickerName } from "./spend.ts";
 import { formatElapsed } from "./elapsed.ts";
 
 /** Where the time went, for a tooltip: "model replies 48s (3), tools 31s (2)". */
@@ -15,13 +15,14 @@ function describeTime(time: Timing): string {
 
 /**
  * A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name;
- * Auto's router ("Auto picks · GPT OSS 120B").
+ * Auto's router ("Auto picks · GPT OSS 120B"); the tool picker ("Tool picks · Jev").
  */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
   if (share.model.startsWith(AUTO_LEDGER_PREFIX)) {
     const router = share.model.slice(AUTO_LEDGER_PREFIX.length);
     return `Auto picks · ${models.get(router)?.name ?? router}`;
   }
+  if (share.model.startsWith(TOOL_PICK_LEDGER_PREFIX)) return `Tool picks · ${toolPickerName(share.model.slice(TOOL_PICK_LEDGER_PREFIX.length))}`;
   const name = models.get(share.model)?.name ?? share.model;
   return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;
 }
