@@ -370,14 +370,19 @@ export async function route(routers: readonly Router[], request: RouteRequest, t
     return await new Promise<Routed>((resolve, reject) => {
       let next = 0;
       let asking = 0;
+      let picked = false;
       const ask = () => {
         clearTimeout(timer);
+        if (picked) return;
         if (next < routers.length && !signal.aborted) {
           const i = next++;
           const router = routers[i];
           asking++;
           router.ask(request, signal).then(
-            ({ pick, usage }) => resolve({ pick, router: routerSpend(router.id, usage), usage }),
+            ({ pick, usage }) => {
+              picked = true;
+              resolve({ pick, router: routerSpend(router.id, usage), usage });
+            },
             (error) => {
               errors[i] = `${router.id}: ${clip(errorMessage(error), MAX_ERROR_CHARS)}`;
               asking--;

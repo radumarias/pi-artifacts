@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxProvider, type AssistantMessage, type ClassifierModel, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
 import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { OPENAI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
@@ -201,6 +201,7 @@ describe("routing", () => {
   });
 
   describe("a slow router", () => {
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
     afterEach(() => vi.useRealTimers());
     /** A router that picks `model` after `ms`, or fails when stopped; `stopped` says whether it was. */
     const timed = (id: string, ms: number, model = "openai/gpt-4o") => {
@@ -222,7 +223,6 @@ describe("routing", () => {
     };
 
     it("keeps going while the next one is asked beside it, and the first pick wins", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const first = timed("first", 1_800, "anthropic/claude-haiku-5.5");
       const second = timed("second", 2_000);
       const routed = route([first.router, second.router], request());
@@ -234,14 +234,16 @@ describe("routing", () => {
       expect(second.state).toEqual({ asked: true, stopped: true });
     });
 
-    it("leaves the next one the time that is left, and one that fails has the next asked at once", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    it("leaves the next one the time that is left", async () => {
       const hung = timed("hung", 60_000);
       const fast = timed("fast", 100);
       const routed = route([hung.router, fast.router], request());
       await vi.advanceTimersByTimeAsync(1_600);
       expect((await routed).router.model).toBe("fast");
       expect(hung.state.stopped).toBe(true);
+    });
+
+    it("has the next one asked at once when one fails", async () => {
       const failing: Router = { id: "failing", ask: () => Promise.reject(new Error("no credits")) };
       const next = timed("next", 10);
       const quick = route([failing, next.router], request());

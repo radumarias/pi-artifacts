@@ -1,6 +1,6 @@
 import type { ClassifierModel, ClassifierOptions } from "@earendil-works/pi-ai";
 import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
-import { abortable } from "../../shared/util.ts";
+import { abortable, isObject } from "../../shared/util.ts";
 
 /**
  * System One classifiers on Workers AI (TypeSafe's Jev, Cloudflare's Clef), asked with pi-ai's `classify` through the AI
@@ -27,56 +27,38 @@ export function bindingClassifierOptions(ai: ModelRunner): Pick<ClassifierOption
   const fetch = async (_url: string | URL | Request, init?: RequestInit) => {
     const { model, input } = JSON.parse(String(init?.body)) as { model: string; input: object };
     const signal = init?.signal ?? undefined;
-    const result = await abortable(ai.run(model, input, { signal }), signal);
-    return Response.json({ success: true, result: classifierOutput(await settled(result)) });
+    const answer = await abortable(ai.run(model, input, { signal }), signal);
+    // A Response or a stream would go to pi-ai as `{}`: its JSON is read instead.
+    const body = answer instanceof Response ? await answer.json() : answer instanceof ReadableStream ? await new Response(answer).json() : answer;
+    return Response.json(restEnvelope(body));
   };
   // The binding needs no key; pi-ai only wants one to send.
   return { apiKey: "ai-binding", fetch };
 }
 
-/** How deep a binding's answer may nest its output in `result` layers. */
-const MAX_LAYERS = 4;
-
 /**
- * The output a classifier's answer holds, as pi-ai reads it (`{ answers, usage }`): the binding hands back a Workers AI
- * model's output alone, but a third-party one's (Jev's) can come in the REST API's envelope (`{ success, result }`), its
- * run record (`{ state: "Completed", result }`), or both. An answer with no output in it fails, naming its shape (its
- * keys, never its values), so the reason shown says what came back.
+ * The binding's answer in the REST API's envelope, which pi-ai reads (its run record, `state`, its errors): a Workers AI
+ * model's output comes alone, but a third-party one's (Jev's) can come already enveloped. An answer pi-ai would find no
+ * output in fails here, naming its shape (its keys, never its values), so the reason shown says what came back.
  */
-export function classifierOutput(answer: unknown): unknown {
-  let value = answer;
-  for (let layer = 0; layer < MAX_LAYERS && isRecord(value); layer++) {
-    if ("answers" in value) return value;
-    if (value.success === false) throw new Error(`Workers AI error: ${JSON.stringify(value.errors ?? value).slice(0, 300)}`);
-    if ("state" in value && value.state !== "Completed") throw new Error(`Workers AI run did not complete (state: ${String(value.state)})`);
-    value = value.result;
+export function restEnvelope(answer: unknown): object {
+  const envelope = isObject(answer) && "success" in answer ? answer : { success: true, result: answer };
+  const { success, result } = envelope;
+  if (success !== false && !(isObject(result) && ("answers" in result || "state" in result))) {
+    throw new Error(`Workers AI answered with no classifier output: ${shapeOf(answer)}`);
   }
-  throw new Error(`Workers AI answered with no classifier output: ${shapeOf(answer)}`);
+  return envelope;
 }
 
-/** The binding's answer as a value: one it gives as a Response, a stream or JSON text is read. */
-async function settled(answer: unknown): Promise<unknown> {
-  if (answer instanceof Response) return answer.json();
-  if (answer instanceof ReadableStream) return new Response(answer).json();
-  if (typeof answer === "string") {
-    try {
-      return JSON.parse(answer);
-    } catch {
-      return answer;
-    }
-  }
-  return answer;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+/** How deep an answer's shape is shown. */
+const SHAPE_DEPTH = 3;
 
 /** An answer's shape, for an error: its keys, nested, and the kind of each leaf: `{success: boolean, result: {id: string}}`. */
 function shapeOf(value: unknown, depth = 0): string {
   if (Array.isArray(value)) return "array";
-  if (!isRecord(value)) return value === null ? "null" : typeof value;
-  if (depth >= MAX_LAYERS) return "{…}";
-  const keys = Object.keys(value).slice(0, 8);
-  return `{${keys.map((key) => `${key}: ${shapeOf(value[key], depth + 1)}`).join(", ")}${Object.keys(value).length > keys.length ? ", …" : ""}}`;
+  if (!isObject(value)) return value === null ? "null" : typeof value;
+  if (depth >= SHAPE_DEPTH) return "{…}";
+  const keys = Object.keys(value);
+  const shown = keys.slice(0, 8).map((key) => `${key}: ${shapeOf(value[key], depth + 1)}`);
+  return `{${shown.join(", ")}${keys.length > shown.length ? ", …" : ""}}`;
 }

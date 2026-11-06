@@ -53,7 +53,7 @@ export default defineConfig({
       // Auto, in the model picker: before each message that starts a run, a router model reads the end of the
       // conversation and the message, and picks one of AUTO_MODELS and an effort to answer it (worker/agent/route.ts).
       // ROUTER_MODEL: the router, a small, fast model; a comma-separated list is asked in order (the next one when one
-      // fails, or beside it once it has had 1.5 s; the first pick wins), with ROUTE_MS for all of them. If none answers,
+      // fails, or beside it once it is slow; the first pick wins), with ROUTE_MS for all of them. If none answers,
       // the chat keeps its model.
       // decisions:<model> asks that OpenAI model through OpenAI's Decisions API, which picks without writing a reply
       // (input priced only), through AI Gateway with the OpenAI key; system-one:<model> asks a System One classifier on
