@@ -83,6 +83,8 @@
     "worker/skills/index.ts",
     "worker/raw.d.ts",
     "worker/artifacts/check.ts",
+    "worker/artifacts/look.ts",
+    "worker/ai-binding.ts",
     "worker/agent/publish.ts",
     "worker/agent/prompt.ts",
     "worker/artifacts/serve.ts",

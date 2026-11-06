@@ -2,6 +2,7 @@ import { CHECK_TOOL, DRAFTS_TOOL, manifestOf, WRITE_TOOL, type ArtifactManifest,
 import { errorMessage, formatBytes, plural } from "../../shared/util.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../artifacts/browser.ts";
 import { timedOutReport, type CheckInput, type CheckReport } from "../artifacts/check.ts";
+import type { PageLooks } from "../artifacts/look.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { ArtifactStore } from "../storage/artifacts.ts";
@@ -19,6 +20,8 @@ export interface PublishScope {
    * `signal` aborts. Throws BrowserUnavailable without a browser, CheckTimedOut when the page held it too long.
    */
   checkPage(input: CheckInput, signal?: AbortSignal): Promise<CheckReport>;
+  /** A vision classifier's look at each check's screenshot (worker/artifacts/look.ts); unset, the checks go without. */
+  looks?: PageLooks;
   /** The artifacts published in this chat, newest first. */
   chatArtifacts(): Promise<ArtifactSummary[]>;
   /** The pages written in this chat and not published yet: in the owner's folder, encrypted with their key. */
@@ -154,6 +157,7 @@ export async function checkDraft(
   const drafts = await scope.drafts();
   const draft = await draftNamed(drafts, id, "Not checked.");
   const checked = await checkInBrowser(scope, { html: draft.html, manifest: draft.manifest, ...options }, signal);
+  if (checked.report && scope.looks) checked.report = await scope.looks.review(id, checked.report, signal);
   const check = draftCheck(checked.report);
   if (check) await drafts.recordCheck(id, check);
   return { draft: { ...draft, ...check }, ...checked };

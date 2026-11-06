@@ -317,7 +317,8 @@ export function artifactExtension(scope: ChatScope): Extension {
         description:
           `Render a draft (saved with ${WRITE_TOOL}) in a headless browser before publishing it, with its live MCP calls answered as the viewer's would be (read-only tools only; ` +
           "a write tool gets a not_granted error instead of running). Returns errors (uncaught exceptions, console errors, blocked or failed loads, " +
-          "calls the page got wrong, failed tests), warnings, how the live calls went, the visible text and a screenshot. Nothing is published, " +
+          "calls the page got wrong, failed tests, a screenshot a vision model is sure looks blank or shows an error), warnings, how the live calls went, " +
+          "the visible text and a screenshot. Nothing is published, " +
           `so fixing and checking again uses up no versions. Fix what it finds with ${WRITE_TOOL}, draft_id and edits, then check the new draft. ` +
           "Pass `tests`: a few short checks of what the page must show once its data arrived.",
         parameters: Type.Object({
@@ -355,7 +356,8 @@ export function artifactExtension(scope: ChatScope): Extension {
             ? `The check found ${plural(report.errors.length, "error")} in draft "${id}". Fix them with ${WRITE_TOOL}, draft_id "${id}" and edits ` +
               `for just what changes, then check the new draft. Nothing was published.${stop}`
             : `${passedLine(report)} To publish this page, call ${PUBLISH_TOOL} with draft_id "${id}".`;
-          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed };
+          const { usage } = report;
+          return { output: checkOutput(headline, report), details: { check: checkedDetails(report) }, isError: failed, ...(usage && { usage }) };
         },
       }),
       defineTool({

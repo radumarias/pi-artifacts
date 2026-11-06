@@ -13,6 +13,7 @@ import {
 } from "../worker/agent/publish.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../worker/artifacts/browser.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
+import { PageLooks } from "../worker/artifacts/look.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
 import type { ArtifactStore } from "../worker/storage/artifacts.ts";
 import { ChatDrafts, draftId } from "../worker/storage/drafts.ts";
@@ -143,6 +144,20 @@ describe("write, check, publish", () => {
     expect(await publishDraft(local.scope, { title: "Map", draftId: good.id })).not.toHaveProperty("unchecked");
     expect(local.checked).toEqual([broken, fixed]);
     expect(local.versions).toHaveLength(1);
+  });
+
+  it("keeps a draft the screenshot look stopped from publishing, until it is checked again unchanged", async () => {
+    const { scope, versions, drafts } = chat(() => ({ ...report([]), screenshot: "SHOT", text: "Prices" }));
+    scope.looks = new PageLooks(async () => ({ look: { by: "Jev", verdict: "blank", probability: 0.95 } }));
+    const { id } = await writeDraft(scope, { html: fixed });
+    const first = await checkDraft(scope, id, {});
+    expect(first.report?.errors).toEqual([expect.stringContaining("looks blank")]);
+    expect(await drafts.get(id)).toMatchObject({ errors: 1 });
+    await expect(publishDraft(scope, { title: "Prices", draftId: id })).rejects.toThrow("found 1 error");
+    const again = await checkDraft(scope, id, {});
+    expect(again.draft).toMatchObject({ errors: 0, warnings: 1 });
+    await publishDraft(scope, { title: "Prices", draftId: id });
+    expect(versions).toEqual([{ id: undefined, html: fixed }]);
   });
 });
 

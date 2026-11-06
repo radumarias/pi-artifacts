@@ -63,6 +63,7 @@ import { ChatReactions } from "./reactions.ts";
 import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
+import { pageLooks } from "./artifacts/look.ts";
 import type { ChatAnswer } from "./artifacts/page-calls.ts";
 import { chatOutFolder, chatTraces, type ChatTraces } from "./chat-traces.ts";
 import { Storage } from "./storage/index.ts";
@@ -291,6 +292,7 @@ export class ChatAgent extends DurableObject<Env> {
         this.#checkBrowser.withPage((page) => checkPage(page, input, this.#checkBridge(input.manifest)), { timeoutMs: CHECK_MS, signal }),
       chatArtifacts: () => this.#directory.listChatArtifacts(this.chatId),
       drafts: memoAsync(() => this.storage.chatDrafts(this.uid, this.chatId)),
+      looks: pageLooks(env.CHECK_LOOK_MODEL, env.AI),
       publishUnchecked: env.AUTH_MODE === "demo",
       failedChecks: new FailedChecks(),
       react: (emoji) => this.#agentReact(emoji),

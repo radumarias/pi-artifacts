@@ -1,6 +1,8 @@
 import type { Frame, Page } from "@cloudflare/puppeteer";
+import type { Usage } from "@earendil-works/pi-ai";
 import { ARTIFACT_SANDBOX, type ArtifactManifest, type CallToolResult, type McpError, type McpErrorCode, type ToolInfo } from "../../shared/protocol.ts";
 import { clip, deadline, errorMessage } from "../../shared/util.ts";
+import type { PageLook } from "./look.ts";
 import { PAGE_POLICY, renderArtifact } from "./serve.ts";
 
 /**
@@ -64,6 +66,12 @@ export interface CheckReport {
   thumb: string;
   width: number;
   height: number;
+  /** Set when a live call failed for a reason outside the page (a sign-in, an outage): what the page shows for it is no fault. */
+  failedOutside?: true;
+  /** What a vision classifier saw in the screenshot (worker/artifacts/look.ts), when one looked. */
+  look?: PageLook;
+  /** What that look cost, for pi's ledger. */
+  usage?: Usage;
 }
 
 const VIEWPORTS: Record<CheckViewport, { width: number; height: number; isMobile?: boolean; hasTouch?: boolean }> = {
@@ -286,6 +294,7 @@ export async function checkPage(page: Page, input: CheckInput, bridge: Bridge): 
     thumb: `data:image/jpeg;base64,${thumb}`,
     width: viewport.width,
     height,
+    ...(harness.calls.some(failedOutside) && { failedOutside: true as const }),
   };
 }
 
@@ -410,6 +419,8 @@ export function describeReport(report: CheckReport): string {
       tests.map((t) => `${t.ok ? "passed" : "FAILED"}: ${t.name}${t.detail ? ` (${t.detail})` : ""}`),
     ),
     `Visible text:\n${report.text || "(none)"}`,
+    report.look?.verdict === "content" &&
+      `${report.look.by} looked at the screenshot: it shows the page's content (${Math.round(report.look.probability * 100)}% sure).`,
     report.screenshot
       ? `Screenshot at ${report.width}×${report.height}: look at it for anything that renders wrong (overlaps, empty sections, broken charts, unreadable contrast).`
       : "No screenshot: the check did not get that far.",

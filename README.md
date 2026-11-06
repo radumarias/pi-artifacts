@@ -200,6 +200,15 @@ page's CSP, with its live calls answered by the chat's MCP connections. It retur
 - the results of **tests** the agent passes: short scripts run in the page once its data arrived, such as "the price
   table has rows".
 
+A check that found no errors also gets a **look at its screenshot** (`worker/artifacts/look.ts`): a vision classifier on
+Workers AI (TypeSafe's Jev by default, `CHECK_LOOK_MODEL`, run through the `AI` binding with no key) answers whether the
+page shows its content, or looks blank, shows an error, is stuck loading or is broken. It catches what only shows in the
+picture, such as text the same colour as its background or a chart that drew nothing. A sure "blank", or a sure "error"
+when no live call failed outside the page, is an error; anything else it sees is a warning. Since a model can be wrong,
+it stops a draft only once: checked again unchanged, after the agent looked at the screenshot, its finding is a warning.
+The look answers without writing text (input priced only) and its spend counts in the chat's cost panel; when it fails
+or takes over 6 s, the check goes on without it. An empty `CHECK_LOOK_MODEL` turns it off.
+
 A draft that passes is published by its `draft_id`. A publish without an `artifact_id` goes to the artifact the draft was
 written for, else to the chat's artifact whose title matches (`new_artifact: true` makes a separate one), so a fix the
 model publishes without the id never turns into a second artifact stuck at version 1. `artifact_publish` takes only a
