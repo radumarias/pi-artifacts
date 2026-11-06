@@ -14,6 +14,7 @@ import {
   thoughtLine,
   ThoughtStep,
   tookFor,
+  tookTogether,
   ToolStep,
 } from "../src/chat/Steps.tsx";
 import { stepRuns, streamingSteps, type StepItem } from "../src/chat/stepRuns.ts";
@@ -181,7 +182,7 @@ describe("runs of steps", () => {
   it("joins the steps of a reply's messages until something shows between them", () => {
     const chat = [
       { id: 1, kind: "pi.user", model: [{ role: "user", content: "hi" }] },
-      assistant(2, [thought("Look first."), call("a", "juyo__run_query", {})]),
+      assistant(2, [thought("Look first."), call("a", "sales__run_query", {})]),
       result(3, "a"),
       // Not shown: an aside does not end the run.
       { id: 4, kind: "chat.aside", data: {} },
@@ -246,15 +247,15 @@ describe("runs of steps", () => {
     expect(
       runSummary([
         thoughtItem,
-        tool("juyo__run_query"),
+        tool("sales__run_query"),
         tool("run_bash"),
-        tool("juyo__list_hotels"),
+        tool("sales__list_regions"),
         tool("run_bash"),
         tool("run_bash"),
-        tool("juyo__describe"),
+        tool("sales__describe"),
         tool("other__x"),
       ]),
-    ).toBe("Queried juyo 3 times, ran 3 commands, queried other");
+    ).toBe("Queried sales 3 times, ran 3 commands, queried other");
     expect(runSummary([tool("files_write"), tool("run_bash")])).toBe("Wrote a file, ran a command");
     expect(runSummary([tool("artifact_write", { html: "<p>" }), tool("artifact_check"), tool("artifact_write", { edits: [] }), tool("artifact_check")])).toBe(
       "Wrote a page, checked the page twice, edited the page",
@@ -286,6 +287,17 @@ describe("step run", () => {
     );
     expect(html).toContain('<span class="step-status">Done · 1.3s</span><span class="step-time step-failed">· 1 failed</span>');
     expect(html).not.toContain("step-body");
+  });
+
+  it("fails when none of its calls succeeded, also with one stopped before it", () => {
+    // "open" has no result and no run goes on: stopped. "bad" failed after it.
+    expect(render(items("open", "bad"))).toMatch(/^<details class="step step-run error">.*<span class="step-status">Failed<\/span>/);
+  });
+
+  it("counts calls that ran at once once in their time together", () => {
+    const result = (timestamp: number | undefined, durationMs: number) => ({ timestamp, durationMs }) as never;
+    // Two at once (0–1 s and 0.5–1.5 s), then one later (3–4 s), and one without a time.
+    expect(tookTogether([result(1_000, 1_000), result(1_500, 1_000), result(4_000, 1_000), result(undefined, 200)])).toBe(2_700);
   });
 
   it("spins while a step in it runs", () => {

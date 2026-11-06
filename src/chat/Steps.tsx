@@ -240,8 +240,20 @@ export function tookFor(ms: number): string {
   return ms < 1_000 ? `${Math.round(ms)}ms` : `${(ms / 1_000).toFixed(1)}s`;
 }
 
-/** Panels the reader opened, by key: one stays open when its streaming message becomes an entry and remounts. */
-const opened = new Set<string>();
+/**
+ * Panels the reader opened (true) or closed (false), by key: one stays as it was when its streaming message becomes an
+ * entry and remounts. A closed one is kept too, so a run the reader closed does not open again for its first step.
+ */
+const opened = new Map<string, boolean>();
+
+/** Whether a panel starts open: as the reader left it, else as the step it grew from (`openedAs`), which it then keeps. */
+function startsOpen(openKey: string, openedAs: string | undefined): boolean {
+  const known = opened.get(openKey);
+  if (known !== undefined) return known;
+  const grown = openedAs !== undefined && opened.get(openedAs) === true;
+  if (grown) opened.set(openKey, true);
+  return grown;
+}
 
 /**
  * One step of the agent as a plain line: an icon, what it is, a hint and where it is. With more to show than the line
@@ -265,7 +277,7 @@ function Panel({ openKey, openedAs, kind, tone, icon, label, hint, prose, status
   time?: ReactNode;
   children?: () => ReactNode;
 }) {
-  const [open, setOpen] = useState(() => opened.has(openKey) || (openedAs !== undefined && opened.has(openedAs)));
+  const [open, setOpen] = useState(() => startsOpen(openKey, openedAs));
   const className = ["step", kind, tone, !children && "static"].filter(Boolean).join(" ");
   const line = (
     <>
@@ -299,8 +311,7 @@ function Panel({ openKey, openedAs, kind, tone, icon, label, hint, prose, status
       open={open}
       onToggle={(event) => {
         const now = event.currentTarget.open;
-        if (now) opened.add(openKey);
-        else opened.delete(openKey);
+        opened.set(openKey, now);
         setOpen(now);
       }}
     >
@@ -410,30 +421,52 @@ function callStatus(result: ToolResultMessage | undefined, live: StepsLive | und
   return { status, startedAt: status === "running" ? live!.tools.get(callId)?.startedAt : undefined };
 }
 
-/** A run's calls in short: the first still under way, where the last is, how many failed, and their time together. */
+/** A run's calls in short: the first still under way, where the last is, how many failed and succeeded, and their time together. */
 interface RunTally {
   active?: { status: StepStatus; startedAt?: number };
   last?: StepStatus;
   failed: number;
+  succeeded: number;
   took: number;
-  calls: number;
 }
 
 /** How a run's line looks from its tally: like its active call, else done (with what failed), failed, or stopped. */
-function runLook({ active, last, failed, took, calls }: RunTally): Pick<Parameters<typeof Panel>[0], "tone" | "icon" | "status" | "time"> {
+function runLook({ active, last, failed, succeeded, took }: RunTally): Pick<Parameters<typeof Panel>[0], "tone" | "icon" | "status" | "time"> {
   if (active) {
     return { tone: "active", icon: <Spark />, status: STATUS[active.status].text, time: active.startedAt !== undefined && <RunningFor since={active.startedAt} /> };
   }
   // Thoughts alone.
   if (!last) return { icon: "✻" };
   if (last === "stopped") return { icon: STATUS.stopped.icon, status: STATUS.stopped.text };
-  if (failed === calls) return { tone: "error", icon: STATUS.error.icon, status: STATUS.error.text };
+  // None of them did what it was called for (each failed, or stopped before it finished).
+  if (succeeded === 0) return { tone: "error", icon: STATUS.error.icon, status: STATUS.error.text };
   return {
     tone: "done",
     icon: STATUS.done.icon,
     status: STATUS.done.text + (took ? ` · ${tookFor(took)}` : ""),
     time: failed > 0 && <span className="step-time step-failed">· {failed} failed</span>,
   };
+}
+
+/**
+ * How long calls took together: the spans they ran in (each ending at its result's time), merged, so calls of one round
+ * that ran at once count once. A result without a time adds its duration.
+ */
+export function tookTogether(results: readonly ToolResultMessage[]): number {
+  let took = 0;
+  const spans: [start: number, end: number][] = [];
+  for (const { durationMs = 0, timestamp } of results) {
+    if (typeof timestamp === "number") spans.push([timestamp - durationMs, timestamp]);
+    else took += durationMs;
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  let end = -Infinity;
+  for (const [from, to] of spans) {
+    if (to <= end) continue;
+    took += to - Math.max(from, end);
+    end = to;
+  }
+  return took;
 }
 
 /** A step on its own: a call, or a thought. */
@@ -448,21 +481,25 @@ function OneStep({ item }: { item: StepItem }) {
  */
 export function StepRun({ items }: { items: readonly StepItem[] }) {
   const { results } = use(ResultsContext);
-  // The same items until the run grows: the line is worked out once for a finished run.
-  const label = useMemo(() => runSummary(items), [items]);
+  // The same items until the run grows: the line is worked out once for a finished run, and not for a step alone.
+  const label = useMemo(() => (items.length === 1 ? "" : runSummary(items)), [items]);
   if (items.length === 1) return <OneStep item={items[0]} />;
   const calls = items.flatMap((item) => (item.kind === "tool" ? [item] : []));
   // Read only while a call is unfinished, as ToolStep does.
   const live = calls.every((item) => results.has(item.call.id)) ? undefined : use(LiveContext);
-  const tally: RunTally = { failed: 0, took: 0, calls: calls.length };
+  const tally: RunTally = { failed: 0, succeeded: 0, took: 0 };
+  const finished: ToolResultMessage[] = [];
   for (const { call, streaming } of calls) {
     const result = results.get(call.id);
     const now = callStatus(result, live, call.id, streaming);
     tally.last = now.status;
-    if (result?.isError) tally.failed++;
-    tally.took += result?.durationMs ?? 0;
-    if (!result && now.status !== "stopped") tally.active ??= now;
+    if (result) {
+      finished.push(result);
+      if (result.isError) tally.failed++;
+      else tally.succeeded++;
+    } else if (now.status !== "stopped") tally.active ??= now;
   }
+  tally.took = tookTogether(finished);
   return (
     <Panel openKey={`run:${items[0].key}`} openedAs={items[0].key} kind="step-run" label={label} hint="" {...runLook(tally)}>
       {() => (
