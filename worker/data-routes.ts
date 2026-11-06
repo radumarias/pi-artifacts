@@ -203,11 +203,11 @@ async function importChat(request: Request, uid: string, directory: Directory, s
     // Oldest first, as they were saved: the store keeps the newest MAX_DRAFTS.
     for (const draft of body) {
       if (!isObject(draft) || typeof draft.id !== "string" || typeof draft.html !== "string" || !isObject(draft.manifest)) continue;
-      const { id, html, manifest, artifactId, skillSets, errors, warnings } = draft as unknown as Draft;
-      const check = typeof errors === "number" ? { errors, warnings: Number(warnings) || 0 } : null;
+      const { id, html, manifest, artifactId, skillSets } = draft as unknown as Draft;
       const page = { id, html, manifest, ...(typeof artifactId === "string" && { artifactId }), ...(isObject(skillSets) && { skillSets }) };
+      // Not checked here: the zip's word that a page passed is not a browser's, and publish takes a passed draft as is.
       // A draft whose id is not one the store takes is left out; the others still go in.
-      await drafts.save(page, check).catch(() => {});
+      await drafts.save(page, { errors: null, warnings: 0 }).catch(() => {});
     }
     return json({});
   }

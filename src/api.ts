@@ -229,8 +229,7 @@ export const api = {
   sidebarSocketUrl: () => socketUrl("/api/me/ws"),
 };
 
-/** Draft pages as an export carries them (worker/storage/drafts.ts Draft): JSON the import gives back as it came. */
-/** A draft as the export holds it: as the Worker stores it (worker/storage/drafts.ts). */
+/** A draft as the export holds it: as the Worker stores it (worker/storage/drafts.ts), JSON the import gives back as it came. */
 export type DraftJson = Record<string, unknown>;
 
 /** A GET's body as a blob, or null when it is not there (404); throws with the Worker's error otherwise. */
@@ -244,11 +243,10 @@ export async function fetchBlob(url: string): Promise<{ blob: Blob; response: Re
 /** Export and import of everything the user has, a piece at a time (worker/data-routes.ts, src/data/). */
 export const dataApi = {
   exportStart: () => request<ExportStart>("/api/me/export"),
-  /** One part of a chat's storage as its JSON (a ChatDumpPart), kept as a blob, and where the next part starts. */
-  exportChatPart: async (chatId: string, cursor?: ChatDumpCursor): Promise<{ part: Blob; next?: ChatDumpCursor }> => {
+  /** One part of a chat's storage as its JSON (a ChatDumpPart), kept as a blob, and where the next part starts; null when the chat is gone. */
+  exportChatPart: async (chatId: string, cursor?: ChatDumpCursor): Promise<{ part: Blob; next?: ChatDumpCursor } | null> => {
     const fetched = await fetchBlob(`/api/me/export/chats/${chatId}${cursor ? `?cursor=${formatCursor(cursor)}` : ""}`);
-    if (!fetched) throw new Error("The chat is gone.");
-    return { part: fetched.blob, next: parseCursor(fetched.response.headers.get(NEXT_PART_HEADER)) };
+    return fetched && { part: fetched.blob, next: parseCursor(fetched.response.headers.get(NEXT_PART_HEADER)) };
   },
   exportDrafts: (chatId: string) => request<DraftJson[]>(`/api/me/export/chats/${chatId}/drafts`),
   exportArtifact: (id: string) => request<ArtifactMeta>(`/api/me/export/artifacts/${id}`),

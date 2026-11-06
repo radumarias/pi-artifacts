@@ -111,7 +111,7 @@ import {
   type Catalog,
 } from "./models.ts";
 import { inboxIds, queuedIdsOf, queuedMessages } from "./queue.ts";
-import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, type Tag } from "./users.ts";
+import { mcpAuthStore, readSystemPrompt, saveSystemPrompt, SYSTEM_PROMPT_KEY, type Tag } from "./users.ts";
 
 /** Artifacts from the owner's other chats one chat remembers as named with "@" (see ChatAgent.#broughtIn). */
 const MAX_BROUGHT_IN = 200;
@@ -173,10 +173,12 @@ const ROUTE_ENTRIES = 40;
 const SHOWN_SKILLS_KEY = "skillsShown";
 /** The artifacts of the owner's other chats this one brought in (see #broughtIn). */
 const BROUGHT_IN_KEY = "broughtIn";
-/** The settings of a chat its export carries, beside its tables (worker/chat-dump.ts). The chat's system prompt is under "systemPrompt". */
-const EXPORTED_KV = [AUTO_KEY, SHOWN_SKILLS_KEY, BROUGHT_IN_KEY, "systemPrompt"];
+/** The settings of a chat its export carries, beside its tables (worker/chat-dump.ts), its own system prompt among them. */
+const EXPORTED_KV = [AUTO_KEY, SHOWN_SKILLS_KEY, BROUGHT_IN_KEY, SYSTEM_PROMPT_KEY];
 /** Set while an import fills the chat (ChatImportStart): what it puts in place of what. */
 const IMPORTING_KEY = "importing";
+/** Set once an import stored every part: until its owner's list has the chat, the same import may start it again. */
+const IMPORTED_KEY = "imported";
 
 /** The newest transcript entries, read at most once per message (see #recentEntries). */
 type RecentEntries = () => Promise<readonly EntryRecord[] | undefined>;
@@ -1697,7 +1699,8 @@ export class ChatAgent extends DurableObject<Env> {
    */
   importBegin(start: ChatImportStart): ChatRefusal | null {
     const { sql, kv } = this.ctx.storage;
-    const resuming = kv.get(IMPORTING_KEY) !== undefined;
+    // An imported chat whose listing failed after importFinish (the Worker refuses one its owner's list has) starts again too.
+    const resuming = kv.get(IMPORTING_KEY) !== undefined || kv.get(IMPORTED_KEY) === true;
     if (!resuming && !this.#deleted() && hasConversation(sql)) return refuse(409, "This chat already has a conversation here.");
     this.ctx.storage.transactionSync(() => {
       clearImported(sql, kv, EXPORTED_KV);
@@ -1724,8 +1727,13 @@ export class ChatAgent extends DurableObject<Env> {
 
   /** The import has stored every part: the chat opens as it was, with nobody in it but its owner. */
   importFinish(): ChatRefusal | null {
-    if (this.ctx.storage.kv.get(IMPORTING_KEY) === undefined) return refuse(409, "This chat's import has not begun.");
-    this.ctx.storage.kv.delete(IMPORTING_KEY);
+    const kv = this.ctx.storage.kv;
+    if (kv.get(IMPORTING_KEY) === undefined) return refuse(409, "This chat's import has not begun.");
+    // The chat's system prompt came as the zip had it: keep it only within what a saved one may be.
+    const prompt = readSystemPrompt(kv);
+    if (prompt && "error" in saveSystemPrompt(kv, prompt)) kv.delete(SYSTEM_PROMPT_KEY);
+    kv.delete(IMPORTING_KEY);
+    kv.put(IMPORTED_KEY, true);
     return null;
   }
 

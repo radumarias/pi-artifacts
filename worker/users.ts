@@ -17,7 +17,7 @@ export function mcpAuthStore(uid: string, server: string): McpAuthStore {
 }
 
 /** Where a user's, or a chat's, own system prompt is kept, in its object's KV storage. */
-const SYSTEM_PROMPT_KEY = "systemPrompt";
+export const SYSTEM_PROMPT_KEY = "systemPrompt";
 
 /** The system prompt kept under SYSTEM_PROMPT_KEY in `kv`; "" for none. */
 export function readSystemPrompt(kv: SyncKvStorage): string {
@@ -583,7 +583,9 @@ export class UserDirectory extends DurableObject<Env> {
     const sql = this.ctx.storage.sql;
     const values = new Map<string, Record<string, string | null>>();
     for (const row of sql.exec<{ artifact_id: string; key: string; value: string | null }>("SELECT artifact_id, key, value FROM page_values ORDER BY artifact_id, key")) {
-      values.set(row.artifact_id, { ...values.get(row.artifact_id), [row.key]: row.value });
+      const page = values.get(row.artifact_id) ?? {};
+      page[row.key] = row.value;
+      values.set(row.artifact_id, page);
     }
     const skills = sql
       .exec<SkillRow>("SELECT * FROM skills ORDER BY name")

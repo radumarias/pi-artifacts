@@ -27,6 +27,12 @@ const blobEntry = (name: string, blob: () => Promise<Blob | null>, modified = ne
 /** A piece's body, or null when it is gone (deleted since it was listed). */
 const fetched = async (url: string) => (await fetchBlob(url))?.blob ?? null;
 
+/** For a failed read of a piece: null when the piece is gone (404), so the export goes on without it; any other failure stops it. */
+const orGone = (error: unknown): null => {
+  if ((error as { status?: number }).status === 404) return null;
+  throw error;
+};
+
 /**
  * Everything the signed-in user has, as one zip (shared/data-export.ts ARCHIVE), read a piece at a time: first the
  * chats' storage and the artifacts' versions, which say how many more pieces there are, then the zip itself, each file
@@ -39,18 +45,19 @@ export async function exportData(onProgress: (progress: Progress) => void): Prom
   const entries: ZipEntry[] = [];
 
   // Each chat's parts and drafts kept as blobs, which the browser may keep on disk, rather than as parsed JSON.
-  const chats = await mapLimit(start.chats, PARALLEL, async (chat): Promise<{ chat: ExportedChat; entries: ZipEntry[] }> => {
+  // A chat deleted since it was listed is left out, as a gone file or page is.
+  const read = await mapLimit(start.chats, PARALLEL, async (chat): Promise<{ chat: ExportedChat; entries: ZipEntry[] } | null> => {
     step(`Chat “${chat.title}”`);
     const parts: Blob[] = [];
     let page = await dataApi.exportChatPart(chat.id);
-    parts.push(page.part);
-    while (page.next) {
-      page = await dataApi.exportChatPart(chat.id, page.next);
+    while (page) {
       parts.push(page.part);
+      page = page.next ? await dataApi.exportChatPart(chat.id, page.next) : null;
     }
-    const drafts = await dataApi.exportDrafts(chat.id);
-    const draftsBlob = drafts.length ? jsonBlob(drafts) : null;
+    const drafts = parts.length ? await dataApi.exportDrafts(chat.id).catch(orGone) : null;
     steps.done++;
+    if (!drafts) return null;
+    const draftsBlob = drafts.length ? jsonBlob(drafts) : null;
     return {
       chat: { ...chat, parts: parts.length },
       entries: [
@@ -59,11 +66,12 @@ export async function exportData(onProgress: (progress: Progress) => void): Prom
       ],
     };
   });
+  const chats = read.filter((chat) => chat !== null);
   for (const chat of chats) entries.push(...chat.entries);
 
   const metas = await mapLimit(start.artifacts, PARALLEL, async (artifact) => {
     step(`Artifact “${artifact.title}”`);
-    const meta = await dataApi.exportArtifact(artifact.id).catch(() => null);
+    const meta = await dataApi.exportArtifact(artifact.id).catch(orGone);
     steps.done++;
     return meta;
   });
