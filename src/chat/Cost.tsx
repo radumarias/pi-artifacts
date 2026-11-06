@@ -1,9 +1,10 @@
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable";
 import { memo, useMemo, useState } from "react";
-import { AUTO_LEDGER_PREFIX, effortLabel, TOOL_PICK_LEDGER_PREFIX, type ModelInfo } from "../../shared/models.ts";
+import { AUTO_LEDGER_PREFIX, effortLabel, HINT_LEDGER_PREFIX, SKILLS_LEDGER_PREFIX, TOOL_PICK_LEDGER_PREFIX, type ModelInfo } from "../../shared/models.ts";
+import { AGENT_NAME } from "../../shared/mentions.ts";
 import { useDismiss } from "../layout.tsx";
 import { useCatalog } from "./ModelPicker.tsx";
-import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing, toolPickerName } from "./spend.ts";
+import { chatSpend, describeTokens, formatCost, type PromptSpend, type Share, shortTokens, type Timing } from "./spend.ts";
 import { formatElapsed } from "./elapsed.ts";
 
 /** Where the time went, for a tooltip: "model replies 48s (3), tools 31s (2)". */
@@ -13,16 +14,26 @@ function describeTime(time: Timing): string {
   return parts.join(", ");
 }
 
+/** The ledger rows of classifiers and routers that run beside the agent, by their key's prefix. */
+const PICKERS = [
+  [AUTO_LEDGER_PREFIX, "Auto picks"],
+  [SKILLS_LEDGER_PREFIX, "Skill picks"],
+  [HINT_LEDGER_PREFIX, `Spotting asks for ${AGENT_NAME}`],
+  [TOOL_PICK_LEDGER_PREFIX, "Tool picks"],
+] as const;
+
 /**
  * A row's name: the model's, and the effort its replies were asked at ("Claude Opus 5.5 · High effort"); a tool's name;
- * Auto's router ("Auto picks · GPT OSS 120B"); the tool picker ("Tool picks · Jev").
+ * Auto's router ("Auto picks · GPT OSS 120B"); the classifier that picks the skills shown ("Skill picks ·
+ * cloudflare-workers-ai/typesafe/jev"); what told whether messages were meant for the agent ("Spotting asks for pi ·
+ * typesafe/jev"); the tool picker ("Tool picks · cloudflare-workers-ai/typesafe/jev").
  */
 function shareName(share: Share, models: ReadonlyMap<string, ModelInfo>): string {
-  if (share.model.startsWith(AUTO_LEDGER_PREFIX)) {
-    const router = share.model.slice(AUTO_LEDGER_PREFIX.length);
-    return `Auto picks · ${models.get(router)?.name ?? router}`;
+  for (const [prefix, label] of PICKERS) {
+    if (!share.model.startsWith(prefix)) continue;
+    const picker = share.model.slice(prefix.length);
+    return `${label} · ${models.get(picker)?.name ?? picker}`;
   }
-  if (share.model.startsWith(TOOL_PICK_LEDGER_PREFIX)) return `Tool picks · ${toolPickerName(share.model.slice(TOOL_PICK_LEDGER_PREFIX.length))}`;
   const name = models.get(share.model)?.name ?? share.model;
   return share.effort ? `${name} · ${effortLabel(share.effort)}` : name;
 }

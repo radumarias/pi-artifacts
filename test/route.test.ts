@@ -10,7 +10,6 @@ import {
   decisionsRouter,
   modelRouter,
   parsePick,
-  recordRouterSpend,
   route,
   routeHistory,
   routePrompt,
@@ -18,6 +17,7 @@ import {
   workersAIClassifierRouter,
   type RouteRequest,
 } from "../worker/agent/route.ts";
+import { recordSpend } from "../worker/agent/ledger.ts";
 import { baseCatalog } from "../worker/models.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 
@@ -337,8 +337,8 @@ describe("the router's spend", () => {
       totalTokens: 1_020,
       cost: { input: total / 2, output: total / 2, cacheRead: 0, cacheWrite: 0, total },
     });
-    await recordRouterSpend(tx, 1 as ConversationId, "cerebras/gpt-oss-120b", call(0.001));
-    await recordRouterSpend(tx, 1 as ConversationId, "cerebras/gpt-oss-120b", call(0.002));
+    await recordSpend(tx, 1 as ConversationId, "auto:cerebras/gpt-oss-120b", call(0.001));
+    await recordSpend(tx, 1 as ConversationId, "auto:cerebras/gpt-oss-120b", call(0.002));
     expect(Object.keys(ledger.tools)).toEqual(["auto:cerebras/gpt-oss-120b"]);
     expect(ledger.tools["auto:cerebras/gpt-oss-120b"]).toMatchObject({ input: 2_000, output: 40, totalTokens: 2_040 });
     expect(ledger.tools["auto:cerebras/gpt-oss-120b"].cost.total).toBeCloseTo(0.003);

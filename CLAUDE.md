@@ -28,7 +28,9 @@ with `@cloudflare/vite-plugin`, pnpm; configured and deployed with the `cf` CLI 
   pages calling them load only for people in the author's chat. `test/mcp-oauth.test.ts` runs the flow against a stand-in portal.
 - Skills (`shared/skills.ts`, `worker/skills/`, `worker/agent/skills.ts`): built-in `SKILL.md` files in `worker/skills/builtin/` plus each
   user's own, stored in `UserDirectory` and installed through `skills()` from `agents/harness/pi` before every prompt.
-  A skill the agent proposes (`skill_propose`) is saved off until the user turns it on; keep it that way.
+  A skill the agent proposes (`skill_propose`) is saved off until the user turns it on; keep it that way. With
+  `SKILLS_MODEL` set, Jev (Workers AI) picks which skills a message needs (`worker/agent/skill-pick.ts`); a chat's list
+  only grows, so the prompt cache holds, and a failed pick lists them all.
 - Shared chats (`worker/chat-routes.ts`, `worker/members.ts`): the owner invites people by single-use link; they share
   the one conversation and the one agent, which always acts as the owner (owner's MCP sign-ins, files, skills; artifacts
   owned by the owner). The chat object checks membership on every socket and prompt; keep it that way. Once a chat

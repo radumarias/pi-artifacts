@@ -45,10 +45,9 @@ const answer = (probabilities: Record<string, number>) => {
 type Question = { type: string; instructions: string; criteria: Record<string, string> };
 
 describe("the tool picker", () => {
-  it("is the System One model TOOL_PICK_MODEL names, or none", () => {
-    expect(toolPicker("system-one:typesafe/jev")).toBe(jev);
-    expect(toolPicker(" system-one:typesafe/jev ")).toBe(jev);
-    expect(toolPicker("typesafe/jev")).toBeUndefined();
+  it("is the System One model TOOL_PICK_MODEL names by its id, or none", () => {
+    expect(toolPicker("typesafe/jev")).toBe(jev);
+    expect(toolPicker(" typesafe/jev ")).toBe(jev);
     expect(toolPicker("")).toBeUndefined();
     expect(toolPicker(undefined)).toBeUndefined();
     expect(toolPicker("nobody/unlisted")).toBeUndefined();

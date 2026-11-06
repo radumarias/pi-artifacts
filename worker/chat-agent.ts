@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Models, Provider, UserMessage } from "@earendil-works/pi-ai";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentChange, type Extension, type AgentState, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type Conversation, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type Agent, type AgentChange, type AgentState, type Submission, type Conversation, type Cursor, type EntryId, type EntryRecord, type Extension, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
@@ -48,8 +48,20 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
-import { AUTO_MODEL, COMPACTION, isAuto, modelKey, TOOL_PICK_LEDGER_PREFIX, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
-import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
+import {
+  AUTO_LEDGER_PREFIX,
+  AUTO_MODEL,
+  COMPACTION,
+  HINT_LEDGER_PREFIX,
+  isAuto,
+  modelKey,
+  SKILLS_LEDGER_PREFIX,
+  TOOL_PICK_LEDGER_PREFIX,
+  type AutoCandidate,
+  type ModelChoice,
+  type ModelSetting,
+} from "../shared/models.ts";
+import { deadline, errorMessage, memoAsync, serial, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
 import { filesIndex } from "./agent/file-refs.ts";
@@ -57,9 +69,14 @@ import { resolveMentions } from "./agent/mentions.ts";
 import { AGENT_REACTOR, isReactable, isReaction, type Reaction, type Reactions } from "../shared/reactions.ts";
 import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
+import { skillClassifier, skillMessage, type SkillChoice, type SkillClassifier } from "./agent/skill-pick.ts";
+import { isActive, type SkillInfo } from "../shared/skills.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
-import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom, routerSpend } from "./agent/route.ts";
+import { autoCandidates, contextTokens, route, routeHistory, routersFrom, routerSpend } from "./agent/route.ts";
+import { callHinter, HINT_MS, HINT_THRESHOLD, worthAsking, type CallHinter } from "./agent/call-hint.ts";
+import { recordSpend } from "./agent/ledger.ts";
+import type { ModelRunner } from "./agent/workers-ai.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { deferredTools, MIN_TOOLS_TO_PICK, pickerId, pickFailure, pickTools, TOOL_PICK_MS, toolPicker, toolsToOffer, type PickableTool } from "./agent/tool-pick.ts";
@@ -147,6 +164,16 @@ const SHARED_TOLD_KEY = "sharedTold";
 const AUTO_KEY = "auto";
 /** How many of the newest transcript entries the router is shown (routeHistory keeps the people's and agent's words). */
 const ROUTE_ENTRIES = 40;
+/** The names of the skills shown in this chat so far, once SKILLS_MODEL picks them (worker/agent/skill-pick.ts). */
+const SHOWN_SKILLS_KEY = "skillsShown";
+
+/** The newest transcript entries, read at most once per message (see #recentEntries). */
+type RecentEntries = () => Promise<readonly EntryRecord[] | undefined>;
+/** A message about to start a run, as the skill classifier reads it, and the end of the conversation before it. */
+interface SkillsFor {
+  text: string;
+  recent: RecentEntries;
+}
 
 /**
  * pi-ai's models, through the chat's AI Gateway, at the vendors' current prices, each reply marked with its effort and
@@ -252,8 +279,12 @@ export class ChatAgent extends DurableObject<Env> {
    */
   #mcp = { key: "", listing: "", generation: 0, deferred: false };
   #mcpListings = 0;
-  /** The skills version the agent's skills come from, so a refresh fetches and reinstalls them only on a change. */
+  /** The fingerprint of the skills the agent has now, so a refresh reinstalls them only on a change. */
   #skillsInstalled: string | undefined;
+  /** The user's skills as last listed, and their version, so a refresh lists them again only on a change. */
+  #skillsListed: { version: string; skills: SkillInfo[] } | undefined;
+  /** The classifier that picks the skills shown (SKILLS_MODEL); null when it names none, so every skill is shown. */
+  #skillClassifier: SkillClassifier | null | undefined;
   /** The agent's prompt's list of the user's files, so a refresh reinstalls it only on a change. */
   #filesInstalled: string | undefined;
   /** The owner's own system prompt, as last read (see refreshUserPrompt). */
@@ -276,6 +307,8 @@ export class ChatAgent extends DurableObject<Env> {
   #seen: { through: number; traces: ChatTraces } = { through: -1, traces: chatTraces([]) };
   /** See #oneShotModels. */
   #oneShot: Models | undefined;
+  /** What tells whether an aside is meant for the agent (CALL_HINT_MODEL); undefined when hints are off. */
+  readonly #hinter: CallHinter | undefined = callHinter(this.env.AI as unknown as ModelRunner, this.env.CALL_HINT_MODEL);
   /** See #place. */
   #placing: Promise<void> = Promise.resolve();
   /** The deployment's tool picker (TOOL_PICK_MODEL); undefined: every MCP tool is offered with every message. */
@@ -449,9 +482,9 @@ export class ChatAgent extends DurableObject<Env> {
    * reply is running (as pi's own queue says: the sidebars' status lags behind it) the router is not asked. Undefined
    * only when the conversation could not be read. Never throws: when no router picks in time (ROUTE_MS), or one picks a
    * model the picker does not list, the chat keeps its model, and the pick says why. `recent`: the newest entries
-   * (#recentEntries, read once), which the tool picker reads too.
+   * (#recentEntries, read once), which the skill classifier and the tool picker read too.
    */
-  async #route(message: string, images: number, files: number, recent: () => Promise<readonly EntryRecord[] | undefined>): Promise<Routing | undefined> {
+  async #route(message: string, images: number, files: number, recent: RecentEntries): Promise<Routing | undefined> {
     const started = Date.now();
     const kept = (failed: string): Routing => ({ kept: { failed, ms: Date.now() - started } });
     let read;
@@ -474,7 +507,7 @@ export class ChatAgent extends DurableObject<Env> {
       const routed = await route(routersFrom(this.env.ROUTER_MODEL, catalog, { models: this.#oneShotModels, gateway, ai: this.env.AI }), request);
       // Paid for whether or not the pick is used. Only a record: a failure is logged.
       await root
-        .commit((tx) => recordRouterSpend(tx, root.id, routed.router.model, routed.usage), BACKGROUND_CONTEXT)
+        .commit((tx) => recordSpend(tx, root.id, `${AUTO_LEDGER_PREFIX}${routed.router.model}`, routed.usage), BACKGROUND_CONTEXT)
         .catch((error: unknown) => console.error("auto spend:", errorMessage(error)));
       // An effort the model does not take moves to the nearest it does; none named asks for its usual one.
       const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
@@ -535,23 +568,13 @@ export class ChatAgent extends DurableObject<Env> {
     return { root, busy, agent };
   }
 
-  /** The newest transcript entries, which Auto's router and the tool picker read. Undefined when they could not be read. */
-  async #recentEntries(): Promise<readonly EntryRecord[] | undefined> {
-    try {
-      return (await (await this.#root()).entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)).items;
-    } catch (error) {
-      console.error("recent entries:", errorMessage(error));
-      return undefined;
-    }
-  }
-
   /**
    * The tool picker's pick for a message about to start a run: the few MCP tools it needs, out of the conversation's
    * deferred ones. The call counts in pi's ledger like any model call. Undefined when no tool is deferred (no picker, or
    * too few tools to pick). Never throws: when the picker fails or takes longer than TOOL_PICK_MS, the note says why,
    * and every tool is offered (#applyTools). `recent`: the newest entries (#recentEntries, read once).
    */
-  async #pickTools(message: string, recent: () => Promise<readonly EntryRecord[] | undefined>): Promise<ToolPickNote | undefined> {
+  async #pickTools(message: string, recent: RecentEntries): Promise<ToolPickNote | undefined> {
     const picker = this.#toolPicker;
     if (!picker) return undefined;
     const started = Date.now();
@@ -565,7 +588,7 @@ export class ChatAgent extends DurableObject<Env> {
       const id = pickerId(picker);
       // Paid for whether or not the pick is used. Only a record, off the prompt's path: a failure is logged.
       void root
-        .commit((tx) => recordRouterSpend(tx, root.id, id, picked.usage, TOOL_PICK_LEDGER_PREFIX), BACKGROUND_CONTEXT)
+        .commit((tx) => recordSpend(tx, root.id, `${TOOL_PICK_LEDGER_PREFIX}${id}`, picked.usage), BACKGROUND_CONTEXT)
         .catch((error: unknown) => console.error("tool pick spend:", errorMessage(error)));
       return { tools: picked.tools, of: tools.length, picker: routerSpend(id, picked.usage), ms: Date.now() - started };
     } catch (error) {
@@ -656,19 +679,81 @@ export class ChatAgent extends DurableObject<Env> {
   /**
    * Install the user's enabled skills, built-in and their own. Runs before every
    * prompt, so a skill added, changed or turned off in any chat applies from the
-   * next message on. Never rejects: a failure is logged, and the agent keeps the skills it has.
+   * next message on. With SKILLS_MODEL set, the agent is shown only the skills
+   * picked for this chat: given the `message` about to start a run, the
+   * classifier is first asked which of the skills not shown yet it needs (see
+   * worker/agent/skill-pick.ts). Never rejects: a failure is logged, and the agent
+   * keeps the skills it has.
    */
-  readonly refreshSkills = singleFlight(async () => {
+  // One at a time, so an older refresh never installs over a newer one.
+  readonly refreshSkills = serial((message?: SkillsFor) => this.#refreshSkills(message));
+
+  async #refreshSkills(message: SkillsFor | undefined): Promise<void> {
     try {
       const directory = this.#directory;
       const version = await directory.skillsVersion();
-      if (version === this.#skillsInstalled) return;
-      this.registry.install(await skills([skillSource(await directory.listSkills(), version)]));
-      this.#skillsInstalled = version;
+      if (this.#skillsListed?.version !== version) this.#skillsListed = { version, skills: await directory.listSkills() };
+      const listed = this.#skillsListed.skills;
+      const classifier = this.#skillPicker();
+      let shown: Set<string> | undefined;
+      if (classifier) {
+        const saved = this.ctx.storage.kv.get<string[]>(SHOWN_SKILLS_KEY);
+        // A chat the agent answered before its skills were picked (or a run resumed with none saved) was shown every
+        // enabled skill: it keeps them, so its list only grows. A chat the agent has not answered yet starts with none.
+        const answered = saved === undefined && (!message || ((await message.recent())?.some(({ kind }) => kind === "pi.assistant") ?? true));
+        shown = new Set(answered ? listed.filter(isActive).map(({ name }) => name) : (saved ?? []));
+        const waiting = listed.filter((skill) => isActive(skill) && !shown!.has(skill.name));
+        if (message && waiting.length) for (const name of await this.#pickSkills(classifier, message.text, message.recent, waiting)) shown.add(name);
+        // Not into a chat deleted meanwhile.
+        if ((saved === undefined || (message && waiting.length)) && !this.#gone) this.ctx.storage.kv.put(SHOWN_SKILLS_KEY, [...shown]);
+      }
+      const source = skillSource(listed, version, shown);
+      if (source.fingerprint === this.#skillsInstalled) return;
+      this.registry.install(await skills([source]));
+      this.#skillsInstalled = source.fingerprint;
     } catch (error) {
       console.error("skills:", errorMessage(error));
     }
-  });
+  }
+
+  /** The classifier SKILLS_MODEL names, made once; undefined when it names none (said once, when it names something else). */
+  #skillPicker(): SkillClassifier | undefined {
+    if (this.#skillClassifier === undefined) {
+      this.#skillClassifier = skillClassifier(this.env.SKILLS_MODEL, this.env.AI) ?? null;
+      if (!this.#skillClassifier && this.env.SKILLS_MODEL.trim()) console.error(`skills: SKILLS_MODEL names no System One model: ${this.env.SKILLS_MODEL}`);
+    }
+    return this.#skillClassifier ?? undefined;
+  }
+
+  /**
+   * Which of `waiting` (skills not shown yet) `message` needs, as `classifier` says with the end of the conversation
+   * (`recent`), and any it could not answer for. Its calls count in pi's ledger, off the prompt's path. Never throws.
+   */
+  async #pickSkills(classifier: SkillClassifier, message: string, recent: RecentEntries, waiting: readonly SkillChoice[]): Promise<string[]> {
+    const history = routeHistory((await recent()) ?? []);
+    const pick = await classifier.pick({ message, history, skills: waiting });
+    if (pick.errors.length) console.error("skills pick:", pick.errors.join("; "));
+    if (pick.usage.totalTokens > 0 || pick.usage.cost.total > 0) {
+      void this.#root()
+        .then((root) => root.commit((tx) => recordSpend(tx, root.id, `${SKILLS_LEDGER_PREFIX}${classifier.id}`, pick.usage), BACKGROUND_CONTEXT))
+        .catch((error: unknown) => console.error("skills spend:", errorMessage(error)));
+    }
+    return pick.add;
+  }
+
+  /**
+   * The newest ROUTE_ENTRIES transcript entries, newest first: what Auto's router and the skill classifier read of the
+   * conversation before a message starts a run, read once for both, and only when one asks. Undefined when they could not
+   * be read.
+   */
+  async #recentEntries(): Promise<readonly EntryRecord[] | undefined> {
+    try {
+      return (await (await this.#root()).entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)).items;
+    } catch (error) {
+      console.error("recent entries:", errorMessage(error));
+      return undefined;
+    }
+  }
 
   /**
    * Read the owner's own system prompt again: runs before every prompt, so a change made in any chat, or in the
@@ -935,9 +1020,9 @@ export class ChatAgent extends DurableObject<Env> {
     ]).then(([given, copied]) => [...given, ...copied]);
     // On Auto, the router picks the model while the rest gets ready. Its pick is used only if the message is a prompt.
     const images = attachments.filter((attachment) => attachment.image).length;
-    // Read once, for Auto's router and the tool picker, and only if either asks.
-    const recent = memoAsync(() => this.#recentEntries());
-    const routing = calling && this.#auto() ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
+    // What the router, the skill classifier and the tool picker read of the conversation: read once for all, and only if one asks.
+    const recent = calling ? memoAsync(() => this.#recentEntries()) : undefined;
+    const routing = recent && this.#auto() ? this.#route(text, images, attachments.length + own.length - images, recent) : undefined;
     this.#announce({
       uid: author.uid,
       name: author.name,
@@ -948,10 +1033,13 @@ export class ChatAgent extends DurableObject<Env> {
       ...(quote && { replyTo: quote }),
       ...(routing && { picking: true }),
     });
+    // What the skill classifier reads: the text, and the names of the files attached (a file alone can need a skill).
+    const attachedPaths = [...attachments, ...own].map(({ path }) => path);
+    const skillText = skillMessage(text, attachedPaths);
     // Picked (or not): the rest may still take a while, and should not say the router is still at it.
     void routing?.then(() => this.#picked(incomingKey({ uid: author.uid, sentAt })));
     // The tool picker reads the tools the refresh installs, while the rest gets ready. Used only if the message is a prompt.
-    const tooling = calling
+    const tooling = recent
       ? this.refreshMcpTools()
           .catch(() => {})
           .then(() => this.#pickTools(text, recent))
@@ -976,7 +1064,7 @@ export class ChatAgent extends DurableObject<Env> {
       ),
       // A message to the people in the chat starts no run: the agent needs its tools only when it is called.
       tooling,
-      calling && this.refreshSkills(),
+      recent && this.refreshSkills({ text: skillText, recent }),
       calling && this.refreshFiles(),
       calling && this.refreshUserPrompt(),
     ]);
@@ -1010,7 +1098,16 @@ export class ChatAgent extends DurableObject<Env> {
         const auto = routing && (await this.#applyPick(await routing, now));
         await summon(dataWith(auto, await this.#applyTools(await tooling, now)));
       });
-    } else await this.#aside(content, dataWith());
+    } else {
+      const aside = await this.#aside(content, dataWith());
+      // Meant for the agent, though it did not call it? Its author may be offered to (#hintCall). Off the prompt's path.
+      // Not while the agent works: it reads the message at its next step. The classifier reads whom it replies to too.
+      const hinter = this.#hinter;
+      if (hinter && this.#status() !== "running" && worthAsking(text)) {
+        const asked = [quote && replyLine(quote), text].filter(Boolean).join("\n\n");
+        void this.#hintCall(hinter, aside, author, asked).catch((error) => console.error("call hint:", errorMessage(error)));
+      }
+    }
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
     const tags = taggedPeople(keptMentions(text, mentions));
@@ -1050,11 +1147,41 @@ export class ChatAgent extends DurableObject<Env> {
    * entry everyone sees has no model message, so it lands at once, even mid-run; what the model reads of it is a
    * `chat.aside` entry, which pi places at once when the agent is idle, or between its steps while it works.
    */
-  async #aside(content: UserMessage["content"], data: JsonObject): Promise<void> {
+  async #aside(content: UserMessage["content"], data: JsonObject): Promise<Submission> {
     const root = await this.#root();
-    await root.submit({ type: "write", entry: { kind: CHAT_MESSAGE_KIND, data: { ...data, aside: true } } }, BACKGROUND_CONTEXT);
+    const written = await root.submit({ type: "write", entry: { kind: CHAT_MESSAGE_KIND, data: { ...data, aside: true } } }, BACKGROUND_CONTEXT);
     const message: UserMessage = { role: "user", content, timestamp: Date.now() };
     await root.submit({ type: "write", entry: { kind: CHAT_ASIDE_KIND, model: [message] } }, BACKGROUND_CONTEXT);
+    return written;
+  }
+
+  /**
+   * An aside someone wrote (`written`, its `chat.message`) that may still be meant for the agent ("pi, can you…"): the
+   * deployment's CALL_HINT_MODEL reads it with the end of the conversation, and when it is likely enough
+   * (HINT_THRESHOLD) for the agent, its author's windows are told, and show them Ask pi under it. The call counts in
+   * pi's ledger like the router's. Nothing on a failure or past HINT_MS.
+   */
+  async #hintCall(hinter: CallHinter, written: Submission, author: Person, text: string): Promise<void> {
+    const root = await this.#root();
+    const placed = await written.wait(BACKGROUND_CONTEXT);
+    if (placed.status !== "done") return;
+    const entry = placed.entry;
+    // What came before it, newest first: not what followed it meanwhile.
+    const page = await root.entries({ maxEntryId: (entry - 1) as EntryId }, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT);
+    const request = {
+      author: author.name,
+      message: text,
+      people: everyone(this.people()).map((person) => person.name),
+      history: routeHistory(page.items),
+    };
+    const { probability, usage } = await hinter.ask(request, AbortSignal.timeout(HINT_MS));
+    // Paid for whatever it said. Only a record: a failure is logged.
+    if (usage) {
+      await root
+        .commit((tx) => recordSpend(tx, root.id, `${HINT_LEDGER_PREFIX}${hinter.id}`, usage), BACKGROUND_CONTEXT)
+        .catch((error: unknown) => console.error("call hint spend:", errorMessage(error)));
+    }
+    if (probability >= HINT_THRESHOLD) this.sockets.sendTo(author.uid, { type: "callHint", entry });
   }
 
   /**
@@ -1797,6 +1924,11 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       if (!people) views.set(person.uid, (people = this.#chat.peopleFor(person.uid)));
       send(ws, { type: "people", people });
     }
+  }
+
+  /** Tell one person's open sockets something only they see. */
+  sendTo(uid: string, message: ChatServerMessage): void {
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) if (this.#person(ws)?.uid === uid) send(ws, message);
   }
 
   /** Tell every open socket the same thing: an entry's reactions changed, or someone turned Auto on or off. */

@@ -426,6 +426,12 @@ body.resizing iframe { pointer-events: none; }
 .auto-pick-tag { flex: none; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; font-weight: 600; }
 .auto-pick-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auto-pick.kept .auto-pick-model { font-style: italic; }
+/* Under the viewer's message that looks meant for the agent though it did not call it: Ask pi, or no. */
+.call-hint { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 2px 2px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 999px; background: var(--accent-soft); color: var(--text); font-size: 13px; line-height: 22px; }
+.call-hint-ask { padding: 0 10px; border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; }
+.call-hint-no { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.call-hint-ask:hover { filter: brightness(1.1); }
+.call-hint-no:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
 /* Reactions under a message: each emoji, how many, the viewer's own marked; a click adds or takes back theirs. */
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; }
 .reaction { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 22px; }
@@ -656,6 +662,8 @@ a.mention-chip:hover { text-decoration: underline; }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: var(--shadow-card), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 /* Bottom-aligned, so Send stays by the last line as the input grows. */
 .composer-row { display: flex; align-items: flex-end; gap: 6px; }
+/* Send (an up arrow) and Stop are round. */
+.composer-row .icon-button { border-radius: 50%; }
 .composer textarea {
   flex: 1;
   min-width: 0;
