@@ -236,7 +236,6 @@ function PressMenu({
     menu.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
-  const mine = content.current?.classList.contains("mine") ?? false;
   return (
     <div className="press-layer" onClick={onClose}>
       {reactions && (
@@ -250,7 +249,7 @@ function PressMenu({
           />
         </div>
       )}
-      <div ref={menu} className={mine ? "press-menu mine" : "press-menu"} role="menu" onClick={(event) => event.stopPropagation()}>
+      <div ref={menu} className="press-menu" role="menu" onClick={(event) => event.stopPropagation()}>
         {actions.map((action) => (
           <button
             key={action.label}

@@ -69,11 +69,19 @@ export function useDismiss<T extends HTMLElement>(open: boolean, setOpen: (open:
   return box;
 }
 
+/** Each media query's list, made once and shared by every component that follows it. */
+const mediaLists = new Map<string, MediaQueryList>();
+const mediaList = (query: string): MediaQueryList => {
+  let list = mediaLists.get(query);
+  if (!list) mediaLists.set(query, (list = matchMedia(query)));
+  return list;
+};
+
 /** Whether the window matches a media `query`, following it as it changes. */
 export function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
     (onChange: () => void) => {
-      const list = matchMedia(query);
+      const list = mediaList(query);
       list.addEventListener("change", onChange);
       return () => list.removeEventListener("change", onChange);
     },
@@ -81,7 +89,7 @@ export function useMediaQuery(query: string): boolean {
   );
   return useSyncExternalStore(
     subscribe,
-    () => matchMedia(query).matches,
+    () => mediaList(query).matches,
     () => false,
   );
 }
@@ -132,7 +140,7 @@ export function SectionHead({
   );
 }
 
-/** Opens the app's menu (the sidebar) where it is hidden: on a phone or in a narrow window (styles.css shows it there). */
+/** Opens the app's menu (the sidebar) where it is hidden: on a phone or in a narrow window. */
 export function MenuButton({ onClick }: { onClick: () => void }) {
   return (
     <button type="button" className="icon-button menu-button" onClick={onClick} title="Menu" aria-label="Open the menu">

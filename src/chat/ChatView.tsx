@@ -341,7 +341,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                 ) : (
                   <button
                     type="submit"
-                    className="icon-button send"
+                    className="icon-button primary"
                     disabled={!connected || attachments.sending || (!draft.trim() && attachments.pending.length === 0)}
                     title={sendLabel}
                     aria-label={sendLabel}
@@ -555,7 +555,7 @@ function PeopleBar({ people, online, uid, working }: { people: ChatPeople; onlin
         return (
           <span key={person.uid} className={count ? "person online" : "person"} title={`${person.name}${you ? " (you)" : ""}: ${state}`}>
             <Avatar name={person.name} tint={tintOf(people, person.uid)} online={count > 0} />
-            <span className="person-name">
+            <span className="sr-only">
               {you ? "You" : person.name}
               {count > 1 && <small> ×{count}</small>}
             </span>
@@ -565,7 +565,7 @@ function PeopleBar({ people, online, uid, working }: { people: ChatPeople; onlin
       <span className="people-divider" aria-hidden="true" />
       <span className="person agent" title={`${AGENT_NAME}, the agent: ${working ? "working" : "idle"}`}>
         <AgentAvatar working={working} />
-        <span className="person-name">
+        <span className="sr-only">
           {AGENT_NAME}
           {working && <small> working</small>}
         </span>
@@ -591,7 +591,7 @@ function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
   return queued.map((message, i) => {
     const mine = message.uid === uid;
     return (
-      <div key={message.id} className={mine ? "queued mine" : "queued"}>
+      <div key={message.id} className="queued">
         <User
           text={message.text}
           author={mine ? undefined : message}
@@ -659,30 +659,28 @@ function User({
   const people = useSharedChat();
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
-  const tint = people ? tintOf(people, author?.uid ?? uid) : undefined;
-  const role = people && (people.owner.uid === (author?.uid ?? uid) ? "owner" : "member");
+  const by = author?.uid ?? uid;
+  // In a shared chat, their colour; in one with no one else, the first.
+  const tint = people ? tintOf(people, by) : 0;
+  const role = people && (people.owner.uid === by ? "owner" : "member");
   const tagsMe = !mine && mentions?.some((mention) => mention.kind === "person" && mention.uid === uid);
   const files = attachments.length > 0 && (
-    <div className={mine ? "attachments mine" : "attachments"}>
+    <div className="attachments">
       {attachments.map((attachment) => (
         <Attached key={attachment.path} attachment={attachment} />
       ))}
     </div>
   );
   const bubble = text && (
-    <div className={mine ? "bubble user" : "bubble peer"}>
+    <div className="bubble">
       {replyTo && <ReplyQuoteView quote={replyTo} />}
       <MentionText text={text} mentions={mentions} me={uid} />
     </div>
   );
   return (
-    <div
-      ref={content}
-      className={[mine ? "message mine" : "message other", tint !== undefined && "tinted", tagsMe && "mentions-me"].filter(Boolean).join(" ")}
-      style={tint === undefined ? undefined : tintStyle(tint)}
-    >
+    <div ref={content} className={tagsMe ? "message mentions-me" : "message"}>
       <div className="byline">
-        <Avatar name={author?.name ?? ownName ?? "You"} tint={tint ?? 0} />
+        <Avatar name={author?.name ?? ownName ?? "You"} tint={tint} />
         <strong>{author?.name ?? "You"}</strong>
         {role && <small>{role}</small>}
       </div>
@@ -692,7 +690,7 @@ function User({
         {bubble || files}
         <MessageActions content={content} text={text} reactions={reactions} onReply={onReply} floating />
       </div>
-      <ReactionChips reactions={reactions} picked={picked} mine={mine} />
+      <ReactionChips reactions={reactions} picked={picked} />
       {auto && <AutoPicked pick={auto} />}
       {sentAt !== undefined && <SentTime at={sentAt} />}
     </div>
@@ -824,7 +822,7 @@ function Assistant({
         if (!block) return null;
         if (block.type === "text")
           return block.text ? (
-            <div key={i} className="bubble bot markdown">
+            <div key={i} className="bubble markdown">
               {streaming ? <RevealedMarkdown text={block.text} onGrow={onGrow} /> : <Markdown text={block.text} />}
             </div>
           ) : null;

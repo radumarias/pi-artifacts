@@ -1,4 +1,5 @@
-import { createContext, useEffect, useRef, useSyncExternalStore, type RefObject } from "react";
+import { createContext, useEffect, useRef, type RefObject } from "react";
+import { useMediaQuery } from "../layout.tsx";
 
 /**
  * Phones, tablets and narrow windows: messages have no hover bar. A long press (or a right click) opens a message's
@@ -7,22 +8,8 @@ import { createContext, useEffect, useRef, useSyncExternalStore, type RefObject 
  */
 const COMPACT_QUERY = "(hover: none), (max-width: 640px)";
 
-let compactQuery: MediaQueryList | undefined;
-const query = () => (compactQuery ??= matchMedia(COMPACT_QUERY));
-
-function subscribeCompact(onChange: () => void): () => void {
-  query().addEventListener("change", onChange);
-  return () => query().removeEventListener("change", onChange);
-}
-
 /** Whether the app is compact (COMPACT_QUERY), following the window as it changes. */
-export function useCompact(): boolean {
-  return useSyncExternalStore(
-    subscribeCompact,
-    () => query().matches,
-    () => false,
-  );
-}
+export const useCompact = (): boolean => useMediaQuery(COMPACT_QUERY);
 
 /** Whether the chat is compact, for its messages: read once by the chat, not by each of them. */
 export const Compact = createContext(false);

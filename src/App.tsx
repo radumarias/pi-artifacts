@@ -446,9 +446,9 @@ function Workspace({ uid, label, chatId, secondSeat, opening, showSkills, naviga
       <main className="main" ref={chatRef}>
         {/* A chat has its own header, with the menu button in it. */}
         {narrow && (showSkills || !chatId) && (
-          <header className="mobile-bar">
+          <header className="chat-header">
             <MenuButton onClick={openMenu} />
-            <strong>{showSkills ? "Skills" : "Chats"}</strong>
+            <h1 className="chat-title">{showSkills ? "Skills" : "Chats"}</h1>
           </header>
         )}
         {showSkills ? (

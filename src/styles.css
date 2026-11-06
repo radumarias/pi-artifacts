@@ -33,8 +33,12 @@
   --font-display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
   --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
-  /* What a message's text is indented by: its author's badge and the gap after it. */
-  --gutter: 38px;
+  /* A message's author badge, the gap after it, and so what its text is indented by. */
+  --byline-avatar: 28px;
+  --byline-gap: 10px;
+  --gutter: calc(var(--byline-avatar) + var(--byline-gap));
+  /* The width the conversation reads in, centred in a wide window. */
+  --column: 760px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -76,6 +80,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.01em; text-wrap: balance; }
+h1, h2 { font-weight: 800; }
+b, strong { font-weight: 600; }
 code, pre, kbd, samp { font-family: var(--font-mono); }
 button, .button, select, input, textarea { font: inherit; color: inherit; }
 button, .button, select {
@@ -87,10 +93,10 @@ button, .button, select {
   text-decoration: none;
 }
 /* Plain buttons (no class of their own) and the framed ones read as buttons: a little heavier than text. */
-button:not([class]), .button, button.primary, button.danger, .share-button { font-weight: 500; font-size: 14px; }
+button:not([class]), .button, button.danger, .share-button { font-weight: 500; font-size: 14px; }
 button:not([class]):hover, .button:hover, .share-button:hover { background: var(--surface-2); }
 button:disabled { opacity: 0.5; cursor: default; }
-button.primary, .button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button.primary, .button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-size: 14px; font-weight: 600; }
 button.primary:not(:disabled):hover, .button.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
 button.danger { background: var(--error); color: var(--surface); border-color: transparent; }
 :focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
@@ -160,7 +166,7 @@ body.resizing iframe { pointer-events: none; }
 .sidebar.rail button, .sidebar.rail .back-to-site { width: 36px; padding: 6px 0; }
 .sidebar h3 { margin: 14px 0 2px; }
 /* Section names: small capitals in the body face, as the mockups' eyebrows. */
-.sidebar h3, .section-head { font: 600 11.5px/1.2 var(--font-body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.sidebar h3, .section-head, .mention-group, .step-section-label { font: 600 11.5px/1.2 var(--font-body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 /* After .sidebar h3, whose margin shorthand would otherwise win at equal specificity. */
 .sidebar .sidebar-pinned h3 { margin-top: 10px; }
 /* A section heading's h3 (SectionHead) adds no space of its own; its button pads it. */
@@ -207,9 +213,9 @@ body.resizing iframe { pointer-events: none; }
 @media (hover: none) { .chat-delete { opacity: 1; } }
 /* With a mouse, the button shows over the chat's status icon on hover, so the icons line up with the other lists'. */
 @media (hover: hover) { .chat-delete { position: absolute; top: 0; right: 0; bottom: 0; border-radius: 0 6px 6px 0; background: var(--surface-2); } }
-.confirm-dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop); }
+.confirm-dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop); }
 .confirm-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
-.confirm-dialog h2 { margin: 0 0 10px; font-size: 20px; font-weight: 800; }
+.confirm-dialog h2 { margin: 0 0 10px; font-size: 20px; }
 .confirm-dialog p { margin: 0 0 10px; }
 .confirm-dialog > small { display: block; color: var(--muted); font-size: 13px; }
 .confirm-list { margin: 0 0 10px; padding-left: 20px; max-height: 140px; overflow-y: auto; font-size: 14px; overflow-wrap: anywhere; }
@@ -285,7 +291,6 @@ body.resizing iframe { pointer-events: none; }
 :is(.account-button, .account-menu button, .composer-more-menu button):hover, .account-button[aria-expanded="true"], .share-button[aria-expanded="true"], :is(.account-menu, .composer-more-menu) button:focus-visible { background: var(--surface-2); }
 :is(.account-button, .composer-more-button) > svg { flex: none; color: var(--muted); transition: transform 0.15s; }
 :is(.account-button, .composer-more-button)[aria-expanded="true"] > svg { transform: rotate(180deg); }
-.avatar { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border); font-size: 13px; font-weight: 600; }
 /* A long email ends in an ellipsis rather than squeezing anything else. */
 .account-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-menu { right: 0; bottom: calc(100% + 4px); }
@@ -293,39 +298,43 @@ body.resizing iframe { pointer-events: none; }
 /* A column: on a phone, the bar with the menu button over the skills or the empty page. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .main > * { flex: 1 1 auto; min-height: 0; }
-.main > .mobile-bar { flex: none; }
+.main > .chat-header { flex: none; }
 .chat { display: flex; flex-direction: column; height: 100%; }
 /* The conversation reads in one column, centred in a wide window, as the composer below it. */
 .messages { flex: 1; min-height: 0; overflow-y: auto; padding: 32px 20px 8px; display: flex; flex-direction: column; gap: 10px; }
 .empty-chat { margin: auto; max-width: 440px; text-align: center; color: var(--muted); }
-.empty-chat h2 { margin: 0 0 10px; color: var(--text); font-size: 28px; font-weight: 800; line-height: 1.1; }
+.empty-chat h2 { margin: 0 0 10px; color: var(--text); font-size: 28px; line-height: 1.1; }
 
 /*
  * The transcript, as the mockups draw a chat: every message, the viewer's own too, starts at the left under its
  * author's badge and name, its text indented past the badge (--gutter), with no bubble around it. The agent's replies
- * read the same under its square badge. Lines that belong to no one (days, "New", joins) span the whole column.
+ * read the same under its square badge, their parts indented alike. Lines that belong to no one (days, "New", joins)
+ * span the whole column.
  */
-.transcript { width: 100%; max-width: 760px; margin: 0 auto; padding-left: var(--gutter); }
-.chat-notice, .empty-chat { translate: calc(var(--gutter) / -2) 0; }
+.transcript { width: 100%; max-width: var(--column); margin: 0 auto; }
+:is(.message > :not(.byline, .sent-time), .transcript > :is(.assistant, .step, .artifact-card, .prompt-cost, .thinking, .chat-error)) { margin-left: var(--gutter); }
 .bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 100%; min-width: 0; }
-:is(.message, .bubble-row) > .attachments { max-width: 100%; }
 /* A message that tags the viewer: on the accent's tint, so it stands out in a busy chat. */
 .message.mentions-me .bubble { margin-left: -10px; padding: 4px 10px; border-radius: 8px; background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-/* The badge hangs into the gutter, its top level with the name; the text starts right under the name. */
-.byline { display: flex; align-items: flex-start; gap: 10px; height: 22px; margin-left: calc(-1 * var(--gutter)); font-size: 14px; line-height: 22px; white-space: nowrap; }
-.byline .avatar { width: 28px; height: 28px; font-size: 12px; }
-.byline .avatar.agent { font-size: 15px; }
-.byline strong { font-weight: 600; }
+/* The badge, taller than the name's line, reaches down beside the text; the text starts right under the name. */
+.byline { display: flex; align-items: flex-start; gap: var(--byline-gap); height: 22px; font-size: 14px; line-height: 22px; white-space: nowrap; }
+.byline .avatar { --size: var(--byline-avatar); }
 .byline small { color: var(--muted); font-size: 12px; }
 .byline.agent { margin-top: 4px; }
-.avatar { position: relative; flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--tint, var(--muted)); color: var(--on-tint); font: 600 11px/1 var(--font-body); }
+/* A badge, --size across (each place sets its own), its letter in proportion. */
+.avatar {
+  --size: 22px;
+  position: relative; flex: none; display: inline-grid; place-items: center; width: var(--size); height: var(--size); border-radius: 50%;
+  background: var(--tint, var(--muted)); color: var(--on-tint); font: 600 calc(var(--size) * 0.44) / 1 var(--font-body);
+}
 /* The agent's badge: a rounded square, where people's are round. */
-.avatar.agent { border-radius: 30%; background: var(--accent); color: var(--accent-text); font-size: 13px; }
-/* Whether someone has the chat open: green while they do. The agent's: a rust dot while it works. */
-.presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--bg); border-radius: 50%; background: var(--border); }
+.avatar.agent { border-radius: 30%; background: var(--accent); color: var(--accent-text); font-size: calc(var(--size) * 0.56); }
+/* Whether someone has the chat open: green while they do. On the agent's badge: rust at the top while it works. Its
+   ring is the colour of what the badge sits on (--ring). */
+.presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--ring, var(--bg)); border-radius: 50%; background: var(--border); }
 .presence.online { background: var(--live); }
-.working-dot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border: 2px solid var(--bg); border-radius: 50%; background: var(--working); animation: notify-pulse 1.6s ease-in-out infinite; }
+.presence.working { top: -3px; right: -3px; bottom: auto; background: var(--working); animation: notify-pulse 1.6s ease-in-out infinite; }
 /*
  * React, copy, reply and "…": in a pill at the right end of a person's message, level with their name, and in a row
  * under the agent's replies. When it was sent: under the message, and beside that row. All on hover, holding their
@@ -366,8 +375,7 @@ body.resizing iframe { pointer-events: none; }
 .messages[data-compact] { padding-top: 20px; overflow-x: hidden; touch-action: pan-y pinch-zoom; }
 [data-compact] .transcript { transition: transform 0.2s ease-out; }
 [data-compact] .transcript.revealing { transition: none; }
-[data-compact] .message:is(.mine, .other) { position: relative; align-self: stretch; max-width: none; }
-[data-compact] .message > :not(.sent-time) { max-width: 100%; }
+[data-compact] .message { position: relative; align-self: stretch; }
 [data-compact] .assistant { position: relative; }
 [data-compact] .message-foot { display: contents; }
 [data-compact] .sent-time { position: absolute; left: calc(100% + 24px); opacity: 1; padding: 0; }
@@ -391,7 +399,7 @@ body.resizing iframe { pointer-events: none; }
 .press-menu button:active, .press-menu button:focus-visible { background: var(--surface-2); }
 .press-toast { position: fixed; left: 50%; bottom: 96px; z-index: 50; translate: -50% 0; padding: 8px 14px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px; }
 /* Over the first message of each day: the day, between two wavy lines. Over the first one the reader has not seen: "New", the same in the accent colour. */
-.day-separator, .new-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0 4px calc(-1 * var(--gutter)); color: var(--muted); font-size: 13px; }
+.day-separator, .new-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0; color: var(--muted); font-size: 13px; }
 .new-divider { color: var(--accent); --rule: color-mix(in srgb, var(--accent) 70%, transparent); }
 .day-separator::before, .day-separator::after, .new-divider::before, .new-divider::after {
   content: ""; flex: 1; height: 6px; background: var(--rule, var(--border));
@@ -437,19 +445,16 @@ button.reaction:hover { border-color: var(--muted); }
 
 /* Relative: the cost panel hangs from its right edge, so it stays on screen however wide the header is. */
 /* A bar over the conversation: the chat's name, who is in it, its cost and sharing. */
-.chat-header { position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 16px 8px 20px; min-height: var(--header-h); border-bottom: 1px solid var(--border); background: var(--surface); }
+.chat-header { --ring: var(--surface); position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 16px 8px 20px; min-height: var(--header-h); border-bottom: 1px solid var(--border); background: var(--surface); }
 .chat-title { flex: 0 1 auto; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-people { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Everyone in a shared chat as badges in their colours (a dot for who has it open now), a rule, then the agent's. */
 /* It keeps its size; the chat's name before it gives way (to an ellipsis) instead. */
 .people-bar { flex: none; display: flex; align-items: center; gap: 4px; margin-left: auto; padding: 3px; }
 .people-bar .person { display: inline-flex; flex: none; }
-.people-bar .avatar { width: 26px; height: 26px; font-size: 11.5px; }
-.people-bar .avatar.agent { font-size: 14px; }
+.people-bar .avatar { --size: 26px; }
 .people-bar .person:not(.online, .agent) .avatar { opacity: 0.7; }
-.people-bar .person-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .people-divider { flex: none; width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
-.chat-header :is(.presence, .working-dot) { border-color: var(--surface); }
 .share-panel, .cost-panel, .context-panel { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
 .share-panel ul, .cost-panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .share-panel { margin: 8px 20px 0; align-items: flex-start; }
@@ -473,7 +478,6 @@ button.reaction:hover { border-color: var(--muted); }
 .bubble.markdown li + li { margin-top: 3px; }
 .bubble.markdown h1, .bubble.markdown h2, .bubble.markdown h3, .bubble.markdown h4 { margin: 14px 0 8px; font-size: 1.05em; line-height: 1.3; }
 .bubble.markdown h1 { font-size: 1.2em; }
-.bubble.markdown h1, .bubble.markdown h2 { font-weight: 800; }
 .bubble.markdown code { font: 500 0.86em var(--font-mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
 .bubble.markdown pre { background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: var(--radius); overflow-x: auto; white-space: pre; font-size: 13px; line-height: 1.6; }
 .bubble.markdown pre code { background: none; padding: 0; }
@@ -484,7 +488,6 @@ button.reaction:hover { border-color: var(--muted); }
 .bubble.markdown th, .bubble.markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
 .bubble.markdown th { background: var(--surface-2); font-size: 0.85em; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .assistant { display: flex; flex-direction: column; gap: 4px; }
-.assistant > .bubble { max-width: 100%; }
 .tool-call { color: var(--muted); font-size: 13px; }
 /* One step of the agent (Steps.tsx): a plain line with an icon, what it is, a hint and its status. An arrow after the
    hint opens what went in and came out, beside a thin guide line; a step with nothing more to show has no arrow. */
@@ -514,7 +517,7 @@ button.reaction:hover { border-color: var(--muted); }
 .step > summary:hover .step-chevron { stroke: var(--text); }
 .step[open] .step-chevron { transform: rotate(90deg); }
 .step-body { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 6px 7px; padding: 4px 0 4px 16px; border-left: 1px solid var(--border); }
-.step-section-label { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+.step-section-label { margin-bottom: 4px; }
 .step-section pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font: 12px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .step-section.error pre { color: var(--error); background: color-mix(in srgb, var(--error) 8%, var(--surface-2)); }
 .step-note { margin: 0; color: var(--muted); }
@@ -585,11 +588,10 @@ button.reaction:hover { border-color: var(--muted); }
 }
 .artifact-card:hover { border-color: var(--accent); }
 .artifact-card-icon { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 22px; }
-.artifact-card strong { font-weight: 600; }
 .artifact-card small { display: block; color: var(--muted); font-size: 12.5px; }
 
 /* As wide as the conversation's column (its badges' gutter included), centred under it. */
-.composer { position: relative; display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 800px; margin: 0 auto; padding: 10px 20px max(14px, env(safe-area-inset-bottom)); }
+.composer { position: relative; display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: calc(var(--column) + 40px); margin: 0 auto; padding: 10px 20px max(14px, env(safe-area-inset-bottom)); }
 /* What "@" offers, over the transcript just above the input. */
 .mention-list {
   position: absolute;
@@ -608,7 +610,7 @@ button.reaction:hover { border-color: var(--muted); }
   box-shadow: var(--shadow-pop);
 }
 /* Over each kind of choice: the agent, people, files, artifacts. */
-.mention-group { padding: 9px 8px 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; line-height: 1; text-transform: uppercase; }
+.mention-group { padding: 9px 8px 4px; }
 .mention-choice { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; text-align: left; font-size: 14px; }
 .mention-choice.active { background: var(--accent-soft); }
 .mention-icon { flex: none; display: inline-grid; place-items: center; width: 22px; color: var(--muted); }
@@ -658,10 +660,6 @@ a.mention-chip:hover { text-decoration: underline; }
 /* One size for every icon button, so Send and Stop swap without a shift. */
 .icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; }
 .icon-button:disabled { opacity: 0.35; }
-/* Send: the one filled button in the composer, in the accent, as the mockups' primary action. */
-.icon-button.send { border-radius: 9px; background: var(--accent); color: var(--accent-text); }
-.icon-button.send:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
-.icon-button.send:disabled { opacity: 1; background: var(--surface-2); color: var(--muted); }
 .icon-button.listening { color: var(--error); }
 /* Attach, dictation and the "more" chevron at the left; the model and the context ring at the right. */
 .composer-tools { display: flex; align-items: center; gap: 2px; padding: 0 4px; min-height: 32px; }
@@ -808,7 +806,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .file-image img { max-width: 100%; max-height: 100%; object-fit: contain; background: repeating-conic-gradient(var(--border) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
 .file-markdown { max-width: 860px; padding: 20px 28px 28px; line-height: 1.6; overflow-wrap: break-word; }
 .file-markdown > :first-child { margin-top: 0; }
-.file-markdown h1, .file-markdown h2 { padding-bottom: 6px; border-bottom: 1px solid var(--border); line-height: 1.2; font-weight: 800; }
+.file-markdown h1, .file-markdown h2 { padding-bottom: 6px; border-bottom: 1px solid var(--border); line-height: 1.2; }
 .file-markdown h1 { font-size: 1.7em; }
 .file-markdown h2 { font-size: 1.35em; margin-top: 1.6em; }
 .file-markdown h3 { font-size: 1.12em; margin-top: 1.4em; }
@@ -850,14 +848,11 @@ a.mention-chip:hover { text-decoration: underline; }
 .sign-in form { width: min(380px, 100%); display: flex; flex-direction: column; gap: 12px; }
 .sign-in label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
 .sign-in input { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-weight: 400; }
-.sign-in h1, .sign-in h2 { margin: 0; font-size: 32px; font-weight: 800; line-height: 1.05; }
+.sign-in h1, .sign-in h2 { margin: 0; font-size: 32px; line-height: 1.05; }
 .sign-in p { color: var(--muted); margin: 0; }
 .sign-in .form-error { color: var(--error); }
 
-/* The menu button, and the bar that holds it where a chat's header does not: only in a narrow window. */
-.menu-button { display: none; }
-.mobile-bar { display: flex; align-items: center; gap: 6px; min-height: var(--header-h); padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
-.mobile-bar strong { font: 600 16px/1.3 var(--font-display); }
+.menu-button { margin-left: -6px; }
 /*
  * Phones and narrow windows (NARROW in App.tsx): one column for the chat, or for the preview while one is open. The
  * sidebar is a menu that slides in from the left over a dimmed page; its button sits at the start of the header.
@@ -865,10 +860,9 @@ a.mention-chip:hover { text-decoration: underline; }
 @media (max-width: 900px) {
   .workspace, .workspace.with-preview { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .resize-handle { display: none; }
-  .menu-button { display: inline-grid; margin-left: -6px; }
   .sidebar.drawer {
     position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(320px, 86vw); padding-top: max(14px, env(safe-area-inset-top)); padding-bottom: max(14px, env(safe-area-inset-bottom));
-    border-right: 1px solid var(--border); box-shadow: 0 0 40px rgb(0 0 0 / 0.25); overflow-y: auto;
+    box-shadow: 0 0 40px rgb(0 0 0 / 0.25); overflow-y: auto;
     translate: -105% 0; visibility: hidden; transition: translate 0.22s ease, visibility 0s 0.22s;
   }
   .sidebar.drawer.open { translate: 0 0; visibility: visible; transition: translate 0.22s ease; }
@@ -885,12 +879,10 @@ a.mention-chip:hover { text-decoration: underline; }
 }
 /* Phones: badges and the gutter a little smaller; the people bar overlaps its badges to fit beside the name. */
 @media (max-width: 640px) {
-  :root { --gutter: 34px; }
-  .byline { gap: 8px; }
-  .byline .avatar { width: 26px; height: 26px; }
+  :root { --byline-avatar: 26px; --byline-gap: 8px; }
   .people-bar { gap: 0; }
   .people-bar .person + .person { margin-left: -6px; }
-  .people-bar .avatar { width: 24px; height: 24px; box-shadow: 0 0 0 2px var(--surface); }
+  .people-bar .avatar { --size: 24px; box-shadow: 0 0 0 2px var(--ring); }
   .people-divider { margin: 0 6px; }
   .chat-cost > button { padding: 5px 8px; font-size: 13px; }
 }
@@ -904,20 +896,18 @@ a.mention-chip:hover { text-decoration: underline; }
 
 .skills { height: 100%; overflow-y: auto; padding: 32px 24px; max-width: 900px; }
 .skills-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
-.skills-head h2 { margin: 0 0 6px; font-size: 30px; font-weight: 800; line-height: 1.1; }
+.skills-head h2 { margin: 0 0 6px; font-size: 30px; line-height: 1.1; }
 .skills-head p { margin: 0; color: var(--muted); max-width: 60ch; }
 .skills-actions { display: flex; gap: 6px; align-items: flex-start; }
 .skills-note { color: var(--muted); font-size: 13px; }
 .skill-form { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
 .skill-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .skill-form label small { font-weight: 400; color: var(--muted); }
-.skill-form input:not([type=file]), .skill-form textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-weight: 400; }
-.skill-form input:not([type=file]), .skill-form textarea { color: var(--text); font-size: 15px; }
+.skill-form input:not([type=file]), .skill-form textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; font-weight: 400; }
 .skill-form textarea.code { font-family: var(--font-mono); font-size: 13px; resize: vertical; }
 .skill-form-actions { display: flex; gap: 6px; }
 .skill-list { list-style: none; padding: 0; margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 12px; }
 .skill { min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-.skill-toggle strong, .skill-toggle b { font-weight: 600; }
 .skill.off { opacity: 0.75; }
 .skill p { margin: 6px 0 0; }
 .skill-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -930,10 +920,10 @@ a.mention-chip:hover { text-decoration: underline; }
   appearance: none; flex: none; position: relative; width: 32px; height: 18px; margin: 0; border-radius: 999px; background: var(--border); cursor: pointer; transition: background 0.15s;
 }
 .skill-toggle input[type="checkbox"]::after {
-  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: left 0.15s;
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: translate 0.15s;
 }
 .skill-toggle input[type="checkbox"]:checked { background: var(--accent); }
-.skill-toggle input[type="checkbox"]:checked::after { left: 16px; }
+.skill-toggle input[type="checkbox"]:checked::after { translate: 14px 0; }
 .skill details { margin-top: 6px; font-size: 13px; color: var(--muted); }
 .skill summary { cursor: pointer; }
 .skill pre { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); padding: 8px 10px; border-radius: 8px; font-size: 12px; color: var(--text); max-height: 320px; overflow: auto; }
@@ -942,11 +932,10 @@ a.mention-chip:hover { text-decoration: underline; }
 
 /* Someone joined or left a shared chat: a quiet line between the messages. */
 .chat-notice { align-self: center; padding: 2px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12.5px; }
-/* A message waiting for the agent: in a dashed box, faded, with its place in the queue under it. The box takes in the
-   badge's gutter, so the badge sits inside it. */
-.queued { display: flex; flex-direction: column; gap: 2px; margin-left: calc(-1 * var(--gutter) - 10px); padding: 8px 10px 8px calc(var(--gutter) + 10px); border: 1px dashed var(--border); border-radius: var(--radius); }
+/* A message waiting for the agent: in a dashed box, faded, with its place in the queue under it. */
+.queued { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius); }
 .queued > :not(.queued-label) { opacity: 0.6; }
-.queued-label { color: var(--working); font-size: 12px; font-weight: 500; }
+.queued-label { margin-left: var(--gutter); color: var(--working); font-size: 12px; font-weight: 500; }
 /* What the model calls cost: per prompt under the agent's last reply to it, and for the whole chat in the header. */
 .prompt-cost { align-self: flex-start; padding-left: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chat-cost > button { font-variant-numeric: tabular-nums; }

@@ -53,7 +53,7 @@ export function EmojiRow({ onPick, isMine }: { onPick: (emoji: Reaction) => void
  * Under a message: each emoji it got, how many people reacted with it and who (on hover), the viewer's own marked; a
  * click adds or takes back theirs. `picked` is the agent having picked the message up, shown as its 👀.
  */
-export function ReactionChips({ reactions, picked = false, mine = false }: { reactions: MessageReactions | null; picked?: boolean; mine?: boolean }) {
+export function ReactionChips({ reactions, picked = false }: { reactions: MessageReactions | null; picked?: boolean }) {
   const people = useSharedChat();
   const byEmoji = { ...reactions?.byEmoji };
   if (picked && !byEmoji["👀"]?.includes(AGENT_REACTOR)) byEmoji["👀"] = [AGENT_REACTOR, ...(byEmoji["👀"] ?? [])];
@@ -62,7 +62,7 @@ export function ReactionChips({ reactions, picked = false, mine = false }: { rea
   const names = new Map(people ? everyone(people).map((person) => [person.uid, person.name]) : []);
   const nameOf = (uid: string) => (uid === reactions?.uid ? "You" : uid === AGENT_REACTOR ? AGENT_NAME : (names.get(uid) ?? "Someone who left"));
   return (
-    <div className={mine ? "reactions mine" : "reactions"}>
+    <div className="reactions">
       {shown.map((emoji) => {
         const who = byEmoji[emoji]!;
         const label = `${listSome(who.map(nameOf), 10)} reacted with ${emoji}`;

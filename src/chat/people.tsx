@@ -43,7 +43,7 @@ export function Avatar({ name, tint, online }: { name: string; tint: number; onl
 export function AgentAvatar({ working = false }: { working?: boolean }) {
   return (
     <span className="avatar agent" aria-hidden="true">
-      π{working && <i className="working-dot" />}
+      π{working && <i className="presence working" />}
     </span>
   );
 }
