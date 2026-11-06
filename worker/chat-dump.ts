@@ -25,11 +25,13 @@ const isCarried = (table: string) => PI_TABLE.test(table) || APP_TABLES.includes
 
 /**
  * Rows of pi's tables that are work still to do (a run, a tool call, a message waiting for one) are left out: on
- * another deployment they would run as the importer, with their sign-ins, unasked. An imported chat is idle.
+ * another deployment they would run as the importer, with their sign-ins, unasked. An imported chat is idle. pi keeps a
+ * row's status twice, in its column (which it looks work up by) and in its record; both must say it is finished. An
+ * export leaves such rows out, and an import drops any a zip brings (restorePart), since pi would run them when the chat opens.
  */
 const FINISHED: Record<string, string> = {
-  pi_tasks: "status = 'terminal'",
-  pi_submissions: "status IN ('done', 'unanswered')",
+  pi_tasks: "status = 'terminal' AND json_extract(record, '$.state.status') IS 'terminal'",
+  pi_submissions: "status IN ('done', 'unanswered') AND COALESCE(json_extract(record, '$.status'), '') IN ('done', 'unanswered')",
 };
 
 const ROWS_AT_ONCE = 200;
@@ -148,6 +150,7 @@ export function restorePart(sql: DumpSql, kv: DumpKv, kvKeys: readonly string[],
       const values = names.map((column) => fromCell(row[column], remap));
       sql.exec(`INSERT OR REPLACE INTO "${name}" (${names.map((column) => `"${column}"`).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`, ...values);
     }
+    if (FINISHED[name]) sql.exec(`DELETE FROM "${name}" WHERE NOT (${FINISHED[name]})`);
   }
 }
 

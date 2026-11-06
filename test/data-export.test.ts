@@ -7,6 +7,8 @@ import { clearImported, DumpError, dumpChat, restorePart } from "../worker/chat-
 import { memorySql } from "./fakes.ts";
 
 const OLD = "0123456789abcdef0123456789abcdef";
+/** A finished task, as pi records one: its status in its column and in its record. */
+const TERMINAL = JSON.stringify({ state: { status: "terminal" } });
 const NEW = "fedcba9876543210fedcba9876543210";
 const KV_KEYS = ["auto", "broughtIn"];
 
@@ -37,8 +39,8 @@ function chatStorage() {
       JSON.stringify({ kind: "chat.message", data: { uid: OLD, text: `message ${id} about artifact aaaabbbbccccdddd` } }),
     );
   }
-  sql.exec("INSERT INTO pi_tasks VALUES (1, 'terminal', '{}')");
-  sql.exec("INSERT INTO pi_tasks VALUES (2, 'running', '{\"tool\":\"write\"}')");
+  sql.exec("INSERT INTO pi_tasks VALUES (1, 'terminal', ?)", TERMINAL);
+  sql.exec('INSERT INTO pi_tasks VALUES (2, \'running\', \'{"state":{"status":"running"}}\')');
   sql.exec("INSERT INTO pi_blobs VALUES (1, ?)", new Uint8Array([0, 1, 2, 255]).buffer);
   sql.exec("INSERT INTO chat_reactions VALUES (3, 'thumbs', ?, 5)", OLD);
   sql.exec("INSERT INTO chat_owner VALUES (?, 'Ada')", OLD);
@@ -84,7 +86,7 @@ describe("a chat's export", () => {
     expect([...tables].sort()).toEqual(["chat_owner", "chat_reactions", "pi_blobs", "pi_entries", "pi_tasks"]);
     const rows = (name: string) => parts.flatMap((part) => part.tables.filter((table) => table.name === name).flatMap((table) => table.rows));
     expect(rows("pi_entries")).toHaveLength(30);
-    expect(rows("pi_tasks")).toEqual([{ id: 1, status: "terminal", record: "{}" }]);
+    expect(rows("pi_tasks")).toEqual([{ id: 1, status: "terminal", record: TERMINAL }]);
     expect(rows("pi_blobs")).toEqual([{ id: 1, data: { b64: "AAEC/w==" } }]);
     // The schema comes once, with a table's first rows: the table and its index.
     const schemas = parts.flatMap((part) => part.tables.filter((table) => table.name === "pi_entries" && table.schema));
@@ -116,6 +118,23 @@ describe("a chat's export", () => {
     );
     // The renamed table kept its quoted name in its schema, and came back as pi_tasks.
     expect(target.sql.exec("SELECT status FROM pi_tasks").toArray()).toEqual([{ status: "terminal" }]);
+    // Work still to do that a zip brings is dropped, by either of its statuses: pi would run it when the chat opens.
+    const [tasks] = parts.flatMap((part) => part.tables.filter((table) => table.name === "pi_tasks"));
+    const crafted = {
+      tables: [
+        {
+          ...tasks,
+          schema: undefined,
+          rows: [
+            { id: 7, status: "pending", record: '{"state":{"status":"pending"}}' },
+            { id: 8, status: "terminal", record: '{"state":{"status":"pending"}}' },
+            { id: 9, status: "terminal", record: "{}" },
+          ],
+        },
+      ],
+    };
+    restorePart(target.sql, target.kv, KV_KEYS, crafted, remap);
+    expect(target.sql.exec("SELECT id FROM pi_tasks").toArray()).toEqual([{ id: 1 }]);
     // A part sent twice changes nothing.
     restorePart(target.sql, target.kv, KV_KEYS, parts[1], remap);
     expect(target.sql.exec("SELECT COUNT(*) AS n FROM pi_entries").toArray()).toEqual([{ n: 30 }]);
@@ -171,6 +190,9 @@ describe("the export's ids and manifest", () => {
     expect(checkManifest({ ...manifest, version: EXPORT_VERSION + 1 })).toEqual({ error: expect.stringMatching(/newer version/) });
     expect(checkManifest({ format: "other" })).toEqual({ error: expect.stringMatching(/not an export/) });
     expect(checkManifest(null)).toEqual({ error: expect.stringMatching(/not an export/) });
+    // Ids go into request paths: one that could reach another route is refused.
+    expect(checkManifest({ ...manifest, chats: [{ id: "../../plan" }] })).toEqual({ error: expect.stringMatching(/damaged/) });
+    expect(checkManifest({ ...manifest, artifacts: [{ id: "aaaabbbbccccdddd", chatId: "x/y" }] })).toEqual({ error: expect.stringMatching(/damaged/) });
   });
 });
 

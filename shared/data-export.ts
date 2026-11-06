@@ -1,7 +1,7 @@
 import type { ModelSetting } from "./models.ts";
-import type { ArtifactVersion } from "./protocol.ts";
+import { ID_PATTERN, type ArtifactVersion } from "./protocol.ts";
 import type { SkillFileInfo } from "./skill-files.ts";
-import type { SavedSkillOrigin, SkillInput } from "./skills.ts";
+import { SKILL_NAME_PATTERN, type SavedSkillOrigin, type SkillInput } from "./skills.ts";
 import { sha256Hex } from "./util.ts";
 
 /**
@@ -202,5 +202,11 @@ export function checkManifest(value: unknown): ExportManifest | { error: string 
   }
   const lists = [manifest.chats, manifest.artifacts, manifest.files, manifest.sharedWithMe];
   if (typeof manifest.uid !== "string" || !manifest.account || !lists.every(Array.isArray)) return { error: "The export's manifest is damaged." };
+  // Ids and skill names go into request paths: only ones this app makes.
+  const ids = [...manifest.chats!.flatMap((chat) => [chat?.id]), ...manifest.artifacts!.flatMap((artifact) => [artifact?.id, artifact?.chatId])];
+  const skills = Array.isArray(manifest.account.skills) ? manifest.account.skills : [];
+  if (!ids.every((id) => typeof id === "string" && ID_PATTERN.test(id)) || !skills.every((skill) => SKILL_NAME_PATTERN.test(String(skill?.name)))) {
+    return { error: "The export's manifest is damaged." };
+  }
   return manifest as ExportManifest;
 }
