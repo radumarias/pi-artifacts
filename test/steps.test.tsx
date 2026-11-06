@@ -1,7 +1,22 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { inputSections, liveStatus, shortOutput, stepHint, stepLabel, stepResults, StepRun, StepsProvider, stepsLive, thoughtLine, ThoughtStep, tookFor, ToolStep } from "../src/chat/Steps.tsx";
-import { runSummary, stepRuns, streamingSteps, type StepItem } from "../src/chat/stepRuns.ts";
+import {
+  inputSections,
+  liveStatus,
+  runSummary,
+  shortOutput,
+  stepHint,
+  stepLabel,
+  stepResults,
+  StepRun,
+  StepsProvider,
+  stepsLive,
+  thoughtLine,
+  ThoughtStep,
+  tookFor,
+  ToolStep,
+} from "../src/chat/Steps.tsx";
+import { stepRuns, streamingSteps, type StepItem } from "../src/chat/stepRuns.ts";
 import type { RunningTool } from "../src/chat/useChat.ts";
 
 const call = (id: string, name: string, args: Record<string, unknown>) => ({ type: "toolCall", id, name, arguments: args });
@@ -176,7 +191,7 @@ describe("runs of steps", () => {
       result(8, "c"),
       assistant(9, [call("d", "run_bash", {})]),
     ] as never;
-    const runs = stepRuns(chat);
+    const runs = stepRuns(chat, new Set());
     expect(keys(runs.byEntry.get(2)?.get(0))).toEqual(["2:0", "a", "b"]);
     expect(runs.byEntry.get(2)?.get(1)).toBeNull();
     expect(runs.byEntry.get(5)?.get(0)).toBeNull();
@@ -185,8 +200,10 @@ describe("runs of steps", () => {
     expect(keys(runs.byEntry.get(7)?.get(1))).toEqual(["c", "d"]);
     expect(runs.open).toMatchObject({ entry: 7, index: 1 });
     // The same places again are the same objects: a message whose steps did not change is not drawn again.
-    const again = stepRuns(chat, runs);
+    const again = stepRuns(chat, new Set(), runs);
     expect(again.byEntry.get(2)).toBe(runs.byEntry.get(2));
+    // A line the chat draws over a message (a day, "New") ends the run before it.
+    expect(keys(stepRuns(chat, new Set([5])).byEntry.get(5)?.get(0))).toEqual(["b"]);
   });
 
   it("ends a run at a published artifact's card, a message, and a stopped message", () => {
@@ -201,20 +218,23 @@ describe("runs of steps", () => {
       },
       assistant(6, [call("s", "run_bash", {})]),
     ] as never;
-    const runs = stepRuns(chat);
+    const runs = stepRuns(chat, new Set());
     expect([1, 3, 5, 6].map((id) => keys(runs.byEntry.get(id)?.get(0)))).toEqual([["p"], ["q"], ["r"], ["s"]]);
   });
 
   it("joins a streaming reply's first steps to the run before it", () => {
     const chat = [assistant(1, [call("a", "run_bash", {})]), result(2, "a")] as never;
-    const runs = stepRuns(chat);
-    const streaming = { role: "assistant", timestamp: 3, content: [call("b", "run_bash", {}), text("Done."), call("c", "run_bash", {})] } as never;
+    const runs = stepRuns(chat, new Set());
+    const content = [call("b", "run_bash", {}), text("Done."), call("c", "run_bash", {})];
+    const streaming = { role: "assistant", timestamp: 3, content } as never;
     const { steps, grown } = streamingSteps(runs, streaming);
     expect(grown?.entry).toBe(1);
     expect(keys(grown?.steps.get(0))).toEqual(["a", "b"]);
     expect(grown?.steps.get(0)?.[1]).toMatchObject({ streaming: true });
     expect(steps.get(0)).toBeNull();
     expect(keys(steps.get(2))).toEqual(["c"]);
+    // The next chunk with the same first steps keeps the grown places: the earlier message is not drawn again.
+    expect(streamingSteps(runs, { role: "assistant", timestamp: 3, content: [...content] } as never, { steps, grown }).grown).toBe(grown);
     // Text first: nothing joins.
     expect(streamingSteps(runs, { role: "assistant", timestamp: 3, content: [text("So"), call("b", "run_bash", {})] } as never).grown).toBeUndefined();
   });

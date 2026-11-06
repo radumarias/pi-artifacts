@@ -191,6 +191,15 @@ export const MCP_DISCOVER_TOOL = "mcp_discover";
 /** Between the server's slug and the tool's name in an MCP tool's agent name (mcpToolName in worker/agent/mcp.ts). */
 export const MCP_TOOL_SEPARATOR = "__";
 
+/** An MCP tool's server slug and tool, from its agent name (mcpToolName); nothing for a built-in tool. */
+export function mcpParts(name: string): [server: string, tool: string] | undefined {
+  let split = name.indexOf(MCP_TOOL_SEPARATOR);
+  if (split <= 0) return undefined;
+  // A server slug can end in "_" ("Reports (beta)" is "reports_beta_"): the separator is the last two of the run.
+  while (name[split + MCP_TOOL_SEPARATOR.length] === "_") split++;
+  return [name.slice(0, split), name.slice(split + MCP_TOOL_SEPARATOR.length)];
+}
+
 /** The tool that publishes an artifact, and the details its result carries: the chat UI opens the preview from them. */
 export const PUBLISH_TOOL = "artifact_publish";
 // Types, not interfaces: tool details must be JSON, which an interface does not promise.

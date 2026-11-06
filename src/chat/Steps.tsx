@@ -1,11 +1,11 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
+import { CHECK_TOOL, DRAFTS_TOOL, MCP_DISCOVER_TOOL, mcpParts, PUBLISH_TOOL, WRITE_TOOL, type CheckedDetails } from "../../shared/protocol.ts";
 import { clip, formatBytes, plural } from "../../shared/util.ts";
 import { Linkified } from "./Linkified.tsx";
 import { formatElapsed, useElapsed } from "./elapsed.ts";
-import { mcpParts, runSummary, type StepItem } from "./stepRuns.ts";
+import type { StepItem } from "./stepRuns.ts";
 import { unansweredCalls, type RunningTool } from "./useChat.ts";
 
 /** The finished calls, by call id, and every call some assistant entry made: a result without one shows on its own. */
@@ -119,6 +119,66 @@ export function stepLabel(name: string): string {
   return mcp ? `${mcp[0]} › ${mcp[1]}` : name;
 }
 
+/** Whether a page write writes a whole new page, not edits to one. */
+function writesNewPage(args: Record<string, unknown> | undefined): args is { html: string } {
+  return typeof args?.html === "string";
+}
+
+const times = (n: number) => (n === 1 ? "" : n === 2 ? " twice" : ` ${n} times`);
+/** "ran a command", "ran 3 commands". */
+const some = (verb: string, one: string, noun: string) => (n: number) => (n === 1 ? `${verb} ${one}` : `${verb} ${plural(n, noun)}`);
+/** "checked the page", "checked the page twice". */
+const again = (did: string) => (n: number) => did + times(n);
+
+/** What a kind of step did, for so many of them, in a run's summary; beside LABELS, which names one step. */
+const SAID: Record<string, (n: number) => string> = {
+  run_bash: some("ran", "a command", "command"),
+  run_python: again("ran Python"),
+  "write:new": some("wrote", "a page", "page"),
+  "write:edit": again("edited the page"),
+  [CHECK_TOOL]: again("checked the page"),
+  [PUBLISH_TOOL]: again("published"),
+  [DRAFTS_TOOL]: again("listed drafts"),
+  artifact_read: some("read", "an artifact", "artifact"),
+  artifact_history: again("looked at version history"),
+  artifact_diff: again("compared versions"),
+  files_list: again("listed files"),
+  files_read: some("read", "a file", "file"),
+  files_write: some("wrote", "a file", "file"),
+  skill_propose: some("proposed", "a skill", "skill"),
+  [MCP_DISCOVER_TOOL]: again("looked up MCP servers"),
+  tool_search: again("searched for tools"),
+  react: again("reacted"),
+};
+
+/** A step's kind for a run's summary: a page write by whether it writes a new page, an MCP call by its server. */
+function kindOf(call: Pick<ToolCall, "name" | "arguments">): string {
+  if (call.name === WRITE_TOOL) return writesNewPage(call.arguments) ? "write:new" : "write:edit";
+  const mcp = mcpParts(call.name);
+  return mcp ? `mcp:${mcp[0]}` : call.name;
+}
+
+function said(kind: string, n: number): string {
+  if (SAID[kind]) return SAID[kind](n);
+  if (kind.startsWith("mcp:")) return `queried ${kind.slice(4)}${times(n)}`;
+  return `used ${kind}${times(n)}`;
+}
+
+/**
+ * A run's summary in a line: what its calls did, by kind in the order they first came ("Queried sales 5 times, ran 3
+ * commands"). Thoughts count only in a run of nothing else.
+ */
+export function runSummary(items: readonly StepItem[]): string {
+  const kinds = new Map<string, number>();
+  for (const item of items) {
+    if (item.kind !== "tool") continue;
+    const kind = kindOf(item.call);
+    kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+  }
+  const line = kinds.size ? [...kinds].map(([kind, n]) => said(kind, n)).join(", ") : plural(items.length, "thought");
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
 /** Lines that say nothing about what a script does: blank, a shebang, shell options. */
 const BOILERPLATE = /^\s*($|#!|set -)/;
 
@@ -127,7 +187,7 @@ const HINTS: Record<string, (args: Record<string, unknown> | undefined) => strin
   // A new page, whose first line is its doctype, or edits to one.
   [WRITE_TOOL]: (args) => {
     const edits = Array.isArray(args?.edits) ? args.edits.length : 0;
-    if (typeof args?.html === "string") return `New page · ${formatBytes(args.html.length)}`;
+    if (writesNewPage(args)) return `New page · ${formatBytes(args.html.length)}`;
     return edits ? `${plural(edits, "edit")} to ${args?.draft_id ? "draft" : "published page"}` : "";
   },
   [CHECK_TOOL]: (args) => {
@@ -300,9 +360,8 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   const result = use(ResultsContext).results.get(call.id);
   // Read only while the call is unfinished: a finished step does not follow the live output of others.
   const live = result ? undefined : use(LiveContext);
-  const status: StepStatus = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
+  const { status, startedAt } = callStatus(result, live, call.id, streaming);
   const { text, icon, tone } = STATUS[status];
-  const startedAt = status === "running" ? live!.tools.get(call.id)?.startedAt : undefined;
   const took = result?.durationMs !== undefined ? ` · ${tookFor(result.durationMs)}` : "";
   const props = {
     openKey: call.id,
@@ -344,6 +403,39 @@ export function ToolStep({ call, streaming = false }: { call: StepCall; streamin
   );
 }
 
+/** Where a call is (its result's outcome, else what the live round says), and since when it runs. `live` is needed only without a result. */
+function callStatus(result: ToolResultMessage | undefined, live: StepsLive | undefined, callId: string, streaming: boolean): { status: StepStatus; startedAt?: number } {
+  if (result) return { status: result.isError ? "error" : "done" };
+  const status = liveStatus(live!, callId, streaming);
+  return { status, startedAt: status === "running" ? live!.tools.get(callId)?.startedAt : undefined };
+}
+
+/** A run's calls in short: the first still under way, where the last is, how many failed, and their time together. */
+interface RunTally {
+  active?: { status: StepStatus; startedAt?: number };
+  last?: StepStatus;
+  failed: number;
+  took: number;
+  calls: number;
+}
+
+/** How a run's line looks from its tally: like its active call, else done (with what failed), failed, or stopped. */
+function runLook({ active, last, failed, took, calls }: RunTally): Pick<Parameters<typeof Panel>[0], "tone" | "icon" | "status" | "time"> {
+  if (active) {
+    return { tone: "active", icon: <Spark />, status: STATUS[active.status].text, time: active.startedAt !== undefined && <RunningFor since={active.startedAt} /> };
+  }
+  // Thoughts alone.
+  if (!last) return { icon: "✻" };
+  if (last === "stopped") return { icon: STATUS.stopped.icon, status: STATUS.stopped.text };
+  if (failed === calls) return { tone: "error", icon: STATUS.error.icon, status: STATUS.error.text };
+  return {
+    tone: "done",
+    icon: STATUS.done.icon,
+    status: STATUS.done.text + (took ? ` · ${tookFor(took)}` : ""),
+    time: failed > 0 && <span className="step-time step-failed">· {failed} failed</span>,
+  };
+}
+
 /** A step on its own: a call, or a thought. */
 function OneStep({ item }: { item: StepItem }) {
   return item.kind === "tool" ? <ToolStep call={item.call} streaming={item.streaming} /> : <ThoughtStep openKey={item.key} text={item.text} />;
@@ -356,38 +448,23 @@ function OneStep({ item }: { item: StepItem }) {
  */
 export function StepRun({ items }: { items: readonly StepItem[] }) {
   const { results } = use(ResultsContext);
+  // The same items until the run grows: the line is worked out once for a finished run.
+  const label = useMemo(() => runSummary(items), [items]);
   if (items.length === 1) return <OneStep item={items[0]} />;
   const calls = items.flatMap((item) => (item.kind === "tool" ? [item] : []));
   // Read only while a call is unfinished, as ToolStep does.
   const live = calls.every((item) => results.has(item.call.id)) ? undefined : use(LiveContext);
-  let active: { status: StepStatus; startedAt?: number } | undefined;
-  let last: StepStatus | undefined;
-  let failed = 0;
-  let took = 0;
+  const tally: RunTally = { failed: 0, took: 0, calls: calls.length };
   for (const { call, streaming } of calls) {
     const result = results.get(call.id);
-    last = result ? (result.isError ? "error" : "done") : liveStatus(live!, call.id, streaming);
-    if (result) {
-      if (result.isError) failed++;
-      took += result.durationMs ?? 0;
-    } else if (last !== "stopped" && !active) active = { status: last, startedAt: last === "running" ? live!.tools.get(call.id)?.startedAt : undefined };
+    const now = callStatus(result, live, call.id, streaming);
+    tally.last = now.status;
+    if (result?.isError) tally.failed++;
+    tally.took += result?.durationMs ?? 0;
+    if (!result && now.status !== "stopped") tally.active ??= now;
   }
-  const shown: Pick<Parameters<typeof Panel>[0], "tone" | "icon" | "status" | "time"> = active
-    ? { tone: "active", icon: <Spark />, status: STATUS[active.status].text, time: active.startedAt !== undefined && <RunningFor since={active.startedAt} /> }
-    : !last
-      ? { icon: "✻" }
-      : last === "stopped"
-        ? { icon: STATUS.stopped.icon, status: STATUS.stopped.text }
-        : failed === calls.length
-          ? { tone: "error", icon: STATUS.error.icon, status: STATUS.error.text }
-          : {
-              tone: "done",
-              icon: STATUS.done.icon,
-              status: `Done${took ? ` · ${tookFor(took)}` : ""}`,
-              time: failed > 0 && <span className="step-time step-failed">· {failed} failed</span>,
-            };
   return (
-    <Panel openKey={`run:${items[0].key}`} openedAs={items[0].key} kind="step-run" label={runSummary(items)} hint="" {...shown}>
+    <Panel openKey={`run:${items[0].key}`} openedAs={items[0].key} kind="step-run" label={label} hint="" {...runLook(tally)}>
       {() => (
         <div className="step-run-list">
           {items.map((item) => (

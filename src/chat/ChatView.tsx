@@ -1,4 +1,4 @@
-import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
@@ -13,7 +13,6 @@ import {
   CHAT_PEOPLE_KIND,
   everyone,
   incomingKey,
-  PUBLISH_TOOL,
   type AutoPick,
   type ToolPickNote,
   type ChatMessageData,
@@ -51,7 +50,7 @@ import { MentionList, MentionText, useMentions } from "./Mentions.tsx";
 import { NotifyButton } from "./notify.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepRun, StepsProvider } from "./Steps.tsx";
-import { stepRuns, streamingSteps, type MessageSteps, type StepRuns } from "./stepRuns.ts";
+import { endedEarly, stepRuns, streamingSteps, type MessageSteps, type StepRuns, type StreamingSteps } from "./stepRuns.ts";
 import { Thinking } from "./Thinking.tsx";
 import { useRevealedText } from "./reveal.ts";
 import { firstNew, isAgent, openHints, published, sentAt, shown } from "./entries.ts";
@@ -228,14 +227,23 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   // Recomputed only when entries change, not as a reply streams.
   const dayStarts = useMemo(() => dayStartsOf(state.entries), [state.entries]);
   const agentLast = useMemo(() => endsInAgentTurn(state.entries), [state.entries]);
-  // The agent's steps in runs, each shown as one line where it starts; the streaming reply's first ones join the last run.
-  const lastRuns = useRef<StepRuns>(undefined);
-  const runs = useMemo(() => (lastRuns.current = stepRuns(state.entries, lastRuns.current)), [state.entries]);
-  const streamed = useMemo(() => state.partial && streamingSteps(runs, state.partial), [runs, state.partial]);
   const newAt = useMemo(
     // Only once it is known who owns the chat: until then a member's own legacy messages could not be told apart.
     () => (newSince === undefined || !people ? undefined : firstNew(state.entries, newSince, uid, isOwner)),
     [newSince, state.entries, uid, people, isOwner],
+  );
+  // The agent's steps in runs, each one line where it starts, ended by what the chat draws over an entry (a day, the
+  // "New" line). The streaming reply's first steps join the last run. Both keep what did not change, for Entry's memo.
+  const lastRuns = useRef<StepRuns>(undefined);
+  const runs = useMemo(() => {
+    const breaks = new Set(dayStarts.keys());
+    if (newAt !== undefined) breaks.add(newAt);
+    return (lastRuns.current = stepRuns(state.entries, breaks, lastRuns.current));
+  }, [state.entries, dayStarts, newAt]);
+  const lastStreamed = useRef<StreamingSteps>(undefined);
+  const streamed = useMemo(
+    () => (lastStreamed.current = state.partial && streamingSteps(runs, state.partial, lastStreamed.current)),
+    [runs, state.partial],
   );
   useNewInView(list, following, newAt, newSince);
   const hinted = useMemo(() => openHints(hints, state.entries), [hints, state.entries]);
@@ -921,7 +929,7 @@ function Assistant({
     const run = steps?.get(i);
     return run ? <StepRun key={i} items={run} /> : null;
   });
-  const ended = message.stopReason === "error" || message.stopReason === "aborted";
+  const ended = endedEarly(message);
   // Nothing of its own to show (its steps are in an earlier message's run): no empty block to space the conversation.
   if (!ended && parts.every((part) => !part)) return null;
   return (

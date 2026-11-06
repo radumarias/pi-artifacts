@@ -552,7 +552,7 @@ button.reaction:hover { border-color: var(--muted); }
 .step-run-list { display: flex; flex-direction: column; }
 .step-run-list > .step { padding: 4px 0; }
 .step-run-list > .step + .step { border-top: 1px solid var(--border); }
-.step-run-list .step-body { margin: 4px 0 6px; padding: 0; border-left: 0; }
+.step-run-list > .step > .step-body { margin: 4px 0 6px; padding: 0; border-left: 0; }
 .step-failed { color: var(--error); }
 .step-note { margin: 0; color: var(--muted); }
 .step-shot { margin: 0 0 10px; }
