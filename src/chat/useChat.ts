@@ -246,6 +246,8 @@ export function useChat(chatId: string) {
   const [online, setOnline] = useState<Presence[]>([]);
   const [reactions, setReactions] = useState<Reactions>({});
   const [auto, setAuto] = useState(false);
+  // The viewer's messages that did not call the agent but look meant for it: under each the app offers to call it.
+  const [hints, setHints] = useState<ReadonlySet<number>>(NO_HINTS);
   const socket = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -254,6 +256,7 @@ export function useChat(chatId: string) {
     setReactions({});
     setOnline([]);
     setAuto(false);
+    setHints(NO_HINTS);
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -285,6 +288,7 @@ export function useChat(chatId: string) {
         else if (message.type === "reacted") setReactions((known) => withEntry(known, message.entry, message.reactions));
         else if (message.type === "presence") setOnline(message.online);
         else if (message.type === "auto") setAuto(message.on);
+        else if (message.type === "callHint") setHints((known) => new Set(known).add(message.entry));
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();
@@ -314,17 +318,8 @@ export function useChat(chatId: string) {
     socket.current.send(JSON.stringify(message));
     return true;
   }, []);
-  // Stable, so the memoized model picker skips the re-render on every streamed token.
-  const setModel = useCallback((model: string, thinkingLevel?: ModelThinkingLevel) => send({ type: "model", model, thinkingLevel }), [send]);
-  const react = useCallback((entry: number, emoji: Reaction, on: boolean) => send({ type: "react", entry, emoji, on }), [send]);
-
-  return {
-    state,
-    connected,
-    people,
-    /** Who has the chat open right now, and in how many windows. */
-    online,
-    prompt: (text: string, attachments?: AttachmentInput[], mentions?: MentionInput[], replyTo?: number) =>
+  const prompt = useCallback(
+    (text: string, attachments?: AttachmentInput[], mentions?: MentionInput[], replyTo?: number) =>
       send({
         type: "prompt",
         text,
@@ -332,6 +327,29 @@ export function useChat(chatId: string) {
         ...(mentions?.length && { mentions }),
         ...(replyTo !== undefined && { replyTo }),
       }),
+    [send],
+  );
+  // Stable, so the memoized model picker skips the re-render on every streamed token.
+  const setModel = useCallback((model: string, thinkingLevel?: ModelThinkingLevel) => send({ type: "model", model, thinkingLevel }), [send]);
+  const react = useCallback((entry: number, emoji: Reaction, on: boolean) => send({ type: "react", entry, emoji, on }), [send]);
+  const dropHint = useCallback(
+    (entry: number) =>
+      setHints((known) => {
+        if (!known.has(entry)) return known;
+        const next = new Set(known);
+        next.delete(entry);
+        return next;
+      }),
+    [],
+  );
+
+  return {
+    state,
+    connected,
+    people,
+    /** Who has the chat open right now, and in how many windows. */
+    online,
+    prompt,
     abort: () => send({ type: "abort" }),
     setModel,
     /** Whether the chat is on Auto: a router picks the model and effort for each message. */
@@ -339,8 +357,14 @@ export function useChat(chatId: string) {
     /** Everyone's reactions, by transcript entry; each entry's object stays the same until its reactions change. */
     reactions,
     react,
+    /** The viewer's messages that look meant for the agent though they did not call it, by transcript entry. */
+    hints,
+    /** Stop offering to call the agent on a message: it was called, or the viewer said no. */
+    dropHint,
   };
 }
+
+const NO_HINTS: ReadonlySet<number> = new Set();
 
 /**
  * `next`, keeping `known`'s object for each entry whose reactions are the same: a socket is sent all of them again on

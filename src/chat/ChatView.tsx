@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
@@ -49,7 +49,7 @@ import { ModelPicker } from "./ModelPicker.tsx";
 import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx";
 import { Thinking } from "./Thinking.tsx";
 import { useRevealedText } from "./reveal.ts";
-import { firstNew, isAgent, sentAt, shown } from "./entries.ts";
+import { firstNew, isAgent, openHints, sentAt, shown } from "./entries.ts";
 
 interface Props {
   chatId: string;
@@ -82,7 +82,7 @@ function published(entry: EntryRecord): PublishedDetails | undefined {
 }
 
 export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity, onLeft, onMenu }: Props) {
-  const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react } = useChat(chatId);
+  const { state, connected, people, online, prompt, abort, setModel, auto, reactions, react, hints, dropHint } = useChat(chatId);
   const chatReactions = useMemo(() => ({ uid, react }), [uid, react]);
   const [draft, setDraft] = useState("");
   const [sharing, setSharing] = useState(false);
@@ -103,6 +103,15 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     setReplying(quote);
     input.current?.focus();
   }, []);
+  // "Ask pi" under a message of the viewer's that looks meant for the agent: a reply to it that calls the agent.
+  const askAgent = useCallback(
+    (entry: number) => {
+      if (!prompt(AGENT_TOKEN, undefined, undefined, entry)) return;
+      dropHint(entry);
+      following.current = true;
+    },
+    [prompt, dropHint],
+  );
   const picker = useRef<HTMLInputElement>(null);
   const lastArtifact = useRef<string>("");
   // Whether the conversation so far has arrived: publishes in it are not new.
@@ -228,6 +237,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     [newSince, state.entries, uid, people, isOwner],
   );
   useNewInView(list, following, newAt, newSince);
+  const hinted = useMemo(() => openHints(hints, state.entries), [hints, state.entries]);
   const thinking = state.runStartedAt !== undefined && waitingOnModel(state);
   return (
     <SharedChat.Provider value={shared}>
@@ -272,7 +282,15 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                         {dayStart !== undefined && <DaySeparator at={dayStart} />}
                         {entry.id === newAt && <NewDivider />}
                         {bylines.has(entry.id) && <AgentByline />}
-                        <Entry entry={entry} reactions={reactions[entry.id]} uid={uid} ownerName={ownerName} onOpen={onArtifact} onReply={reply} />
+                        <Entry
+                          entry={entry}
+                          reactions={reactions[entry.id]}
+                          uid={uid}
+                          ownerName={ownerName}
+                          onOpen={onArtifact}
+                          onReply={reply}
+                          {...(hinted.has(entry.id as number) && { onAskAgent: askAgent, onNoHint: dropHint })}
+                        />
                         {spend && <PromptCost spend={spend} />}
                       </Fragment>
                     );
@@ -416,6 +434,8 @@ const Entry = memo(function Entry({
   ownerName,
   onOpen,
   onReply,
+  onAskAgent,
+  onNoHint,
 }: {
   entry: EntryRecord;
   /** Its reactions; the same object until they change, so a reaction draws only its message again. */
@@ -425,6 +445,9 @@ const Entry = memo(function Entry({
   ownerName?: string;
   onOpen: (artifact: PublishedDetails) => void;
   onReply: (quote: ReplyQuote) => void;
+  /** Set for a message of the viewer's that looks meant for the agent: Ask pi under it calls the agent on it. */
+  onAskAgent?: (entry: number) => void;
+  onNoHint?: (entry: number) => void;
 }) {
   const people = useSharedChat();
   const reactions = useMessageReactions(isReactable(entry) ? entry.id : undefined, byEmoji);
@@ -452,6 +475,7 @@ const Entry = memo(function Entry({
         auto={data.auto}
         reactions={reactions}
         onReply={answer}
+        hint={onAskAgent && onNoHint && <CallHint onAsk={() => onAskAgent(entry.id as number)} onNo={() => onNoHint(entry.id as number)} />}
       />
     );
   }
@@ -641,6 +665,7 @@ function User({
   sentAt,
   reactions = null,
   onReply,
+  hint,
 }: {
   text: string;
   /** Undefined for the viewer's own message. */
@@ -656,6 +681,8 @@ function User({
   sentAt?: number;
   reactions?: MessageReactions | null;
   onReply?: () => void;
+  /** Under the message: the offer to call the agent on it (CallHint). */
+  hint?: ReactNode;
 }) {
   const content = useRef<HTMLDivElement>(null);
   const mine = author === undefined;
@@ -684,7 +711,26 @@ function User({
       </div>
       <ReactionChips reactions={reactions} picked={picked} />
       {auto && <AutoPicked pick={auto} />}
+      {hint}
       {sentAt !== undefined && <SentTime at={sentAt} />}
+    </div>
+  );
+}
+
+/**
+ * Under a message of the viewer's that did not call the agent but looks meant for it ("pi, can you…"): Ask pi, which
+ * replies to it with "@pi", or no.
+ */
+function CallHint({ onAsk, onNo }: { onAsk: () => void; onNo: () => void }) {
+  return (
+    <div className="call-hint" role="group" aria-label={`Meant for ${AGENT_NAME}?`}>
+      <span>Meant for {AGENT_NAME}?</span>
+      <button type="button" className="call-hint-ask" onClick={onAsk} title={`Reply to it with ${AGENT_TOKEN}, so ${AGENT_NAME} answers it`}>
+        Ask {AGENT_NAME}
+      </button>
+      <button type="button" className="call-hint-no" onClick={onNo} title={`Not for ${AGENT_NAME}`} aria-label={`Not for ${AGENT_NAME}`}>
+        ×
+      </button>
     </div>
   );
 }

@@ -388,9 +388,13 @@ function unavailable(id: string, why: string): Router {
  * the router's picker id, as pi adds a tool's spend: the cost panel then counts it, also after older messages are
  * summarized. Not under `models`, whose rows the panel splits by the efforts of the replies in the transcript.
  */
-export async function recordRouterSpend(tx: Tx, conversationId: ConversationId, router: string, usage: Usage): Promise<void> {
+export function recordRouterSpend(tx: Tx, conversationId: ConversationId, router: string, usage: Usage): Promise<void> {
+  return recordSpend(tx, conversationId, `${AUTO_LEDGER_PREFIX}${router}`, usage);
+}
+
+/** Add a call's usage to the conversation's spend ledger under `tools` as `key`, as pi adds a tool's spend. */
+export async function recordSpend(tx: Tx, conversationId: ConversationId, key: string, usage: Usage): Promise<void> {
   const totals = (await tx.doc(UsageDoc, conversationId)).tools as Record<string, Usage>;
-  const key = `${AUTO_LEDGER_PREFIX}${router}`;
   const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
   // Drafts take strict JSON: no undefined counters.
   if (!total) {

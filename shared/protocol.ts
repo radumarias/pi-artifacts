@@ -406,6 +406,11 @@ export type ChatServerMessage =
   | { type: "presence"; online: Presence[] }
   /** Whether the chat is on Auto (shared/models.ts AUTO_MODEL): on connect, and whenever someone turns it on or off. */
   | { type: "auto"; on: boolean }
+  /**
+   * To the author of a message in a shared chat that did not call the agent, but looks meant for it ("pi, can you…"):
+   * its transcript entry, under which the app offers to call the agent on it.
+   */
+  | { type: "callHint"; entry: number }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
   /** Sent to everyone just before the chat closes their sockets, when its owner deleted it. */

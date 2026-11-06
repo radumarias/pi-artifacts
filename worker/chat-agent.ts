@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Models, Provider, UserMessage } from "@earendil-works/pi-ai";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type Submission, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -44,7 +44,7 @@ import {
 import { baseName, type AttachmentInput } from "../shared/attachments.ts";
 import { keptMentions, parseMentions, summonsAgent, taggedPeople, type MentionInput } from "../shared/mentions.ts";
 import { freePath, MAX_LISTED, uploadTargets } from "../shared/uploads.ts";
-import { AUTO_MODEL, COMPACTION, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
+import { AUTO_MODEL, COMPACTION, HINT_LEDGER_PREFIX, isAuto, modelKey, type AutoCandidate, type ModelChoice, type ModelSetting } from "../shared/models.ts";
 import { deadline, errorMessage, memoAsync, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -55,7 +55,8 @@ import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
 import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
 import { skillSource } from "./agent/skills.ts";
 import { titleFor } from "./agent/title.ts";
-import { autoCandidates, contextTokens, recordRouterSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
+import { autoCandidates, contextTokens, recordRouterSpend, recordSpend, route, routeHistory, routersFrom } from "./agent/route.ts";
+import { callHinter, HINT_MS, HINT_THRESHOLD, worthAsking, type ModelRunner } from "./agent/call-hint.ts";
 import { RunTracker } from "./chat-status.ts";
 import { mcpExtension, type ServerCatalog } from "./agent/mcp.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
@@ -829,7 +830,11 @@ export class ChatAgent extends DurableObject<Env> {
     // The model changes before the message goes in, so the run it starts is on the pick.
     if (summoned && routing) await this.#placeAuto(async () => summon(dataWith(await this.#applyPick(await routing))));
     else if (summoned) await summon(dataWith());
-    else await this.#aside(content, dataWith());
+    else {
+      const written = await this.#aside(content, dataWith());
+      // Meant for the agent, though it did not call it? Its author may be offered to (#hintCall). Off the prompt's path.
+      if (text && worthAsking(text)) void this.#hintCall(written, author, text).catch((error) => console.error("call hint:", errorMessage(error)));
+    }
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
     const tags = taggedPeople(keptMentions(text, mentions));
@@ -868,11 +873,42 @@ export class ChatAgent extends DurableObject<Env> {
    * entry everyone sees has no model message, so it lands at once, even mid-run; what the model reads of it is a
    * `chat.aside` entry, which pi places at once when the agent is idle, or between its steps while it works.
    */
-  async #aside(content: UserMessage["content"], data: JsonObject): Promise<void> {
+  async #aside(content: UserMessage["content"], data: JsonObject): Promise<Submission> {
     const root = await this.#root();
-    await root.submit({ type: "write", entry: { kind: CHAT_MESSAGE_KIND, data: { ...data, aside: true } } }, BACKGROUND_CONTEXT);
+    const written = await root.submit({ type: "write", entry: { kind: CHAT_MESSAGE_KIND, data: { ...data, aside: true } } }, BACKGROUND_CONTEXT);
     const message: UserMessage = { role: "user", content, timestamp: Date.now() };
     await root.submit({ type: "write", entry: { kind: CHAT_ASIDE_KIND, model: [message] } }, BACKGROUND_CONTEXT);
+    return written;
+  }
+
+  /**
+   * An aside someone wrote (`written`, its `chat.message`) that may still be meant for the agent ("pi, can you…"): the
+   * deployment's CALL_HINT_MODEL reads it with the end of the conversation, and when it is likely enough
+   * (HINT_THRESHOLD) for the agent, its author's windows are told, and show them Ask pi under it. The call counts in
+   * pi's ledger like the router's. Nothing for no CALL_HINT_MODEL, and nothing on a failure or past HINT_MS.
+   */
+  async #hintCall(written: Submission, author: Person, text: string): Promise<void> {
+    const hinter = callHinter(this.env.AI as unknown as ModelRunner, this.env.CALL_HINT_MODEL);
+    if (!hinter) return;
+    const root = await this.#root();
+    const [placed, page] = await Promise.all([written.wait(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
+    if (placed.status !== "done") return;
+    const entry = placed.entry;
+    const request = {
+      author: author.name,
+      message: text,
+      people: everyone(this.people()).map((person) => person.name),
+      // What came before it: the page may already hold the message, and what followed.
+      history: routeHistory(page.items.filter((item) => item.id < entry)),
+    };
+    const { probability, usage } = await hinter.ask(request, AbortSignal.timeout(HINT_MS));
+    // Paid for whatever it said. Only a record: a failure is logged.
+    if (usage) {
+      await root
+        .commit((tx) => recordSpend(tx, root.id, `${HINT_LEDGER_PREFIX}${hinter.id}`, usage), BACKGROUND_CONTEXT)
+        .catch((error: unknown) => console.error("call hint spend:", errorMessage(error)));
+    }
+    if (probability >= HINT_THRESHOLD) this.sockets.sendTo(author.uid, { type: "callHint", entry });
   }
 
   /**
@@ -1608,6 +1644,11 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       if (!people) views.set(person.uid, (people = this.#chat.peopleFor(person.uid)));
       send(ws, { type: "people", people });
     }
+  }
+
+  /** Tell one person's open sockets something only they see. */
+  sendTo(uid: string, message: ChatServerMessage): void {
+    for (const ws of this.lifecycle.sockets.get(SOCKET_TAG)) if (this.#person(ws)?.uid === uid) send(ws, message);
   }
 
   /** Tell every open socket the same thing: an entry's reactions changed, or someone turned Auto on or off. */
