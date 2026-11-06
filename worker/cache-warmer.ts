@@ -56,8 +56,10 @@ export class CacheWarmer {
   }
 
   #keep(run: Run, model: string, input: Record<string, unknown>, options: Record<string, unknown>): void {
-    // The same request, answered with nothing: no output, no stream to read.
-    this.#last = { model, input: { ...input, max_tokens: 0, stream: false }, options: { ...options, signal: undefined }, at: this.now() };
+    // The same request, answered with nothing: no output, no stream to read. Past AI Gateway's own cache, which would
+    // answer the second identical ping itself and never reach Anthropic's.
+    const gateway = typeof options.gateway === "object" && options.gateway !== null ? { ...options.gateway, skipCache: true } : options.gateway;
+    this.#last = { model, input: { ...input, max_tokens: 0, stream: false }, options: { ...options, gateway, signal: undefined }, at: this.now() };
     this.#schedule(run);
   }
 
@@ -90,23 +92,30 @@ export class CacheWarmer {
   }
 }
 
-/** A Claude conversation call (it has tools) large enough that its cache is worth keeping, and not a ping. */
+/**
+ * A Claude conversation call (it has tools) large enough that its cache is worth keeping, and not a ping. Not one with
+ * budget thinking (`thinking.type: "enabled"`): Anthropic wants its max_tokens above the budget, so a ping would be
+ * refused, and changing the thinking settings to get past that would miss the cache it is meant to keep.
+ */
 function worthWarming(model: string, input: Record<string, unknown>): boolean {
   if (!model.startsWith("anthropic/") || input.max_tokens === 0) return false;
+  if ((input.thinking as { type?: unknown } | undefined)?.type === "enabled") return false;
   if (!Array.isArray(input.messages) || !Array.isArray(input.tools) || input.tools.length === 0) return false;
   return atLeastChars([input.system, input.tools, input.messages], MIN_WARM_CHARS);
 }
 
 /**
  * Whether the strings in `value` add up to `min` characters: the size of a request without serializing it again on
- * every call (the binding does that once to send it), stopping as soon as the count gets there.
+ * every call (the binding does that once to send it), stopping as soon as the count gets there. An image's base64
+ * source is left out: hundreds of thousands of characters for a screenshot of about 1,200 tokens.
  */
 function atLeastChars(value: unknown, min: number): boolean {
   let count = 0;
   const walk = (node: unknown): boolean => {
     if (typeof node === "string") return (count += node.length) >= min;
     if (Array.isArray(node)) return node.some(walk);
-    return typeof node === "object" && node !== null && Object.values(node).some(walk);
+    if (typeof node !== "object" || node === null || (node as { type?: unknown }).type === "base64") return false;
+    return Object.values(node).some(walk);
   };
   return walk(value);
 }

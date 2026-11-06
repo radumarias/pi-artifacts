@@ -54,7 +54,7 @@ describe("CacheWarmer", () => {
     const ping = calls[1];
     expect(ping.model).toBe("anthropic/claude-opus-5.5");
     expect(ping.input).toMatchObject({ max_tokens: 0, stream: false, messages: large.messages });
-    expect(ping.options).toMatchObject({ gateway: { id: "g" }, returnRawResponse: true });
+    expect(ping.options).toMatchObject({ gateway: { id: "g", skipCache: true }, returnRawResponse: true });
     // The binding's other members are the binding's own.
     expect(warmed.aiGatewayLogId).toBe("log-1");
   });
@@ -81,6 +81,11 @@ describe("CacheWarmer", () => {
     await warmed.run("anthropic/claude-opus-5.5", { ...large, max_tokens: 0 });
     // A summary of the conversation: as large, but no tools.
     await warmed.run("anthropic/claude-opus-5.5", { messages: large.messages, max_tokens: 13_000 });
+    // Budget thinking: a ping's max_tokens 0 would be under the budget, and refused.
+    await warmed.run("anthropic/claude-opus-4.1", { ...large, thinking: { type: "enabled", budget_tokens: 16_000 } });
+    // A small conversation with a large screenshot: the image's base64 is not counted.
+    const image = { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "x".repeat(MIN_WARM_CHARS) } };
+    await warmed.run("anthropic/claude-opus-5.5", { ...large, messages: [{ role: "user", content: [image] }] });
     expect(await time.next()).toBe(false);
   });
 
