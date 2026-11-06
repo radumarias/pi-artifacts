@@ -341,7 +341,8 @@ body.resizing iframe { pointer-events: none; }
 /*
  * React, copy, reply and "…": in a pill at the right end of someone else's message, level with their name (beside the
  * viewer's own bubble, on its left), and in a row under the agent's replies. When it was sent: under the message, and
- * beside that row. All on hover, holding their place so nothing moves. The pill rises 28px above the text: .messages leaves room for it over the first message.
+ * beside that row. All on hover, holding their place so nothing moves. The pill rises 28px above the text: .messages
+ * leaves room for it over the first message.
  */
 .bubble-row { position: relative; display: flex; align-self: stretch; max-width: 100%; }
 .message-actions { position: relative; }
