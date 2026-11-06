@@ -28,6 +28,7 @@
     "src/chat/useChat.ts",
     "src/chat/spend.ts",
     "src/chat/entries.ts",
+    "src/chat/sending.ts",
     "src/chat/reveal.ts",
     "scripts/prices.ts",
     "src/api.ts",

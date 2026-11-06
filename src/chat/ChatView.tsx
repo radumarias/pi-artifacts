@@ -1,7 +1,7 @@
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject } from "react";
-import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment } from "../../shared/attachments.ts";
+import { baseName, imageBudget, MAX_ATTACHMENTS, type Attachment, type AttachmentInput } from "../../shared/attachments.ts";
 import { MAX_FILE_BYTES } from "../../shared/uploads.ts";
 import { errorMessage, formatBytes } from "../../shared/util.ts";
 import { api } from "../api.ts";
@@ -24,7 +24,7 @@ import {
   type ReplyQuote,
 } from "../../shared/protocol.ts";
 import { textOf } from "../../shared/canonical.ts";
-import { AGENT_NAME, AGENT_TOKEN, type Mention } from "../../shared/mentions.ts";
+import { AGENT_NAME, AGENT_TOKEN, summonsAgent, type Mention } from "../../shared/mentions.ts";
 import { replyQuote } from "../../shared/replies.ts";
 import { MessageActions } from "./MessageActions.tsx";
 import { Compact, useCompact, useSwipeReveal } from "./gestures.ts";
@@ -50,6 +50,7 @@ import { OrphanResult, StepsProvider, ThoughtStep, ToolStep } from "./Steps.tsx"
 import { Thinking } from "./Thinking.tsx";
 import { useRevealedText } from "./reveal.ts";
 import { firstNew, isAgent, sentAt, shown } from "./entries.ts";
+import { useSending, type Sending } from "./sending.ts";
 
 interface Props {
   chatId: string;
@@ -96,6 +97,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const shared = people && people.members.length > 0 ? people : null;
+  const sending = useSending(state.entries, state.queued, uid, state.error);
   const mentions = useMentions(chatId, draft, setDraft, input, shared, uid);
   // The message the next one answers, quoted above the composer until it is sent or let go.
   const [replying, setReplying] = useState<ReplyQuote | null>(null);
@@ -119,7 +121,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     const el = list.current;
     if (el && following.current) el.scrollTop = el.scrollHeight;
   }, []);
-  useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length]);
+  useEffect(follow, [follow, state.entries.length, state.partial, state.tools, state.queued.length, sending.sending.length]);
   // On a phone, dragging the conversation left shows when each message was sent.
   const compact = useCompact();
   const track = useRef<HTMLDivElement>(null);
@@ -151,9 +153,24 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
     if (attachments.sending || (!text && attachments.pending.length === 0)) return;
     const named = mentions.take(text);
     const replyTo = replying?.id;
+    const files = attachments.pending.map((item) => item.file);
+    // Shown at once, until the chat puts it in: on Auto, after the router picked the model.
+    const sent = (inputs: AttachmentInput[] = []) =>
+      sending.add({
+        text,
+        after: (state.entries.at(-1)?.id as number | undefined) ?? -1,
+        ...(inputs.length && { attachments: inputs.map((input, i) => ({ path: input.path, size: files[i]?.size ?? 0, shown: input.image ? "image" : "path", thumb: input.thumb })) }),
+        ...(replying && { replyTo: replying }),
+        picking: auto && (!shared || (replying !== null && "agent" in replying) || summonsAgent(text)),
+      });
+    const go = (inputs?: AttachmentInput[]) => {
+      if (!prompt(text, inputs, named, replyTo)) return false;
+      sent(inputs);
+      return true;
+    };
     if (attachments.pending.length === 0) {
-      if (!prompt(text, undefined, named, replyTo)) return;
-    } else if (!(await attachments.send((inputs) => prompt(text, inputs, named, replyTo)))) return;
+      if (!go()) return;
+    } else if (!(await attachments.send(go))) return;
     following.current = true;
     setDraft("");
     setReplying(null);
@@ -256,7 +273,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
             <Compact.Provider value={compact}>
               <div className="messages" ref={list} onScroll={onScroll} data-compact={compact || undefined}>
                 <div className="transcript" ref={track}>
-                  {state.entries.length === 0 && !state.busy && (
+                  {state.entries.length === 0 && !state.busy && !sending.sending.length && (
                     <div className="empty-chat">
                       <h2>What should we build?</h2>
                       <p>Try: “A live crypto dashboard for BTC, ETH and SOL with 24 h change and a 7-day price chart, refreshing every 30 seconds.”</p>
@@ -280,6 +297,7 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                   {thinking && <Thinking since={state.runStartedAt!} />}
                   {state.error && <div className="chat-error">{state.error}</div>}
                   <Queue queued={state.queued} uid={uid} />
+                  <Unshown sending={sending.sending} uid={uid} />
                 </div>
               </div>
             </Compact.Provider>
@@ -603,6 +621,19 @@ function Queue({ queued, uid }: { queued: QueuedMessage[]; uid: string }) {
       </div>
     );
   });
+}
+
+/**
+ * Messages this window sent that the chat has not put in yet, at the bottom like the queue: faded, marked as sending, or
+ * on Auto as picking the model. Each leaves for the transcript, or the queue, once it is there.
+ */
+function Unshown({ sending, uid }: { sending: Sending[]; uid: string }) {
+  return sending.map((message) => (
+    <div key={message.key} className="queued mine sending">
+      <User text={message.text} uid={uid} attachments={message.attachments} replyTo={message.replyTo} />
+      <small className="queued-label">{message.picking ? "Auto · picking a model…" : "Sending…"}</small>
+    </div>
+  ));
 }
 
 /** A message's blocks, skipping any slot a stream has not filled yet. */

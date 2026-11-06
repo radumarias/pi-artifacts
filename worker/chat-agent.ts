@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Models, Provider, UserMessage } from "@earendil-works/pi-ai";
-import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, ROOT_CONVERSATION_ID, type AgentChange, type AgentState, type Cursor, type EntryId, type EntryRecord, type JsonObject, type AgentEvent, type AgentEventStream, type ConversationView, type SnapshotEvent } from "@earendil-works/pi-durable";
 import { PiHarness, skills } from "agents/harness/pi";
 import { Lifecycle, LifecycleCapability, type DurableObjectCapability } from "agents/lifecycle";
 import { createAI } from "agents/models/pi-ai";
@@ -129,6 +129,9 @@ type OwnFile = Extract<MentionInput, { kind: "file" }>;
  * after, and the spinner should not blink between them.
  */
 const SETTLE_MS = 1_500;
+/** Why an Auto message kept the chat's model, when a reply was running as it came in, or started while the router thought. */
+const RUNNING_WHEN_SENT = "a reply was still running when it was sent, so the router was not asked";
+const RUNNING_WHEN_PICKED = "a reply started while the router picked, so the message went in on the model it runs on";
 /** How often pi commits a streaming answer and running tool output (see STREAM_STEP_MS). */
 const PROGRESS = { partialIntervalMs: STREAM_STEP_MS, outputIntervalMs: STREAM_STEP_MS };
 /** The chat's status as the sidebars last heard it, in this object's storage: after a restart, whether a run may be going. */
@@ -428,26 +431,26 @@ export class ChatAgent extends DurableObject<Env> {
    * Auto's pick for a message about to start a run: the deployment's router (ROUTER_MODEL, the first the picker lists
    * that answers) reads the end of the conversation and the message (and how many images and other files it attaches),
    * and picks one of AUTO_MODELS and an effort. The router call counts in pi's ledger like any model call. `choice`: the
-   * model and effort to run on, when a router picked. Undefined while a run is going (as the sidebars last heard:
-   * #applyPick checks again), which the message joins on the model it runs on, and when the conversation could not be
-   * read. Never throws: when no router picks in time (ROUTE_MS), the pick is the model the chat runs on, with no router,
-   * and the failure is logged.
+   * model and effort to run on, when a router picked. While a reply is running (as pi's own queue says: the sidebars'
+   * status lags behind it), the router is not asked: the message goes in on the model the chat runs on (#applyPick
+   * checks again). Undefined only when the conversation could not be read. Never throws: when no router picks in time
+   * (ROUTE_MS), the pick is the model the chat runs on, with no router, and why.
    */
   async #route(message: string, images: number, files: number): Promise<Routing | undefined> {
-    if (this.#status() === "running") return undefined;
     const started = Date.now();
     let read;
     try {
-      const [root, catalog] = await Promise.all([this.#root(), this.#catalog()]);
+      const [root, catalog, busy] = await Promise.all([this.#root(), this.#catalog(), this.#replying()]);
       const [agent, page] = await Promise.all([root.agent(BACKGROUND_CONTEXT), root.entries({}, ROUTE_ENTRIES, undefined, BACKGROUND_CONTEXT)]);
-      read = { root, catalog, agent, page };
+      read = { root, catalog, busy, agent, page };
     } catch (error) {
       console.error("auto:", errorMessage(error));
       return undefined;
     }
-    const { root, catalog, agent, page } = read;
-    const current = agent.model ? modelKey(agent.model.provider, agent.model.modelId) : this.env.MODEL;
+    const { root, catalog, busy, agent, page } = read;
+    const current = this.#modelOf(agent);
     const kept = (failed: string) => ({ pick: { model: current, thinkingLevel: agent.thinkingLevel, failed, ms: Date.now() - started } });
+    if (busy) return kept(RUNNING_WHEN_SENT);
     const tokens = contextTokens(page.items);
     try {
       const candidates = autoCandidates(catalog.models, this.env.AUTO_MODELS as AutoCandidate[], { images: images > 0, contextTokens: tokens });
@@ -460,33 +463,43 @@ export class ChatAgent extends DurableObject<Env> {
         .catch((error: unknown) => console.error("auto spend:", errorMessage(error)));
       // An effort the model does not take moves to the nearest it does; none named asks for its usual one.
       const choice = catalog.check({ model: routed.pick.model, thinkingLevel: routed.pick.thinkingLevel });
-      if (!choice) return kept(`${routed.pick.model} is not in the picker`);
+      if (!choice) return kept(`the router picked ${routed.pick.model}, which is not in the picker`);
       const pick: AutoPick = { ...choice, ...(routed.pick.reason && { reason: routed.pick.reason }), router: routed.router, ms: Date.now() - started };
       return { pick, choice };
     } catch (error) {
       console.error("auto:", errorMessage(error));
-      return kept(errorMessage(error));
+      return kept(`no router could pick: ${errorMessage(error)}`);
     }
   }
 
   /**
-   * Run the chat on Auto's pick, unless a run is going by now (someone else's message started one while the router
-   * thought), which the message then joins on the model it runs on, with no pick. The pick, when it stands. Compared
-   * with the model the chat runs on now, not when the router was asked: another message may have changed it since.
-   * Called only inside #placeAuto, so no other Auto message changes the model between this and its message going in.
+   * Run the chat on Auto's pick, unless a reply is running by now (someone else's message started one while the router
+   * thought), which the message then goes to on the model it runs on, as its pick says. The pick, as it stands.
+   * Compared with the model the chat runs on now, not when the router was asked: another message may have changed it
+   * since. Called only inside #placeAuto, so no other Auto message changes the model between this and its message going in.
    */
   async #applyPick(routed: Routing | undefined): Promise<AutoPick | undefined> {
     if (!routed) return undefined;
-    const pi = await this.harness.pi();
-    if ((await pi.inspect(BACKGROUND_CONTEXT)).submissions.length) return undefined;
-    if (!routed.choice) return routed.pick;
     const root = await this.#root();
-    const agent = await root.agent(BACKGROUND_CONTEXT);
-    const current = agent.model ? modelKey(agent.model.provider, agent.model.modelId) : this.env.MODEL;
+    const [busy, agent] = await Promise.all([this.#replying(), root.agent(BACKGROUND_CONTEXT)]);
+    const current = this.#modelOf(agent);
+    // Kept: the model it goes in on is the one the chat runs on now.
+    if (!routed.choice) return { ...routed.pick, model: current, thinkingLevel: agent.thinkingLevel };
+    if (busy) return { model: current, thinkingLevel: agent.thinkingLevel, failed: RUNNING_WHEN_PICKED, ms: routed.pick.ms };
     if (current !== routed.choice.model || agent.thinkingLevel !== routed.choice.thinkingLevel) {
       await root.configure(this.#agentChange(routed.choice), BACKGROUND_CONTEXT);
     }
     return routed.pick;
+  }
+
+  /** Whether a reply is running or a message waits for one, by pi's own queue. */
+  async #replying(): Promise<boolean> {
+    return (await (await this.harness.pi()).inspect(BACKGROUND_CONTEXT)).submissions.length > 0;
+  }
+
+  /** The picker's id of the model `agent` runs on. */
+  #modelOf(agent: Pick<AgentState, "model">): string {
+    return agent.model ? modelKey(agent.model.provider, agent.model.modelId) : this.env.MODEL;
   }
 
   /**

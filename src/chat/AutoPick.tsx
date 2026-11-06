@@ -6,8 +6,8 @@ import { autoSpendOf, formatCost, shortTokens } from "./spend.ts";
 
 /**
  * Under a message sent on Auto, the model and effort picked to answer it ("Auto · Claude Sonnet 5.5 · High effort"); its
- * tooltip says why, and which router picked, at what cost and in how long. When no router could pick, it says the chat
- * kept its model, and why. A tap shows the same under it. Memoized: the chat re-renders on every streamed token.
+ * tooltip says why, and which router picked, at what cost and in how long. When the chat kept its model (no router could
+ * pick, or a reply was running), it says so, and why. A tap shows the same under it. Memoized: the chat re-renders on every streamed token.
  */
 export const AutoPicked = memo(function AutoPicked({ pick }: { pick: AutoPick }) {
   const catalog = useCatalog();
@@ -21,7 +21,7 @@ export const AutoPicked = memo(function AutoPicked({ pick }: { pick: AutoPick })
       ]
         .filter(Boolean)
         .join("\n")
-    : `The router could not pick, so the chat kept the model it was on.${pick.failed ? `\nWhy: ${pick.failed}` : ""}`;
+    : `The chat kept the model it was on.\nWhy: ${pick.failed ?? "no router could pick"}`;
   // A tap shows the tooltip's text under it too: phones have no hover.
   return (
     <details className={router ? "auto-pick" : "auto-pick kept"}>
