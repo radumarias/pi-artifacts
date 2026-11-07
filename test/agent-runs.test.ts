@@ -313,7 +313,7 @@ describe("scheduled runs", () => {
     expect(reads.host.runs.list(reads.definition.id)[0]).toMatchObject({ status: "sent" });
   });
 
-  it("skips a waiting run once a newer one went, when the sign-in comes late", async () => {
+  it("skips a waiting run once a newer one went, before the sign-in comes", async () => {
     const { host, runner, definition } = home();
     host.signIn.add("crm");
     await runner.now(definition.id, false);
@@ -323,12 +323,13 @@ describe("scheduled runs", () => {
     host.clock.now = T0 + 86_400_000;
     await runner.now(definition.id, false);
     await host.settled();
+    // It was skipped as the newer one went, before the sign-in came.
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: a newer run went instead." });
     expect(await runner.signedIn("crm")).toBe(0);
-    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: a newer run went since." });
     expect(host.delivered).toHaveLength(1);
   });
 
-  it("counts as newer only a run that ended: not one that failed, waits for a sign-in too, or is still going", () => {
+  it("says a newer run went only once one ended, and that one is going while it may yet wait", () => {
     const { host, definition } = home();
     const id = definition.id;
     host.runs.begin(id, T0, "schedule", false);
@@ -337,15 +338,33 @@ describe("scheduled runs", () => {
     host.runs.update(id, T0 + 1, { status: "failed" });
     host.runs.begin(id, T0 + 2, "schedule", false);
     host.runs.update(id, T0 + 2, { status: "needs_sign_in" });
-    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
     host.runs.begin(id, T0 + 3, "schedule", true);
-    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
-    // Still in its sign-in check, it may wait too: the older one goes, not skipped for a run that then waits as well.
+    host.runs.update(id, T0 + 3, { status: "sent" });
+    // Failed, waiting too, or a test's: none replaced it.
+    expect(host.runs.newer(id, T0, false)).toBeNull();
     host.runs.begin(id, T0 + 5, "schedule", false);
-    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
+    expect(host.runs.newer(id, T0, false)).toBe("going");
     host.runs.begin(id, T0 + 4, "schedule", false);
     host.runs.update(id, T0 + 4, { status: "not_today" });
-    expect(host.runs.hasNewer(id, T0, false)).toBe(true);
+    expect(host.runs.newer(id, T0, false)).toBe("went");
+    // Once one went, the older ones waiting are skipped; others are left as they are.
+    host.runs.skipReplaced(id, T0 + 4, false);
+    expect(host.runs.get(id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: a newer run went instead." });
+    expect(host.runs.get(id, T0 + 2)?.status).toBe("not_today");
+    expect(host.runs.get(id, T0 + 1)?.status).toBe("failed");
+  });
+
+  it("leaves a waiting run waiting when a sign-in comes while a newer run is still going", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    await host.settled();
+    host.signIn.delete("crm");
+    // The next run is in its sign-in check: restarting the older one now would post twice if this one goes.
+    host.runs.begin(definition.id, T0 + 86_400_000, "schedule", false);
+    expect(await runner.signedIn("crm")).toBe(0);
+    expect(host.runs.get(definition.id, T0)?.status).toBe("needs_sign_in");
+    expect(host.delivered).toHaveLength(0);
   });
 
   it("finds a sign-in failure mid-run too", async () => {

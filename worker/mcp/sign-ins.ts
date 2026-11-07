@@ -84,7 +84,9 @@ export class McpSignIns {
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = this.#oauthServers().map((server) => server.name);
     const notIn = configured.length ? ` WHERE server NOT IN (${configured.map(() => "?").join(", ")})` : "";
-    for (const table of ["mcp_auth", "mcp_run_servers", "mcp_waiting", "mcp_notices", "mcp_known"]) sql.exec(`DELETE FROM ${table}${notIn}`, ...configured);
+    for (const table of ["mcp_auth", "mcp_run_servers", "mcp_waiting", "mcp_notices", "mcp_known"]) {
+      sql.exec(`DELETE FROM ${table}${notIn}`, ...configured);
+    }
   }
 
   /** The store a connection of this user's uses for one server (McpOAuthClient). */
@@ -356,7 +358,9 @@ export class McpSignIns {
 
   /** The notice reaches every open app, which reads the list again on it: no separate list change. */
   async #tell(notice: SignInNotice): Promise<void> {
-    const { title, body } = signInNoticeText({ ...notice, what: undefined });
+    // A lapsed sign-in (known, no tokens) can be Disconnected, so its push says so.
+    const lapsed = this.known().includes(notice.server) && !this.#signedIn().some((row) => row.server === notice.server);
+    const { title, body } = signInNoticeText({ ...notice, what: undefined, lapsed });
     // A click on the push starts the sign-in.
     await this.#host.notify(notice, { title, body, url: notice.link, tag: `sign-in:${notice.server}` });
   }

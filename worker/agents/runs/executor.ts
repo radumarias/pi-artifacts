@@ -513,6 +513,8 @@ export class RunExecutor {
           ? `Failed: ${(undelivered ? undelivered.detail : failed[0]?.reason) ?? "a step failed"}`
           : `Not today: ${items[0]?.reason ?? "nothing to report"}`;
     runs.update(agent.id, run.dueAt, { status, summary });
+    // It went: older runs still waiting for a sign-in would only post after it.
+    if (status !== "failed") runs.skipReplaced(agent.id, run.dueAt, run.test);
     return status;
   }
 

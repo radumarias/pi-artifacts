@@ -240,7 +240,8 @@ describe("sign-ins with nobody present", () => {
     expect(refused.signIns.known()).toEqual(["Portal"]);
     // Records from before the table count, whatever they hold: signed in, lapsed with or without a grant (from before
     // grants), or even never finished, which Disconnect then forgets.
-    for (const record of [{ client: CLIENT, tokens: TOKENS }, { client: CLIENT, grant: "g1" }, { client: CLIENT }, { client: CLIENT, verifier: "v" }]) {
+    const records = [{ client: CLIENT, tokens: TOKENS }, { client: CLIENT, grant: "g1" }, { client: CLIENT }, { client: CLIENT, verifier: "v" }];
+    for (const record of records) {
       const sql = memorySql();
       await setup({ sql }).signIns.update("Portal", { set: record });
       sql.exec("DROP TABLE mcp_known");

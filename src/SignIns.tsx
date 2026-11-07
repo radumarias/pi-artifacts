@@ -32,22 +32,22 @@ export function useSignInAlerts(reload: () => void) {
   );
 }
 
-/** Disconnect a sign-in: which one is going (`busy`), and why the last one failed. */
+/** Disconnect a sign-in: which one is going (`busy`), and why the last one failed (`failed`, the server it was for). */
 function useDisconnect(onChange: (list: McpSignInView[]) => void) {
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState<{ server: string; error: string } | null>(null);
   const disconnect = async (server: string) => {
     setBusy(server);
-    setError(null);
+    setFailed(null);
     try {
       onChange(await api.disconnect(server));
     } catch (e) {
-      setError(errorMessage(e));
+      setFailed({ server, error: errorMessage(e) });
     } finally {
       setBusy(null);
     }
   };
-  return { busy, error, disconnect };
+  return { busy, failed, error: failed?.error ?? null, disconnect };
 }
 
 /** The Disconnect button of one sign-in. */
@@ -64,13 +64,19 @@ function DisconnectButton({ server, busy, onClick }: { server: string; busy: str
  * with its sign-in link. It stays until they sign in, or dismiss it.
  */
 export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onChange: (list: McpSignInView[]) => void }) {
-  const { busy, error, disconnect } = useDisconnect(onChange);
+  const { busy, failed, disconnect } = useDisconnect(onChange);
   const shown = list.filter((item) => item.notice);
   if (shown.length === 0) return null;
   return (
     <div className="sign-in-notices" role="status">
       {shown.map((item) => {
-        const { title, body } = signInNoticeText({ server: item.server, kind: item.notice!, endsAt: item.endsAt, what: item.waiting });
+        const { title, body } = signInNoticeText({
+          server: item.server,
+          kind: item.notice!,
+          endsAt: item.endsAt,
+          what: item.waiting,
+          lapsed: item.lapsed,
+        });
         return (
           <div key={item.server} className={`sign-in-notice ${item.notice}`}>
             <KeyIcon />
@@ -83,7 +89,7 @@ export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onCha
                 </a>
                 {item.lapsed && <DisconnectButton server={item.server} busy={busy} onClick={(server) => void disconnect(server)} />}
               </div>
-              {error && <span className="form-error">{error}</span>}
+              {failed?.server === item.server && <span className="form-error">{failed.error}</span>}
             </div>
             <button
               type="button"

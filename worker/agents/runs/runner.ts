@@ -360,11 +360,15 @@ export class AgentRunner {
         skip(run, `@${agent.name} was off`);
         continue;
       }
-      // A later run went meanwhile (without the server, after its sign-in lapsed): this one would post after it.
-      if (this.#host.runs.hasNewer(run.agentId, run.dueAt, run.test)) {
+      // A later run went meanwhile (without the server, after its sign-in lapsed): this one would post after it. One
+      // still going may yet wait too: this one waits for it, and is skipped when it goes (RunExecutor), else restarted at
+      // the next sign-in, when that one waits too.
+      const newer = this.#host.runs.newer(run.agentId, run.dueAt, run.test);
+      if (newer === "went") {
         skip(run, "a newer run went since");
         continue;
       }
+      if (newer === "going") continue;
       this.#host.runs.restart(run.agentId, run.dueAt);
       restarted++;
       this.#host.waitUntil(this.executor.start(startOf(agent, run)));

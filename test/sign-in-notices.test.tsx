@@ -18,7 +18,9 @@ describe("the sidebar's sign-in notice", () => {
     expect(lapsed).toContain(">Sign in</a>");
     expect(lapsed).toContain(">Disconnect</button>");
     expect(lapsed).toContain("Disconnect it, and runs go on without it.");
-    // Never signed in: nothing to disconnect.
-    expect(renderToStaticMarkup(<SignInNotices list={[needed]} onChange={() => {}} />)).not.toContain(">Disconnect</button>");
+    // Never signed in: nothing to disconnect, and the text offers none.
+    const never = renderToStaticMarkup(<SignInNotices list={[needed]} onChange={() => {}} />);
+    expect(never).not.toContain(">Disconnect</button>");
+    expect(never).not.toContain("Disconnect it");
   });
 });

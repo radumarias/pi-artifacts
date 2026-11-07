@@ -39,16 +39,22 @@ export interface SignInNotice {
   at: number;
 }
 
-/** One line for a notice: what the user reads in the sidebar and in the browser's notification. */
-export function signInNoticeText(notice: Pick<SignInNotice, "server" | "kind" | "what" | "endsAt">): { title: string; body: string } {
+/**
+ * One line for a notice: what the user reads in the sidebar and in the browser's notification. Only a `lapsed` sign-in
+ * (McpSignInView.lapsed) can be Disconnected, so only its text offers that.
+ */
+export function signInNoticeText(
+  notice: Pick<SignInNotice, "server" | "kind" | "what" | "endsAt"> & { lapsed?: boolean },
+): { title: string; body: string } {
   if (notice.kind === "ending") {
     const when = notice.endsAt ? ` around ${new Date(notice.endsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : " soon";
     return { title: `Sign in to ${notice.server} again`, body: `Your sign-in runs out${when}. Sign in again so scheduled runs keep working.` };
   }
+  const way = notice.lapsed ? " No access any more? Disconnect it, and runs go on without it." : "";
   return {
     title: `Sign in to ${notice.server}`,
     body: notice.what
-      ? `${notice.what} is waiting for you to sign in, then it runs. No access any more? Disconnect it, and runs go on without it.`
-      : "Your sign-in no longer works. Sign in again so scheduled runs keep working, or Disconnect it so they go on without it.",
+      ? `${notice.what} is waiting for you to sign in, then it runs.${way}`
+      : `Your sign-in no longer works. Sign in again so scheduled runs keep working.${way}`,
   };
 }
