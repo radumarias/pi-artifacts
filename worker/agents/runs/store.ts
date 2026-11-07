@@ -194,13 +194,13 @@ export class AgentRuns {
   }
 
   /**
-   * Whether a run of the agent (a test, or a real one, as `test` says) went after `dueAt`: is going, sent, or found
-   * nothing to do. One that failed or waits for a sign-in too replaced nothing.
+   * Whether a run of the agent (a test, or a real one, as `test` says) went after `dueAt`: sent, or found nothing to do.
+   * One that failed or waits for a sign-in too replaced nothing, nor does one still going (it may yet wait as well).
    */
   hasNewer(agentId: string, dueAt: number, test: boolean): boolean {
     return (
       this.#rows(
-        "agent_id = ? AND due_at > ? AND item = '' AND test = ? AND status IN ('running', 'sent', 'not_today') LIMIT 1",
+        "agent_id = ? AND due_at > ? AND item = '' AND test = ? AND status IN ('sent', 'not_today') LIMIT 1",
         agentId,
         dueAt,
         test ? 1 : 0,

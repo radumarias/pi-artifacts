@@ -327,7 +327,7 @@ describe("scheduled runs", () => {
     expect(host.delivered).toHaveLength(1);
   });
 
-  it("counts as newer only a run that went: not one that failed or waits for a sign-in too", () => {
+  it("counts as newer only a run that ended: not one that failed, waits for a sign-in too, or is still going", () => {
     const { host, definition } = home();
     const id = definition.id;
     host.runs.begin(id, T0, "schedule", false);
@@ -338,6 +338,9 @@ describe("scheduled runs", () => {
     host.runs.update(id, T0 + 2, { status: "needs_sign_in" });
     expect(host.runs.hasNewer(id, T0, false)).toBe(false);
     host.runs.begin(id, T0 + 3, "schedule", true);
+    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
+    // Still in its sign-in check, it may wait too: the older one goes, not skipped for a run that then waits as well.
+    host.runs.begin(id, T0 + 5, "schedule", false);
     expect(host.runs.hasNewer(id, T0, false)).toBe(false);
     host.runs.begin(id, T0 + 4, "schedule", false);
     host.runs.update(id, T0 + 4, { status: "not_today" });
