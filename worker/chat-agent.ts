@@ -276,6 +276,8 @@ type PiScan = { through: number; chain?: { hop: number; root: number } };
 const HOME_AGENT_KEY = "homeAgent";
 /** Set while the home agent is on with a trigger: only then can its alarms have gone missing (#reconcileHome). */
 const HOME_RUNS_KEY = "homeRuns";
+/** Per agent: the newest definition version agentChanged acted on, so one read earlier and told late changes nothing. */
+const AGENT_VERSION_KEY = "agentVersion:";
 /** The interval that wakes this object while a run is going, so a run cut off by a reset goes on soon (#keepResuming). */
 const RESUME_KEY = "runsResume";
 const RESUME_SECONDS = 90;
@@ -2821,6 +2823,9 @@ export class ChatAgent extends DurableObject<Env> {
   async agentChanged(agentId: string, agent: AgentDefinition | null): Promise<void> {
     if (this.#gone) return;
     if (agent) {
+      const applied = this.ctx.storage.kv.get<number>(`${AGENT_VERSION_KEY}${agentId}`);
+      if (applied !== undefined && agent.version < applied) return;
+      this.ctx.storage.kv.put(`${AGENT_VERSION_KEY}${agentId}`, agent.version);
       this.ctx.storage.kv.put(HOME_AGENT_KEY, agentId);
       this.ctx.storage.kv.put(HOME_RUNS_KEY, Boolean(agent.enabled && agent.trigger));
       if (this.roster.get(agentId)) {
@@ -2832,6 +2837,7 @@ export class ChatAgent extends DurableObject<Env> {
         if (refused) console.error("agent home:", refused.error);
       }
     }
+    if (!agent) this.ctx.storage.kv.delete(`${AGENT_VERSION_KEY}${agentId}`);
     if (!agent && this.ctx.storage.kv.get(HOME_AGENT_KEY) === agentId) {
       this.ctx.storage.kv.delete(HOME_AGENT_KEY);
       this.ctx.storage.kv.delete(HOME_RUNS_KEY);

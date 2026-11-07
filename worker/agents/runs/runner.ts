@@ -126,7 +126,11 @@ export class AgentRunner {
     if (agent && row?.version != null && agent.version < row.version) return;
     const wanted = agent?.enabled && agent.trigger ? agent : null;
     const key = wanted ? triggerKey(wanted) : "";
-    if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) return;
+    if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) {
+      // The same alarm, from a newer definition: remembered, so one read before this one does not set it back either.
+      if (wanted.version > (row.version ?? -Infinity)) this.#sql.exec("UPDATE agent_schedules SET version = ? WHERE agent_id = ?", wanted.version, agentId);
+      return;
+    }
     if (row) await this.#clear(row);
     if (!wanted) return;
     const trigger = wanted.trigger!;

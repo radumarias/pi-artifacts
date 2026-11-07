@@ -389,7 +389,7 @@ describe("scheduled runs", () => {
     await runner.apply(definition.id, { ...definition, version: 2, job: "Changed" });
     expect([...host.alarms.keys()]).toEqual(["alarm-1"]);
     // A new time: the old alarm goes, and its firing runs nothing.
-    const later = agent({ trigger: { kind: "schedule", at: "09:30", tz: "Europe/Bucharest" } });
+    const later = agent({ version: 3, trigger: { kind: "schedule", at: "09:30", tz: "Europe/Bucharest" } });
     host.definitions.set(definition.id, later);
     await runner.apply(definition.id, later);
     expect([...host.alarms.values()].map((alarm) => alarm.at)).toEqual([Date.parse("2026-11-04T07:30:00Z")]);
@@ -444,6 +444,16 @@ describe("scheduled runs", () => {
     const { host, runner, definition } = home(agent({ version: 3 }));
     await runner.apply(definition.id, definition);
     await runner.apply(definition.id, agent({ version: 2, enabled: false }));
+    expect(runner.nextRun(definition.id)).toBe(SEVEN);
+    expect(host.alarms.size).toBe(1);
+  });
+
+  it("remembers the newest definition even when it kept the alarm", async () => {
+    const { host, runner, definition } = home(agent({ version: 3 }));
+    await runner.apply(definition.id, definition);
+    // Version 4 changed only the instructions: the same alarm, but version 3 read late no longer turns it off.
+    await runner.apply(definition.id, agent({ version: 4, instructions: "Report the month too." }));
+    await runner.apply(definition.id, agent({ version: 3, enabled: false }));
     expect(runner.nextRun(definition.id)).toBe(SEVEN);
     expect(host.alarms.size).toBe(1);
   });
