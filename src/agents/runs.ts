@@ -1,6 +1,7 @@
 // What the Runs tab says of a run, in plain functions the tests read without a browser.
 
-import { serversNamed, type AgentDefinition } from "../../shared/agents.ts";
+import { stepServers, type AgentDefinition } from "../../shared/agents.ts";
+import { readsInStepText } from "../../shared/sign-ins.ts";
 import type { AgentRunView, RunDelivery, RunDeliveryKind, RunItemStatus, RunStatus, RunWhy } from "../../shared/runs.ts";
 
 /** A pill's tone, as the stylesheet colours it. */
@@ -71,13 +72,11 @@ export function deliveryStatusLabel(status: RunDelivery["status"]): { text: stri
  * (change the steps, or turn it off); one its work only may use, Disconnect lets the runs go on without.
  */
 export function signInWayOut(agent: Pick<AgentDefinition, "name" | "trigger" | "scope" | "workflow">, servers: readonly string[]): string[] {
-  const steps = new Set(serversNamed(agent, { reads: true }));
+  const steps = stepServers(agent);
   const read = servers.filter((server) => steps.has(server));
   const rest = servers.filter((server) => !steps.has(server));
   return [
-    ...(read.length
-      ? [`@${agent.name} reads ${read.join(", ")} in a step, so it cannot go on without it: no access any more? Change its steps, or turn it off.`]
-      : []),
+    ...(read.length ? [`No access any more? ${readsInStepText(`@${agent.name}`, read)}`] : []),
     ...(rest.length
       ? [`Signed in to ${rest.join(", ")} before and no access any more? Disconnect it under Sign-ins in the account menu, and runs go on without it.`]
       : []),

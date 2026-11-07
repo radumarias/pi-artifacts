@@ -76,7 +76,7 @@ describe("a run waiting for a sign-in", () => {
   it("offers Disconnect only for a server its agent does not read in a step", () => {
     const brief = { name: "brief", workflow: steps };
     expect(signInWayOut(brief, ["crm"])).toEqual([
-      "@brief reads crm in a step, so it cannot go on without it: no access any more? Change its steps, or turn it off.",
+      "No access any more? @brief reads crm in a step, so it cannot go on without it: change its steps or turn it off.",
     ]);
     expect(signInWayOut(brief, ["calendar"])).toEqual([
       "Signed in to calendar before and no access any more? Disconnect it under Sign-ins in the account menu, and runs go on without it.",

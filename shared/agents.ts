@@ -296,6 +296,11 @@ export function serversNamed(agent: Pick<AgentDefinition, "trigger" | "scope" | 
   return [...found];
 }
 
+/** The servers `agent` reads in a step (a look, its scope's list, its watch): a run cannot go on without them. */
+export function stepServers(agent: Pick<AgentDefinition, "trigger" | "scope" | "workflow">): Set<string> {
+  return new Set(serversNamed(agent, { reads: true }));
+}
+
 /** The steps a run of `agent` goes through: its workflow, or, without one, its instructions as one work step for its owner. */
 export function workflowOf(agent: Pick<AgentDefinition, "workflow">): AgentStep[] {
   if (agent.workflow?.length) return agent.workflow;

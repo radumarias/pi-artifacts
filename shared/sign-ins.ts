@@ -46,6 +46,11 @@ export interface SignInNotice {
   at: number;
 }
 
+/** What to do about an agent that reads these servers in a step, when its owner has no access to them any more. */
+export function readsInStepText(agent: string, servers: readonly string[]): string {
+  return `${agent} reads ${servers.join(", ")} in a step, so it cannot go on without it: change its steps or turn it off.`;
+}
+
 /** Whether a notice offers Disconnect: for a sign-in that lapsed, unless an agent waiting reads the server in a step. */
 export function offersDisconnect(view: { lapsed?: boolean; stepReads?: boolean }): boolean {
   return Boolean(view.lapsed && !view.stepReads);
@@ -63,7 +68,7 @@ export function signInNoticeText(
     return { title: `Sign in to ${notice.server} again`, body: `Your sign-in runs out${when}. Sign in again so scheduled runs keep working.` };
   }
   const way = notice.stepReads
-    ? ` No access any more? ${notice.what ?? "An agent"} reads ${notice.server} in a step: change its steps or turn it off.`
+    ? ` No access any more? ${readsInStepText(notice.what ?? "An agent", [notice.server])}`
     : offersDisconnect(notice)
       ? " No access any more? Disconnect it, and runs go on without it."
       : "";

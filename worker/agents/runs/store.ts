@@ -38,6 +38,11 @@ type RunRow = {
   reply_session: string | null;
 };
 
+/** Why a run of an agent turned off did not go. */
+export function turnedOff(agent: { name: string }): string {
+  return `Skipped: @${agent.name} was turned off.`;
+}
+
 /** What a run's own row keeps besides its status: what it sent, and what it waits for. */
 export interface RunDetail {
   deliveries: RunDelivery[];
@@ -229,9 +234,10 @@ export class AgentRuns {
    * (it went again, another skip ended it, or it was pruned): a list read before an await may be stale.
    */
   skipWaiting(agentId: string, dueAt: number, summary: string): boolean {
+    const waiting = "agent_id = ? AND due_at = ? AND item = '' AND status = 'needs_sign_in'";
     const changed =
       this.#sql.exec(
-        "UPDATE agent_runs SET status = 'not_today', ended_at = ?, summary = ? WHERE agent_id = ? AND due_at = ? AND item = '' AND status = 'needs_sign_in'",
+        `UPDATE agent_runs SET status = 'not_today', ended_at = ?, summary = ? WHERE ${waiting}`,
         this.#now(),
         summary,
         agentId,
@@ -253,14 +259,13 @@ export class AgentRuns {
     const run = this.get(agentId, dueAt);
     if (!run || run.status !== "needs_sign_in") return false;
     const { needsSignIn: _, released: __, ...detail } = run.detail;
-    return (
-      this.#sql.exec(
-        "UPDATE agent_runs SET status = 'running', ended_at = NULL, summary = NULL, detail = ? WHERE agent_id = ? AND due_at = ? AND item = '' AND status = 'needs_sign_in'",
-        JSON.stringify(detail),
-        agentId,
-        dueAt,
-      ).rowsWritten > 0
+    this.#sql.exec(
+      "UPDATE agent_runs SET status = 'running', ended_at = NULL, summary = NULL, detail = ? WHERE agent_id = ? AND due_at = ? AND item = ''",
+      JSON.stringify(detail),
+      agentId,
+      dueAt,
     );
+    return true;
   }
 
   /** Change what a run's row keeps: its status (an end once it is not running), summary, detail. */

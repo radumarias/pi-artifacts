@@ -37,7 +37,7 @@ export type SignInNeededContext = {
   what?: string;
   quiet?: boolean;
   /** The agent reads the server in a step: going on without it is no way out, so Disconnect is not offered for it. */
-  step?: boolean;
+  stepReads?: boolean;
 };
 
 /**
@@ -87,7 +87,7 @@ export class McpSignIns {
       // Records from before the table count as known, lapsed or not (one never finished too: Disconnect forgets it).
       sql.exec("CREATE TABLE mcp_known (server TEXT PRIMARY KEY); INSERT INTO mcp_known (server) SELECT server FROM mcp_auth");
     }
-    addColumns(sql, "mcp_notices", { step: "INTEGER NOT NULL DEFAULT 0" });
+    addColumns(sql, "mcp_notices", { step_reads: "INTEGER NOT NULL DEFAULT 0" });
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = this.#oauthServers().map((server) => server.name);
     const notIn = configured.length ? ` WHERE server NOT IN (${configured.map(() => "?").join(", ")})` : "";
@@ -122,9 +122,12 @@ export class McpSignIns {
     const known = new Set(this.known());
     const notices = new Map(
       this.#host.sql
-        .exec("SELECT server, kind, what, step FROM mcp_notices")
+        .exec("SELECT server, kind, what, step_reads FROM mcp_notices")
         .toArray()
-        .map((row) => [row.server as string, { kind: row.kind as SignInNoticeKind, what: row.what as string | null, step: Boolean(row.step) }]),
+        .map((row) => {
+          const notice = { kind: row.kind as SignInNoticeKind, what: row.what as string | null, stepReads: Boolean(row.step_reads) };
+          return [row.server as string, notice] as const;
+        }),
     );
     return this.#oauthServers().map(({ name }) => {
       const signedInAt = rows.get(name)?.signed_in_at ?? undefined;
@@ -136,7 +139,7 @@ export class McpSignIns {
         ...(signedInAt === undefined && known.has(name) && { lapsed: true as const }),
         usedByRuns: runs.has(name),
         link: signInPath(name),
-        ...(notice && { notice: notice.kind, ...(notice.what && { waiting: notice.what }), ...(notice.step && { stepReads: true as const }) }),
+        ...(notice && { notice: notice.kind, ...(notice.what && { waiting: notice.what }), ...(notice.stepReads && { stepReads: true as const }) }),
       };
     });
   }
@@ -235,10 +238,11 @@ export class McpSignIns {
     if (context.chatId) this.#host.sql.exec("INSERT OR IGNORE INTO mcp_waiting (server, chat_id) VALUES (?, ?)", server, context.chatId);
     if (context.quiet) return;
     const what = context.what?.slice(0, 80);
-    if (this.#setNotice(server, "needed", what, context.step)) {
+    const set = this.#setNotice(server, "needed", what, context.stepReads);
+    if (set === "new") {
       const notice = { type: "sign-in", server, kind: "needed", link: signInPath(server), at: this.#now() } as const;
-      await this.#tell({ ...notice, ...(what && { what }), ...(context.step && { stepReads: true }) });
-    } else if (context.step) this.#host.changed();
+      await this.#tell({ ...notice, ...(what && { what }), ...(context.stepReads && { stepReads: true }) });
+    } else if (set === "changed") this.#host.changed();
   }
 
   /**
@@ -334,22 +338,22 @@ export class McpSignIns {
    * Put up a notice for `server`, replacing an `ending` one; false when a `needed` one is up already (it says more, and
    * was told once).
    */
-  #setNotice(server: string, kind: SignInNoticeKind, what?: string, step = false): boolean {
+  #setNotice(server: string, kind: SignInNoticeKind, what?: string, stepReads = false): "new" | "changed" | false {
     const sql = this.#host.sql;
     // Shown already: once any agent waiting reads it in a step, the notice says so.
     if (sql.exec("SELECT 1 FROM mcp_notices WHERE server = ? AND kind = 'needed'", server).toArray().length) {
-      if (step) sql.exec("UPDATE mcp_notices SET step = 1 WHERE server = ?", server);
-      return false;
+      const marked = stepReads && sql.exec("UPDATE mcp_notices SET step_reads = 1 WHERE server = ? AND step_reads = 0", server).rowsWritten > 0;
+      return marked ? "changed" : false;
     }
     sql.exec(
-      `INSERT INTO mcp_notices (server, kind, what, step) VALUES (?, ?, ?, ?)
-       ON CONFLICT(server) DO UPDATE SET kind = excluded.kind, what = excluded.what, step = excluded.step`,
+      `INSERT INTO mcp_notices (server, kind, what, step_reads) VALUES (?, ?, ?, ?)
+       ON CONFLICT(server) DO UPDATE SET kind = excluded.kind, what = excluded.what, step_reads = excluded.step_reads`,
       server,
       kind,
       what ?? null,
-      step ? 1 : 0,
+      stepReads ? 1 : 0,
     );
-    return true;
+    return "new";
   }
 
   /**

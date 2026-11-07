@@ -257,9 +257,9 @@ describe("sign-ins with nobody present", () => {
     s.answer("needs_sign_in");
     s.at(T0 + DAY);
     await s.signIns.check(["Portal"]);
-    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", step: true });
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
     expect(s.signIns.list()[0]).toMatchObject({ lapsed: true, notice: "needed", stepReads: true });
-    expect(s.pushed[0]).toContain("An agent reads Portal in a step: change its steps or turn it off.");
+    expect(s.pushed[0]).toContain("An agent reads Portal in a step, so it cannot go on without it: change its steps or turn it off.");
     expect(s.pushed[0]).not.toContain("Disconnect");
     // Another agent's wait, which could go without it, does not take that back.
     await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });

@@ -7,7 +7,7 @@ import type { Value } from "../../../shared/conditions.ts";
 import { mayUseServer, type AgentDefinition, type AgentTrigger, type LookStep } from "../../../shared/agents.ts";
 import { errorMessage, sha256Hex } from "../../../shared/util.ts";
 import { readFor, resultName, RunExecutor, startOf, watchFires, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
-import type { RunRecord } from "./store.ts";
+import { turnedOff, type RunRecord } from "./store.ts";
 import { nextRunAt } from "./schedule.ts";
 import { sourceName } from "./source.ts";
 import type { Sql } from "../../members.ts";
@@ -40,7 +40,6 @@ export interface RunnerHost extends RunHost {
   /** Leave the Source named `source` (sourceName). */
   unsubscribe(agentId: string, source: string): Promise<void>;
   /** Keep the object alive for work that outlives the call that started it. */
-  waitUntil(promise: Promise<unknown>): void;
 }
 
 type ScheduleRow = { agent_id: string; kind: string; key: string; schedule_id: string | null; due_at: number | null };
@@ -53,7 +52,6 @@ function triggerKey(agent: AgentDefinition): string {
 
 const HASHED = "sha256:";
 
-/** A run to start again from its row: the same due time, and the watch values it started with. */
 /** A value as it is compared with the last one: its canonical JSON, or a hash of a large one. */
 async function fingerprint(value: Value): Promise<string> {
   const json = canonicalJson(value);
@@ -170,7 +168,7 @@ export class AgentRunner {
   #skipWaiting(agent: AgentDefinition): void {
     const waiting = this.#host.runs.unfinished().filter((run) => run.agentId === agent.id && run.status === "needs_sign_in" && !run.test);
     let skipped = 0;
-    for (const run of waiting) if (this.#host.runs.skipWaiting(run.agentId, run.dueAt, `Skipped: @${agent.name} was turned off.`)) skipped++;
+    for (const run of waiting) if (this.#host.runs.skipWaiting(run.agentId, run.dueAt, turnedOff(agent))) skipped++;
     if (skipped) this.#host.changed(agent.id);
   }
 
