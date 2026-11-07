@@ -4,7 +4,7 @@ import type { Value } from "../shared/conditions.ts";
 import type { ArtifactMeta } from "../shared/protocol.ts";
 import type { RunDelivery } from "../shared/runs.ts";
 import { fillInput, itemKey, itemsOf, reportOf, SignInNeeded, type DeliveryRequest, type WorkResult } from "../worker/agents/runs/executor.ts";
-import { publishedAlready, publishFindings, publishRebuilt, runMark } from "../worker/agents/runs/page.ts";
+import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "../worker/agents/runs/page.ts";
 import { findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, workSpend } from "../worker/agents/runs/report.ts";
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "../worker/agents/runs/runner.ts";
 import { sourceName, SourceCore, type Subscriber } from "../worker/agents/runs/source.ts";
@@ -79,9 +79,16 @@ class FakeHome implements RunnerHost {
   async needsSignIn(servers: readonly string[]) {
     return servers.filter((server) => this.signIn.has(server));
   }
+  /** The servers that sign in each user that the owner has signed in to. */
+  readonly oauth: string[] = [];
+  async signInServers() {
+    return this.oauth;
+  }
   readonly asked: string[] = [];
-  signInNeeded(_agent: AgentDefinition, servers: readonly string[]) {
-    this.asked.push(...servers);
+  /** Asked for a test run: recorded as waiting, nobody told. */
+  readonly askedQuietly: string[] = [];
+  signInNeeded(_agent: AgentDefinition, servers: readonly string[], quiet: boolean) {
+    (quiet ? this.askedQuietly : this.asked).push(...servers);
   }
   async newSession() {
     return `session-${++this.#sessions}`;
@@ -125,6 +132,10 @@ class FakeHome implements RunnerHost {
   async cancelAlarm(id: string) {
     this.alarms.delete(id);
   }
+  async alarmTime(id: string) {
+    const alarm = this.alarms.get(id);
+    return alarm ? (alarm.at ?? this.clock.now + alarm.every! * 1000) : null;
+  }
   async definition(agentId: string) {
     if (this.failDefinition) throw new Error("directory unreachable");
     return this.definitions.get(agentId) ?? null;
@@ -156,7 +167,8 @@ function home(definition = agent()) {
   return { host, runner, definition };
 }
 
-const runAlarm = (host: FakeHome) => [...host.alarms.values()].find((alarm) => alarm.at !== undefined)!;
+// The newest one-shot: a fired one stays in the fake's map, as the real Scheduler drops it only after its callback.
+const runAlarm = (host: FakeHome) => [...host.alarms.values()].findLast((alarm) => alarm.at !== undefined)!;
 
 describe("scheduled runs", () => {
   it("sets the next local time as a one-shot, and runs at it", async () => {
@@ -191,7 +203,8 @@ describe("scheduled runs", () => {
     expect(await runner.executor.start({ agent: definition, dueAt: SEVEN, why: "schedule" })).toEqual({ status: "sent", started: false });
     expect(host.works).toHaveLength(1);
     expect(host.delivered).toHaveLength(1);
-    expect(host.alarms.size).toBe(1);
+    // One alarm ahead: the next run (no retry left over from the second fire).
+    expect([...host.alarms.values()].filter((alarm) => alarm.at! > SEVEN)).toHaveLength(1);
   });
 
   it("makes no model call when a condition does not hold", async () => {
@@ -275,6 +288,24 @@ describe("scheduled runs", () => {
     expect(host.delivered).toHaveLength(1);
   });
 
+  it("waits for a sign-in to a server only its work step's tools can come from", async () => {
+    // No step reads calendar, but the work step may use its tools: its sign-in is checked before the run.
+    const { host, runner, definition } = home(agent({ servers: ["crm", "calendar"] }));
+    host.oauth.push("calendar", "mail");
+    host.signIn.add("calendar").add("mail");
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.works).toHaveLength(0);
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "needs_sign_in", needsSignIn: ["calendar"] });
+    // Without a work step, only the servers its steps read.
+    const reads = home(agent({ servers: ["crm", "calendar"], workflow: [sales, { kind: "tell", to: ["owner"], via: "chat" }] }));
+    reads.host.oauth.push("calendar");
+    reads.host.signIn.add("calendar");
+    await reads.runner.now(reads.definition.id, false);
+    await reads.host.settled();
+    expect(reads.host.runs.list(reads.definition.id)[0]).toMatchObject({ status: "sent" });
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {
@@ -300,7 +331,21 @@ describe("scheduled runs", () => {
     ]);
   });
 
-  it("refuses writes and other people at Inform", async () => {
+  it("restarts a test run waiting for a sign-in, with nobody told", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, true);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "needs_sign_in", test: true });
+    expect(host.asked).toEqual([]);
+    expect(host.askedQuietly).toEqual(["crm"]);
+    host.signIn.delete("crm");
+    expect(await runner.signedIn("crm")).toBe(1);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "sent", test: true });
+  });
+
+    it("refuses writes and other people at Inform", async () => {
     const workflow: AgentStep[] = [{ kind: "do", server: "crm", tool: "update", input: {} }, { kind: "work", prompt: "Report." }];
     const { host, runner, definition } = home(agent({ workflow }));
     await runner.now(definition.id, false);
@@ -344,7 +389,7 @@ describe("scheduled runs", () => {
     await runner.apply(definition.id, { ...definition, version: 2, job: "Changed" });
     expect([...host.alarms.keys()]).toEqual(["alarm-1"]);
     // A new time: the old alarm goes, and its firing runs nothing.
-    const later = agent({ trigger: { kind: "schedule", at: "09:30", tz: "Europe/Bucharest" } });
+    const later = agent({ version: 3, trigger: { kind: "schedule", at: "09:30", tz: "Europe/Bucharest" } });
     host.definitions.set(definition.id, later);
     await runner.apply(definition.id, later);
     expect([...host.alarms.values()].map((alarm) => alarm.at)).toEqual([Date.parse("2026-11-04T07:30:00Z")]);
@@ -367,20 +412,48 @@ describe("scheduled runs", () => {
     host.failDefinition = true;
     await expect(runner.fired({ agentId: definition.id, dueAt: SEVEN })).rejects.toThrow("directory unreachable");
     // The same time, five minutes on: the schedule did not stop.
-    expect([...host.alarms.values()].at(-1)).toEqual({ at: SEVEN + 5 * 60_000, payload: { agentId: definition.id, dueAt: SEVEN, attempt: 1 } });
+    expect([...host.alarms.values()].at(-1)).toEqual({ at: SEVEN + 5 * 60_000, payload: { agentId: definition.id, dueAt: SEVEN } });
     host.failDefinition = false;
-    expect(await runner.fired({ agentId: definition.id, dueAt: SEVEN, attempt: 1 })).toEqual({ status: "sent", started: true });
+    expect(await runner.fired({ agentId: definition.id, dueAt: SEVEN })).toEqual({ status: "sent", started: true });
     expect(runner.nextRun(definition.id)).toBe(Date.parse("2026-11-05T05:00:00Z"));
+    // The retry alarm went with the next run set: only that one is left for this agent.
+    expect([...host.alarms.values()].filter((alarm) => alarm.payload.agentId === definition.id && alarm.at! > SEVEN)).toEqual([
+      { at: Date.parse("2026-11-05T05:00:00Z"), payload: { agentId: definition.id, dueAt: Date.parse("2026-11-05T05:00:00Z") } },
+    ]);
     // An object whose alarms went (no schedule row): reconcile sets them from the definition.
     const fresh = home(definition);
     await fresh.runner.reconcile(definition.id);
     expect(fresh.runner.nextRun(definition.id)).toBe(SEVEN);
   });
 
+  it("sets the schedule again after a restart when the row's alarm is no longer set", async () => {
+    const { host, runner, definition } = home();
+    await runner.apply(definition.id, definition);
+    // Its alarm ran (or went) and a reset came before the next was set: the stale row is still there.
+    host.alarms.clear();
+    host.clock.now = SEVEN + 60_000;
+    await runner.reconcile(definition.id);
+    expect(runner.nextRun(definition.id)).toBe(Date.parse("2026-11-05T05:00:00Z"));
+    expect(host.alarms.size).toBe(1);
+    // With its alarm set, reconcile leaves it.
+    await runner.reconcile(definition.id);
+    expect(host.alarms.size).toBe(1);
+  });
+
   it("ignores a definition older than the one its alarm was set from", async () => {
     const { host, runner, definition } = home(agent({ version: 3 }));
     await runner.apply(definition.id, definition);
     await runner.apply(definition.id, agent({ version: 2, enabled: false }));
+    expect(runner.nextRun(definition.id)).toBe(SEVEN);
+    expect(host.alarms.size).toBe(1);
+  });
+
+  it("remembers the newest definition even when it kept the alarm", async () => {
+    const { host, runner, definition } = home(agent({ version: 3 }));
+    await runner.apply(definition.id, definition);
+    // Version 4 changed only the instructions: the same alarm, but version 3 read late no longer turns it off.
+    await runner.apply(definition.id, agent({ version: 4, instructions: "Report the month too." }));
+    await runner.apply(definition.id, agent({ version: 3, enabled: false }));
     expect(runner.nextRun(definition.id)).toBe(SEVEN);
     expect(host.alarms.size).toBe(1);
   });
@@ -411,7 +484,17 @@ describe("scheduled runs", () => {
     expect(host.runs.get(definition.id, T0 + 2)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: @brief was off." });
   });
 
-  it("reads only the agent's own servers", async () => {
+  it("fails a run whose items acted when its only delivery failed", async () => {
+    const { host, runner, definition } = home();
+    host.deliver = async () => {
+      throw new Error("chat unreachable");
+    };
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "failed", summary: "Failed: chat unreachable", items: { acted: 1 } });
+  });
+
+    it("reads only the agent's own servers", async () => {
     const { host, runner, definition } = home(agent({ servers: ["other"] }));
     await runner.now(definition.id, false);
     await host.settled();
@@ -496,7 +579,25 @@ describe("watches", () => {
     expect(host.left).toEqual([source]);
   });
 
-  it("leaves a Source it no longer watches through, and runs nothing for it", async () => {
+  it("answers a Source once the run is stored, and rejects so the value comes again when it could not be", async () => {
+    const { host, runner, definition } = home(watched("signups.today < 50"));
+    host.shared = true;
+    await runner.apply(definition.id, definition);
+    const source = await sourceName((definition.trigger as { step: LookStep }).step);
+    const begin = host.runs.begin.bind(host.runs);
+    host.runs.begin = () => {
+      throw new Error("storage reset");
+    };
+    await expect(runner.sourceMoved(definition.id, { today: 40 }, source, { detach: true })).rejects.toThrow("storage reset");
+    host.runs.begin = begin;
+    // The same value, told again: handled now, with the run going on after the answer.
+    expect(await runner.sourceMoved(definition.id, { today: 40 }, source, { detach: true })).toBeNull();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ why: "watch" });
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "sent" });
+  });
+
+    it("leaves a Source it no longer watches through, and runs nothing for it", async () => {
     const { host, runner, definition } = home(watched("signups.today < 50"));
     host.shared = true;
     await runner.apply(definition.id, definition);
@@ -537,7 +638,15 @@ describe("watches", () => {
     expect(host.runs.get(definition.id, run.dueAt)!.detail).toMatchObject({ watch: { count: 5 }, previous: { count: 3 } });
   });
 
-  it("reads a watch named __proto__ like any other name", async () => {
+  it("writes the value that fired a watch even with no work step, for a reply to its report to see", async () => {
+    const { host, runner, definition } = home(watched("signups.today < 50"));
+    const workflow: AgentStep[] = [{ kind: "tell", to: ["owner"], via: "chat" }];
+    expect(await runner.moved({ ...definition, workflow }, { today: 40 })).toMatchObject({ status: "sent" });
+    expect(host.works).toHaveLength(0);
+    expect([...host.writes.values()].some((write) => write.text.includes('"today":40'))).toBe(true);
+  });
+
+    it("reads a watch named __proto__ like any other name", async () => {
     const step: LookStep = { kind: "look", server: "crm", tool: "signups", input: {}, as: "__proto__" };
     const { runner, definition } = home(
       agent({ trigger: { kind: "watch", step, everyMinutes: 60, when: "__proto__.count > 2" }, workflow: [{ kind: "work", prompt: "Say." }] }),
@@ -698,7 +807,7 @@ describe("a run's page step", () => {
 
   it("publishes a page whose check passes, with the report in it", async () => {
     const { publishScope, published } = scope([]);
-    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark(T0, "0"))).toEqual({
+    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"))).toEqual({
       kind: "page",
       to: "Sales brief",
       status: "sent",
@@ -711,7 +820,7 @@ describe("a run's page step", () => {
 
   it("does not publish a page that fails its check, and says so", async () => {
     const { publishScope, published } = scope(["TypeError: x is undefined"]);
-    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark(T0, "0"))).toEqual({
+    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"))).toEqual({
       kind: "page",
       to: "Sales brief",
       status: "failed",
@@ -722,57 +831,71 @@ describe("a run's page step", () => {
 
   it("publishes once per run: a version with the run's mark is the one it sent", async () => {
     const { publishScope, published, messages } = scope([]);
-    const mark = runMark(T0, "2");
+    const mark = runMark("a1", T0, "2");
     expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", mark)).toMatchObject({ status: "sent", version: 4 });
     expect(messages).toEqual([`Findings ${mark}`]);
     const after = { ...meta, latest: 4, versions: [...meta.versions, { version: 4, message: messages[0] }] } as unknown as ArtifactMeta;
     expect(publishedAlready(after, mark)).toMatchObject({ status: "sent", version: 4 });
-    expect(publishedAlready(after, runMark(T0, "3"))).toBeNull();
+    expect(publishedAlready(after, runMark("a1", T0, "3"))).toBeNull();
     expect(published).toHaveLength(1);
   });
 
   it("keeps the run's mark in a long message, which the store cuts", async () => {
     const { publishScope, messages } = scope([]);
-    const mark = runMark(T0, "0");
+    const mark = runMark("a1", T0, "0");
     await publishFindings(publishScope, meta, "Sales are up.", `Findings, when ${"signups.count > 10 and ".repeat(20)}true`, mark);
     expect(messages[0].length).toBeLessThanOrEqual(MAX_VERSION_MESSAGE);
     expect(messages[0].endsWith(mark)).toBe(true);
   });
 
-  it("publishes a rebuilt page's checked draft of that page only", async () => {
+  it("publishes the newest checked draft of that page that the rebuild's own session saved", async () => {
     const { publishScope, published, drafts } = scope([]);
     const seed = await writeDraft(publishScope, { artifact: meta, edits: [] });
     const other = await writeDraft(publishScope, { html: "<!doctype html><main>another page</main>" });
     await drafts.recordCheck(other.id, { errors: 0, warnings: 0 });
     // Nothing of this page passed: the other page's draft is not published in its place.
-    expect(await publishRebuilt(publishScope, meta, seed, T0, "Snapshot", runMark(T0, "1"))).toMatchObject({
+    expect(await publishRebuilt(publishScope, meta, seed, [seed.id, other.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({
       status: "failed",
       detail: "page not updated: no draft of it passed its check",
     });
     const rebuilt = await writeDraft(publishScope, { draftId: seed.id, edits: [{ old: "yesterday", new: "today" }] });
     await drafts.recordCheck(rebuilt.id, { errors: 0, warnings: 0 });
-    expect(await publishRebuilt(publishScope, meta, seed, T0, "Snapshot", runMark(T0, "1"))).toMatchObject({ status: "sent", version: 4 });
+    // Saved by someone else (the owner, another run): not this rebuild's.
+    expect(await publishRebuilt(publishScope, meta, seed, [seed.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({ status: "failed" });
+    expect(await publishRebuilt(publishScope, meta, seed, [seed.id, rebuilt.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({
+      status: "sent",
+      version: 4,
+    });
     expect(published).toEqual([expect.stringContaining("<p>today</p>")]);
   });
 
-  it("never publishes a rebuilt page that declares other servers or tools than the page did", async () => {
+  it("never publishes a rebuilt page that declares more than the page's read-only tools", async () => {
     const { publishScope, published, drafts } = scope([]);
+    const tools = [
+      { name: "list_deals", description: "", inputSchema: {}, annotations: { readOnlyHint: true } },
+      { name: "update_deal", description: "", inputSchema: {} },
+    ];
     publishScope.hub = {
       servers: () => [{ name: "crm" }],
       server: (name: string) => (name === "crm" ? { name: "crm" } : undefined),
-      tools: async () => [{ name: "delete_contact", description: "", inputSchema: {} }],
-      tool: async () => ({ name: "delete_contact", description: "", inputSchema: {} }),
+      tools: async () => tools,
+      tool: async (_server: string, name: string) => tools.find((tool) => tool.name === name),
     } as unknown as McpHub;
-    const seed = await writeDraft(publishScope, { artifact: meta, edits: [] });
+    const declared = { mcp: { servers: [{ server: "crm", tools: ["list_deals", "update_deal"] }] } };
+    const page = { ...meta, versions: [{ version: 3, manifest: declared }] } as unknown as ArtifactMeta;
+    const readOnly = await readOnlyDeclaration(declared, async (_server, name) => !!tools.find((tool) => tool.name === name)?.annotations);
+    expect(readOnly).toEqual([{ server: "crm", tools: ["list_deals"] }]);
+    const seed = await writeDraft(publishScope, { artifact: page, edits: [], mcp: readOnly });
+    // The page's own write tool, declared again: a load handler could call it as the owner.
     const widened = await writeDraft(publishScope, {
       draftId: seed.id,
       edits: [{ old: "yesterday", new: "today" }],
-      mcp: [{ server: "crm", tools: ["delete_contact"] }],
+      mcp: declared.mcp.servers,
     });
     await drafts.recordCheck(widened.id, { errors: 0, warnings: 0 });
-    expect(await publishRebuilt(publishScope, meta, seed, T0, "Snapshot", runMark(T0, "1"))).toMatchObject({
+    expect(await publishRebuilt(publishScope, page, seed, [seed.id, widened.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({
       status: "failed",
-      detail: "page not updated: the rebuilt page declares other servers or tools than the page did",
+      detail: "page not updated: the rebuilt page declares other servers or tools than its read-only ones",
     });
     expect(published).toEqual([]);
   });

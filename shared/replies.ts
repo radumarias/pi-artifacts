@@ -37,3 +37,8 @@ export function excerpt(text: string, max = REPLY_QUOTE_CHARS): string {
   const flat = text.trim().replace(/\s+/g, " ");
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
+
+/** The first line of a text with something on it, as an excerpt. */
+export function firstLine(text: string, max = 140): string {
+  return excerpt(text.split("\n").find((part) => part.trim()) ?? "", max);
+}

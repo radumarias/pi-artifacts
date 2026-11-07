@@ -91,6 +91,13 @@ export interface AgentRunView {
   needsSignIn?: string[];
 }
 
+/** An agent's runs as its Runs tab reads them: newest first, when it runs next, and its own chat (null before one). */
+export interface AgentRunList {
+  runs: AgentRunView[];
+  nextRunAt: number | null;
+  homeChatId: string | null;
+}
+
 /** One run in full, for its detail page. */
 export interface AgentRunDetail extends AgentRunView {
   /** "Every day at 07:00 (Europe/Bucharest)", "when signups vs lastYear < -5% (checked every 60 minutes)". */
@@ -129,3 +136,26 @@ export const STEP_LABELS: Record<AgentStep["kind"] | "when" | "scope", string> =
   page: "Page",
   handOver: "Hand over",
 };
+
+/**
+ * What a step does, after its label: "sales.weekly_sales as sales", "sales vs lastYear < -5%", "owner in chat". The
+ * Workflow tab's cards and a run's steps both say a step this way.
+ */
+export function stepSummary(step: AgentStep): string {
+  switch (step.kind) {
+    case "look":
+    case "do":
+      return step.server || step.tool ? `${step.server}.${step.tool}${step.kind === "look" && step.as ? ` as ${step.as}` : ""}` : "(not set)";
+    case "work":
+      return step.prompt.split("\n").find((line) => line.trim())?.trim() || "(not set)";
+    case "onlyIf":
+    case "if":
+      return step.condition || "(not set)";
+    case "tell":
+      return `${step.to.join(", ")} ${typeof step.via === "object" ? `through ${step.via.server}.${step.via.tool}` : step.via === "notify" ? "as a notification" : "in chat"}`;
+    case "page":
+      return `${step.artifactId || "(not set)"}, ${step.edit === "findings" ? "its findings" : "rebuilt"}`;
+    case "handOver":
+      return `to @${step.agent || "(not set)"}`;
+  }
+}

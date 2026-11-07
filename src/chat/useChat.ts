@@ -57,8 +57,6 @@ export interface ChatState {
 
 /** How long an incoming message that went in is kept, at most, waiting to show in the transcript or the queue. */
 export const ARRIVING_MS = 10_000;
-/** The window event a chat's socket raises when a run of its home agent moved on (detail: the agent's id). */
-export const RUNS_EVENT = "pi-agent-runs";
 
 const initial: ChatState = { entries: [], tools: [], busy: false, queued: [], incoming: [] };
 
@@ -450,8 +448,6 @@ export function useChat(chatId: string) {
           setAgents(message.agents);
           dispatchAgents({ type: "agents", agents: message.agents, at: Date.now() });
         } else if (message.type === "agentEvents") dispatchAgents({ ...message, events: message.events as AgentEvent[], at: Date.now() });
-        // For the runs list of the agent whose home this chat is: it reads them itself.
-        else if (message.type === "runs") window.dispatchEvent(new CustomEvent(RUNS_EVENT, { detail: message.agentId }));
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();

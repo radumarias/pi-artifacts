@@ -294,6 +294,30 @@ export function serversNamed(agent: Pick<AgentDefinition, "trigger" | "scope" | 
   }
   return [...found];
 }
+
+/** The steps a run of `agent` goes through: its workflow, or, without one, its instructions as one work step for its owner. */
+export function workflowOf(agent: Pick<AgentDefinition, "workflow">): AgentStep[] {
+  if (agent.workflow?.length) return agent.workflow;
+  return [
+    { kind: "work", prompt: "Do what your instructions say, for this run." },
+    { kind: "tell", to: ["owner"], via: "chat" },
+  ];
+}
+
+/** Whether a workflow calls the model at all. */
+function hasWork(steps: readonly AgentStep[]): boolean {
+  return [...walkSteps(steps)].some(({ step }) => step.kind === "work");
+}
+
+/**
+ * The servers a run of `agent` may need a sign-in for: those its steps read, and with a work step also each of
+ * `signIn` (the servers that sign in each user) it may use, since a work step's tools come from all of its servers.
+ */
+export function runServers(agent: Pick<AgentDefinition, "trigger" | "scope" | "workflow" | "servers">, signIn: readonly string[]): string[] {
+  const reads = serversNamed(agent, { reads: true });
+  if (!hasWork(workflowOf(agent))) return reads;
+  return [...new Set([...reads, ...signIn.filter((server) => mayUseServer(agent, server))])];
+}
 /** A workflow's steps, counting those inside an if's branches toward MAX_WORKFLOW_STEPS. */
 function checkSteps(value: unknown, depth = 0, count = { steps: 0 }): AgentStep[] {
   if (!Array.isArray(value)) fail("A workflow is a list of steps.");

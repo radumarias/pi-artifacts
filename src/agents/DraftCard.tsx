@@ -1,16 +1,13 @@
-import { useState, type MouseEvent } from "react";
+import { useState } from "react";
 import type { AgentDefinition, AgentProposedDetails } from "../../shared/agents.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Markdown } from "../chat/Markdown.tsx";
 import { AgentAvatar } from "../chat/people.tsx";
-import { opensElsewhere } from "../layout.tsx";
+import { AppLink } from "../layout.tsx";
 import { glanceRows, instructionSteps, runsLabel, stateLabel } from "./glance.ts";
-import { agentPath, goTo } from "./nav.ts";
+import { agentPath } from "./nav.ts";
 import { putAgent, reloadAgents, useAgents } from "./store.ts";
-
-/** This deployment runs no Test it: its route answered 404 (the note that says so re-renders the card). */
-let untestable = false;
 
 /**
  * Where the model drafted an agent (agent_propose), in place of a plain step: its badge, name and job, whether it is
@@ -43,7 +40,7 @@ export function DraftCard({ details, chatId, mine }: { details: AgentProposedDet
 
 function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
+  const [note, setNote] = useState<{ text: string; error?: boolean; run?: number } | null>(null);
   const state = stateLabel(agent);
   const steps = instructionSteps(agent.instructions);
   const rows = glanceRows(agent);
@@ -52,11 +49,6 @@ function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
   const when = [runs && `${runs.value}${runs.note ? ` (${runs.note})` : ""}`, scope && `for each item of ${scope.server} ${scope.tool}`]
     .filter(Boolean)
     .join(", ");
-  const open = (field?: string) => (event: MouseEvent) => {
-    if (opensElsewhere(event)) return;
-    event.preventDefault();
-    goTo(agentPath({ id: agent.id, field, chat: chatId }));
-  };
 
   const turnOn = async () => {
     setBusy(true);
@@ -84,13 +76,10 @@ function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
     setBusy(true);
     setNote(null);
     try {
-      await api.testAgent(agent.id);
-      setNote({ text: "Testing it on today's data: nothing is sent or changed. Its result shows under its runs." });
+      const { dueAt } = await api.testAgent(agent.id);
+      setNote({ text: "Testing it on today's data: nothing is sent or changed.", run: dueAt });
     } catch (e) {
-      if ((e as { status?: number }).status === 404) {
-        untestable = true;
-        setNote({ text: "Testing an agent is not available here yet." });
-      } else setNote({ text: errorMessage(e), error: true });
+      setNote({ text: errorMessage(e), error: true });
     } finally {
       setBusy(false);
     }
@@ -101,18 +90,16 @@ function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
       <header className="agent-card-head">
         <AgentAvatar badge={agent} />
         <div className="agent-card-title">
-          <a href={agentPath({ id: agent.id, chat: chatId })} onClick={open()}>
+          <AppLink path={agentPath({ id: agent.id, chat: chatId })}>
             <strong>{agent.name}</strong>
-          </a>
+          </AppLink>
           <span>{agent.job}</span>
         </div>
         <span className={`pill agent-state ${state.tone}`}>{state.text}</span>
         <div className="agent-card-actions">
-          {!untestable && (
-            <button type="button" disabled={busy} onClick={() => void test()}>
-              Test it
-            </button>
-          )}
+          <button type="button" disabled={busy} onClick={() => void test()}>
+            Test it
+          </button>
           {!agent.enabled && (
             <button type="button" className="primary" disabled={busy} onClick={() => void turnOn()}>
               Turn on
@@ -153,15 +140,21 @@ function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
               </span>
               {row.note && <small>{row.note}</small>}
             </dd>
-            <a className="agent-glance-change" href={agentPath({ id: agent.id, field: row.field, chat: chatId })} onClick={open(row.field)}>
+            <AppLink className="agent-glance-change" path={agentPath({ id: agent.id, field: row.field, chat: chatId })}>
               Change
-            </a>
+            </AppLink>
           </div>
         ))}
       </dl>
       {note && (
         <p className={note.error ? "form-error" : "skills-note"} role="status">
           {note.text}
+          {note.run !== undefined && (
+            <>
+              {" "}
+              <AppLink path={agentPath({ id: agent.id, tab: "runs", chat: chatId, run: note.run })}>See the run</AppLink>
+            </>
+          )}
         </p>
       )}
     </article>

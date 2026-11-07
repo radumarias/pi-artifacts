@@ -31,6 +31,9 @@ export interface SignInsHost {
   now?: () => number;
 }
 
+/** What a run's need for a sign-in says: the chat whose runs wait, what waits, and whether to tell the user. */
+export type SignInNeededContext = { chatId?: string; what?: string; quiet?: boolean };
+
 /**
  * One user's sign-ins to servers that sign in each user, in their UserDirectory's SQLite:
  *
@@ -187,11 +190,13 @@ export class McpSignIns {
   /**
    * A run, or the daily refresh, found that `server` needs a new sign-in: show a notice with the sign-in link (the
    * sidebar, the browser, a push when no app is open), once until they sign in. With `chatId`, that chat's waiting runs
-   * are told when they do. `what` says what is waiting ("Daily brief").
+   * are told when they do. `what` says what is waiting ("Daily brief"). `quiet` (a test run): only the chat is
+   * recorded as waiting, with no notice or push.
    */
-  async needed(server: string, context: { chatId?: string; what?: string } = {}): Promise<void> {
+  async needed(server: string, context: SignInNeededContext = {}): Promise<void> {
     if (!this.#oauthServers().some((s) => s.name === server)) return;
     if (context.chatId) this.#host.sql.exec("INSERT OR IGNORE INTO mcp_waiting (server, chat_id) VALUES (?, ?)", server, context.chatId);
+    if (context.quiet) return;
     const what = context.what?.slice(0, 80);
     if (this.#setNotice(server, "needed", what))
       await this.#tell({ type: "sign-in", server, kind: "needed", link: signInPath(server), ...(what && { what }), at: this.#now() });

@@ -6,7 +6,9 @@
 
 import {
   AUTONOMY_LABELS,
+  workflowOf,
   mayUseServer,
+  runServers,
   serversNamed,
   stepKey,
   walkSteps,
@@ -17,11 +19,12 @@ import {
   type StepValue,
 } from "../../../shared/agents.ts";
 import { ConditionError, evaluate, holds, type Value } from "../../../shared/conditions.ts";
-import { excerpt } from "../../../shared/replies.ts";
+import { excerpt, firstLine } from "../../../shared/replies.ts";
 import {
   MAX_RUN_ITEMS,
   RUN_CONCURRENCY,
   STEP_LABELS,
+  stepSummary,
   type RunDelivery,
   type RunItemStatus,
   type RunItemView,
@@ -74,10 +77,18 @@ export interface RunHost {
   readonly runs: AgentRuns;
   /** A read-only call through the hub, as the agent's owner: the result's payload. Throws SignInNeeded for a sign-in. */
   read(server: string, tool: string, input: StepInput): Promise<Value>;
+  /**
+   * The servers that sign in each user (`auth: "oauth"`) its owner has signed in to: a work step's tools may come from
+   * them, so a run checks them too. One they never signed in to (or left) is no reason to wait.
+   */
+  signInServers(): Promise<readonly string[]>;
   /** Which of these servers need their owner to sign in again before a run can read them. */
   needsSignIn(servers: readonly string[]): Promise<string[]>;
-  /** Ask the owner to sign in to these servers again, for `agent`'s run: they are told, and this chat when they do. */
-  signInNeeded(agent: AgentDefinition, servers: readonly string[]): void;
+  /**
+   * `agent`'s run waits for the owner to sign in to these servers again: this chat hears when they do, and they are
+   * told (a notice, a push) unless `quiet` (a test run).
+   */
+  signInNeeded(agent: AgentDefinition, servers: readonly string[], quiet: boolean): void;
   /** A fresh pi session for one item. */
   newSession(): Promise<string>;
   /** Set an item's session up for its work steps: the agent's model (or `model`), instructions and read tools. */
@@ -102,15 +113,6 @@ export interface RunStart {
   watch?: Value;
   /** The watch's result before that one, when it was kept: its steps read it as `previous`. */
   previous?: Value;
-}
-
-/** The workflow a definition runs: its own, else its instructions as one work step reported to its home chat. */
-function workflowOf(agent: Pick<AgentDefinition, "workflow" | "instructions">): AgentStep[] {
-  if (agent.workflow?.length) return agent.workflow;
-  return [
-    { kind: "work", prompt: "Do what your instructions say, for this run." },
-    { kind: "tell", to: ["owner"], via: "chat" },
-  ];
 }
 
 /** The name a look step's result goes by: its `as`, else its tool's name as a name. */
@@ -245,26 +247,28 @@ export class RunExecutor {
     const key = `${start.agent.id}:${start.dueAt}`;
     const going = this.#active.get(key);
     if (going) return going.then((end) => ({ ...end, started: false }));
-    const run = this.#run(start).finally(() => this.#active.delete(key));
+    // The run's row is stored before start returns, or start throws: a caller told only that much (a Source) can count on it.
+    const { agent, dueAt, why, test = false, watch, previous } = start;
+    const begun = this.#host.runs.begin(agent.id, dueAt, why, test, {
+      when: whenOf(agent),
+      ...(watch !== undefined && { watch }),
+      ...(previous !== undefined && { previous }),
+      used: { skills: skillsNamed(workflowOf(agent)), servers: serversNamed(agent, { reads: true }), models: [] },
+    });
+    const run = this.#run(agent, begun).finally(() => this.#active.delete(key));
     this.#active.set(key, run);
     return run;
   }
 
-  async #run({ agent, dueAt, why, test = false, watch, previous }: RunStart): Promise<RunEnd> {
+  async #run(agent: AgentDefinition, { run, started }: { run: RunRecord; started: boolean }): Promise<RunEnd> {
     const runs = this.#host.runs;
+    const { dueAt } = run;
     const when = whenOf(agent);
-    const reads = serversNamed(agent, { reads: true });
-    const { run, started } = runs.begin(agent.id, dueAt, why, test, {
-      when,
-      ...(watch !== undefined && { watch }),
-      ...(previous !== undefined && { previous }),
-      used: { skills: skillsNamed(workflowOf(agent)), servers: reads, models: [] },
-    });
     // Ended, or waiting for a sign-in that has not come: an alarm that fires twice sends once.
     if (!started && run.status !== "running") return { status: run.status, started: false };
     this.#host.changed(agent.id);
     try {
-      const missing = await this.#host.needsSignIn(reads);
+      const missing = await this.#host.needsSignIn(runServers(agent, await this.#host.signInServers()));
       if (missing.length) return this.#waitForSignIn(agent, run, missing);
       const elements = await this.#elements(agent);
       const outcomes = await mapLimit(elements, RUN_CONCURRENCY, (element) => this.#item(agent, run, element, when));
@@ -280,8 +284,8 @@ export class RunExecutor {
   }
 
   #waitForSignIn(agent: AgentDefinition, run: RunRecord, servers: string[]): RunEnd {
-    // The owner is asked to sign in (a notice, a push), and this chat hears when they do (AgentRunner.signedIn).
-    if (!run.test) this.#host.signInNeeded(agent, servers);
+    // This chat hears when the owner signs in (AgentRunner.signedIn); they are asked to (a notice, a push), unless a test.
+    this.#host.signInNeeded(agent, servers, run.test);
     this.#host.runs.update(run.agentId, run.dueAt, {
       status: "needs_sign_in",
       summary: `Waiting for you to sign in to ${servers.join(", ")}.`,
@@ -333,8 +337,9 @@ export class RunExecutor {
     let status: RunItemStatus = "acted";
     let reason: string | undefined;
     try {
-      // The value that started a watch's run goes into its session first, so its work steps see what fired it.
-      if (trigger && watched !== undefined && hasWork(workflowOf(agent))) {
+      // The value that started a watch's run goes into its session first: its work steps, and a reply to its report
+      // (a fork of this session), see what fired it.
+      if (trigger && watched !== undefined) {
         const { server, tool } = trigger.step;
         const read = `${server}.${tool}, as ${resultName(trigger.step)} and watch`;
         const text = `The watch that started this run (${read}) read:\n${clip(jsonOf(watched), MAX_RESULT_CHARS)}`;
@@ -416,7 +421,7 @@ export class RunExecutor {
           const result = await this.#host.work(state.session, workPrompt(step, state.when, state.element), `${opId(state)}:work:${key}`);
           state.cost += result.cost;
           if (result.model) this.#usedModel(state, result.model);
-          const label = `${STEP_LABELS.work} ${firstLine(step.prompt)}${step.skill ? `, with ${step.skill}` : ""}`;
+          const label = `${STEP_LABELS.work}: ${firstLine(step.prompt)}${step.skill ? `, with ${step.skill}` : ""}`;
           if (result.status !== "done") {
             record(label, false, result.reason ?? "it ended without an answer", result.cost);
             throw new Error(`The work step ended without an answer: ${result.reason ?? "no reason given"}.`);
@@ -496,15 +501,15 @@ export class RunExecutor {
     const failed = items.filter((item) => item.status === "failed");
     // An item stopped after a delivery step still sent it: the run sent something.
     const delivered = deliveries.some((delivery) => delivery.status === "sent" || delivery.status === "recorded");
-    // And one that went out to nobody (every send failed) is no quiet day: the run failed.
+    // And one whose report went out to nobody (every send failed) failed, even with items acted: nobody heard.
     const undelivered = deliveries.find((delivery) => delivery.status === "failed" || delivery.status === "refused");
-    const status: RunStatus = acted.length || delivered ? "sent" : failed.length || undelivered ? "failed" : "not_today";
+    const status: RunStatus = delivered ? "sent" : undelivered ? "failed" : acted.length ? "sent" : failed.length ? "failed" : "not_today";
     const first = deliveries.find((delivery) => delivery.text)?.text ?? acted.find((item) => item.text)?.text;
     const summary =
       status === "sent"
         ? firstLine(first ?? `Acted on ${acted.length} of ${items.length}.`)
         : status === "failed"
-          ? `Failed: ${failed[0]?.reason ?? undelivered?.detail ?? "a step failed"}`
+          ? `Failed: ${(undelivered ? undelivered.detail : failed[0]?.reason) ?? "a step failed"}`
           : `Not today: ${items[0]?.reason ?? "nothing to report"}`;
     runs.update(agent.id, run.dueAt, { status, summary });
     return status;
@@ -550,10 +555,7 @@ function targetOf(step: DeliveryRequest["step"]): string {
 }
 
 function deliveryLabel(step: DeliveryRequest["step"]): string {
-  if (step.kind === "page") return `${STEP_LABELS.page} ${step.artifactId}, ${step.edit === "findings" ? "its findings" : "rebuilt"}`;
-  if (step.kind === "handOver") return `${STEP_LABELS.handOver} to @${step.agent}`;
-  const via = typeof step.via === "object" ? `through ${step.via.server}.${step.via.tool}` : step.via === "chat" ? "in chat" : "as a notification";
-  return `${STEP_LABELS.tell} ${step.to.join(", ")} ${via}`;
+  return `${STEP_LABELS[step.kind]} ${stepSummary(step)}`;
 }
 
 /** A test run's delivery: what it would have sent, and to whom. */
@@ -569,12 +571,6 @@ export function whenOf(agent: Pick<AgentDefinition, "trigger">): string {
   return `when ${trigger.when} (checked every ${trigger.everyMinutes} minutes)`;
 }
 
-/** The first line of a text with anything on it, cut to `max`. */
-function firstLine(text: string, max = 140): string {
-  return excerpt(text.split("\n").find((part) => part.trim()) ?? "", max);
-}
-
-
 /** A condition scope with no prototype: a result named "__proto__" or "constructor" is a name like any other. */
 function bareScope(): Record<string, Value> {
   return Object.create(null) as Record<string, Value>;
@@ -587,11 +583,6 @@ function watchScope(name: string, value: Value, previous: Value | undefined): Re
   scope.watch = value;
   scope.previous = previous ?? null;
   return scope;
-}
-
-/** Whether a workflow calls the model at all: only then does an item's session have a reader. */
-function hasWork(steps: readonly AgentStep[]): boolean {
-  return [...walkSteps(steps)].some(({ step }) => step.kind === "work");
 }
 
 /** An item's text at each delivery it reached, where that differs from its final text. */

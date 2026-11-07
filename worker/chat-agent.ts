@@ -17,6 +17,7 @@ import {
   isSecondSeatUid,
   type ArtifactSummary,
   manifestOf,
+  writtenBy,
   secondSeat,
   secondSeatUid,
   SOCKET_NOT_A_MEMBER,
@@ -105,7 +106,7 @@ import { newestFirst, type FileEntry } from "./storage/user-files.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
-import { mcpServers, sharesResults, watchableForAll, type McpServerConfig } from "./mcp/servers.ts";
+import { mcpServers, oauthServerNames, sharesResults, watchableForAll, type McpServerConfig } from "./mcp/servers.ts";
 import { CacheWarmer } from "./cache-warmer.ts";
 import { GeminiCompat } from "./gemini.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
@@ -133,7 +134,7 @@ import {
   CHAT_TURN_KIND,
   inputOf,
   copiedFields,
-  serversNamed,
+  runServers,
   type AgentDefinition,
   type AgentStep,
   type AgentTurnView,
@@ -150,11 +151,11 @@ import { reportOf, SignInNeeded, whenOf, type DeliveryRequest } from "./agents/r
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "./agents/runs/runner.ts";
 import { AgentRuns } from "./agents/runs/store.ts";
 import { reportContext, runInstructions, RUN_STEP_KIND, workSpend, type RunStepData } from "./agents/runs/report.ts";
-import { publishedAlready, publishFindings, publishRebuilt, runMark } from "./agents/runs/page.ts";
+import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "./agents/runs/page.ts";
 import { compileWorkflow } from "./agents/runs/compile.ts";
 import { sourceName } from "./agents/runs/source.ts";
 import type { Value } from "../shared/conditions.ts";
-import { runRef, type AgentRunDetail, type AgentRunView, type RunDelivery, type RunRef } from "../shared/runs.ts";
+import { runRef, type AgentRunDetail, type AgentRunList, type RunDelivery, type RunRef } from "../shared/runs.ts";
 import { agentsExtension } from "./agents/tools.ts";
 import { agentInstructions, allowedTools, askOf, assistantText, attachedNote, MAX_ASK_CHARS, messageAskKey, runTools, speakersFor } from "./agents/turns.ts";
 import {
@@ -275,6 +276,9 @@ type PiScan = { through: number; chain?: { hop: number; root: number } };
 const HOME_AGENT_KEY = "homeAgent";
 /** Set while the home agent is on with a trigger: only then can its alarms have gone missing (#reconcileHome). */
 const HOME_RUNS_KEY = "homeRuns";
+/** The interval that wakes this object while a run is going, so a run cut off by a reset goes on soon (#keepResuming). */
+const RESUME_KEY = "runsResume";
+const RESUME_SECONDS = 90;
 /** A run's reads reuse results this young: a run wants today's numbers, and its items often read the same. */
 const RUN_STALE_MS = 60_000;
 /** Who a run's tell step names for its owner's own conversation. */
@@ -408,6 +412,12 @@ export class ChatAgent extends DurableObject<Env> {
     callbacks: {
       run: (payload: RunAlarm) => this.#onAlarm(() => this.runner.fired(payload)),
       watch: (payload: WatchAlarm) => this.#onAlarm(() => this.runner.watchTick(payload)),
+      // Resumes the runs cut off (cheap when they are going here already: a run goes once), and takes the interval down
+      // once none is going. onStart does the same on a cold wake, but an object that stayed up would not retry otherwise.
+      resume: () => {
+        this.runner.resume();
+        this.#keepResuming();
+      },
     },
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets).use(this.scheduler);
@@ -488,11 +498,7 @@ export class ChatAgent extends DurableObject<Env> {
       artifacts: this.storage.artifacts,
       // Deriving the user's key is not free, so derive it once per object.
       files: memoAsync(() => this.storage.userFiles(this.uid)),
-      onPublished: async (artifact) => {
-        await this.#directory.recordArtifact({ ...artifact, chatId: this.chatId });
-        // Off the publish's path: the chat that discusses the page hears of its new version.
-        void this.#tellPageChat(artifact).catch((error: unknown) => console.error("page chat:", errorMessage(error)));
-      },
+      onPublished: this.#onPublished(this.chatId),
       broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
       proposeAgent: (input) => this.#directory.saveAgent(input, "agent", false),
@@ -549,6 +555,7 @@ export class ChatAgent extends DurableObject<Env> {
     // The agents' turns that were running, or waiting, go on: cheap when there are none. So do runs cut off.
     this.turns.resume();
     this.runner.resume();
+    this.#keepResuming();
     this.#reconcileHome();
     // An answer pi gave before the restart may not have been read for the agents it names, even once its run ended.
     this.#scanPi();
@@ -1344,8 +1351,9 @@ export class ChatAgent extends DurableObject<Env> {
     // The agents of the roster it calls ("@research"), who take turns of their own (worker/agents/). A message that
     // calls only them is not pi's to answer, even in a chat nobody shares. Told for sure once the mentions are known.
     const repliesTo = quote && "agent" in quote ? quote.agentId : undefined;
-    // In an agent's home conversation, a message that calls nobody else is the agent's, not pi's.
-    const home = this.#homeSpeaker();
+    // In an agent's home conversation, a message that calls nobody else is the agent's, not pi's: while the chat's kind
+    // answers every message. With members in it, only a summons or a reply runs an agent, as in any other chat.
+    const home = everyMessage ? this.#homeSpeaker() : undefined;
     const speakersOf = (named: readonly Mention[] = []) => {
       const called = speakersFor(text, this.roster.list(), repliesTo, named);
       if (!called.length && home !== undefined && !summonsAgent(text, named) && !repliesToAgent) called.push(home);
@@ -2099,6 +2107,17 @@ export class ChatAgent extends DurableObject<Env> {
     this.sockets.broadcastPeople();
   }
 
+  /**
+   * What every publish does once a version is out, whoever published it (pi, an agent, a run's page step): record it
+   * as `chatId`'s, and, off the publish's path, tell the chat that discusses the page of its new version.
+   */
+  #onPublished(chatId: string): (artifact: Omit<ArtifactSummary, "chatId">) => Promise<void> {
+    return async (artifact) => {
+      await this.#directory.recordArtifact({ ...artifact, chatId });
+      void this.#tellPageChat(artifact).catch((error: unknown) => console.error("page chat:", errorMessage(error)));
+    };
+  }
+
   /** Tell the chat that discusses a page this chat just published a version of, if there is one. Only a notice. */
   async #tellPageChat(artifact: Omit<ArtifactSummary, "chatId">): Promise<void> {
     const chatId = await this.#directory.pageChat(artifact.id);
@@ -2770,6 +2789,37 @@ export class ChatAgent extends DurableObject<Env> {
     this.ctx.waitUntil(this.runner.reconcile(id).catch((error: unknown) => console.error("agent alarm:", errorMessage(error))));
   }
 
+  #resuming: Promise<void> = Promise.resolve();
+  /** The resume interval's id once this instance set or found it: while a run goes, later calls skip the scheduler. */
+  #resumeId: string | undefined;
+
+  /**
+   * While a run is going, an interval wakes this object every RESUME_SECONDS: the one-shot that started the run has
+   * completed, so after a reset (a deploy mid-run) nothing else would wake it until the next run's alarm, and onStart's
+   * runner.resume picks the run up. Taken down once no run is going. The interval is idempotent, as is this.
+   */
+  #keepResuming(): void {
+    if (this.#gone) return;
+    this.#resuming = this.#resuming
+      .then(async () => {
+        const going = this.runs.unfinished().some((run) => run.status === "running");
+        if (going) {
+          if (this.#resumeId !== undefined) return;
+          // Set once: a second every() for the same callback and interval finds the one set (after a reset too).
+          this.#resumeId = (await this.scheduler.every(RESUME_SECONDS, "resume")).id;
+          this.ctx.storage.kv.put(RESUME_KEY, this.#resumeId);
+          return;
+        }
+        const id = this.#resumeId ?? this.ctx.storage.kv.get<string>(RESUME_KEY);
+        if (id === undefined) return;
+        await this.scheduler.cancel(id);
+        this.ctx.storage.kv.delete(RESUME_KEY);
+        this.#resumeId = undefined;
+      })
+      .catch((error: unknown) => console.error("agent run wake:", errorMessage(error)));
+    this.ctx.waitUntil(this.#resuming);
+  }
+
   /**
    * A scheduler callback: its work goes on detached, so the job queue (pi's own wake jobs, a retry's backoff) is not held
    * while a run takes minutes; runner.resume picks up a run cut off by a restart. A failed run is the run's to record,
@@ -2787,7 +2837,8 @@ export class ChatAgent extends DurableObject<Env> {
    * definition with a trigger and no workflow is compiled to one.
    */
   async agentChanged(agentId: string, agent: AgentDefinition | null): Promise<void> {
-    if (this.#gone) return;
+    // A definition older than one acted on (its notice came late) changes neither the roster, the alarms nor the sign-ins.
+    if (this.#gone || !this.runner.accepts(agentId, agent)) return;
     if (agent) {
       this.ctx.storage.kv.put(HOME_AGENT_KEY, agentId);
       this.ctx.storage.kv.put(HOME_RUNS_KEY, Boolean(agent.enabled && agent.trigger));
@@ -2810,7 +2861,7 @@ export class ChatAgent extends DurableObject<Env> {
     }
     await this.runner.apply(agentId, agent);
     // The sign-ins its runs read with are kept alive daily and warned about before they end (worker/mcp/sign-ins.ts).
-    const runs = agent?.enabled && agent.trigger ? serversNamed(agent, { reads: true }) : [];
+    const runs = agent?.enabled && agent.trigger ? runServers(agent, oauthServerNames(this.env)) : [];
     await this.#directory.setRunServers(this.chatId, runs).catch((error: unknown) => console.error("agent sign-ins:", errorMessage(error)));
     if (agent?.enabled && agent.trigger && !agent.workflow?.length) this.ctx.waitUntil(this.#compile(agent).catch(() => {}));
   }
@@ -2850,7 +2901,7 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /** An agent's runs, newest first, and when it runs next. */
-  runsFor(uid: string, agentId: string): { runs: AgentRunView[]; nextRunAt: number | null; homeChatId: string } | ChatRefusal {
+  runsFor(uid: string, agentId: string): AgentRunList | ChatRefusal {
     const refused = this.#ownRuns(uid, agentId);
     if (refused) return refused;
     return { runs: this.runs.list(agentId), nextRunAt: this.runner.nextRun(agentId), homeChatId: this.chatId };
@@ -2944,9 +2995,11 @@ export class ChatAgent extends DurableObject<Env> {
    * A Source this chat's agent watches through says its value moved. The run it may start goes on here, off the
    * Source's poll: the Source does not wait for its subscribers' runs.
    */
-  sourceMoved(agentId: string, value: Value, source: string): void {
+  async sourceMoved(agentId: string, value: Value, source: string): Promise<void> {
     if (this.#gone) return;
-    this.ctx.waitUntil(this.runner.sourceMoved(agentId, value, source).catch((error: unknown) => console.error("agent watch:", errorMessage(error))));
+    // Resolves once the run's row is stored (the run goes on detached): a failure before that rejects, and the Source
+    // tells this chat again at its next poll.
+    await this.runner.sourceMoved(agentId, value, source, { detach: true });
   }
 
   /**
@@ -3009,15 +3062,24 @@ export class ChatAgent extends DurableObject<Env> {
           throw signInOr(error);
         }
       },
+      signInServers: async () => {
+        const servers = oauthServerNames(this.env);
+        if (!servers.length) return [];
+        const signedIn = new Set(await this.#directory.mcpSignedIn());
+        return servers.filter((server) => signedIn.has(server));
+      },
       // Each sign-in refreshed now, as nobody is there to sign in (worker/mcp/sign-ins.ts).
       needsSignIn: async (servers) => {
         const checked = await this.#directory.checkSignIns(servers);
         return servers.filter((server) => checked[server] === "needs_sign_in");
       },
-      signInNeeded: (agent, servers) => {
+      signInNeeded: (agent, servers, quiet) => {
         const directory = this.#directory;
-        const asking = servers.map((server) => directory.notifySignInNeeded(server, { chatId: this.chatId, what: `@${agent.name}` }));
-        this.ctx.waitUntil(Promise.allSettled(asking));
+        const context = { chatId: this.chatId, what: `@${agent.name}`, ...(quiet && { quiet }) };
+        const asking = servers.map((server) =>
+          directory.notifySignInNeeded(server, context).catch((error: unknown) => console.error(`agent sign-in (${server}):`, errorMessage(error))),
+        );
+        this.ctx.waitUntil(Promise.all(asking));
       },
       newSession: async () => (await this.harness.sessions.create()).id,
       configure: (session, agent, model) => this.#configureRun(session, agent, model),
@@ -3027,11 +3089,19 @@ export class ChatAgent extends DurableObject<Env> {
         return { status: result.status, ...(result.text !== undefined && { text: result.text }), ...(result.reason && { reason: result.reason }), ...workSpend(entries) };
       },
       deliver: (request) => this.#deliverRun(request),
-      changed: (agentId) => this.sockets.broadcast({ type: "runs", agentId }),
+      // Over the owner's sidebar socket: the Runs tab is a page of its own, with no chat socket open.
+      changed: (agentId) => {
+        this.ctx.waitUntil(this.#directory.runsChanged(agentId));
+        this.#keepResuming();
+      },
       alarmAt: async (at, payload) => (await this.scheduler.set(new Date(at), "run", payload)).id,
       alarmEvery: async (seconds, payload) => (await this.scheduler.every(seconds, "watch", payload)).id,
       cancelAlarm: async (id) => {
         await this.scheduler.cancel(id);
+      },
+      alarmTime: async (id) => {
+        const alarm = await this.scheduler.get(id);
+        return alarm ? alarm.time * 1000 : null;
       },
       definition: (agentId) => this.#directory.getAgent(agentId),
       sharedWatch: (step) => {
@@ -3182,7 +3252,8 @@ export class ChatAgent extends DurableObject<Env> {
     }
     const { agent } = request;
     this.turns.call([entry.agentId], {
-      calledBy: { name: agent.name, agentId: agent.id, schedule: true },
+      // For the agent whose run handed it over: "for @signups".
+      calledBy: { name: agent.name, agentId: agent.id },
       ask: askOf({ name: agent.name, kind: "agent" }, request.text, MAX_ASK_CHARS),
       // A run's hand-over can only read, as any turn its owner did not give, and its chain never hands pi a turn.
       byOwner: false,
@@ -3205,9 +3276,9 @@ export class ChatAgent extends DurableObject<Env> {
     const scope: PublishScope = {
       ...this.scope,
       chatId: meta.chatId,
-      onPublished: (artifact) => this.#directory.recordArtifact({ ...artifact, chatId: meta.chatId }),
+      onPublished: this.#onPublished(meta.chatId),
     };
-    const mark = runMark(request.run.dueAt, request.key);
+    const mark = runMark(request.agent.id, request.run.dueAt, request.key);
     // A run that goes on after a restart publishes once: a version with its mark is the one it sent.
     const already = publishedAlready(meta, mark);
     if (already) return already;
@@ -3225,7 +3296,13 @@ export class ChatAgent extends DurableObject<Env> {
     const { agent, run } = request;
     // artifact_read takes this chat's pages and the ones brought in.
     this.#bringIn([meta.id]);
-    const seed = await writeDraft(scope, { artifact: meta, edits: [] });
+    // The page as it is, declaring only its read-only tools: a snapshot never writes as the owner (publishRebuilt).
+    const mcp = await readOnlyDeclaration(manifestOf(meta, meta.latest), async (server, name) => {
+      // A listing that fails fails the step: dropping the tool would publish a version without a read tool it declared.
+      const tool = await this.hub.tool(server, name);
+      return !!tool && isReadOnly(tool);
+    });
+    const seed = await writeDraft(scope, { artifact: meta, edits: [], mcp });
     const session = request.session ?? (await this.harness.sessions.create()).id;
     await this.#configureRun(session, agent, undefined, ["artifact_read", WRITE_TOOL, CHECK_TOOL]);
     const operationId = `run:${agent.id}:${run.dueAt}:page:${request.key}`;
@@ -3236,8 +3313,9 @@ export class ChatAgent extends DurableObject<Env> {
         `draft_id "${seed.id}" and edits (a new page written whole is not this page's and is not published), check the new draft with ` +
         `${CHECK_TOOL} and fix what it finds. The newest draft that passes is published for you. Answer with one line on what changed.`,
     ].join("\n\n");
-    const { result } = await this.#runStep(session, prompt, operationId);
-    const delivery = await publishRebuilt(scope, meta, seed, run.dueAt, `Snapshot, ${whenOf(agent)}`, mark);
+    const { result, entries } = await this.#runStep(session, prompt, operationId);
+    const written = entries.flatMap((entry) => writtenBy(entry) ?? []);
+    const delivery = await publishRebuilt(scope, meta, seed, written, `Snapshot, ${whenOf(agent)}`, mark);
     // The seed is only the page as it was: left behind, each run's would push the owner's own drafts out of the chat's.
     await (await scope.drafts()).remove(seed.id).catch((error: unknown) => console.error("draft:", errorMessage(error)));
     return delivery.status === "failed" && result.reason ? { ...delivery, detail: `${delivery.detail} (${result.reason})` } : delivery;

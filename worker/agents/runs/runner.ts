@@ -12,16 +12,15 @@ import { nextRunAt } from "./schedule.ts";
 import { sourceName } from "./source.ts";
 import type { Sql } from "../../members.ts";
 
-/** What a run's alarm carries; `attempt` counts the tries of a due time whose definition could not be read. */
-export type RunAlarm = { agentId: string; dueAt: number; attempt?: number };
+/** What a run's alarm carries. */
+export type RunAlarm = { agentId: string; dueAt: number };
 /** What a watch's interval carries. */
 export type WatchAlarm = { agentId: string };
 
 /** The longest a watch's last value is kept, as JSON: a larger one is compared by a hash of it. */
 const MAX_KEPT_VALUE = 100_000;
-/** When a due time's definition could not be read: how long until it is tried again, and how often at most. */
+/** How long until a due time is tried again, when its run could not start (a failed read, a reset). */
 const RETRY_MS = 5 * 60_000;
-const MAX_ATTEMPTS = 12;
 
 /** What the runner needs besides the executor's host: alarms, the owner's definitions, and shared watches. */
 export interface RunnerHost extends RunHost {
@@ -30,6 +29,8 @@ export interface RunnerHost extends RunHost {
   /** An alarm every `seconds`: its schedule id. */
   alarmEvery(seconds: number, payload: WatchAlarm): Promise<string>;
   cancelAlarm(id: string): Promise<void>;
+  /** When a set alarm fires next (ms); null when it is no longer set (its job ran or was cancelled). */
+  alarmTime(id: string): Promise<number | null>;
   /** The owner's definition of an agent as it is now; null when it is gone. */
   definition(agentId: string): Promise<AgentDefinition | null>;
   /**
@@ -44,7 +45,7 @@ export interface RunnerHost extends RunHost {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-type ScheduleRow = { agent_id: string; kind: string; key: string; schedule_id: string | null; due_at: number | null; version: number | null };
+type ScheduleRow = { agent_id: string; kind: string; key: string; schedule_id: string | null; due_at: number | null };
 
 /** How a trigger is set, as a key: a definition saved with the same trigger keeps its alarm. */
 function triggerKey(agent: AgentDefinition): string {
@@ -88,11 +89,8 @@ export class AgentRunner {
         agent_id TEXT PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL, schedule_id TEXT, due_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS agent_watch_last (agent_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS agent_versions (agent_id TEXT PRIMARY KEY, version INTEGER NOT NULL);
     `);
-    // Added later: the definition version a row was set from, so an older one read late does not set it back.
-    if (!sql.exec("SELECT 1 FROM pragma_table_info('agent_schedules') WHERE name = 'version'").toArray().length) {
-      sql.exec("ALTER TABLE agent_schedules ADD COLUMN version INTEGER");
-    }
   }
 
   #one<T>(work: () => Promise<T>): Promise<T> {
@@ -119,10 +117,25 @@ export class AgentRunner {
     return this.#one(() => this.#apply(agentId, agent));
   }
 
+  /**
+   * Whether to act on `agent` as the definition of `agentId`: not when it is older than one acted on before (two saves,
+   * their notices out of order, or a read that came late). Remembers the newest; a deleted agent (null) is forgotten.
+   * Everything that acts on a definition (apply, the home chat's agentChanged) asks this first.
+   */
+  accepts(agentId: string, agent: AgentDefinition | null): boolean {
+    if (!agent) {
+      this.#sql.exec("DELETE FROM agent_versions WHERE agent_id = ?", agentId);
+      return true;
+    }
+    const known = this.#sql.exec("SELECT version FROM agent_versions WHERE agent_id = ?", agentId).toArray()[0] as { version: number } | undefined;
+    if (known && agent.version < known.version) return false;
+    if (known?.version !== agent.version) this.#sql.exec("INSERT OR REPLACE INTO agent_versions (agent_id, version) VALUES (?, ?)", agentId, agent.version);
+    return true;
+  }
+
   async #apply(agentId: string, agent: AgentDefinition | null, after = this.#host.runs.now()): Promise<void> {
+    if (!this.accepts(agentId, agent)) return;
     const row = this.#row(agentId);
-    // A definition read before the one this row was set from (two saves, their notices out of order) changes nothing.
-    if (agent && row?.version != null && agent.version < row.version) return;
     const wanted = agent?.enabled && agent.trigger ? agent : null;
     const key = wanted ? triggerKey(wanted) : "";
     if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) return;
@@ -133,33 +146,34 @@ export class AgentRunner {
       const dueAt = nextRunAt(trigger, after);
       if (dueAt === null) return;
       const id = await this.#host.alarmAt(dueAt, { agentId, dueAt });
-      this.#setRow({ agent_id: agentId, kind: "schedule", key, schedule_id: id, due_at: dueAt, version: wanted.version });
+      this.#setRow({ agent_id: agentId, kind: "schedule", key, schedule_id: id, due_at: dueAt });
       return;
     }
     let id: string | null = null;
     if (this.#host.sharedWatch(trigger.step)) await this.#host.subscribe(agentId, trigger.step, trigger.everyMinutes);
     else id = await this.#host.alarmEvery(trigger.everyMinutes * 60, { agentId });
-    this.#setRow({ agent_id: agentId, kind: "watch", key, schedule_id: id, due_at: null, version: wanted.version });
+    this.#setRow({ agent_id: agentId, kind: "watch", key, schedule_id: id, due_at: null });
   }
 
   #setRow(row: ScheduleRow): void {
     this.#sql.exec(
-      "INSERT OR REPLACE INTO agent_schedules (agent_id, kind, key, schedule_id, due_at, version) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO agent_schedules (agent_id, kind, key, schedule_id, due_at) VALUES (?, ?, ?, ?, ?)",
       row.agent_id,
       row.kind,
       row.key,
       row.schedule_id,
       row.due_at,
-      row.version,
     );
   }
 
   /**
-   * After a restart, for the agent whose home this is: when it has no schedule or watch set (an alarm whose job went
-   * before its next one was set), read its definition and set them.
+   * After a restart, for the agent whose home this is: when it has no schedule or watch set, or its row's alarm is no
+   * longer set (its job ran or went before the next one was set), read its definition and set them.
    */
   async reconcile(agentId: string): Promise<void> {
-    if (this.#row(agentId)) return;
+    const row = this.#row(agentId);
+    // A row whose alarm is still set is fine (a shared watch has none); one whose job went is set again.
+    if (row && (row.schedule_id === null || (await this.#host.alarmTime(row.schedule_id)) !== null)) return;
     const agent = await this.#host.definition(agentId);
     await this.apply(agentId, agent);
   }
@@ -178,17 +192,14 @@ export class AgentRunner {
   /**
    * A run's alarm came: the next run is set first (so a run that never ends does not stop the schedule), then this
    * one runs. An alarm for a time the agent no longer runs at (its definition changed since) runs nothing; one that
-   * fires twice runs once. When the definition cannot be read, the same time is tried again a few minutes later, and
-   * after that the schedule goes on from the trigger it was set from.
+   * fires twice runs once. Before anything else the same time is armed again a few minutes on (#retry), so a failed
+   * read or a reset before the next run is set tries it again; setting the next run replaces that alarm.
    */
-  async fired({ agentId, dueAt, attempt = 0 }: RunAlarm): Promise<RunEnd | null> {
-    let agent: AgentDefinition | null;
-    try {
-      agent = await this.#host.definition(agentId);
-    } catch (error) {
-      await this.#one(() => this.#retry(agentId, dueAt, attempt));
-      throw error;
-    }
+  async fired({ agentId, dueAt }: RunAlarm): Promise<RunEnd | null> {
+    const reading = this.#host.definition(agentId);
+    reading.catch(() => {}); // awaited below, once the retry is armed
+    await this.#one(() => this.#retry(agentId, dueAt));
+    const agent = await reading;
     const due = await this.#one(async () => {
       const row = this.#row(agentId);
       const current = agent?.enabled && agent.trigger?.kind === "schedule" && row?.kind === "schedule" && row.key === triggerKey(agent);
@@ -205,21 +216,22 @@ export class AgentRunner {
     return this.executor.start({ agent, dueAt, why: "schedule" });
   }
 
-  /** A due time whose definition could not be read: try it again soon, or, after MAX_ATTEMPTS, set the next one. */
-  async #retry(agentId: string, dueAt: number, attempt: number): Promise<void> {
+  /**
+   * The due time `dueAt` came: arm it again RETRY_MS from now, until that would reach the next due time of the trigger
+   * the row was set from; then arm that one instead (this time is given up). Only for the row's own due time.
+   */
+  async #retry(agentId: string, dueAt: number): Promise<void> {
     const row = this.#row(agentId);
     if (row?.kind !== "schedule" || row.due_at !== dueAt) return;
     const now = this.#host.runs.now();
-    if (attempt + 1 < MAX_ATTEMPTS) {
-      const id = await this.#host.alarmAt(now + RETRY_MS, { agentId, dueAt, attempt: attempt + 1 });
-      this.#sql.exec("UPDATE agent_schedules SET schedule_id = ? WHERE agent_id = ?", id, agentId);
-      return;
-    }
-    // Given up on this one: the next, from the trigger the row was set from.
+    // Already armed ahead (the same alarm fired twice at once): one retry is enough.
+    const armed = row.schedule_id === null ? null : await this.#host.alarmTime(row.schedule_id);
+    if (armed !== null && armed > now) return;
     const next = nextRunAt(JSON.parse(row.key) as Extract<AgentTrigger, { kind: "schedule" }>, Math.max(dueAt, now));
-    if (next === null) return;
-    const id = await this.#host.alarmAt(next, { agentId, dueAt: next });
-    this.#sql.exec("UPDATE agent_schedules SET schedule_id = ?, due_at = ? WHERE agent_id = ?", id, next, agentId);
+    const again = next === null || now + RETRY_MS < next;
+    const due = again ? dueAt : next;
+    const id = await this.#host.alarmAt(again ? now + RETRY_MS : next, { agentId, dueAt: due });
+    this.#sql.exec("UPDATE agent_schedules SET schedule_id = ?, due_at = ? WHERE agent_id = ?", id, due, agentId);
   }
 
   /** A watch's interval came: read it, and run when its value moved and its condition holds. */
@@ -235,9 +247,10 @@ export class AgentRunner {
 
   /**
    * The Source named `source` says the value the agent watches through it moved. A Source that is not the agent's watch
-   * as it is now (its trigger changed, it is off or gone, or the server is no longer one of its own) is left.
+   * as it is now (its trigger changed, it is off or gone, or the server is no longer one of its own) is left. With
+   * `detach`, see moved.
    */
-  async sourceMoved(agentId: string, value: Value, source: string): Promise<RunEnd | null> {
+  async sourceMoved(agentId: string, value: Value, source: string, options: { detach?: boolean } = {}): Promise<RunEnd | null> {
     const agent = await this.#host.definition(agentId);
     const step = agent?.enabled && agent.trigger?.kind === "watch" ? agent.trigger.step : null;
     if (!step || !mayUseServer(agent!, step.server) || !this.#host.sharedWatch(step) || (await sourceName(step)) !== source) {
@@ -248,7 +261,7 @@ export class AgentRunner {
       else if (mayUseServer(agent!, step.server)) await this.#one(() => this.#resubscribe(agentId, agent!, source));
       return null;
     }
-    return this.moved(agent!, value);
+    return this.moved(agent!, value, options);
   }
 
   /** The agent's row says it watches through the Source named `source`, which it left: set its watch again from `agent`. */
@@ -260,12 +273,19 @@ export class AgentRunner {
     await this.#apply(agentId, agent);
   }
 
-  /** A watch read `value`: a run when it differs from the last one and the condition holds over it (and `previous`). */
-  async moved(agent: AgentDefinition, value: Value): Promise<RunEnd | null> {
+  /**
+   * A watch read `value`: a run when it differs from the last one and the condition holds over it (and `previous`).
+   * With `detach`, the run goes on in the background and this resolves once its row is stored, so a caller that is told
+   * it was handled (a Source) can count on the run; when the row could not be stored, the value is forgotten again and
+   * this rejects, so the same value is handled when it comes again.
+   */
+  async moved(agent: AgentDefinition, value: Value, { detach = false } = {}): Promise<RunEnd | null> {
     if (agent.trigger?.kind !== "watch") return null;
     const now = this.#host.runs.now();
     const print = await fingerprint(value);
-    const last = this.#sql.exec("SELECT fingerprint FROM agent_watch_last WHERE agent_id = ?", agent.id).toArray()[0] as { fingerprint: string } | undefined;
+    const last = this.#sql.exec("SELECT fingerprint, at FROM agent_watch_last WHERE agent_id = ?", agent.id).toArray()[0] as
+      | { fingerprint: string; at: number }
+      | undefined;
     if (last?.fingerprint === print) return null;
     this.#sql.exec("INSERT OR REPLACE INTO agent_watch_last (agent_id, fingerprint, at) VALUES (?, ?, ?)", agent.id, print, now);
     // A small value is kept as its JSON, so the condition can compare with it; a large one only as its hash.
@@ -278,7 +298,17 @@ export class AgentRunner {
       return null;
     }
     if (!fires) return null;
-    return this.executor.start({ agent, dueAt: now, why: "watch", watch: value, ...(previous !== undefined && { previous }) });
+    const start: RunStart = { agent, dueAt: now, why: "watch", watch: value, ...(previous !== undefined && { previous }) };
+    if (!detach) return this.executor.start(start);
+    try {
+      // start stores the run's row before it returns, or throws.
+      this.#host.waitUntil(this.executor.start(start));
+    } catch (error) {
+      if (last) this.#sql.exec("UPDATE agent_watch_last SET fingerprint = ?, at = ? WHERE agent_id = ?", last.fingerprint, last.at, agent.id);
+      else this.#sql.exec("DELETE FROM agent_watch_last WHERE agent_id = ?", agent.id);
+      throw error;
+    }
+    return null;
   }
 
   /**
