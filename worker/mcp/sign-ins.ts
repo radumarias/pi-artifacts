@@ -123,6 +123,14 @@ export class McpSignIns {
     });
   }
 
+  /**
+   * The servers the user has a sign-in record for: signed in now, or once with tokens a refused refresh then cleared
+   * (the record stays; Disconnect removes it). A run that may use one waits for its sign-in rather than going without.
+   */
+  known(): string[] {
+    return this.#rows().map((row) => row.server);
+  }
+
   /** Remove a stored sign-in (the account menu's Disconnect). Runs that need it ask for a new one. */
   disconnect(server: string): Promise<boolean> {
     return this.#serially(async () => {

@@ -194,6 +194,20 @@ describe("sign-ins with nobody present", () => {
     expect(s.chats).toHaveLength(2);
   });
 
+  it("keeps a lapsed sign-in among the known ones until Disconnect", async () => {
+    const s = setup();
+    expect(s.signIns.known()).toEqual([]);
+    await signIn(s, T0);
+    s.answer("needs_sign_in");
+    s.at(T0 + DAY);
+    expect(await s.signIns.check(["Portal"])).toEqual({ Portal: "needs_sign_in" });
+    // The refused refresh ended the grant (signed out), but the record says the user signs in to it.
+    expect(s.signIns.list()[0]!.signedIn).toBe(false);
+    expect(s.signIns.known()).toEqual(["Portal"]);
+    await s.signIns.disconnect("Portal");
+    expect(s.signIns.known()).toEqual([]);
+  });
+
   it("records a test run's chat as waiting without telling the user", async () => {
     const s = setup();
     await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", quiet: true });

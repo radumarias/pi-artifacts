@@ -189,6 +189,11 @@ export class AgentRuns {
     return row ? recordOf(row) : null;
   }
 
+  /** Whether a run of the agent (a test, or a real one, as `test` says) came after `dueAt`. */
+  hasNewer(agentId: string, dueAt: number, test: boolean): boolean {
+    return this.#rows("agent_id = ? AND due_at > ? AND item = '' AND test = ? LIMIT 1", agentId, dueAt, test ? 1 : 0).length > 0;
+  }
+
   /** A run waiting for sign-in goes again: back to running, the servers it waited for forgotten. */
   restart(agentId: string, dueAt: number): void {
     const run = this.get(agentId, dueAt);

@@ -3065,8 +3065,9 @@ export class ChatAgent extends DurableObject<Env> {
       signInServers: async () => {
         const servers = oauthServerNames(this.env);
         if (!servers.length) return [];
-        const signedIn = new Set(await this.#directory.mcpSignedIn());
-        return servers.filter((server) => signedIn.has(server));
+        // By the record, not the tokens: a refused refresh clears those, and the run should wait for a new sign-in.
+        const known = new Set(await this.#directory.mcpSignInRecords());
+        return servers.filter((server) => known.has(server));
       },
       // Each sign-in refreshed now, as nobody is there to sign in (worker/mcp/sign-ins.ts).
       needsSignIn: async (servers) => {

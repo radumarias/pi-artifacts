@@ -78,8 +78,9 @@ export interface RunHost {
   /** A read-only call through the hub, as the agent's owner: the result's payload. Throws SignInNeeded for a sign-in. */
   read(server: string, tool: string, input: StepInput): Promise<Value>;
   /**
-   * The servers that sign in each user (`auth: "oauth"`) its owner has signed in to: a work step's tools may come from
-   * them, so a run checks them too. One they never signed in to (or left) is no reason to wait.
+   * The servers that sign in each user (`auth: "oauth"`) its owner has a sign-in record for (signed in now, or lapsed):
+   * a work step's tools may come from them, so a run checks them too. One they never signed in to (or Disconnected) is
+   * no reason to wait.
    */
   signInServers(): Promise<readonly string[]>;
   /** Which of these servers need their owner to sign in again before a run can read them. */

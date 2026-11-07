@@ -346,6 +346,11 @@ export class AgentRunner {
         skip(run, `@${agent.name} was off`);
         continue;
       }
+      // A later run went meanwhile (without the server, after its sign-in lapsed): this one would post after it.
+      if (this.#host.runs.hasNewer(run.agentId, run.dueAt, run.test)) {
+        skip(run, "a newer run went since");
+        continue;
+      }
       this.#host.runs.restart(run.agentId, run.dueAt);
       restarted++;
       this.#host.waitUntil(this.executor.start(startOf(agent, run)));

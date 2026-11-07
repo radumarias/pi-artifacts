@@ -306,6 +306,21 @@ describe("scheduled runs", () => {
     expect(reads.host.runs.list(reads.definition.id)[0]).toMatchObject({ status: "sent" });
   });
 
+  it("skips a waiting run once a newer one went, when the sign-in comes late", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    await host.settled();
+    // The next day's run went (its read no longer needed the sign-in, say): the waiting one would post after it.
+    host.signIn.delete("crm");
+    host.clock.now = T0 + 86_400_000;
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(await runner.signedIn("crm")).toBe(0);
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: a newer run went since." });
+    expect(host.delivered).toHaveLength(1);
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {
