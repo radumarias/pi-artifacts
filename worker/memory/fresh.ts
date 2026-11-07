@@ -19,16 +19,28 @@ import { MEMORY_FORGET_TOOL, MEMORY_RECALL_TOOL } from "../../shared/memory.ts";
 /** The entry that leaves a conversation's earlier prompts out of its context (see freshPrompt). */
 const MEMORY_FRESH_KIND = "chat.memory-fresh";
 
-/** What a memory_recall or memory_forget result says once it is left out (the latter quoted the note it forgot). */
-const LEFT_OUT: Readonly<Record<string, string>> = {
-  [MEMORY_RECALL_TOOL]: "(The notes this call found are left out: more people read this chat now. Call it again for those you may read.)",
-  [MEMORY_FORGET_TOOL]: "(What this call said is left out: more people read this chat now.)",
+/** Who a left-out text is for: the model (its context once the chat has more readers), or the people's sockets. */
+type Audience = "model" | "shown";
+
+/**
+ * What a memory_recall or memory_forget result says once it is left out (the latter quoted the note it forgot): to the
+ * model, why and what to do; on others' screens, only who sees it (in a chat that was always shared too).
+ */
+const LEFT_OUT: Readonly<Record<string, Readonly<Record<Audience, string>>>> = {
+  [MEMORY_RECALL_TOOL]: {
+    model: "(The notes this call found are left out: more people read this chat now. Call it again for those you may read.)",
+    shown: "(Notes this call found are shown only to the chat's owner.)",
+  },
+  [MEMORY_FORGET_TOOL]: {
+    model: "(What this call said is left out: more people read this chat now.)",
+    shown: "(What this call said is shown only to the chat's owner.)",
+  },
 };
 
 /** `message` with what it says put in place of one that says it is left out, if it is a memory_recall or memory_forget result. */
-function leftOutResult(message: Message | undefined): ToolResultMessage | undefined {
+function leftOutResult(message: Message | undefined, audience: Audience): ToolResultMessage | undefined {
   if (message?.role !== "toolResult") return undefined;
-  const leftOut = LEFT_OUT[message.toolName];
+  const leftOut = LEFT_OUT[message.toolName]?.[audience];
   return leftOut ? { ...message, content: [{ type: "text", text: leftOut }], details: undefined } : undefined;
 }
 
@@ -37,11 +49,12 @@ function leftOutResult(message: Message | undefined): ToolResultMessage | undefi
  * the notes); the same entry when it holds neither.
  */
 function withoutNoteResult(entry: EntryRecord): EntryRecord {
-  if (CompactionEntry.is(entry) && entry.model?.length)
-    return { ...entry, model: [{ role: "user", content: SUMMARY_LEFT_OUT, timestamp: entry.model[0]?.timestamp ?? 0 }] };
   const [first, ...rest] = entry.model ?? [];
-  const result = leftOutResult(first);
-  return result ? { ...entry, model: [result, ...rest] } : entry;
+  if (!first) return entry;
+  // A summary is the whole of its entry's model, as leaveOutNotes replaces it.
+  if (CompactionEntry.is(entry)) return { ...entry, model: [leftOutSummary(first.timestamp, "shown")] };
+  const left = leftOutResult(first, "shown");
+  return left ? { ...entry, model: [left, ...rest] } : entry;
 }
 
 /** `entries` with withoutNoteResult applied, the same array when none changed. */
@@ -69,10 +82,10 @@ export function withoutNoteResults(event: AgentEvent): AgentEvent {
       const tools = event.tools.some((slot) => LEFT_OUT[slot.name]) ? event.tools.map((slot) => blankCall(slot, slot.name)) : event.tools;
       return entries === event.entries && tools === event.tools ? event : { ...event, entries, tools };
     }
-    case "message_start": {
-      const message = leftOutResult(event.message);
-      return message ? { ...event, message } : event;
-    }
+    // An entry's message starts whole, before its entry lands (a result, a compaction's summary). The app reads only an
+    // assistant's as it starts; any other arrives again with its entry, as above: none is sent here.
+    case "message_start":
+      return event.message.role === "assistant" ? event : { ...event, message: { ...event.message, content: [], details: undefined } as Message };
     case "message_end":
     case "entry_appended": {
       const entry = withoutNoteResult(event.entry);
@@ -112,19 +125,28 @@ export function withoutNoteResults(event: AgentEvent): AgentEvent {
 /** How a compaction's summary is asked to be placed: its write's request id starts with it. */
 const SUMMARY_REQUEST = "compaction:";
 
-/** What a summary of the conversation says once it is left out. */
-const SUMMARY_LEFT_OUT = "(A summary of the earlier conversation is left out here: more people read this chat now.)";
+/** What a summary of the conversation says once it is left out, as LEFT_OUT. */
+const SUMMARY_LEFT_OUT: Readonly<Record<Audience, string>> = {
+  model: "(A summary of the earlier conversation is left out here: more people read this chat now.)",
+  shown: "(A summary of the earlier conversation is shown only to the chat's owner.)",
+};
 
 /** How a compaction's summary starts in the model's context (pi-durable's CompactionTask; test/memory-prompt.test.ts checks it). */
 const SUMMARY_START = "The conversation history before this point was compacted into the following summary:";
 
+/** Whether `message` is a compaction's summary, as the model reads it. */
+function isSummary(message: Message): boolean {
+  if (message.role !== "user") return false;
+  const first = typeof message.content === "string" ? message.content : message.content.find((part) => part.type === "text")?.text;
+  return first?.startsWith(SUMMARY_START) === true;
+}
+
+/** A compaction's summary put in place of one that says it is left out. */
+const leftOutSummary = (timestamp: number, audience: Audience): Message => ({ role: "user", content: SUMMARY_LEFT_OUT[audience], timestamp });
+
 /** `messages` with every compaction summary among them put in place of one that says it is left out. */
 export function withoutSummaries(messages: readonly Message[]): Message[] {
-  return messages.map((message) => {
-    if (message.role !== "user") return message;
-    const first = typeof message.content === "string" ? message.content : message.content.find((part) => part.type === "text")?.text;
-    return first?.startsWith(SUMMARY_START) ? { ...message, content: SUMMARY_LEFT_OUT } : message;
-  });
+  return messages.map((message) => (isSummary(message) ? leftOutSummary(message.timestamp, "model") : message));
 }
 
 /**
@@ -136,8 +158,8 @@ function leaveOutNotes(entries: readonly EntryRecord[]): ContextEdit[] {
   return entries.flatMap((entry): ContextEdit[] => {
     if (SystemEntry.is(entry)) return [{ target: entry.id, action: "omit" }];
     if (CompactionEntry.is(entry) && entry.model?.length)
-      return [{ target: entry.id, action: "replace", messages: [{ role: "user", content: SUMMARY_LEFT_OUT, timestamp: Date.now() }] }];
-    const result = ToolResultEntry.is(entry) ? leftOutResult(entry.model?.[0]) : undefined;
+      return [{ target: entry.id, action: "replace", messages: [leftOutSummary(Date.now(), "model")] }];
+    const result = ToolResultEntry.is(entry) ? leftOutResult(entry.model?.[0], "model") : undefined;
     return result ? [{ target: entry.id, action: "replace", messages: [result] }] : [];
   });
 }
@@ -158,8 +180,8 @@ const MAX_LOOKS = 5;
  * them. So `done` looks again once they are in, and again after each look that found one: a compaction the
  * conversation runs on its own is stopped, its summary too if it waits to be placed (a later one compacts again); one a
  * turn waits for cannot be (the turn would fail), and is waited for; and every summary placed since the first look is
- * left out too. True once a look finds none; false when MAX_LOOKS were not enough. Until then the caller has each
- * request leave summaries out (withoutSummaries).
+ * left out too, as is a memory tool's result that landed after the context was read. True once a look finds none;
+ * false when MAX_LOOKS were not enough. Until then the caller has each request leave summaries out (withoutSummaries).
  */
 export async function freshPrompt(
   conversation: Pick<Conversation, "id" | "context" | "submit" | "viewState">,
@@ -181,7 +203,12 @@ async function lookAgain(
     await written?.wait(BACKGROUND_CONTEXT);
     const waited = await stopCompactions(conversation, harness);
     await Promise.allSettled(waited.map((taskId) => harness.waitForTask(taskId, BACKGROUND_CONTEXT)));
-    const late = (await conversation.context(BACKGROUND_CONTEXT)).entries.filter((entry) => !seen.has(entry.id) && CompactionEntry.is(entry));
+    // A compaction placed since, and a memory tool's result that landed after the context was read (its call was
+    // answered as someone joined): neither is in the edits yet.
+    const late = (await conversation.context(BACKGROUND_CONTEXT)).entries.filter(
+      (entry) =>
+        !seen.has(entry.id) && (CompactionEntry.is(entry) || (ToolResultEntry.is(entry) && leftOutResult(entry.model?.[0], "model") !== undefined)),
+    );
     if (!late.length && !waited.length) return true;
     for (const entry of late) seen.add(entry.id);
     written = await leaveOut(conversation, late);

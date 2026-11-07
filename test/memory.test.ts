@@ -416,6 +416,15 @@ describe("UserMemory", () => {
     expect(fact.note.confirmed).toBe(false);
   });
 
+  it("imports waiting notes whose chat did not come along within all notes only, not one chat's room", () => {
+    const { memory } = directory();
+    const waiting = Array.from({ length: MAX_UNCONFIRMED + 5 }, (_, i) =>
+      note({ id: i.toString(16).padStart(12, "0"), text: `Said ${i}.`, source: "learned", confirmed: false, scope: "user", chatId: "gone" }),
+    );
+    expect(memory.import(waiting).filter((result) => "error" in result)).toEqual([]);
+    expect(memory.list().filter((each) => !each.confirmed && each.chatId === undefined)).toHaveLength(MAX_UNCONFIRMED + 5);
+  });
+
   it("imports no more waiting notes into one chat than may wait there", () => {
     const { memory } = directory();
     const waiting = Array.from({ length: MAX_UNCONFIRMED + 1 }, (_, i) =>
@@ -502,7 +511,7 @@ describe("ChatMemory", () => {
    * turn answers the owner, and the conversations whose prompt was started afresh.
    */
   function chat(chatId: string, kind: ChatKind, alone: boolean, owner = directory(), kv = new Map<string, unknown>()) {
-    const state: { kind: ChatKind; alone: boolean; piByOwner: boolean; done?: Promise<boolean> } = {
+    const state: { kind: ChatKind; alone: boolean; piByOwner: boolean; done?: Promise<boolean>; recalling?: () => void; reading?: () => void } = {
       kind,
       alone,
       piByOwner: true,
@@ -522,12 +531,21 @@ describe("ChatMemory", () => {
         return { done: state.done ?? Promise.resolve(true) };
       },
       directory: () => ({
-        readNotes: (reader) => owner.memory.read(reader),
+        readNotes: async (reader) => {
+          const read = owner.memory.read(reader);
+          state.reading?.();
+          return read;
+        },
         useNotes: (ids) => {
           used = [...used, ...ids];
           owner.memory.use(ids);
         },
-        recallNotes: (reader, query, shown, offset) => owner.memory.recall(reader, query, shown, offset),
+        recallNotes: async (reader, query, shown, offset) => {
+          const found = owner.memory.recall(reader, query, shown, offset);
+          // What happens in the chat while the owner's directory answers.
+          state.recalling?.();
+          return found;
+        },
         learnNote: (writer, input) => owner.memory.learn(writer, input),
         forgetNoteFor: (writer, id) => owner.memory.forgetFor(writer, id),
       }),
@@ -700,9 +718,13 @@ describe("ChatMemory", () => {
     expect(await asked(reply("toolUse"), reply("error"), message("owner"), reply("stop"))).toBe(true);
     expect(await asked(reply("toolUse"), reply("error"), message("owner"), entry(CHAT_TURN_KIND), reply("stop"))).toBe(false);
     expect(await asked(reply("toolUse"), reply("aborted"), message("ana"), reply("stop"))).toBe(false);
-    // The owner's message after a run that failed, or was cut off by a restart, starts a run of its own.
-    expect(await asked(reply("toolUse"), message("owner"), reply("error"), entry(CHAT_TURN_KIND))).toBe(true);
-    expect(await asked(reply("toolUse"), message("owner"), reply("aborted"), message("ana"))).toBe(true);
+    // A run that failed, or was stopped, did not answer its inputs: they stay in the context, so the owner's message
+    // after a hand-off or a member's is judged with them. One after the owner's own failed run is the owner's.
+    expect(await asked(reply("toolUse"), message("owner"), reply("error"), entry(CHAT_TURN_KIND))).toBe(false);
+    expect(await asked(reply("toolUse"), message("owner"), reply("aborted"), entry(CHAT_TURN_KIND))).toBe(false);
+    expect(await asked(reply("toolUse"), message("owner"), reply("aborted"), message("ana"))).toBe(false);
+    expect(await asked(reply("toolUse"), message("owner"), reply("error"), message("owner"), reply("stop"))).toBe(true);
+    expect(await asked(reply("toolUse"), message("owner"), reply("length"), message("ana"))).toBe(true);
     // The owner's message steered into a member's run that failed once and went on: it is still that run.
     expect(await asked(reply("toolUse"), message("owner"), reply("toolUse"), reply("error"), message("ana"))).toBe(false);
     // A run longer than it reads is not judged the owner's.
@@ -733,6 +755,32 @@ describe("ChatMemory", () => {
     expect(notShown).toBeGreaterThan(0);
     const found = await host.recall("root", "");
     expect(found.notes.slice(0, notShown).every((note) => !section.includes(note.text))).toBe(true);
+  });
+
+  it("recalls again for the chat's readers when someone joins while a recall is answered", async () => {
+    const owner = directory();
+    for (let n = 0; n < 30; n++) saved(owner.memory.add({ text: `Salary note ${n} ${"x".repeat(150)}.`, scope: "user" }));
+    const { host, state } = chat(PRIVATE, "private", true, owner);
+    state.recalling = () => {
+      state.alone = false;
+      state.kind = "group";
+    };
+    expect((await host.recall("root", "salary")).notes).toEqual([]);
+    // Alone all the while: as it was found.
+    const { host: alone } = chat(PRIVATE, "private", true, owner);
+    expect((await alone.recall("root", "salary")).notes.length).toBeGreaterThan(0);
+  });
+
+  it("reads a section again for the chat's readers when someone joins while it is read", async () => {
+    const owner = directory();
+    saved(owner.memory.add({ text: "My salary is private.", scope: "user" }));
+    const { memory, host, state } = chat(PRIVATE, "private", true, owner);
+    state.reading = () => {
+      state.alone = false;
+      state.kind = "group";
+    };
+    expect(await host.section("root")).not.toContain("salary");
+    expect(await memory.refresh()).not.toContain("salary");
   });
 
   it("pages through the notes that match, saying how many more there are", async () => {
@@ -845,6 +893,9 @@ describe("what someone other than the owner sees of a chat's events", () => {
     expect(shown).toContain('"toolCallId":"c1"');
     const appended = withoutNoteResults({ type: "entry_appended", entry: result(MEMORY_RECALL_TOOL, "My salary is private.") });
     expect(JSON.stringify(appended)).not.toContain("salary");
+    // Worded for the people, not the model, and true in a chat that was always shared too.
+    expect(JSON.stringify(appended)).toContain("shown only to the chat's owner");
+    expect(shown).not.toContain("more people read this chat");
     const update = { type: "tool_execution_update", toolCallId: "c5", toolName: MEMORY_RECALL_TOOL, output: { set: "My salary" } } as AgentEvent;
     expect(JSON.stringify(withoutNoteResults(update))).not.toContain("salary");
   });
@@ -861,9 +912,11 @@ describe("what someone other than the owner sees of a chat's events", () => {
       result: { taskId: "t1", structuredOutput: "My salary", isError: false, diagnostics: [] },
     } as unknown as AgentEvent;
     expect(JSON.stringify(withoutNoteResults(nested))).not.toContain("salary");
-    // Anything else, as it is.
+    // Only an assistant's message starts as it is (the app reads no other as it starts; each comes again with its entry).
     const other = { type: "message_start", message: result("files_read", "salary.csv").model![0]! } as AgentEvent;
-    expect(withoutNoteResults(other)).toBe(other);
+    expect(JSON.stringify(withoutNoteResults(other))).not.toContain("salary.csv");
+    const answer = { type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Hi" }], timestamp: 0 } } as AgentEvent;
+    expect(withoutNoteResults(answer)).toBe(answer);
   });
 
   it("leaves out a compaction's summary, which may have kept the notes", () => {
@@ -871,10 +924,21 @@ describe("what someone other than the owner sees of a chat's events", () => {
       id: 7,
       conversationId: "1",
       kind: "pi.compaction",
-      model: [{ role: "user", content: "The conversation history before this point was compacted: My salary is private.", timestamp: 0 }],
+      model: [
+        {
+          role: "user",
+          content: "The conversation history before this point was compacted into the following summary: My salary is private.",
+          timestamp: 0,
+        },
+      ],
     } as unknown as EntryRecord;
-    const shown = withoutNoteResults({ type: "entry_appended", entry: summary });
+    // In the harness's order: its message starts whole, then its entry lands.
+    const started = withoutNoteResults({ type: "message_start", message: summary.model![0]! });
+    expect(JSON.stringify(started)).not.toContain("salary");
+    const shown = withoutNoteResults({ type: "message_end", entry: summary });
     expect(JSON.stringify(shown)).not.toContain("salary");
+    expect(JSON.stringify([started, shown])).not.toContain("more people read this chat");
+    expect(JSON.stringify(shown)).toContain("shown only to the chat's owner");
     expect(shown).toMatchObject({ entry: { id: 7, kind: "pi.compaction" } });
   });
 });

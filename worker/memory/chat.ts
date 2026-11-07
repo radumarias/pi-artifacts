@@ -66,15 +66,13 @@ export const MAX_RUN_PAGES = 20;
 
 /**
  * Whether the run pi is in answers only the owner's own messages, from its log read newest first (`pages`): every
- * input since the end of its last run (a reply that ended it, not one calling tools) is a message of `ownerUid`'s,
- * none an agent's hand-off or another input (piLogEntry). Read from the transcript, so a run resumed after a restart
- * is judged as it was. `pages` go back to the start of the log when no run ended before (only this run is read); past
+ * input since the end of its last answered run (a reply that ended it: not one calling tools, failed or cut off) is a
+ * message of `ownerUid`'s, none an agent's hand-off or another input (piLogEntry). Read from the transcript, so a run
+ * resumed after a restart is judged as it was. `pages` go back to the start of the log when no run ended before (only this run is read); past
  * MAX_RUN_PAGES of them, it is not the owner's.
  */
 export async function runAskedByOwner(pages: AsyncIterable<readonly EntryRecord[]>, ownerUid: string): Promise<boolean> {
   let asked = false;
-  /** Whether the entry read last (the next newer one) is an input. */
-  let newerIsInput = false;
   let read = 0;
   for await (const page of pages) {
     if (++read > MAX_RUN_PAGES) return false;
@@ -82,14 +80,13 @@ export async function runAskedByOwner(pages: AsyncIterable<readonly EntryRecord[
       const seen = piLogEntry(entry);
       if (!seen) continue;
       if ("reply" in seen) {
+        // Only a reply that answered its run ends it. A failed or cut off one did not: the harness keeps that run's
+        // inputs in the context (it drops only the reply), so whatever was asked then is still asked, retried,
+        // resumed or not, and is read past.
         const { stopReason } = seen.reply;
-        // A failed or cut off request is retried, or resumed, in the same run, which places no input before it goes
-        // on: one an input follows at once is a new run's end (the owner's message after a failed one). An input
-        // after a later reply of the run was steered into it. Any other reply ends a run.
-        if (stopReason !== "toolUse" && ((stopReason !== "error" && stopReason !== "aborted") || newerIsInput)) return asked;
-        newerIsInput = false;
+        if (stopReason === "stop" || stopReason === "length") return asked;
       } else if (seen.input !== "message" || seen.uid !== ownerUid) return false;
-      else asked = newerIsInput = true;
+      else asked = true;
     }
   }
   // The start of the log: the run is the conversation's first.
@@ -251,11 +248,25 @@ export class ChatMemory {
     );
   }
 
-  async #read(key: string, agent: MemoryAgent | null): Promise<Section> {
+  /**
+   * `read` from the owner's directory as `agent`'s conversation reads, and again for the chat's readers now when it read
+   * the owner's own notes and they no longer do: someone joined meanwhile, and a fresh start may have read the context
+   * already, so it would never leave them out. They read no more than the first reader, so once is enough.
+   */
+  async #readNow<T>(agent: MemoryAgent | null, read: (reader: MemoryReader) => T | Promise<T>): Promise<{ reader: MemoryReader; found: T }> {
     const reader = this.#reader(agent);
+    const found = await read(reader);
+    const now = this.#reader(agent);
+    return readsOwnNotes(reader) && !readsOwnNotes(now) ? { reader: now, found: await read(now) } : { reader, found };
+  }
+
+  async #read(key: string, agent: MemoryAgent | null): Promise<Section> {
     const directory = this.#directory(agent);
     try {
-      const { notes, more, off } = await directory.readNotes(reader);
+      const {
+        reader,
+        found: { notes, more, off },
+      } = await this.#readNow(agent, (reader) => directory.readNotes(reader));
       // Off the record as the owner's directory knows it (its sidebar's kind, or a chat not theirs): say so, as the
       // tools refuse there.
       if (off) return { text: memorySection({ kinds: ["off_record"] }, []), ids: [] };
@@ -299,7 +310,8 @@ export class ChatMemory {
       recall: async (conversation, query, offset) => {
         const who = this.#who(conversation);
         const { ids } = await this.#section(who);
-        const found = await this.#directory(who.agent).recallNotes(this.#reader(who.agent), query, ids, offset);
+        const directory = this.#directory(who.agent);
+        const { found } = await this.#readNow(who.agent, (reader) => directory.recallNotes(reader, query, ids, offset));
         // Now in the transcript too: left out once the chat has more readers (freshPrompt).
         if (found.notes.some((note) => note.scope === "user")) this.#markOwn(who.key);
         return found;
