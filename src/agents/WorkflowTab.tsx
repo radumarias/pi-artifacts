@@ -303,7 +303,7 @@ function WorkflowForm({
             <button
               type="button"
               disabled={saving}
-              onClick={() => startOver()}
+              onClick={startOver}
             >
               Undo changes
             </button>

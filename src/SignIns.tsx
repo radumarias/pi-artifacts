@@ -32,12 +32,39 @@ export function useSignInAlerts(reload: () => void) {
   );
 }
 
+/** Disconnect a sign-in: which one is going (`busy`), and why the last one failed. */
+function useDisconnect(onChange: (list: McpSignInView[]) => void) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const disconnect = async (server: string) => {
+    setBusy(server);
+    setError(null);
+    try {
+      onChange(await api.disconnect(server));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return { busy, error, disconnect };
+}
+
+/** The Disconnect button of one sign-in. */
+function DisconnectButton({ server, busy, onClick }: { server: string; busy: string | null; onClick: (server: string) => void }) {
+  return (
+    <button type="button" disabled={busy !== null} onClick={() => onClick(server)}>
+      {busy === server ? "Disconnecting…" : "Disconnect"}
+    </button>
+  );
+}
+
 /**
  * In the sidebar, above the chats: each sign-in that needs the user (a run is waiting, or it runs out in a few days),
  * with its sign-in link. It stays until they sign in, or dismiss it.
  */
 export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onChange: (list: McpSignInView[]) => void }) {
-  const [busy, setBusy] = useState<string | null>(null);
+  const { busy, error, disconnect } = useDisconnect(onChange);
   const shown = list.filter((item) => item.notice);
   if (shown.length === 0) return null;
   return (
@@ -54,22 +81,9 @@ export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onCha
                 <a className="button primary" href={item.link} target="_blank" rel="noopener">
                   Sign in
                 </a>
-                {item.lapsed && (
-                  <button
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => {
-                      setBusy(item.server);
-                      api
-                        .disconnect(item.server)
-                        .then(onChange, () => {})
-                        .finally(() => setBusy(null));
-                    }}
-                  >
-                    {busy === item.server ? "Disconnecting…" : "Disconnect"}
-                  </button>
-                )}
+                {item.lapsed && <DisconnectButton server={item.server} busy={busy} onClick={(server) => void disconnect(server)} />}
               </div>
+              {error && <span className="form-error">{error}</span>}
             </div>
             <button
               type="button"
@@ -102,21 +116,8 @@ export function SignInsDialog({
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, disconnect } = useDisconnect(onChange);
   useEffect(() => dialog.current?.showModal(), []);
-
-  const disconnect = async (server: string) => {
-    setBusy(server);
-    setError(null);
-    try {
-      onChange(await api.disconnect(server));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   return (
     <dialog ref={dialog} className="confirm-dialog sign-ins-dialog" onClose={onClose}>
@@ -148,9 +149,7 @@ export function SignInsDialog({
               )}
               {/* A lapsed sign-in is still waited for: Disconnect is how runs stop waiting for it. */}
               {(item.signedIn || item.lapsed) && (
-                <button type="button" disabled={busy !== null} onClick={() => void disconnect(item.server)}>
-                  {busy === item.server ? "Disconnecting…" : "Disconnect"}
-                </button>
+                <DisconnectButton server={item.server} busy={busy} onClick={(server) => void disconnect(server)} />
               )}
             </div>
           </li>

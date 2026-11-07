@@ -209,7 +209,7 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /** The account menu's list of sign-ins: each server that signs in each user, with when (no tokens). */
-  mcpSignIns(): Promise<McpSignInView[]> {
+  mcpSignIns(): McpSignInView[] {
     return this.#signIns.list();
   }
 
@@ -219,7 +219,7 @@ export class UserDirectory extends DurableObject<Env> {
     return this.#signIns.list();
   }
 
-  dismissSignInNotice(server: string): Promise<McpSignInView[]> {
+  dismissSignInNotice(server: string): McpSignInView[] {
     this.#signIns.dismiss(server);
     return this.#signIns.list();
   }
@@ -251,13 +251,14 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /** The servers this user has signed in to, now or before a refused refresh (not Disconnected), by name. */
-  async mcpSignInRecords(): Promise<string[]> {
-    return (await this.#signIns.known()).sort();
+  mcpSignInRecords(): string[] {
+    return this.#signIns.known().sort();
   }
 
   /** The servers this user has signed in to (tokens kept), by name: never the tokens. */
-  async mcpSignedIn(): Promise<string[]> {
-    return (await this.#signIns.list())
+  mcpSignedIn(): string[] {
+    return this.#signIns
+      .list()
       .filter((item) => item.signedIn)
       .map((item) => item.server)
       .sort();

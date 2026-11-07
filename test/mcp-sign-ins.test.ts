@@ -163,10 +163,10 @@ describe("sealed sign-in records", () => {
 describe("sign-ins with nobody present", () => {
   it("lists each server that signs in each user, with its grant", async () => {
     const s = setup();
-    expect(await s.signIns.list()).toEqual([{ server: "Portal", signedIn: false, usedByRuns: false, link: "/api/mcp/sign-in/Portal" }]);
+    expect(s.signIns.list()).toEqual([{ server: "Portal", signedIn: false, usedByRuns: false, link: "/api/mcp/sign-in/Portal" }]);
     await signIn(s, T0);
     s.signIns.setRunServers("chat1", ["Portal", "Public", "Unknown"]);
-    expect(await s.signIns.list()).toEqual([
+    expect(s.signIns.list()).toEqual([
       { server: "Portal", signedIn: true, signedInAt: T0, endsAt: T0 + 30 * DAY, usedByRuns: true, link: "/api/mcp/sign-in/Portal" },
     ]);
   });
@@ -185,10 +185,10 @@ describe("sign-ins with nobody present", () => {
     expect(s.told[0]).toMatchObject({ type: "sign-in", server: "Portal", kind: "needed", link: "/api/mcp/sign-in/Portal", what: "Daily brief" });
     // The push says only that something is waiting: not what.
     expect(s.pushed[0]).not.toContain("Daily brief");
-    expect((await s.signIns.list())[0]!.notice).toBe("needed");
+    expect(s.signIns.list()[0]!.notice).toBe("needed");
     await signIn(s, T0 + DAY);
     expect(s.chats.sort()).toEqual(["chat1:Portal", "chat2:Portal"]);
-    expect((await s.signIns.list())[0]!.notice).toBeUndefined();
+    expect(s.signIns.list()[0]!.notice).toBeUndefined();
     // Told once: a later sign-in tells nobody.
     await signIn(s, T0 + 2 * DAY);
     expect(s.chats).toHaveLength(2);
@@ -196,10 +196,10 @@ describe("sign-ins with nobody present", () => {
 
   it("keeps a lapsed sign-in among the known ones until Disconnect", async () => {
     const s = setup();
-    expect(await s.signIns.known()).toEqual([]);
+    expect(s.signIns.known()).toEqual([]);
     // A sign-in started and never finished (its registration, its state) is no sign-in to wait for.
     await s.signIns.update("Portal", { set: { client: CLIENT, state: "Portal~x", redirectUrl: "https://pi.test/cb" } });
-    expect(await s.signIns.known()).toEqual([]);
+    expect(s.signIns.known()).toEqual([]);
     // The callback's code exchange saves the tokens with their grant.
     s.at(T0);
     await s.signIns.update("Portal", { set: { tokens: TOKENS, grant: "g1" } });
@@ -208,10 +208,10 @@ describe("sign-ins with nobody present", () => {
     s.at(T0 + DAY);
     expect(await s.signIns.check(["Portal"])).toEqual({ Portal: "needs_sign_in" });
     // The refused refresh ended the grant (signed out), but the record says the user signs in to it.
-    expect((await s.signIns.list())[0]!.signedIn).toBe(false);
-    expect(await s.signIns.known()).toEqual(["Portal"]);
+    expect(s.signIns.list()[0]!.signedIn).toBe(false);
+    expect(s.signIns.known()).toEqual(["Portal"]);
     await s.signIns.disconnect("Portal");
-    expect(await s.signIns.known()).toEqual([]);
+    expect(s.signIns.known()).toEqual([]);
   });
 
   it("shows a lapsed sign-in with Disconnect, which lets the runs waiting for it go on without it", async () => {
@@ -221,12 +221,12 @@ describe("sign-ins with nobody present", () => {
     s.at(T0 + DAY);
     await s.signIns.check(["Portal"]);
     await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
-    expect((await s.signIns.list())[0]).toMatchObject({ signedIn: false, lapsed: true, notice: "needed" });
+    expect(s.signIns.list()[0]).toMatchObject({ signedIn: false, lapsed: true, notice: "needed" });
     expect(await s.signIns.disconnect("Portal")).toBe(true);
     // The waiting chat hears it as it would a sign-in: its runs check again, and go on without the server.
     expect(s.chats).toEqual(["chat1:Portal"]);
-    expect(await s.signIns.known()).toEqual([]);
-    const after = (await s.signIns.list())[0]!;
+    expect(s.signIns.known()).toEqual([]);
+    const after = s.signIns.list()[0]!;
     expect(after.lapsed).toBeUndefined();
     expect(after.notice).toBeUndefined();
   });
@@ -237,19 +237,17 @@ describe("sign-ins with nobody present", () => {
     await signIn(refused, T0);
     await refused.signIns.update("Portal", { clear: "all" });
     await refused.signIns.update("Portal", { set: { client: CLIENT, state: "Portal~y", redirectUrl: "https://pi.test/cb" } });
-    expect(await refused.signIns.known()).toEqual(["Portal"]);
-    // A record from before the table: signed in now (no grant, from before grants), or lapsed with its grant.
-    for (const record of [{ client: CLIENT, tokens: TOKENS }, { client: CLIENT, grant: "g1" }]) {
+    expect(refused.signIns.known()).toEqual(["Portal"]);
+    // Records from before the table count, whatever they hold: signed in, lapsed with or without a grant (from before
+    // grants), or even never finished, which Disconnect then forgets.
+    for (const record of [{ client: CLIENT, tokens: TOKENS }, { client: CLIENT, grant: "g1" }, { client: CLIENT }, { client: CLIENT, verifier: "v" }]) {
       const sql = memorySql();
       await setup({ sql }).signIns.update("Portal", { set: record });
-      sql.exec("DELETE FROM mcp_known");
-      expect(await setup({ sql }).signIns.known()).toEqual(["Portal"]);
+      sql.exec("DROP TABLE mcp_known");
+      const later = setup({ sql });
+      expect(later.signIns.known()).toEqual(["Portal"]);
+      expect(later.signIns.list()[0]).toMatchObject("tokens" in record ? { signedIn: true } : { signedIn: false, lapsed: true });
     }
-    // A sign-in never finished, from before the table too, is none.
-    const sql = memorySql();
-    await setup({ sql }).signIns.update("Portal", { set: { client: CLIENT, verifier: "v", state: "Portal~z" } });
-    sql.exec("DELETE FROM mcp_known");
-    expect(await setup({ sql }).signIns.known()).toEqual([]);
   });
 
   it("records a test run's chat as waiting without telling the user", async () => {
@@ -257,7 +255,7 @@ describe("sign-ins with nobody present", () => {
     await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", quiet: true });
     expect(s.told).toHaveLength(0);
     expect(s.pushed).toHaveLength(0);
-    expect((await s.signIns.list())[0]?.notice).toBeUndefined();
+    expect(s.signIns.list()[0]?.notice).toBeUndefined();
     await signIn(s, T0 + DAY);
     expect(s.chats).toEqual(["chat1:Portal"]);
   });
@@ -332,7 +330,7 @@ describe("sign-ins with nobody present", () => {
     s.answer("needs_sign_in");
     s.at(T0 + RECENT_REFRESH_MS + 1);
     expect(await s.signIns.check(["Portal"])).toEqual({ Portal: "needs_sign_in" });
-    expect((await s.signIns.list())[0]).toMatchObject({ signedIn: false });
+    expect(s.signIns.list()[0]).toMatchObject({ signedIn: false });
     expect((await s.signIns.record("Portal")).tokens).toBeUndefined();
     expect(s.alarms.at(-1)).toBeNull();
   });
@@ -370,7 +368,7 @@ describe("sign-ins with nobody present", () => {
     expect(await chat.tokens()).toBeUndefined();
     await chat.saveTokens({ ...TOKENS, access_token: "at-late" });
     expect(s.row()).toBeUndefined();
-    expect((await s.signIns.list())[0]).toMatchObject({ signedIn: false });
+    expect(s.signIns.list()[0]).toMatchObject({ signedIn: false });
 
     await signInFresh("at-2");
     const old = client();
@@ -412,7 +410,7 @@ describe("sign-ins with nobody present", () => {
     sql.exec("UPDATE mcp_auth SET data = ? WHERE server = 'Portal'", JSON.stringify({ client: CLIENT, state: "s" }));
     const signedOut = setup({ sql });
     await signedOut.signIns.record("Portal");
-    expect((await signedOut.signIns.list())[0]).toMatchObject({ signedIn: false });
+    expect(signedOut.signIns.list()[0]).toMatchObject({ signedIn: false });
   });
 
   it("keeps a chat waiting until it could be told", async () => {
@@ -444,7 +442,7 @@ describe("sign-ins with nobody present", () => {
     s.signIns.setRunServers("chat1", ["Portal"]);
     await s.signIns.needed("Portal", { chatId: "chat1" });
     s.signIns.forgetChat("chat1");
-    expect((await s.signIns.list())[0]!.usedByRuns).toBe(false);
+    expect(s.signIns.list()[0]!.usedByRuns).toBe(false);
     expect(s.alarms.at(-1)).toBeNull();
     await signIn(s, T0 + DAY);
     expect(s.chats).toEqual([]);
@@ -472,7 +470,7 @@ describe("sign-ins with nobody present", () => {
     const s = setup();
     await signIn(s, T0);
     await s.signIns.update("Portal", { clear: ["tokens"] });
-    expect((await s.signIns.list())[0]).toMatchObject({ signedIn: false });
+    expect(s.signIns.list()[0]).toMatchObject({ signedIn: false });
     expect(s.row()).toMatchObject({ signed_in_at: null });
     await signIn(s, T0 + DAY);
     expect(await s.signIns.disconnect("Portal")).toBe(true);
