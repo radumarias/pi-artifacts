@@ -204,7 +204,7 @@ describe("sign-ins with nobody present", () => {
     expect(s.chats).toEqual(["chat1:Portal"]);
   });
 
-    it("warns once per grant, a few days before it ends, only for servers runs use", async () => {
+  it("warns once per grant, a few days before it ends, only for servers runs use", async () => {
     const s = setup();
     await signIn(s, T0);
     const grant = 30 * DAY;

@@ -79,9 +79,9 @@ class FakeHome implements RunnerHost {
   async needsSignIn(servers: readonly string[]) {
     return servers.filter((server) => this.signIn.has(server));
   }
-  /** The servers that sign in each user. */
+  /** The servers that sign in each user that the owner has signed in to. */
   readonly oauth: string[] = [];
-  signInServers() {
+  async signInServers() {
     return this.oauth;
   }
   readonly asked: string[] = [];

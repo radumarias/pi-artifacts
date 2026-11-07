@@ -409,8 +409,12 @@ export class ChatAgent extends DurableObject<Env> {
     callbacks: {
       run: (payload: RunAlarm) => this.#onAlarm(() => this.runner.fired(payload)),
       watch: (payload: WatchAlarm) => this.#onAlarm(() => this.runner.watchTick(payload)),
-      // The wake itself resumes the runs cut off (onStart); this only takes the interval down once none is going.
-      resume: () => this.#keepResuming(),
+      // Resumes the runs cut off (cheap when they are going here already: a run goes once), and takes the interval down
+      // once none is going. onStart does the same on a cold wake, but an object that stayed up would not retry otherwise.
+      resume: () => {
+        this.runner.resume();
+        this.#keepResuming();
+      },
     },
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets).use(this.scheduler);
@@ -2100,7 +2104,6 @@ export class ChatAgent extends DurableObject<Env> {
     this.sockets.broadcastPeople();
   }
 
-  /** Tell the chat that discusses a page this chat just published a version of, if there is one. Only a notice. */
   /**
    * What every publish does once a version is out, whoever published it (pi, an agent, a run's page step): record it
    * as `chatId`'s, and, off the publish's path, tell the chat that discusses the page of its new version.
@@ -2112,6 +2115,7 @@ export class ChatAgent extends DurableObject<Env> {
     };
   }
 
+  /** Tell the chat that discusses a page this chat just published a version of, if there is one. Only a notice. */
   async #tellPageChat(artifact: Omit<ArtifactSummary, "chatId">): Promise<void> {
     const chatId = await this.#directory.pageChat(artifact.id);
     if (!chatId || chatId === this.chatId) return;
@@ -3054,7 +3058,12 @@ export class ChatAgent extends DurableObject<Env> {
           throw signInOr(error);
         }
       },
-      signInServers: () => oauthServerNames(this.env),
+      signInServers: async () => {
+        const servers = oauthServerNames(this.env);
+        if (!servers.length) return [];
+        const signedIn = new Set(await this.#directory.mcpSignedIn());
+        return servers.filter((server) => signedIn.has(server));
+      },
       // Each sign-in refreshed now, as nobody is there to sign in (worker/mcp/sign-ins.ts).
       needsSignIn: async (servers) => {
         const checked = await this.#directory.checkSignIns(servers);
@@ -3285,7 +3294,8 @@ export class ChatAgent extends DurableObject<Env> {
     this.#bringIn([meta.id]);
     // The page as it is, declaring only its read-only tools: a snapshot never writes as the owner (publishRebuilt).
     const mcp = await readOnlyDeclaration(manifestOf(meta, meta.latest), async (server, name) => {
-      const tool = await this.hub.tool(server, name).catch(() => undefined);
+      // A listing that fails fails the step: dropping the tool would publish a version without a read tool it declared.
+      const tool = await this.hub.tool(server, name);
       return !!tool && isReadOnly(tool);
     });
     const seed = await writeDraft(scope, { artifact: meta, edits: [], mcp });
