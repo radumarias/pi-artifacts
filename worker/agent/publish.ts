@@ -17,7 +17,8 @@ export interface PublishScope {
   chatId: string;
   hub: McpHub;
   artifacts: ArtifactStore;
-  onPublished(artifact: Omit<ArtifactSummary, "chatId">): Promise<void>;
+  /** A version is out, published as `chatId`'s (the scope's): record it, and tell the chat that discusses the page. */
+  onPublished(artifact: Omit<ArtifactSummary, "chatId">, chatId: string): Promise<void>;
   /**
    * Render a page in a headless browser and report on it (worker/artifacts/check.ts), for at most CHECK_MS and until
    * `signal` aborts. Throws BrowserUnavailable without a browser, CheckTimedOut when the page held it too long.
@@ -426,7 +427,7 @@ export async function publishDraft(scope: PublishScope, input: PublishInput, sig
     manifest: draft.manifest,
     message: input.message,
   });
-  await scope.onPublished({ id: meta.id, title: meta.title, latest: meta.latest, updatedAt: meta.updatedAt });
+  await scope.onPublished({ id: meta.id, title: meta.title, latest: meta.latest, updatedAt: meta.updatedAt }, scope.chatId);
   // Published already: a draft left behind is only clutter, never a reason to fail.
   await drafts.remove(draft.id).catch((error: unknown) => console.error("draft:", errorMessage(error)));
   return { meta, byTitle: target.byTitle, ...(unchecked && { unchecked }) };

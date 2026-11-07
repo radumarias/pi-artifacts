@@ -498,7 +498,7 @@ export class ChatAgent extends DurableObject<Env> {
       artifacts: this.storage.artifacts,
       // Deriving the user's key is not free, so derive it once per object.
       files: memoAsync(() => this.storage.userFiles(this.uid)),
-      onPublished: this.#onPublished(this.chatId),
+      onPublished: (artifact, chatId) => this.#onPublished(artifact, chatId),
       broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
       proposeAgent: (input) => this.#directory.saveAgent(input, "agent", false),
@@ -2108,14 +2108,13 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /**
-   * What every publish does once a version is out, whoever published it (pi, an agent, a run's page step): record it
-   * as `chatId`'s, and, off the publish's path, tell the chat that discusses the page of its new version.
+   * What every publish does once a version is out, whoever published it (pi, an agent, a run's page step, which
+   * publishes as the page's own chat): record it as `chatId`'s, and, off the publish's path, tell the chat that
+   * discusses the page of its new version. A scope sets only its chatId, never its own onPublished.
    */
-  #onPublished(chatId: string): (artifact: Omit<ArtifactSummary, "chatId">) => Promise<void> {
-    return async (artifact) => {
-      await this.#directory.recordArtifact({ ...artifact, chatId });
-      void this.#tellPageChat(artifact).catch((error: unknown) => console.error("page chat:", errorMessage(error)));
-    };
+  async #onPublished(artifact: Omit<ArtifactSummary, "chatId">, chatId: string): Promise<void> {
+    await this.#directory.recordArtifact({ ...artifact, chatId });
+    void this.#tellPageChat(artifact).catch((error: unknown) => console.error("page chat:", errorMessage(error)));
   }
 
   /** Tell the chat that discusses a page this chat just published a version of, if there is one. Only a notice. */
@@ -3274,11 +3273,8 @@ export class ChatAgent extends DurableObject<Env> {
     const meta = await this.storage.artifacts.readMeta(step.artifactId);
     const to = meta?.title ?? `page ${step.artifactId}`;
     if (!meta || meta.ownerUid !== this.uid) return { kind: "page", to, status: "refused", detail: "page not updated: it is not one of your pages" };
-    const scope: PublishScope = {
-      ...this.scope,
-      chatId: meta.chatId,
-      onPublished: this.#onPublished(meta.chatId),
-    };
+    // Published as the page's own chat's: onPublished records it there and tells the chat that discusses it.
+    const scope: PublishScope = { ...this.scope, chatId: meta.chatId };
     const mark = runMark(request.agent.id, request.run.dueAt, request.key);
     // A run that goes on after a restart publishes once: a version with its mark is the one it sent.
     const already = publishedAlready(meta, mark);

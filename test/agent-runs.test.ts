@@ -796,6 +796,8 @@ describe("a run's page step", () => {
   function scope(errors: string[]) {
     const published: string[] = [];
     const messages: string[] = [];
+    /** What onPublished heard: the version, and the chat it was published as. */
+    const told: { id: string; latest: number; chatId: string }[] = [];
     const drafts = new ChatDrafts(new FakeBucket().r2, "ada", "0123456789abcdef", new ArrayBuffer(32));
     const publishScope: PublishScope = {
       uid: "ada",
@@ -809,7 +811,9 @@ describe("a run's page step", () => {
           return { id: "a1", title: input.title, latest: 4, updatedAt: 0 } as ArtifactMeta;
         },
       } as unknown as ArtifactStore,
-      onPublished: async () => {},
+      onPublished: async (artifact, chatId) => {
+        told.push({ id: artifact.id, latest: artifact.latest, chatId });
+      },
       checkPage: async () => report(errors),
       chatArtifacts: async () => [],
       drafts: async () => drafts,
@@ -817,8 +821,17 @@ describe("a run's page step", () => {
       readSkillFile: async () => null,
       publishUnchecked: false,
     };
-    return { publishScope, published, messages, drafts };
+    return { publishScope, published, messages, drafts, told };
   }
+
+  it("tells the scope's chat of a version a run publishes, through the scope's one onPublished", async () => {
+    // A page step publishes with the page's own chat as the scope's: the version is recorded there, and the chat that
+    // discusses the page hears of it (ChatAgent's onPublished calls pageVersion on it).
+    const { publishScope, told } = scope([]);
+    const pageScope: PublishScope = { ...publishScope, chatId: "page-chat" };
+    await publishFindings(pageScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"));
+    expect(told).toEqual([{ id: "a1", latest: 4, chatId: "page-chat" }]);
+  });
 
   it("publishes a page whose check passes, with the report in it", async () => {
     const { publishScope, published } = scope([]);
