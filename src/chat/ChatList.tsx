@@ -309,9 +309,12 @@ function ChatRow({ chat, open, uid, navigate, onDelete }: { chat: ChatSummary; o
           <button type="button" role="menuitem" onClick={() => change({ pinned: !chat.pinnedAt })}>
             {chat.pinnedAt ? "Unpin" : "Pin"}
           </button>
-          <button type="button" role="menuitem" onClick={() => (setMenu(false), setRenaming(true))}>
-            Rename
-          </button>
+          {/* An agent's own chat shows as the agent (@name), whatever it is called: a rename would show nowhere. */}
+          {!chat.agent && (
+            <button type="button" role="menuitem" onClick={() => (setMenu(false), setRenaming(true))}>
+              Rename
+            </button>
+          )}
           <button type="button" role="menuitem" onClick={copyLink}>
             Copy link
           </button>
