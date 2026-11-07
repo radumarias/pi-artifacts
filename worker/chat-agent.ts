@@ -61,7 +61,7 @@ import {
   type ModelChoice,
   type ModelSetting,
 } from "../shared/models.ts";
-import { deadline, errorMessage, formatBytes, memoAsync, serial, sha256Hex, singleFlight } from "../shared/util.ts";
+import { deadline, errorMessage, formatBytes, mapLimit, memoAsync, serial, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import type { SkillFileInfo } from "../shared/skill-files.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -209,6 +209,9 @@ const IMPORTED_KEY = "imported";
  */
 const PI_SCAN_KEY = "piScan";
 type PiScan = { through: number; chain?: { hop: number; root: number } };
+
+/** How many of pi's sessions #transcriptTraces reads at once: a chat with agents (or many runs) has many. */
+const TRACE_READS_AT_ONCE = 6;
 
 /** The newest transcript entries, read at most once per message (see #recentEntries). */
 type RecentEntries = () => Promise<readonly EntryRecord[] | undefined>;
@@ -1920,14 +1923,15 @@ export class ChatAgent extends DurableObject<Env> {
    */
   readonly #transcriptTraces = singleFlight(async (): Promise<ChatTraces> => {
     const seen = this.#seen;
-    for (const { id } of await this.harness.sessions.list()) {
+    // Sessions are read side by side (traces only ever add, so the order does not matter), a few at a time.
+    await mapLimit(await this.harness.sessions.list(), TRACE_READS_AT_ONCE, async ({ id }) => {
       const query = { order: "ascending", minEntryId: ((seen.through.get(id) ?? -1) + 1) as EntryId } as const;
       for await (const page of entryPages(await this.harness.conversation(id), query, 500)) {
         chatTraces(page, seen.traces);
         const last = page.at(-1);
         if (last) seen.through.set(id, last.id as number);
       }
-    }
+    });
     return seen.traces;
   });
 
