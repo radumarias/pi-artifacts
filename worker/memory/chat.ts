@@ -52,10 +52,10 @@ export interface ChatMemoryDeps {
   piByOwner(): Promise<boolean>;
   /**
    * Have the next model request of a conversation (pi's for none, else a session) start its prompt afresh, leaving out
-   * every earlier one: an earlier prompt held the owner's own notes, which its readers may no longer see. With
-   * `compacting`, a compaction it could not stop summarizes the earlier context: once that settles, it is due again.
+   * every earlier one: an earlier prompt held the owner's own notes, which its readers may no longer see. Resolves once
+   * written; `done`, once no compaction is left that read them (false: not sure yet, the next turn tries again).
    */
-  freshPrompt(conversation: string | undefined): Promise<{ compacting?: Promise<unknown>; placed: Promise<unknown> }>;
+  freshPrompt(conversation: string | undefined): Promise<{ done: Promise<boolean> }>;
   directory(uid: string): NotesDirectory;
   /** Where the chat keeps which notes each conversation's prompt already held, so a note's use counts once in each. */
   kv: { get<T>(key: string): T | undefined; put(key: string, value: unknown): void };
@@ -73,6 +73,8 @@ export const MAX_RUN_PAGES = 20;
  */
 export async function runAskedByOwner(pages: AsyncIterable<readonly EntryRecord[]>, ownerUid: string): Promise<boolean> {
   let asked = false;
+  /** Whether the entry read last (the next newer one) is an input. */
+  let newerIsInput = false;
   let read = 0;
   for await (const page of pages) {
     if (++read > MAX_RUN_PAGES) return false;
@@ -80,11 +82,14 @@ export async function runAskedByOwner(pages: AsyncIterable<readonly EntryRecord[
       const seen = piLogEntry(entry);
       if (!seen) continue;
       if ("reply" in seen) {
-        // A failed request is retried in the same run (or compacted after an overflow): only another reply ends one.
-        // Read past one that did end it, the run is judged over more inputs, never fewer.
-        if (seen.reply.stopReason !== "toolUse" && seen.reply.stopReason !== "error") return asked;
+        const { stopReason } = seen.reply;
+        // A failed or cut off request is retried, or resumed, in the same run, which places no input before it goes
+        // on: one an input follows at once is a new run's end (the owner's message after a failed one). An input
+        // after a later reply of the run was steered into it. Any other reply ends a run.
+        if (stopReason !== "toolUse" && ((stopReason !== "error" && stopReason !== "aborted") || newerIsInput)) return asked;
+        newerIsInput = false;
       } else if (seen.input !== "message" || seen.uid !== ownerUid) return false;
-      else asked = true;
+      else asked = newerIsInput = true;
     }
   }
   // The start of the log: the run is the conversation's first.
@@ -96,8 +101,6 @@ const PI = "pi";
 const SHOWN_KEY = "memory.shown:";
 /** The conversations (PI, or a session) whose prompt held the owner's own notes since it last started afresh. */
 const OWN_KEY = "memory.own";
-/** The conversations whose requests leave out a summary of theirs (see #forgetOwn). */
-const SUMMARIES_KEY = "memory.summaries";
 /** How many note ids a conversation keeps as shown; past it, the oldest go (a use may then count again). */
 const MAX_SHOWN = 1_000;
 
@@ -124,10 +127,11 @@ export class ChatMemory {
   readonly #deps: ChatMemoryDeps;
   /** Each conversation's section, as its turn started, with who could read the chat then (`#audience`). */
   readonly #sections = new Map<string, { audience: string; section: Promise<Section> }>();
-  /** The conversations whose prompt is being started afresh now (#forgetOwn). */
-  readonly #freshening = new Map<string, Promise<void>>();
-  /** The conversations whose fresh start waits for a compaction's summary (#forgetOwn): that wait starts it again. */
-  readonly #awaitingSummary = new Set<string>();
+  /**
+   * The conversations whose prompt is being started afresh now (#forgetOwn), till it is done: its edits written, and
+   * whether it still covers every prompt that held the owner's own notes (`current`; a new one since needs its own).
+   */
+  readonly #freshening = new Map<string, { written: Promise<void>; current: boolean }>();
 
   constructor(deps: ChatMemoryDeps) {
     this.#deps = deps;
@@ -163,61 +167,56 @@ export class ChatMemory {
     return this.#deps.directory(agent?.ownerUid ?? this.#deps.ownerUid);
   }
 
-  /** The conversations kept under `list` in the chat's kv (OWN_KEY, SUMMARIES_KEY). */
-  #marked(list: string): string[] {
-    return this.#deps.kv.get<string[]>(list) ?? [];
-  }
-
-  #mark(list: string, key: string): void {
-    const marked = this.#marked(list);
-    if (!marked.includes(key)) this.#deps.kv.put(list, [...marked, key]);
-  }
-
-  #unmark(list: string, key: string): void {
-    this.#deps.kv.put(
-      list,
-      this.#marked(list).filter((each) => each !== key),
-    );
-  }
-
+  /** The conversations kept under OWN_KEY in the chat's kv. */
   #own(): string[] {
-    return this.#marked(OWN_KEY);
+    return this.#deps.kv.get<string[]>(OWN_KEY) ?? [];
   }
 
   #markOwn(key: string): void {
-    this.#mark(OWN_KEY, key);
+    // A prompt that held them after a fresh start began: that one leaves it marked, and the next starts another.
+    const going = this.#freshening.get(key);
+    if (going) going.current = false;
+    const own = this.#own();
+    if (!own.includes(key)) this.#deps.kv.put(OWN_KEY, [...own, key]);
+  }
+
+  #unmarkOwn(key: string): void {
+    this.#deps.kv.put(
+      OWN_KEY,
+      this.#own().filter((each) => each !== key),
+    );
   }
 
   /**
-   * Start afresh the prompt of conversation `key` when it held the owner's own notes, which `reader` does not read. One
-   * at a time for each conversation: a refresh and audienceChanged at once write one fresh start, not two.
+   * Start afresh the prompt of conversation `key` when it held the owner's own notes, which `reader` does not read.
+   * Resolves once the edits are written; until freshPrompt is done (no compaction left that read them), `key` stays
+   * marked, so each request leaves summaries out (leavesOutSummaries), and if this object goes away first, the next turn
+   * starts it again. One at a time for each conversation: a refresh and audienceChanged at once
+   * write one fresh start, not two.
    */
   #forgetOwn(key: string, reader: MemoryReader): Promise<void> {
-    if (readsOwnNotes(reader) || !this.#own().includes(key) || this.#awaitingSummary.has(key)) return Promise.resolve();
+    if (readsOwnNotes(reader) || !this.#own().includes(key)) return Promise.resolve();
     const going = this.#freshening.get(key);
-    if (going) return going;
-    const fresh = this.#deps
-      .freshPrompt(key === PI ? undefined : key)
-      .then(({ compacting, placed }) => {
-        // Marked until the summary is left out too: if this object goes away first, the next turn does it.
-        if (compacting) {
-          // Each request leaves summaries out until the edits that do are in (leavesOutSummaries).
-          this.#mark(SUMMARIES_KEY, key);
-          this.#awaitingSummary.add(key);
-          void compacting
-            .finally(() => this.#awaitingSummary.delete(key))
-            // Read as the conversation reads now: its agent's, or pi's.
-            .then(() => this.#forgetOwn(key, this.#reader(key === PI ? null : this.#deps.agentFor(key))))
-            .catch((error: unknown) => console.error("memory prompt:", errorMessage(error)));
-        } else {
-          this.#unmark(OWN_KEY, key);
-          if (this.#marked(SUMMARIES_KEY).includes(key))
-            void placed.then(() => this.#unmark(SUMMARIES_KEY, key)).catch((error: unknown) => console.error("memory prompt:", errorMessage(error)));
-        }
-      })
-      .finally(() => this.#freshening.delete(key));
+    if (going?.current) return going.written;
+    const started = this.#deps.freshPrompt(key === PI ? undefined : key);
+    const fresh = { written: started.then(() => undefined), current: true };
     this.#freshening.set(key, fresh);
-    return fresh;
+    void started
+      .then(
+        ({ done }) =>
+          done.then(
+            (clean) => {
+              if (clean && fresh.current) this.#unmarkOwn(key);
+            },
+            (error: unknown) => console.error("memory prompt:", errorMessage(error)),
+          ),
+        // Not written: the caller logs it (written rejects).
+        () => undefined,
+      )
+      .finally(() => {
+        if (this.#freshening.get(key) === fresh) this.#freshening.delete(key);
+      });
+    return fresh.written;
   }
 
   /**
@@ -289,7 +288,8 @@ export class ChatMemory {
       section: async (conversation) => (await this.#section(this.#who(conversation))).text,
       leavesOutSummaries: (conversation) => {
         const { key, agent } = this.#who(conversation);
-        return this.#marked(SUMMARIES_KEY).includes(key) && !readsOwnNotes(this.#reader(agent));
+        // Marked from the first prompt that held the owner's own notes until freshPrompt is done (#forgetOwn).
+        return this.#own().includes(key) && !readsOwnNotes(this.#reader(agent));
       },
       note: async (conversation, note) => {
         const { agent } = this.#who(conversation);

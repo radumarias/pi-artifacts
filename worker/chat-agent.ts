@@ -170,7 +170,7 @@ import type { Value } from "../shared/conditions.ts";
 import { runRef, type AgentRunDetail, type AgentRunList, type RunDelivery, type RunRef } from "../shared/runs.ts";
 import { agentsExtension } from "./agents/tools.ts";
 import { ChatMemory, runAskedByOwner, type MemoryAgent } from "./memory/chat.ts";
-import { freshPrompt } from "./memory/fresh.ts";
+import { freshPrompt, withoutNoteResults } from "./memory/fresh.ts";
 import { memoryExtension } from "./memory/tools.ts";
 import { coverageOf } from "./memory/coverage.ts";
 import {
@@ -431,6 +431,7 @@ export class ChatAgent extends DurableObject<Env> {
     runStartedAt: (snapshot) => this.runStartedAt(snapshot),
     toolsStartedAt: (snapshot) => this.toolsStartedAt(snapshot),
     admit: (person) => this.admit(person),
+    ownerUid: this.uid,
     peopleFor: (uid) => this.peopleFor(uid),
     queued: (ids) => this.queued(ids),
     incoming: () => this.incoming(),
@@ -3679,6 +3680,8 @@ interface ChatSession {
   runStartedAt(snapshot: SnapshotEvent): Promise<number | undefined>;
   toolsStartedAt(snapshot: SnapshotEvent): Promise<Record<string, number>>;
   admit(person: Person): boolean;
+  /** The chat's owner: only their sockets get what memory tools found (withoutNoteResults). */
+  ownerUid: string;
   peopleFor(uid: string): ChatPeopleView;
   queued(ids: readonly number[]): Promise<QueuedMessage[]>;
   incoming(): IncomingMessage[];
@@ -3911,7 +3914,9 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       send(ws, { type: "agents", agents: this.#chat.agents() });
       this.#followAgents(ws);
       // Timed only once it is to be sent: a wake attaches every socket again, and most find their snapshot already sent.
-      const snapshot = await this.#events([events.snapshot], false);
+      // Someone else's socket never gets what memory tools found (the owner's own notes, before others were in).
+      const member = attachment.person.uid !== this.#chat.ownerUid;
+      const snapshot = await this.#events([events.snapshot], member, false);
       const sent = await sha256Hex(JSON.stringify([snapshot.events, snapshot.queued]));
       if (sent !== attachment.sent && send(ws, { ...snapshot, ...(await this.#timing(events.snapshot)) })) {
         ws.serializeAttachment({ ...attachment, sent } satisfies SocketAttachment);
@@ -3919,7 +3924,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       // Ended meanwhile, it has been replaced above (or left for the socket's next message).
       if (!ended) {
         events.start(async (batch) => {
-          if (!send(ws, await this.#events(batch))) await this.#detach(ws);
+          if (!send(ws, await this.#events(batch, member))) await this.#detach(ws);
         });
       }
       return events;
@@ -3949,7 +3954,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
    * A batch for the browser. A snapshot (on attach, or when the stream overflowed) comes with how long its run and its
    * running calls have gone, unless `timed` is false; a batch that changes pi's inbox, with the people's messages waiting in it.
    */
-  async #events(batch: readonly AgentEvent[], timed = true): Promise<Extract<ChatServerMessage, { type: "events" }>> {
+  async #events(batch: readonly AgentEvent[], member: boolean, timed = true): Promise<Extract<ChatServerMessage, { type: "events" }>> {
     const snapshot = batch.findLast((event) => event.type === "snapshot");
     const ids = inboxIds(batch);
     const [timing, queued] = await Promise.all([
@@ -3957,7 +3962,7 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
       // Only a view of what pi has queued: without it the chat still works.
       ids && this.#chat.queued(ids).catch((error: unknown) => (console.error("queue:", errorMessage(error)), [])),
     ]);
-    return { type: "events", events: batch.map((event) => withoutImageData(withoutSystemPrompt(event))), ...timing, ...(queued && { queued }) };
+    return { type: "events", events: batch.map((event) => shownEvent(event, member)), ...timing, ...(queued && { queued }) };
   }
 
   /** How long the snapshot's run and its running calls have gone, by the server's clock. */
@@ -4031,11 +4036,12 @@ class ChatSockets extends LifecycleCapability implements DurableObjectCapability
    * follows it. `letGo` when the stream ends by itself.
    */
   async #streamTurn(ws: WebSocket, run: { agentId: string; session: string; turn: number }, current: () => boolean, letGo: () => void) {
+    const member = this.#person(ws)?.uid !== this.#chat.ownerUid;
     const message = (events: readonly AgentEvent[]) => ({
       type: "agentEvents" as const,
       agent: run.agentId,
       turn: run.turn,
-      events: events.map((event) => withoutImageData(withoutSystemPrompt(event))),
+      events: events.map((event) => shownEvent(event, member)),
     });
     const events = await this.#chat.agentEvents(run.session);
     const now = Date.now();
@@ -4083,6 +4089,12 @@ function close(ws: WebSocket, code: number, reason: string): void {
   } catch {
     // Already closed.
   }
+}
+
+/** An event as a socket gets it: no prompt, no image data, and for someone other than the owner no notes (withoutNoteResults). */
+function shownEvent(event: AgentEvent, member: boolean): AgentEvent {
+  const shown = withoutImageData(withoutSystemPrompt(event));
+  return member ? withoutNoteResults(shown) : shown;
 }
 
 function send(ws: WebSocket, message: ChatServerMessage): boolean {

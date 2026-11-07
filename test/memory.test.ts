@@ -23,13 +23,14 @@ import {
 import type { McpToolInfo } from "../worker/agent/mcp.ts";
 import { AgentRuns } from "../worker/agents/runs/store.ts";
 import { allowedTools } from "../worker/agents/turns.ts";
-import type { EntryRecord } from "@earendil-works/pi-durable";
+import type { AgentEvent, EntryRecord } from "@earendil-works/pi-durable";
 import { CHAT_TURN_KIND } from "../shared/agents.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
 import { ChatMemory, MAX_RUN_PAGES, runAskedByOwner, type MemoryAgent } from "../worker/memory/chat.ts";
 import { coverageOf } from "../worker/memory/coverage.ts";
 import { UserMemory } from "../worker/memory/memory.ts";
 import { recalledText } from "../worker/memory/tools.ts";
+import { withoutNoteResults } from "../worker/memory/fresh.ts";
 import { memorySql } from "./fakes.ts";
 
 const T0 = 1_000_000;
@@ -45,6 +46,12 @@ function clock(start = T0) {
   let at = start;
   return () => at++;
 }
+
+/** The `i`th of the group chats groupChats makes, MAX_UNCONFIRMED notes in each so none is full. */
+const groupChat = (i: number) => `g${Math.floor(i / MAX_UNCONFIRMED)}`;
+/** Room in group chats for `notes` waiting notes (groupChat). */
+const groupChats = (notes: number): Record<string, ChatKind> =>
+  Object.fromEntries(Array.from({ length: Math.ceil(notes / MAX_UNCONFIRMED) }, (_, i) => [groupChat(i * MAX_UNCONFIRMED), "group"]));
 
 /** The owner's directory as memory sees it: their chats by kind, and their agents. */
 function directory(kinds: Record<string, ChatKind> = { [PRIVATE]: "private", [GROUP]: "group", [PAGE]: "page", [OFF]: "off_record" }, start = T0) {
@@ -378,6 +385,46 @@ describe("UserMemory", () => {
     expect(later?.updatedAt).toBe(later?.createdAt);
   });
 
+  it("imports only a note's own fields, within MAX_NOTES in all", () => {
+    const { memory } = directory(groupChats(MAX_NOTES + 10));
+    const waiting = Array.from({ length: MAX_NOTES + 10 }, (_, i) => ({
+      ...note({ id: i.toString(16).padStart(12, "0"), text: `Said ${i}.`, source: "learned", confirmed: false, scope: "chat", chatId: groupChat(i) }),
+      // Not a field of a note's: an export never sets it.
+      byOwner: false,
+    }));
+    const results = memory.import(waiting);
+    expect(results.filter((result) => "error" in result)).toHaveLength(10);
+    expect(memory.list()).toHaveLength(MAX_NOTES);
+  });
+
+  it("keeps imported waiting notes out of the owner's own room", () => {
+    const { memory } = directory({ [PRIVATE]: "private", ...groupChats(MAX_UNCONFIRMED_ALL) });
+    // As many as the owner's own may wait, in chats of their own (within each chat's room).
+    const waiting = Array.from({ length: MAX_UNCONFIRMED_ALL }, (_, i) =>
+      note({
+        id: i.toString(16).padStart(12, "0"),
+        text: `Said ${i}.`,
+        source: "learned",
+        confirmed: false,
+        scope: "chat",
+        chatId: groupChat(i),
+      }),
+    );
+    expect(memory.import(waiting).every((result) => !("error" in result))).toBe(true);
+    // They waited for the owner's confirm as members' saves: the owner's own still wait too.
+    const fact = saved(memory.learn(writer(PRIVATE, "private", true, true), { text: "The target is 40.", scope: "user", kind: "fact" }));
+    expect(fact.note.confirmed).toBe(false);
+  });
+
+  it("imports no more waiting notes into one chat than may wait there", () => {
+    const { memory } = directory();
+    const waiting = Array.from({ length: MAX_UNCONFIRMED + 1 }, (_, i) =>
+      note({ id: i.toString(16).padStart(12, "0"), text: `Said ${i}.`, source: "learned", confirmed: false, scope: "chat", chatId: GROUP }),
+    );
+    const results = memory.import(waiting);
+    expect(results.filter((result) => "error" in result)).toEqual([{ error: expect.stringContaining(`${MAX_UNCONFIRMED} notes from this chat`) }]);
+  });
+
   it("imports a forgotten note once, and never brings back one forgotten here", () => {
     const owner = directory();
     const gone = saved(owner.memory.add({ text: "Old rule.", scope: "user" }));
@@ -454,14 +501,13 @@ describe("ChatMemory", () => {
    * A chat of the owner's: its kind, who is in it (both may change: `state`), the agent each session is, whether pi's
    * turn answers the owner, and the conversations whose prompt was started afresh.
    */
-  function chat(chatId: string, kind: ChatKind, alone: boolean, owner = directory()) {
-    const state: { kind: ChatKind; alone: boolean; piByOwner: boolean; compacting?: Promise<unknown>; placed?: Promise<unknown> } = {
+  function chat(chatId: string, kind: ChatKind, alone: boolean, owner = directory(), kv = new Map<string, unknown>()) {
+    const state: { kind: ChatKind; alone: boolean; piByOwner: boolean; done?: Promise<boolean> } = {
       kind,
       alone,
       piByOwner: true,
     };
     const sessions = new Map<string, MemoryAgent>();
-    const kv = new Map<string, unknown>();
     const fresh: (string | undefined)[] = [];
     let used: string[] = [];
     const memory = new ChatMemory({
@@ -473,7 +519,7 @@ describe("ChatMemory", () => {
       piByOwner: async () => state.piByOwner,
       freshPrompt: async (conversation) => {
         fresh.push(conversation);
-        return { placed: state.placed ?? Promise.resolve(), ...(state.compacting && { compacting: state.compacting }) };
+        return { done: state.done ?? Promise.resolve(true) };
       },
       directory: () => ({
         readNotes: (reader) => owner.memory.read(reader),
@@ -559,31 +605,62 @@ describe("ChatMemory", () => {
     expect(fresh).toEqual([undefined]);
   });
 
-  it("starts a prompt afresh again once a compaction it could not stop has placed its summary", async () => {
+  it("leaves summaries out of each request until the fresh start is done, and starts it again after a restart", async () => {
+    const owner = directory();
+    saved(owner.memory.add({ text: "My salary is private.", scope: "user" }));
+    const kv = new Map<string, unknown>();
+    const { memory, host, state, fresh } = chat(PRIVATE, "private", true, owner, kv);
+    await memory.refresh();
+    let done!: (clean: boolean) => void;
+    state.done = new Promise<boolean>((resolve) => (done = resolve));
+    state.kind = "group";
+    await memory.audienceChanged();
+    expect(fresh).toEqual([undefined]);
+    expect(host.leavesOutSummaries("root")).toBe(true);
+    // Not done yet: no second fresh start meanwhile.
+    await memory.refresh();
+    expect(fresh).toHaveLength(1);
+    // The object goes away before it is done: the next one starts it again, and leaves summaries out till then.
+    const after = chat(PRIVATE, "group", true, owner, kv);
+    expect(after.host.leavesOutSummaries("root")).toBe(true);
+    after.state.done = Promise.resolve(false);
+    await after.memory.refresh();
+    expect(after.fresh).toEqual([undefined]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(after.host.leavesOutSummaries("root")).toBe(true);
+    after.state.done = Promise.resolve(true);
+    await after.memory.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(after.host.leavesOutSummaries("root")).toBe(false);
+    // Done then: nothing more to leave out.
+    await after.memory.refresh();
+    expect(after.fresh).toHaveLength(2);
+    done(true);
+  });
+
+  it("keeps a conversation marked when its prompt held the owner's own notes again before the fresh start was done", async () => {
     const owner = directory();
     saved(owner.memory.add({ text: "My salary is private.", scope: "user" }));
     const { memory, host, state, fresh } = chat(PRIVATE, "private", true, owner);
     await memory.refresh();
-    let settled!: () => void;
-    state.compacting = new Promise<void>((resolve) => (settled = resolve));
+    let done!: (clean: boolean) => void;
+    state.done = new Promise<boolean>((resolve) => (done = resolve));
+    state.alone = false;
     state.kind = "group";
     await memory.audienceChanged();
-    expect(fresh).toEqual([undefined]);
-    // Until the edits that leave it out are in, each request leaves the summary out itself.
-    expect(host.leavesOutSummaries("root")).toBe(true);
-    state.compacting = undefined;
-    let placed!: () => void;
-    state.placed = new Promise<void>((resolve) => (placed = resolve));
-    settled();
+    // Private again while it is not done: the next prompt holds them again.
+    state.alone = true;
+    state.kind = "private";
+    expect(await memory.refresh()).toContain("salary");
+    done(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
+    // Shared again: that prompt is started afresh too.
+    state.alone = false;
+    state.kind = "group";
+    state.done = Promise.resolve(true);
+    expect(host.leavesOutSummaries("root")).toBe(true);
+    await memory.audienceChanged();
     expect(fresh).toEqual([undefined, undefined]);
-    expect(host.leavesOutSummaries("root")).toBe(true);
-    placed();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(host.leavesOutSummaries("root")).toBe(false);
-    // Done then: nothing more to leave out.
-    await memory.refresh();
-    expect(fresh).toHaveLength(2);
   });
 
   it("lets pi save as the owner only in a turn that answers the owner's own message", async () => {
@@ -619,9 +696,15 @@ describe("ChatMemory", () => {
     // Asides are not inputs; the conversation's first run goes back to the start of the log; no input is no one's.
     expect(await asked(reply("toolUse"), message("ana", true), message("owner"))).toBe(true);
     expect(await asked(reply("toolUse"))).toBe(false);
-    // A failed request retried in the run does not end it; a run that ended in one is read over more inputs.
+    // A failed or cut off request retried or resumed in the run does not end it: the run's inputs are before it.
     expect(await asked(reply("toolUse"), reply("error"), message("owner"), reply("stop"))).toBe(true);
     expect(await asked(reply("toolUse"), reply("error"), message("owner"), entry(CHAT_TURN_KIND), reply("stop"))).toBe(false);
+    expect(await asked(reply("toolUse"), reply("aborted"), message("ana"), reply("stop"))).toBe(false);
+    // The owner's message after a run that failed, or was cut off by a restart, starts a run of its own.
+    expect(await asked(reply("toolUse"), message("owner"), reply("error"), entry(CHAT_TURN_KIND))).toBe(true);
+    expect(await asked(reply("toolUse"), message("owner"), reply("aborted"), message("ana"))).toBe(true);
+    // The owner's message steered into a member's run that failed once and went on: it is still that run.
+    expect(await asked(reply("toolUse"), message("owner"), reply("toolUse"), reply("error"), message("ana"))).toBe(false);
     // A run longer than it reads is not judged the owner's.
     const long = (async function* () {
       for (let page = 0; page <= MAX_RUN_PAGES; page++) yield [reply("toolUse")];
@@ -731,5 +814,67 @@ describe("a run's sessions", () => {
     for (const session of ["7", "8", "9"]) expect(runs.agentOfSession(session)).toBe(RESEARCH);
     // Only where sessions are kept: a delivery key, a sent list or any other value of the detail is none.
     for (const session of ["1", "2"]) expect(runs.agentOfSession(session)).toBeNull();
+  });
+});
+
+describe("what someone other than the owner sees of a chat's events", () => {
+  const result = (toolName: string, text: string, id = 1) =>
+    ({
+      id,
+      conversationId: "1",
+      kind: "pi.tool_result",
+      model: [{ role: "toolResult", toolCallId: `c${id}`, toolName, content: [{ type: "text", text }], isError: false, timestamp: 0 }],
+    }) as unknown as EntryRecord;
+
+  it("leaves out what memory_recall found and memory_forget said, in the history and as calls run", () => {
+    const snapshot = {
+      type: "snapshot",
+      entries: [
+        result(MEMORY_RECALL_TOOL, "- [a1] (about the owner) My salary is private."),
+        result(MEMORY_FORGET_TOOL, "Forgot [a2]: “My bonus.”", 2),
+        result("files_read", "salary.csv", 3),
+      ],
+      tools: [{ callId: "c4", name: MEMORY_RECALL_TOOL, status: "running", output: "My salary" }],
+    } as unknown as AgentEvent;
+    const shown = JSON.stringify(withoutNoteResults(snapshot));
+    expect(shown).not.toContain("My salary is private");
+    expect(shown).not.toContain("My bonus");
+    expect(shown).not.toContain('"output":"My salary"');
+    // Other tools' results stay as they are, and every call stays answered.
+    expect(shown).toContain("salary.csv");
+    expect(shown).toContain('"toolCallId":"c1"');
+    const appended = withoutNoteResults({ type: "entry_appended", entry: result(MEMORY_RECALL_TOOL, "My salary is private.") });
+    expect(JSON.stringify(appended)).not.toContain("salary");
+    const update = { type: "tool_execution_update", toolCallId: "c5", toolName: MEMORY_RECALL_TOOL, output: { set: "My salary" } } as AgentEvent;
+    expect(JSON.stringify(withoutNoteResults(update))).not.toContain("salary");
+  });
+
+  it("leaves them out of a result's message as it starts, and of a nested call's result", () => {
+    const message = result(MEMORY_RECALL_TOOL, "My salary is private.").model![0]!;
+    const started = withoutNoteResults({ type: "message_start", message });
+    expect(JSON.stringify(started)).not.toContain("salary");
+    expect(JSON.stringify(started)).toContain('"toolCallId":"c1"');
+    const nested = {
+      type: "tool_execution_end",
+      toolCallId: "c6",
+      toolName: MEMORY_RECALL_TOOL,
+      result: { taskId: "t1", structuredOutput: "My salary", isError: false, diagnostics: [] },
+    } as unknown as AgentEvent;
+    expect(JSON.stringify(withoutNoteResults(nested))).not.toContain("salary");
+    // Anything else, as it is.
+    const other = { type: "message_start", message: result("files_read", "salary.csv").model![0]! } as AgentEvent;
+    expect(withoutNoteResults(other)).toBe(other);
+  });
+
+  it("leaves out a compaction's summary, which may have kept the notes", () => {
+    const summary = {
+      id: 7,
+      conversationId: "1",
+      kind: "pi.compaction",
+      model: [{ role: "user", content: "The conversation history before this point was compacted: My salary is private.", timestamp: 0 }],
+    } as unknown as EntryRecord;
+    const shown = withoutNoteResults({ type: "entry_appended", entry: summary });
+    expect(JSON.stringify(shown)).not.toContain("salary");
+    expect(shown).toMatchObject({ entry: { id: 7, kind: "pi.compaction" } });
   });
 });
