@@ -3294,7 +3294,7 @@ export class ChatAgent extends DurableObject<Env> {
     // artifact_read takes this chat's pages and the ones brought in.
     this.#bringIn([meta.id]);
     // The page as it is, declaring only its read-only tools: a snapshot never writes as the owner (publishRebuilt).
-    const mcp = await readOnlyDeclaration(manifestOf(meta, meta.latest), async (server, name) => {
+    const { servers: mcp, dropped } = await readOnlyDeclaration(manifestOf(meta, meta.latest), async (server, name) => {
       // A listing that fails fails the step: dropping the tool would publish a version without a read tool it declared.
       const tool = await this.hub.tool(server, name);
       return !!tool && isReadOnly(tool);
@@ -3309,10 +3309,16 @@ export class ChatAgent extends DurableObject<Env> {
       `The page as it is now is the draft "${seed.id}" (read it with artifact_read, artifact_id "${meta.id}"). Change it with ${WRITE_TOOL}, ` +
         `draft_id "${seed.id}" and edits (a new page written whole is not this page's and is not published), check the new draft with ` +
         `${CHECK_TOOL} and fix what it finds. The newest draft that passes is published for you. Answer with one line on what changed.`,
+      ...(dropped.length
+        ? [
+            `A snapshot only reads: it declares no tools that change data, so ${dropped.join(", ")} ${dropped.length === 1 ? "is" : "are"} left out of it. ` +
+              "Remove or disable the buttons and forms that used them, so none of them is left to fail.",
+          ]
+        : []),
     ].join("\n\n");
     const { result, entries } = await this.#runStep(session, prompt, operationId);
     const written = entries.flatMap((entry) => writtenBy(entry) ?? []);
-    const delivery = await publishRebuilt(scope, meta, seed, written, `Snapshot, ${whenOf(agent)}`, mark);
+    const delivery = await publishRebuilt(scope, meta, seed, written, `Snapshot, ${whenOf(agent)}`, mark, dropped);
     // The seed is only the page as it was: left behind, each run's would push the owner's own drafts out of the chat's.
     await (await scope.drafts()).remove(seed.id).catch((error: unknown) => console.error("draft:", errorMessage(error)));
     return delivery.status === "failed" && result.reason ? { ...delivery, detail: `${delivery.detail} (${result.reason})` } : delivery;

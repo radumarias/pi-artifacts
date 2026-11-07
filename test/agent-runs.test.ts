@@ -911,8 +911,9 @@ describe("a run's page step", () => {
     } as unknown as McpHub;
     const declared = { mcp: { servers: [{ server: "crm", tools: ["list_deals", "update_deal"] }] } };
     const page = { ...meta, versions: [{ version: 3, manifest: declared }] } as unknown as ArtifactMeta;
-    const readOnly = await readOnlyDeclaration(declared, async (_server, name) => !!tools.find((tool) => tool.name === name)?.annotations);
+    const { servers: readOnly, dropped } = await readOnlyDeclaration(declared, async (_server, name) => !!tools.find((tool) => tool.name === name)?.annotations);
     expect(readOnly).toEqual([{ server: "crm", tools: ["list_deals"] }]);
+    expect(dropped).toEqual(["crm.update_deal"]);
     const seed = await writeDraft(publishScope, { artifact: page, edits: [], mcp: readOnly });
     // The page's own write tool, declared again: a load handler could call it as the owner.
     const widened = await writeDraft(publishScope, {
@@ -926,5 +927,12 @@ describe("a run's page step", () => {
       detail: "page not updated: the rebuilt page declares other servers or tools than its read-only ones",
     });
     expect(published).toEqual([]);
+    // Kept to the read-only tools, it goes out, and the delivery names the write tool the snapshot is without.
+    const kept = await writeDraft(publishScope, { draftId: seed.id, edits: [{ old: "yesterday", new: "today" }] });
+    await drafts.recordCheck(kept.id, { errors: 0, warnings: 0 });
+    expect(await publishRebuilt(publishScope, page, seed, [seed.id, kept.id], "Snapshot", runMark("a1", T0, "1"), dropped)).toMatchObject({
+      status: "sent",
+      detail: "Sales brief v4 published as a snapshot without crm.update_deal, which writes",
+    });
   });
 });

@@ -69,6 +69,7 @@ export async function publishRebuilt(
   written: readonly string[],
   message: string,
   mark: string,
+  dropped: readonly string[] = [],
 ): Promise<RunDelivery> {
   try {
     const drafts = await scope.drafts();
@@ -79,7 +80,8 @@ export async function publishRebuilt(
       if (!draft || draft.artifactId !== meta.id || !(passed(draft) || (draft.errors === null && scope.publishUnchecked))) continue;
       if (canonicalJson(draft.manifest.mcp ?? null) !== declared)
         return notUpdated(meta, "the rebuilt page declares other servers or tools than its read-only ones");
-      return await publishMarked(scope, meta, draft.id, message, mark);
+      const delivery = await publishMarked(scope, meta, draft.id, message, mark);
+      return delivery.status === "sent" ? { ...delivery, detail: `${delivery.detail}${withoutWrites(dropped)}` } : delivery;
     }
     return notUpdated(meta, "no draft of it passed its check");
   } catch (error) {
@@ -87,18 +89,28 @@ export async function publishRebuilt(
   }
 }
 
-/** A page's MCP declaration with only its read-only tools (`readOnly` says which): what a snapshot of it may call. */
+/**
+ * A page's MCP declaration with only its read-only tools (`readOnly` says which): what a snapshot of it may call; and
+ * the tools left out (`server.tool`), which change data, so the snapshot's controls that used them no longer work.
+ */
 export async function readOnlyDeclaration(
   manifest: ArtifactManifest | undefined,
   readOnly: (server: string, tool: string) => Promise<boolean>,
-): Promise<NonNullable<ArtifactManifest["mcp"]>["servers"]> {
+): Promise<{ servers: NonNullable<ArtifactManifest["mcp"]>["servers"]; dropped: string[] }> {
+  const dropped: string[] = [];
   const servers = await Promise.all(
     (manifest?.mcp?.servers ?? []).map(async (entry) => {
       const kept = await Promise.all(entry.tools.map(async (tool) => ((await readOnly(entry.server, tool)) ? tool : null)));
+      entry.tools.forEach((tool, index) => kept[index] === null && dropped.push(`${entry.server}.${tool}`));
       return { server: entry.server, tools: kept.filter((tool): tool is string => tool !== null) };
     }),
   );
-  return servers.filter((entry) => entry.tools.length);
+  return { servers: servers.filter((entry) => entry.tools.length), dropped };
+}
+
+/** How a delivery names the write tools a snapshot was published without. */
+export function withoutWrites(dropped: readonly string[]): string {
+  return dropped.length ? ` as a snapshot without ${dropped.join(", ")}, which ${dropped.length === 1 ? "writes" : "write"}` : "";
 }
 
 async function publishMarked(scope: PublishScope, meta: ArtifactMeta, draftId: string, message: string, mark: string): Promise<RunDelivery> {
