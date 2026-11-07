@@ -486,6 +486,29 @@ describe("scheduled runs", () => {
     expect(host.runs.get(definition.id, T0 + 2)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: @brief was off." });
   });
 
+  it("skips the runs waiting for a sign-in when the agent is turned off, a test's apart, so none goes when it is on again", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    host.clock.now = T0 + 1;
+    await runner.now(definition.id, true);
+    await host.settled();
+    const off = { ...definition, enabled: false, version: 2 };
+    host.definitions.set(definition.id, off);
+    await runner.apply(definition.id, off);
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: @brief was turned off." });
+    expect(host.runs.get(definition.id, T0 + 1)).toMatchObject({ status: "needs_sign_in" });
+    expect(host.endings).toEqual([`${T0}:needs_sign_in`, `${T0}:not_today`]);
+    // On again and signed in: only the test goes.
+    const on = { ...definition, version: 3 };
+    host.definitions.set(definition.id, on);
+    await runner.apply(definition.id, on);
+    host.signIn.delete("crm");
+    expect(await runner.signedIn("crm")).toBe(1);
+    await host.settled();
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today" });
+  });
+
   it("tells the feed how each run ended, again when a waiting one goes or is skipped, and never of a test", async () => {
     const { host, runner, definition } = home();
     host.signIn.add("crm");

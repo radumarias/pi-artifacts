@@ -135,6 +135,7 @@ export class AgentRunner {
 
   async #apply(agentId: string, agent: AgentDefinition | null, after = this.#host.runs.now()): Promise<void> {
     if (!this.accepts(agentId, agent)) return;
+    if (agent && !agent.enabled) this.#skipWaiting(agent);
     const row = this.#row(agentId);
     const wanted = agent?.enabled && agent.trigger ? agent : null;
     const key = wanted ? triggerKey(wanted) : "";
@@ -153,6 +154,21 @@ export class AgentRunner {
     if (this.#host.sharedWatch(trigger.step)) await this.#host.subscribe(agentId, trigger.step, trigger.everyMinutes);
     else id = await this.#host.alarmEvery(trigger.everyMinutes * 60, { agentId });
     this.#setRow({ agent_id: agentId, kind: "watch", key, schedule_id: id, due_at: null });
+  }
+
+  /**
+   * The agent is off: its runs waiting for a sign-in are skipped, as signing in would skip them (signedIn), so none
+   * waits on its owner nor goes once it is on again. A test's waits, as it would go off or on.
+   */
+  #skipWaiting(agent: AgentDefinition): void {
+    const waiting = this.#host.runs.unfinished().filter((run) => run.agentId === agent.id && run.status === "needs_sign_in" && !run.test);
+    for (const run of waiting) this.#skip(run, `Skipped: @${agent.name} was turned off.`);
+    if (waiting.length) this.#host.changed(agent.id);
+  }
+
+  /** A run waiting for a sign-in that will not go: it ends as skipped, saying why. */
+  #skip(run: RunRecord, summary: string): void {
+    this.#host.runs.update(run.agentId, run.dueAt, { status: "not_today", summary });
   }
 
   #setRow(row: ScheduleRow): void {
@@ -334,8 +350,7 @@ export class AgentRunner {
     const waiting = this.#host.runs.unfinished().filter((run) => run.status === "needs_sign_in" && run.detail.needsSignIn?.includes(server));
     // Oldest first: the last one per agent (and per kind, a test apart from the real ones) is its newest.
     const newest = new Map(waiting.map((run) => [`${run.agentId}:${run.test}`, run]));
-    const skip = (run: RunRecord, why: string) =>
-      this.#host.runs.update(run.agentId, run.dueAt, { status: "not_today", summary: `Skipped once you signed in: ${why}.` });
+    const skip = (run: RunRecord, why: string) => this.#skip(run, `Skipped once you signed in: ${why}.`);
     const agentIds = [...new Set(waiting.map((run) => run.agentId))];
     const definitions = new Map(await Promise.all(agentIds.map(async (id) => [id, await this.#host.definition(id)] as const)));
     let restarted = 0;
