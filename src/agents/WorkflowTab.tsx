@@ -80,7 +80,7 @@ export function WorkflowTab({ subject, save, notice, onDirty }: AgentTabProps) {
   return (
     <WorkflowForm
       agent={subject.agent}
-      save={own && ((fields: WorkflowFields) => save({ ...inputOf(own), ...fields }))}
+      save={own && ((fields: WorkflowFields, version: number) => save({ ...inputOf(own), ...fields }, version))}
       notice={notice}
       onDirty={onDirty}
     />
@@ -93,12 +93,14 @@ function WorkflowForm({
   notice,
   onDirty,
 }: {
-  agent: Pick<AgentDefinition, "id"> & WorkflowFields;
-  /** Saves the tab's fields; none for someone else's agent, which shows read-only. */
-  save?: (fields: WorkflowFields) => Promise<AgentDefinition>;
+  agent: Pick<AgentDefinition, "id" | "version"> & WorkflowFields;
+  /** Saves the tab's fields over `version`; none for someone else's agent, which shows read-only. */
+  save?: (fields: WorkflowFields, version: number) => Promise<AgentDefinition>;
 } & Pick<AgentTabProps, "notice" | "onDirty">) {
   const readOnly = !save;
   const [form, setForm] = useState(() => formOf(agent));
+  // The version the form started from: what a save changes (a change made since is refused, not undone).
+  const [version, setVersion] = useState(agent.version);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +109,12 @@ function WorkflowForm({
   const [round, setRound] = useState(0);
   useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
   useEffect(() => () => onDirty?.(false), [onDirty]);
+  // A newer version (saved here, or changed elsewhere) shows at once while the form has no changes of its own.
+  if (agent.version !== version && !dirty) {
+    setVersion(agent.version);
+    setForm(formOf(agent));
+    setRound((n) => n + 1);
+  }
   const change = (next: Partial<Form>) => {
     setForm((current) => ({ ...current, ...next }));
     setDirty(true);
@@ -131,11 +139,15 @@ function WorkflowForm({
     setSaving(true);
     setError(null);
     try {
-      await save({
-        trigger: triggerOf(form),
-        scope: form.each ? { list: form.list, each: true } : undefined,
-        workflow: form.steps.length ? withoutKeys(form.steps) : undefined,
-      });
+      const saved = await save(
+        {
+          trigger: triggerOf(form),
+          scope: form.each ? { list: form.list, each: true } : undefined,
+          workflow: form.steps.length ? withoutKeys(form.steps) : undefined,
+        },
+        version,
+      );
+      setVersion(saved.version);
       setDirty(false);
       notice({ agentId: agent.id, text: "Saved its workflow." });
     } catch (e) {
