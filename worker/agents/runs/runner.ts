@@ -371,8 +371,7 @@ export class AgentRunner {
         continue;
       }
       if (newer === "going") {
-        const released = [...new Set([...(run.detail.released ?? []), server])];
-        this.#host.runs.update(run.agentId, run.dueAt, { detail: { released } });
+        this.#host.runs.release(run.agentId, run.dueAt, server);
         continue;
       }
       if (!this.#host.runs.restart(run.agentId, run.dueAt)) continue;

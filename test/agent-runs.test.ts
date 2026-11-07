@@ -525,6 +525,21 @@ describe("scheduled runs", () => {
     });
   });
 
+  it("keeps both sign-ins that come at once while a newer run goes, as released", async () => {
+    const { host, runner, definition } = home();
+    const id = definition.id;
+    host.runs.begin(id, T0, "schedule", false);
+    host.runs.update(id, T0, { status: "needs_sign_in", detail: { needsSignIn: ["crm", "mail"] } });
+    host.runs.begin(id, T0 + 1, "schedule", false);
+    // Both read the agent before either marks the run.
+    await Promise.all([runner.signedIn("crm"), runner.signedIn("mail")]);
+    expect(host.runs.get(id, T0)?.detail.released?.sort()).toEqual(["crm", "mail"]);
+    // A run that no longer waits is not marked.
+    host.runs.update(id, T0, { status: "not_today" });
+    host.runs.release(id, T0, "calendar");
+    expect(host.runs.get(id, T0)?.detail.released).not.toContain("calendar");
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {

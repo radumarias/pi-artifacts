@@ -248,6 +248,16 @@ export class AgentRuns {
     return changed;
   }
 
+  /**
+   * Mark a waiting run released for `server` (its sign-in came while a newer run went), as its row is now: two sign-ins
+   * at once both stay marked, and a run that no longer waits is left be.
+   */
+  release(agentId: string, dueAt: number, server: string): void {
+    const run = this.get(agentId, dueAt);
+    if (run?.status !== "needs_sign_in" || run.detail.released?.includes(server)) return;
+    this.update(agentId, dueAt, { detail: { released: [...(run.detail.released ?? []), server] } });
+  }
+
   /** The newest of the agent's runs before `dueAt` waiting for a newer one to end (detail.released), if any. */
   deferred(agentId: string, dueAt: number, test: boolean): RunRecord | null {
     const where = "agent_id = ? AND due_at < ? AND item = '' AND test = ? AND status = 'needs_sign_in' ORDER BY due_at DESC";
