@@ -21,7 +21,7 @@ import { UserMemory, type Learned, type LearnedNote } from "./memory/memory.ts";
 import type { Forgot, MemoryNote, MemoryNoteView, MemoryReader, MemoryWriter, Recalled, ServerCoverage } from "../shared/memory.ts";
 import { ChatRows } from "./chat-rows.ts";
 import { addColumns } from "./members.ts";
-import { mayLeave, type ChatKind } from "../shared/chat-kinds.ts";
+import { mayLeave, type ChatKind, type ChatRef } from "../shared/chat-kinds.ts";
 import { agentFrom, NEEDS_YOU, RUN_FEED_TEXT, type FeedInput, type FeedList, type FeedOpen, type FollowKind, type FollowView } from "../shared/feed.ts";
 import type { RunStatus } from "../shared/runs.ts";
 import { aboutOf, FAN_OUT, fanOut, FeedStore, FollowStore, postsReachFollowers, type Follower, type FollowRecord } from "./feed/store.ts";
@@ -85,8 +85,9 @@ export interface RunEnded {
   chatKind: ChatKind;
   /** The report it posted (in a chat or as a notification), if it did: what its followers may read. */
   post?: string;
-  /** When its report was posted (RunDelivery.sentAt). */
+  /** When its report was posted (RunDelivery.sentAt), and in which chat (its `chat`): where its owner answers it. */
   sentAt?: number;
+  postedIn?: ChatRef;
   /** Its post ends on a question to its owner. */
   asks?: boolean;
 }
@@ -364,11 +365,11 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /**
-   * Stop following what the app names (kind, id, and for an agent the chat it was followed from): its owner forgets
-   * this user, and its items leave the feed. Returns what this user follows now.
+   * Stop following what the app names (a page by id, an agent by id and whose it is): its owner forgets this user, and
+   * its items leave the feed. Returns what this user follows now.
    */
-  async unfollow(kind: FollowKind, id: string, chatId?: string): Promise<FollowView[]> {
-    const had = this.#follows.find(kind, id, chatId);
+  async unfollow(kind: FollowKind, id: string, ownerUid?: string): Promise<FollowView[]> {
+    const had = kind === "page" ? this.#follows.findPage(id) : ownerUid ? this.#follows.get(kind, id, ownerUid) : null;
     if (had) {
       this.#dropFollow(had);
       // Not told, the owner forgets them at its next post (addFeed answers false): the follow is gone here either way.
@@ -462,6 +463,12 @@ export class UserDirectory extends DurableObject<Env> {
     const from = agentFrom(agent);
     const text = run.post ?? run.summary;
     const open: FeedOpen = { to: "agent", agentId: agent.id, tab: "runs" };
+    // The run read in its home chat: off the record there, nothing of it reaches the feed, wherever its report went
+    // (FeedStore.add checks only the chat the item names), as the sender says or as this user's row says.
+    const home = this.#rows.kindOf(run.chatId);
+    if (!mayLeave({ what: "feed" }, run.chatKind, ...(home ? [home] : []))) return;
+    // A report posted only to another chat (a chat step to it) is answered there, and opens there.
+    const chat = run.postedIn ?? { id: run.chatId, kind: run.chatKind };
     this.addFeed({
       kind: "run",
       ref: `run:${agent.id}:${run.dueAt}`,
@@ -470,15 +477,16 @@ export class UserDirectory extends DurableObject<Env> {
       title: `@${agent.name} ${run.asks ? "asks you something" : RUN_FEED_TEXT[run.status]}`,
       ...(text && { text }),
       from,
-      open: run.post ? { to: "chat", chatId: run.chatId } : open,
-      chat: { id: run.chatId, kind: run.chatKind },
+      open: run.post ? { to: "chat", chatId: chat.id } : open,
+      chat,
       status: run.status,
       // A run waiting for a sign-in waits until it goes on (the same ref, replaced); one that asks, until they answer in its chat.
       ...(run.status === "needs_sign_in" ? { needsYou: true } : run.asks && { needsYou: "reply" as const }),
       ...(run.status === "not_today" && { quiet: true }),
       aboutAgent: agent.id,
     });
-    if (!run.post || !mayLeave({ what: "feed" }, run.chatKind, this.#rows.kindOf(run.chatId))) return;
+    // Neither the home chat, where the run read, nor the one it posted to may be off the record.
+    if (!run.post || !mayLeave({ what: "feed" }, run.chatKind, home, chat.kind, this.#rows.kindOf(chat.id))) return;
     const signIn = new Set(oauthServerNames(this.env));
     const all = mcpServers(this.env).map((server) => server.name);
     if (!postsReachFollowers(agent, all, (server) => signIn.has(server))) return;
@@ -1101,6 +1109,8 @@ export class UserDirectory extends DurableObject<Env> {
     const saved = this.#agents.save(input, origin, enabled, save);
     if ("error" in saved) return saved;
     this.#agentChanged(saved.id);
+    // Saved off (a PUT with enabled false turns it off as PATCH does).
+    if (!saved.enabled) this.#agentOff(saved.id);
     // A draft the model made with fields it guessed: the user is asked, in the feed, to confirm them.
     if (origin === "agent" && !saved.enabled && saved.assumed?.length) {
       this.addFeed({
@@ -1127,9 +1137,13 @@ export class UserDirectory extends DurableObject<Env> {
     if (!("error" in result) && result.version !== before) this.#agentChanged(id);
     // Turning it on confirms its guesses (AgentStore.setEnabled clears them).
     if (!("error" in result) && result.enabled) this.resolveFeed(assumptionRef(id));
-    // Off, its runs wait on nothing more: no sign-in or answer is needed for a run that will not go on.
-    if (!("error" in result) && !result.enabled && this.#feed.resolveAbout(aboutOf("agent", id, this.ctx.id.name!), "run")) this.#changed("feed");
+    if (!("error" in result) && !result.enabled) this.#agentOff(id);
     return result;
+  }
+
+  /** One of this user's agents is off: its runs wait on nothing more, no sign-in or answer is needed for a run that will not go on. */
+  #agentOff(id: string): void {
+    if (this.#feed.resolveAbout(aboutOf("agent", id, this.ctx.id.name!), "run")) this.#changed("feed");
   }
 
   deleteAgent(id: string): { error: string } | null {

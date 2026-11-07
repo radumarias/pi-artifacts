@@ -4,6 +4,7 @@
 // as these views.
 
 import type { AgentStep } from "./agents.ts";
+import type { ChatRef } from "./chat-kinds.ts";
 
 /** What started a run: its schedule, a watch whose condition held, Test it, or a person asking for one now. */
 export type RunWhy = "schedule" | "watch" | "test" | "manual";
@@ -47,6 +48,11 @@ export interface RunDelivery {
   version?: number;
   /** When a report was posted (a chat's or a notification): what its owner answered after is an answer to it. */
   sentAt?: number;
+  /**
+   * The chat whose post `sentAt` dates, and its kind as it said: the home chat when the report went there (a
+   * notification, or "its chat" among the chats), else the first chat it went to. Where its owner answers it.
+   */
+  chat?: ChatRef;
 }
 
 /** One item of a run: an element of its scope's list, or the run itself when it has no scope. */

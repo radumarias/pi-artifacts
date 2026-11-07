@@ -200,7 +200,7 @@ function Following() {
     setBusy(followKey(follow));
     setFailed(null);
     try {
-      putFollows(await api.unfollow(follow.kind, follow.id, follow.chatId));
+      putFollows(await api.unfollow(follow));
     } catch (e) {
       setFailed(errorMessage(e));
     } finally {

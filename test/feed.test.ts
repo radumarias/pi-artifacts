@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentFrom, feedPath, MAX_FEED_ITEMS, MAX_FOLLOWERS, MAX_FOLLOWS, type FeedInput } from "../shared/feed.ts";
+import { agentFrom, feedPath, findFollow, followKey, MAX_FEED_ITEMS, MAX_FOLLOWERS, MAX_FOLLOWS, type FeedInput, type FollowView } from "../shared/feed.ts";
 import { aboutOf, fanOut, FeedStore, followersAllowed, FollowStore, postsReachFollowers, type FanOutHost, type Follower } from "../worker/feed/store.ts";
 import { memorySql } from "./fakes.ts";
 
@@ -207,13 +207,13 @@ describe("feed: keeping items", () => {
 });
 
 describe("follows: both sides", () => {
-  it("keeps what a person follows without telling them whose it is, and who follows a target", () => {
+  it("keeps what a person follows, telling them whose only an agent is (as its chat shows), and who follows a target", () => {
     const sql = memorySql();
     const follows = new FollowStore(sql);
     expect(follows.follow({ kind: "page", id: "p1", ownerUid: "ann", title: "Weekly" }, T0)).toEqual({ ok: true });
     expect(follows.follow({ kind: "agent", id: "a1", ownerUid: "ann", title: "@signups", chatOwner: "ann", chatId: "c1" }, T0 + 1)).toEqual({ ok: true });
     expect(follows.list()).toEqual([
-      { kind: "agent", id: "a1", title: "@signups", chatId: "c1", at: T0 + 1 },
+      { kind: "agent", id: "a1", title: "@signups", chatId: "c1", ownerUid: "ann", at: T0 + 1 },
       { kind: "page", id: "p1", title: "Weekly", at: T0 },
     ]);
     expect(follows.get("page", "p1", "ann")).not.toBeNull();
@@ -226,17 +226,31 @@ describe("follows: both sides", () => {
     expect(follows.unfollow("page", "p1", "ann")).toBeNull();
   });
 
-  it("tells two people's agents of one id apart, by the chat each was followed from", () => {
+  it("tells two people's agents of one id apart, followed from chats of one id", () => {
     const follows = new FollowStore(memorySql());
     follows.follow({ kind: "agent", id: "a1", ownerUid: "ann", title: "@brief", chatOwner: "ann", chatId: "c1" }, T0);
-    follows.follow({ kind: "agent", id: "a1", ownerUid: "eve", title: "@brief", chatOwner: "dan", chatId: "c2" }, T0 + 1);
+    follows.follow({ kind: "agent", id: "a1", ownerUid: "eve", title: "@brief", chatOwner: "dan", chatId: "c1" }, T0 + 1);
     expect(follows.list()).toHaveLength(2);
-    expect(follows.find("agent", "a1", "c1")?.ownerUid).toBe("ann");
-    expect(follows.find("agent", "a1", "c2")?.ownerUid).toBe("eve");
-    expect(follows.through("dan", "c2").map((follow) => follow.ownerUid)).toEqual(["eve"]);
+    expect(follows.through("dan", "c1").map((follow) => follow.ownerUid)).toEqual(["eve"]);
     expect(follows.unfollow("agent", "a1", "ann")).not.toBeNull();
     expect(follows.get("agent", "a1", "eve")).not.toBeNull();
     expect(aboutOf("agent", "a1", "ann")).not.toBe(aboutOf("agent", "a1", "eve"));
+  });
+
+  it("finds a follow by kind, id and whose it is: an agent followed from one chat shows from any, never another person's", () => {
+    const follows: FollowView[] = [
+      { kind: "agent", id: "a1", title: "@brief", chatId: "c1", ownerUid: "ann", at: T0 },
+      { kind: "agent", id: "a1", title: "@brief", chatId: "c1", ownerUid: "eve", at: T0 + 1 },
+      { kind: "page", id: "p1", title: "Weekly", at: T0 + 2 },
+    ];
+    expect(findFollow(follows, { kind: "agent", id: "a1", ownerUid: "eve" })?.at).toBe(T0 + 1);
+    expect(findFollow(follows, { kind: "agent", id: "a1", ownerUid: "cai" })).toBeUndefined();
+    expect(findFollow(follows, { kind: "page", id: "p1" })?.title).toBe("Weekly");
+    expect(new Set(follows.map(followKey)).size).toBe(3);
+    const store = new FollowStore(memorySql());
+    store.follow({ kind: "page", id: "p1", ownerUid: "ann", title: "Weekly" }, T0);
+    expect(store.findPage("p1")?.ownerUid).toBe("ann");
+    expect(store.findPage("p2")).toBeNull();
   });
 
   it("refuses past MAX_FOLLOWS and MAX_FOLLOWERS, but following again is not counted twice", () => {

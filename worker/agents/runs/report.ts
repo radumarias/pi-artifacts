@@ -86,6 +86,14 @@ export function findingsEdit(html: string, report: string, at: Date): { old: str
   return { old, new: `${FINDINGS_START}\n${reportHtml(report, at)}\n${FINDINGS_END}` };
 }
 
+/**
+ * Of the chats a run's report was placed in, the one its owner answers it in (RunDelivery.chat): the home chat when it
+ * went there, else the first it went to.
+ */
+export function answeredIn<T extends { chat: { id: string } }>(placed: readonly T[], homeId: string): T | undefined {
+  return placed.find((one) => one.chat.id === homeId) ?? placed[0];
+}
+
 /** What a run's report leaves in an agent's chat session, so a later message there can be about it. */
 export function reportContext(when: string, report: string): string {
   return `Your run (${when}) posted this report to the chat:\n\n${report}`;

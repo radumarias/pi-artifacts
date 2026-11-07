@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { AgentDefinition, AgentStep, LookStep, StepInput } from "../shared/agents.ts";
 import type { Value } from "../shared/conditions.ts";
 import type { ArtifactMeta } from "../shared/protocol.ts";
-import type { RunDelivery } from "../shared/runs.ts";
+import { KEPT_RUNS, type RunDelivery } from "../shared/runs.ts";
 import { fillInput, itemKey, itemsOf, reportOf, SignInNeeded, type DeliveryRequest, type WorkResult } from "../worker/agents/runs/executor.ts";
 import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "../worker/agents/runs/page.ts";
-import { findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, workSpend } from "../worker/agents/runs/report.ts";
+import { answeredIn, findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, workSpend } from "../worker/agents/runs/report.ts";
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "../worker/agents/runs/runner.ts";
 import { sourceName, SourceCore, type Subscriber } from "../worker/agents/runs/source.ts";
 import { AgentRuns } from "../worker/agents/runs/store.ts";
@@ -533,6 +533,29 @@ describe("scheduled runs", () => {
     expect(host.runs.get(definition.id, T0 + 2)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: @brief was off." });
   });
 
+  it("skips the runs waiting for a sign-in when the agent is turned off, a test's apart, so none goes when it is on again", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    host.clock.now = T0 + 1;
+    await runner.now(definition.id, true);
+    await host.settled();
+    const off = { ...definition, enabled: false, version: 2 };
+    host.definitions.set(definition.id, off);
+    await runner.apply(definition.id, off);
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: @brief was turned off." });
+    expect(host.runs.get(definition.id, T0 + 1)).toMatchObject({ status: "needs_sign_in" });
+    expect(host.endings).toEqual([`${T0}:needs_sign_in`, `${T0}:not_today`]);
+    // On again and signed in: only the test goes.
+    const on = { ...definition, version: 3 };
+    host.definitions.set(definition.id, on);
+    await runner.apply(definition.id, on);
+    host.signIn.delete("crm");
+    expect(await runner.signedIn("crm")).toBe(1);
+    await host.settled();
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today" });
+  });
+
   it("tells the feed how each run ended, again when a waiting one goes or is skipped, and never of a test", async () => {
     const { host, runner, definition } = home();
     host.signIn.add("crm");
@@ -553,6 +576,35 @@ describe("scheduled runs", () => {
     await runner.now(definition.id, true);
     await host.settled();
     expect(host.endings).toHaveLength(4);
+  });
+
+  it("ends the runs still waiting for a sign-in that it prunes past KEPT_RUNS, as skipped, and of no test's tells", () => {
+    const { host, definition } = home();
+    const waiting = (dueAt: number, test = false) => {
+      host.runs.begin(definition.id, dueAt, test ? "test" : "manual", test);
+      host.runs.update(definition.id, dueAt, { status: "needs_sign_in" });
+    };
+    waiting(T0, true);
+    waiting(T0 + 1);
+    host.runs.begin(definition.id, T0 + 2, "manual", false);
+    host.runs.update(definition.id, T0 + 2, { status: "sent" });
+    host.endings.length = 0;
+    // The test's run goes first, telling nothing.
+    for (let n = 3; n <= KEPT_RUNS; n++) host.runs.begin(definition.id, T0 + n, "manual", false);
+    expect(host.runs.get(definition.id, T0)).toBeNull();
+    expect(host.endings).toEqual([]);
+    host.runs.begin(definition.id, T0 + KEPT_RUNS + 1, "manual", false);
+    host.runs.begin(definition.id, T0 + KEPT_RUNS + 2, "manual", false);
+    expect(host.endings).toEqual([`${T0 + 1}:not_today`]);
+    expect(host.runs.get(definition.id, T0 + 1)).toBeNull();
+    expect(host.runs.get(definition.id, T0 + 3)).not.toBeNull();
+  });
+
+  it("has a report answered in its home chat when it went there, else in the first chat it went to", () => {
+    const chat = (id: string) => ({ chat: { id, kind: "private" as const }, at: 1 });
+    expect(answeredIn([chat("ops"), chat("home")], "home")?.chat.id).toBe("home");
+    expect(answeredIn([chat("ops"), chat("sales")], "home")?.chat.id).toBe("ops");
+    expect(answeredIn([], "home")).toBeUndefined();
   });
 
   it("fails a run whose items acted when its only delivery failed", async () => {

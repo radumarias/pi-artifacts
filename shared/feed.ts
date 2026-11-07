@@ -7,8 +7,17 @@
 import type { ChatAgentView } from "./agents.ts";
 import type { RunStatus } from "./runs.ts";
 
-/** One follow among a person's, as the app names it: two people's agents can share an id, followed from different chats. */
-export const followKey = (follow: { kind: string; id: string; chatId?: string }) => `${follow.kind}:${follow.id}:${follow.chatId ?? ""}`;
+/** One follow among a person's, as the app names it: two people's agents can share an id, and whose it is tells them apart. */
+export const followKey = (follow: { kind: string; id: string; ownerUid?: string }) => `${follow.kind}:${follow.id}:${follow.ownerUid ?? ""}`;
+
+/**
+ * The follow of a page, or of `ownerUid`'s agent, by its key (followKey): a follow of an agent belongs to the chat it
+ * was made from and shows from any chat that shares it; only that person's, as agent ids are unique only per person.
+ */
+export function findFollow(follows: readonly FollowView[], target: Pick<FollowView, "kind" | "id" | "ownerUid">): FollowView | undefined {
+  const key = followKey(target);
+  return follows.find((follow) => followKey(follow) === key);
+}
 
 /** What can be followed: a page (an artifact) or an agent, someone else's either way. */
 export type FollowKind = "page" | "agent";
@@ -31,6 +40,8 @@ export interface FollowView {
   title: string;
   /** For an agent: the chat it is shared in, where its follower may open it. */
   chatId?: string;
+  /** For an agent: whose it is, as the chat that shares it shows (agent ids are unique only per person). */
+  ownerUid?: string;
   at: number;
 }
 

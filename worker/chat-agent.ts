@@ -151,7 +151,7 @@ import { ChatRoster, type AgentTurn, type RosterEntry } from "./agents/roster.ts
 import { reportOf, SignInNeeded, whenOf, type DeliveryRequest } from "./agents/runs/executor.ts";
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "./agents/runs/runner.ts";
 import { AgentRuns, type RunRecord } from "./agents/runs/store.ts";
-import { reportContext, runInstructions, RUN_STEP_KIND, workSpend, type RunStepData } from "./agents/runs/report.ts";
+import { answeredIn, reportContext, runInstructions, RUN_STEP_KIND, workSpend, type RunStepData } from "./agents/runs/report.ts";
 import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "./agents/runs/page.ts";
 import { compileWorkflow } from "./agents/runs/compile.ts";
 import { sourceName } from "./agents/runs/source.ts";
@@ -185,6 +185,7 @@ import {
   type BranchedFrom,
   type ChatEventData,
   type ChatKind,
+  type ChatRef,
   type ChatMemberVia,
   type ChatPage,
 } from "../shared/chat-kinds.ts";
@@ -2751,7 +2752,9 @@ export class ChatAgent extends DurableObject<Env> {
       },
       turnEntries,
       // Request ids, so a reply posted again after a restart is placed once.
-      post: (reply) => this.#postAgentReply(reply, `agent-reply:${reply.agentId}:${reply.turn}`),
+      post: async (reply) => {
+        await this.#postAgentReply(reply, `agent-reply:${reply.agentId}:${reply.turn}`);
+      },
       tellPi: async (reply) => {
         if (!reply.text) return;
         await this.#writeAside(await this.#root(), askOf({ name: reply.name, kind: "agent" }, reply.text), `agent-aside:${reply.agentId}:${reply.turn}`);
@@ -2790,22 +2793,27 @@ export class ChatAgent extends DurableObject<Env> {
 
   /**
    * An agent's post in this chat's log, placed once per `requestId`, and unread in everyone's sidebar as a person's
-   * message is (`tags`: the uids it notifies). The sidebars are only a view: a failure there is logged.
+   * message is (`tags`: the uids it notifies). The sidebars are only a view: a failure there is logged. Returns when it
+   * was placed: only a message sent after that can answer it.
    */
-  async #postAgentReply(reply: ChatAgentReplyData, requestId: string, tags: readonly string[] = []): Promise<void> {
+  async #postAgentReply(reply: ChatAgentReplyData, requestId: string, tags: readonly string[] = []): Promise<number> {
     await (await this.#root()).submit({ type: "write", requestId, entry: { kind: CHAT_AGENT_KIND, data: reply } }, BACKGROUND_CONTEXT);
+    // After every message sent before it, even in the same millisecond: none of those saw it.
+    const placedAt = Math.max(Date.now(), this.#lastSentAt + 1);
     const author = { uid: `agent:${reply.agentId}`, name: reply.name };
     void this.#touchIndexes(reply.text || reply.name, author, tags, reply.text, requestId, { run: Boolean(reply.run) }).catch((error) =>
       console.error("chat index:", errorMessage(error)),
     );
-    this.#feedQuestion(reply, requestId);
+    this.#feedQuestion(reply, requestId, placedAt);
+    return placedAt;
   }
 
   /**
    * An agent's reply that ends on a question to the person who called it: in that person's feed, as one that needs
-   * them, unless the chat is off the record. A run's report is its owner's run item instead (#runEnded).
+   * them, unless the chat is off the record. A run's report is its owner's run item instead (#runEnded). Asked at
+   * `placedAt`, when it was placed, not when its turn ended: a message sent between the two never saw it.
    */
-  #feedQuestion(reply: ChatAgentReplyData, requestId: string): void {
+  #feedQuestion(reply: ChatAgentReplyData, requestId: string, placedAt: number): void {
     const asker = reply.calledBy.uid;
     if (reply.run || reply.failed || !asker || reply.calledBy.agentId || !asksUser(reply.text) || !this.isInChat(asker)) return;
     // The owner's second seat has no feed of its own: the owner's has it. Refused there when the chat is off the record.
@@ -2813,12 +2821,12 @@ export class ChatAgent extends DurableObject<Env> {
     const added = this.#index(account).addFeed({
       kind: "question",
       ref: `question:${this.chatId}:${requestId}`,
-      at: reply.endedAt,
+      at: placedAt,
       title: `@${reply.name} asks you something`,
       text: excerpt(reply.text, MAX_FEED_TEXT),
       from: agentFrom({ id: reply.agentId, name: reply.name, avatar: reply.avatar, color: reply.color }),
       open: { to: "chat", chatId: this.chatId },
-      chat: { id: this.chatId, kind: this.kinds.kind() },
+      chat: this.#chatRef(),
     });
     this.ctx.waitUntil(added.catch((error: unknown) => console.error("feed:", errorMessage(error))));
   }
@@ -3137,19 +3145,19 @@ export class ChatAgent extends DurableObject<Env> {
    * an agent of this chat's owner that is on its roster. Its session here reads the report as context, so a reply
    * here can be about it. Placed once per `requestId`.
    */
-  async postRun(reply: ChatAgentReplyData, context: string, requestId: string): Promise<ChatRefusal | null> {
+  async postRun(reply: ChatAgentReplyData, context: string, requestId: string): Promise<ChatRefusal | { sentAt: number; chat: ChatRef }> {
     if (this.#gone) return refuse(404, DELETED);
     const entry = this.roster.get(reply.agentId);
     if (reply.ownerUid !== this.uid || !entry) return refuse(403, `@${reply.name} is not in this chat.`);
-    await this.#placeRun(reply, context, requestId, entry);
-    return null;
+    return { sentAt: await this.#placeRun(reply, context, requestId, entry), chat: this.#chatRef() };
   }
 
-  /** A run's report in this chat's log, and as context in the agent's session here when it has one. */
-  async #placeRun(reply: ChatAgentReplyData, context: string, requestId: string, entry: RosterEntry | null, tags: readonly string[] = []): Promise<void> {
-    await this.#postAgentReply(reply, requestId, tags);
+  /** A run's report in this chat's log, and as context in the agent's session here when it has one; when it was placed. */
+  async #placeRun(reply: ChatAgentReplyData, context: string, requestId: string, entry: RosterEntry | null, tags: readonly string[] = []) {
+    const placedAt = await this.#postAgentReply(reply, requestId, tags);
     const session = entry && (await this.harness.conversation(entry.session));
     if (session) await this.#writeAside(session, context, `${requestId}:context`);
+    return placedAt;
   }
 
   /**
@@ -3302,9 +3310,19 @@ export class ChatAgent extends DurableObject<Env> {
       ...(run.summary && { summary: run.summary }),
       chatId: this.chatId,
       chatKind: this.kinds.kind(),
-      ...(posted?.text && { post: posted.text, ...(posted.sentAt && { sentAt: posted.sentAt }), ...(asksUser(posted.text) && { asks: true }) }),
+      ...(posted?.text && {
+        post: posted.text,
+        ...(posted.sentAt && { sentAt: posted.sentAt }),
+        ...(posted.chat && { postedIn: posted.chat }),
+        ...(asksUser(posted.text) && { asks: true }),
+      }),
     });
     this.ctx.waitUntil(ended.catch((error: unknown) => console.error("feed:", errorMessage(error))));
+  }
+
+  /** This chat, with its kind as it is now. */
+  #chatRef(): ChatRef {
+    return { id: this.chatId, kind: this.kinds.kind() };
   }
 
   /** A run's report as a post of its agent's, carrying the run. */
@@ -3352,14 +3370,15 @@ export class ChatAgent extends DurableObject<Env> {
       if (others.length === step.to.length)
         return { kind: "notify", to: step.to.join(", "), status: "refused", detail: "at Inform, an agent notifies only its owner" };
       // Posted here, tagging the owner: their sidebar's notice, and a browser notification when they allow one.
-      const sentAt = Date.now();
-      await this.#placeRun(this.#runReply(request), context, `run-post:${agent.id}:${request.run.dueAt}:${request.key}`, this.roster.get(agent.id), [this.uid]);
+      const requestId = `run-post:${agent.id}:${request.run.dueAt}:${request.key}`;
+      const sentAt = await this.#placeRun(this.#runReply(request), context, requestId, this.roster.get(agent.id), [this.uid]);
       return {
         kind: "notify",
         to: "you",
         text: request.text,
         status: "sent",
         sentAt,
+        chat: this.#chatRef(),
         ...(others.length && { detail: `not ${others.join(", ")}: at Inform, an agent notifies only its owner` }),
       };
     }
@@ -3367,28 +3386,32 @@ export class ChatAgent extends DurableObject<Env> {
     // The owner's names ("owner", "me", "@agent") are one place: the report goes there once.
     const targets = [...new Set(step.to.map((to) => to.trim()).map((to) => (isOwner(to) ? "owner" : to)))];
     const chats = targets.every(isOwner) ? [] : (await this.#directory.listChats()).filter((chat) => !chat.sharedBy);
-    const sentAt = Date.now();
     const outcomes = await Promise.all(
-      targets.map(async (target): Promise<{ sent: string } | { refused: string }> => {
+      targets.map(async (target): Promise<{ sent: string; at: number; chat: ChatRef } | { refused: string }> => {
         const requestId = `run-post:${agent.id}:${request.run.dueAt}:${request.key}:${target}`;
         if (isOwner(target)) {
-          await this.#placeRun(this.#runReply(request), context, requestId, this.roster.get(agent.id));
-          return { sent: "its chat" };
+          const at = await this.#placeRun(this.#runReply(request), context, requestId, this.roster.get(agent.id));
+          return { sent: "its chat", at, chat: this.#chatRef() };
         }
         const chat = chats.find((one) => one.id === target) ?? chats.find((one) => one.title.toLowerCase() === target.toLowerCase());
         if (!chat) return { refused: `${target} (no such chat of yours)` };
         const answer = await exports.ChatAgent.getByName(chatAgentName(this.uid, chat.id)).postRun(this.#runReply(request), context, requestId);
-        return answer ? { refused: `${chat.title} (${answer.error})` } : { sent: chat.title };
+        if ("error" in answer) return { refused: `${chat.title} (${answer.error})` };
+        return { sent: chat.title, at: answer.sentAt, chat: answer.chat };
       }),
     );
-    const sent = outcomes.flatMap((outcome) => ("sent" in outcome ? [outcome.sent] : []));
+    // Where its owner answers it: home when it went there, else the first chat it went to; dated when it was placed
+    // there, not before, as a message sent while it was being posted never saw it.
+    const placed = outcomes.flatMap((outcome) => ("sent" in outcome ? [outcome] : []));
+    const answered = answeredIn(placed, this.chatId);
+    const sent = placed.map((outcome) => outcome.sent);
     const refused = outcomes.flatMap((outcome) => ("refused" in outcome ? [outcome.refused] : []));
     return {
       kind: "chat",
       to: [...sent, ...refused].join(", ") || step.to.join(", "),
       text: request.text,
       status: sent.length ? "sent" : "refused",
-      ...(sent.length && { sentAt }),
+      ...(answered && { sentAt: answered.at, chat: answered.chat }),
       ...(refused.length && { detail: `not posted to ${refused.join(", ")}` }),
     };
   }
