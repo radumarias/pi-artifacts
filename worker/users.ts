@@ -22,9 +22,19 @@ import type { Forgot, MemoryNote, MemoryNoteView, MemoryReader, MemoryWriter, Re
 import { ChatRows } from "./chat-rows.ts";
 import { addColumns } from "./members.ts";
 import { mayLeave, type ChatKind, type ChatRef } from "../shared/chat-kinds.ts";
-import { agentFrom, NEEDS_YOU, RUN_FEED_TEXT, type FeedInput, type FeedList, type FeedOpen, type FollowKind, type FollowView } from "../shared/feed.ts";
-import type { RunStatus } from "../shared/runs.ts";
-import { aboutOf, FAN_OUT, fanOut, FeedStore, FollowStore, postsReachFollowers, type Follower, type FollowRecord } from "./feed/store.ts";
+import { agentFrom, NEEDS_YOU, type FeedInput, type FeedList, type FollowKind, type FollowView } from "../shared/feed.ts";
+import {
+  aboutOf,
+  FAN_OUT,
+  fanOut,
+  FeedStore,
+  FollowStore,
+  postsReachFollowers,
+  runItem,
+  type Follower,
+  type FollowRecord,
+  type RunEnded,
+} from "./feed/store.ts";
 import { mcpServers } from "./mcp/servers.ts";
 import {
   withoutSignInShares,
@@ -73,24 +83,6 @@ export type Tag = Pick<MentionNotice, "from" | "text" | "at" | "added"> & {
   /** A run's report, which its owner's feed has as the run's item (runEnded): the tag notifies, and adds no item. */
   run?: true;
 };
-
-/** How a run of one of this user's agents ended, as its home chat tells it (ChatAgent's run host, `ended`). */
-export interface RunEnded {
-  agentId: string;
-  dueAt: number;
-  status: Exclude<RunStatus, "running">;
-  summary?: string;
-  /** The agent's home conversation, where the run lives, and its kind. */
-  chatId: string;
-  chatKind: ChatKind;
-  /** The report it posted (in a chat or as a notification), if it did: what its followers may read. */
-  post?: string;
-  /** When its report was posted (RunDelivery.sentAt), and in which chat (its `chat`): where its owner answers it. */
-  sentAt?: number;
-  postedIn?: ChatRef;
-  /** Its post ends on a question to its owner. */
-  asks?: boolean;
-}
 
 type ArtifactRow = { id: string; title: string; chat_id: string; latest: number; updated_at: number; seen: number };
 
@@ -461,32 +453,19 @@ export class UserDirectory extends DurableObject<Env> {
     const agent = this.#agents.get(run.agentId);
     if (!agent) return;
     const from = agentFrom(agent);
-    const text = run.post ?? run.summary;
-    const open: FeedOpen = { to: "agent", agentId: agent.id, tab: "runs" };
-    // The run read in its home chat: off the record there, nothing of it reaches the feed, wherever its report went
-    // (FeedStore.add checks only the chat the item names), as the sender says or as this user's row says.
-    const home = this.#rows.kindOf(run.chatId);
-    if (!mayLeave({ what: "feed" }, run.chatKind, ...(home ? [home] : []))) return;
-    // A report posted only to another chat (a chat step to it) is answered there, and opens there.
-    const chat = run.postedIn ?? { id: run.chatId, kind: run.chatKind };
-    this.addFeed({
-      kind: "run",
-      ref: `run:${agent.id}:${run.dueAt}`,
-      // When it asked, if it did: an answer written since, while the run went on, answers it (FeedStore.add).
-      at: (run.asks && run.sentAt) || Date.now(),
-      title: `@${agent.name} ${run.asks ? "asks you something" : RUN_FEED_TEXT[run.status]}`,
-      ...(text && { text }),
-      from,
-      open: run.post ? { to: "chat", chatId: chat.id } : open,
-      chat,
-      status: run.status,
-      // A run waiting for a sign-in waits until it goes on (the same ref, replaced); one that asks, until they answer in its chat.
-      ...(run.status === "needs_sign_in" ? { needsYou: true } : run.asks && { needsYou: "reply" as const }),
-      ...(run.status === "not_today" && { quiet: true }),
-      aboutAgent: agent.id,
-    });
-    // Neither the home chat, where the run read, nor the one it posted to may be off the record.
-    if (!run.post || !mayLeave({ what: "feed" }, run.chatKind, home, chat.kind, this.#rows.kindOf(chat.id))) return;
+    // A chat reaches the feed as it says and as this user's row says (when it has one).
+    const reaches = (chat: ChatRef) => {
+      const row = this.#rows.kindOf(chat.id);
+      return mayLeave({ what: "feed" }, chat.kind, ...(row ? [row] : []));
+    };
+    const made = runItem(agent, run, reaches, Date.now());
+    if (!made) return;
+    this.addFeed(made.item);
+    if (!made.postShown) return;
+    // Followers are other people: neither the home chat nor the one the report is shown from may be off the record,
+    // and a chat this user does not list (no row) lets nothing out to them.
+    const shown = run.postedIn ?? { id: run.chatId, kind: run.chatKind };
+    if (!mayLeave({ what: "feed" }, run.chatKind, this.#rows.kindOf(run.chatId), shown.kind, this.#rows.kindOf(shown.id))) return;
     const signIn = new Set(oauthServerNames(this.env));
     const all = mcpServers(this.env).map((server) => server.name);
     if (!postsReachFollowers(agent, all, (server) => signIn.has(server))) return;

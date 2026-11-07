@@ -3298,7 +3298,11 @@ export class ChatAgent extends DurableObject<Env> {
    */
   #runEnded(run: RunRecord): void {
     if (run.status === "running") return;
-    const posted = run.status === "sent" ? run.detail.deliveries.find((delivery) => (delivery.kind === "chat" || delivery.kind === "notify") && delivery.status === "sent" && delivery.text) : undefined;
+    // Of its reports, one the feed may show (not only off the record) before one it may not.
+    const isReport = (delivery: RunDelivery) =>
+      (delivery.kind === "chat" || delivery.kind === "notify") && delivery.status === "sent" && Boolean(delivery.text);
+    const reports = run.status === "sent" ? run.detail.deliveries.filter(isReport) : [];
+    const posted = reports.find((delivery) => delivery.chat?.kind !== "off_record") ?? reports[0];
     const ended = this.#directory.runEnded({
       agentId: run.agentId,
       dueAt: run.dueAt,

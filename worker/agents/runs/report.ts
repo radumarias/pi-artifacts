@@ -4,6 +4,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { AgentDefinition } from "../../../shared/agents.ts";
+import { mayLeave, type ChatRef } from "../../../shared/chat-kinds.ts";
 import { AGENT_NAME } from "../../../shared/mentions.ts";
 import { modelKey } from "../../../shared/models.ts";
 
@@ -88,10 +89,12 @@ export function findingsEdit(html: string, report: string, at: Date): { old: str
 
 /**
  * Of the chats a run's report was placed in, the one its owner answers it in (RunDelivery.chat): the home chat when it
- * went there, else the first it went to.
+ * went there, else the first it went to that may reach the feed (so a report also posted off the record still shows
+ * in the feed from the other chat), else the first.
  */
-export function answeredIn<T extends { chat: { id: string } }>(placed: readonly T[], homeId: string): T | undefined {
-  return placed.find((one) => one.chat.id === homeId) ?? placed[0];
+export function answeredIn<T extends { chat: ChatRef }>(placed: readonly T[], homeId: string): T | undefined {
+  const home = placed.find((one) => one.chat.id === homeId);
+  return home ?? placed.find((one) => mayLeave({ what: "feed" }, one.chat.kind)) ?? placed[0];
 }
 
 /** What a run's report leaves in an agent's chat session, so a later message there can be about it. */

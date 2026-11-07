@@ -624,9 +624,12 @@ describe("scheduled runs", () => {
   });
 
   it("has a report answered in its home chat when it went there, else in the first chat it went to", () => {
-    const chat = (id: string) => ({ chat: { id, kind: "private" as const }, at: 1 });
+    const chat = (id: string, kind: ChatKind = "private") => ({ chat: { id, kind }, at: 1 });
     expect(answeredIn([chat("ops"), chat("home")], "home")?.chat.id).toBe("home");
     expect(answeredIn([chat("ops"), chat("sales")], "home")?.chat.id).toBe("ops");
+    // A chat off the record keeps the report out of the feed: a later chat it also went to is where it shows.
+    expect(answeredIn([chat("secret", "off_record"), chat("ops", "group")], "home")?.chat.id).toBe("ops");
+    expect(answeredIn([chat("secret", "off_record")], "home")?.chat.id).toBe("secret");
     expect(answeredIn([], "home")).toBeUndefined();
   });
 

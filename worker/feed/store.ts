@@ -1,7 +1,9 @@
 // One person's feed and follows, over their UserDirectory's SQLite (see shared/feed.ts). The fan-out to followers is
 // the directory's (worker/users.ts): these tables only keep and read what it hands them.
 
-import { isChatKind, mayLeave, type ChatKind } from "../../shared/chat-kinds.ts";
+import { isChatKind, mayLeave, type ChatKind, type ChatRef } from "../../shared/chat-kinds.ts";
+import type { AgentDefinition } from "../../shared/agents.ts";
+import type { RunStatus } from "../../shared/runs.ts";
 import {
   FEED_PAGE,
   MAX_FEED_ITEMS,
@@ -10,6 +12,8 @@ import {
   MAX_FOLLOWERS,
   MAX_FOLLOWS,
   NEEDS_YOU,
+  RUN_FEED_TEXT,
+  agentFrom,
   type FeedInput,
   type FeedItem,
   type FeedKind,
@@ -210,6 +214,62 @@ function itemOf(row: FeedRow): FeedItem {
 export interface Follower {
   uid: string;
   via?: { ownerUid: string; chatId: string };
+}
+
+/** How a run of one of this user's agents ended, as its home chat tells it (ChatAgent's run host, `ended`). */
+export interface RunEnded {
+  agentId: string;
+  dueAt: number;
+  status: Exclude<RunStatus, "running">;
+  summary?: string;
+  /** The agent's home conversation, where the run lives, and its kind. */
+  chatId: string;
+  chatKind: ChatKind;
+  /** The report it posted (in a chat or as a notification), if it did: what its followers may read. */
+  post?: string;
+  /** When its report was posted (RunDelivery.sentAt), and in which chat (its `chat`): where its owner answers it. */
+  sentAt?: number;
+  postedIn?: ChatRef;
+  /** Its post ends on a question to its owner. */
+  asks?: boolean;
+}
+
+/**
+ * A run's item in its owner's feed (one per run: the same ref replaced, so a run that waited for a sign-in waits no
+ * more once it ends), or null when its home chat, where it read, may not reach the feed (`reaches`). A report posted
+ * only to a chat that may not reach it leaves the item at home, saying how the run went and nothing of what it said,
+ * with nothing to answer here; `postShown` says whether the report itself is in it (what followers may then get).
+ */
+export function runItem(
+  agent: Pick<AgentDefinition, "id" | "name" | "avatar" | "color">,
+  run: RunEnded,
+  reaches: (chat: ChatRef) => boolean,
+  now: number,
+): { item: FeedInput; postShown: boolean } | null {
+  const home: ChatRef = { id: run.chatId, kind: run.chatKind };
+  if (!reaches(home)) return null;
+  // A report posted only to another chat (a chat step to it) is answered there, and opens there.
+  const posted = run.post ? (run.postedIn ?? home) : null;
+  const shown = posted && reaches(posted) ? posted : null;
+  const asks = Boolean(shown && run.asks);
+  const text = shown ? run.post : run.post ? undefined : run.summary;
+  const item: FeedInput = {
+    kind: "run",
+    ref: `run:${agent.id}:${run.dueAt}`,
+    // When it asked, if it did: an answer written since, while the run went on, answers it (FeedStore.add).
+    at: (asks && run.sentAt) || now,
+    title: `@${agent.name} ${asks ? "asks you something" : RUN_FEED_TEXT[run.status]}`,
+    ...(text && { text }),
+    from: agentFrom(agent),
+    open: shown ? { to: "chat", chatId: shown.id } : { to: "agent", agentId: agent.id, tab: "runs" },
+    chat: shown ?? home,
+    status: run.status,
+    // A run waiting for a sign-in waits until it goes on (the same ref, replaced); one that asks, until they answer in its chat.
+    ...(run.status === "needs_sign_in" ? { needsYou: true } : asks && { needsYou: "reply" as const }),
+    ...(run.status === "not_today" && { quiet: true }),
+    aboutAgent: agent.id,
+  };
+  return { item, postShown: Boolean(shown) };
 }
 
 /** A follow as the follower keeps it: with whose the target is, which the app is told only for an agent. */

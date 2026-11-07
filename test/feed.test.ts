@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { agentFrom, feedPath, findFollow, followKey, MAX_FEED_ITEMS, MAX_FOLLOWERS, MAX_FOLLOWS, type FeedInput, type FollowView } from "../shared/feed.ts";
-import { aboutOf, fanOut, FeedStore, followersAllowed, FollowStore, postsReachFollowers, type FanOutHost, type Follower } from "../worker/feed/store.ts";
+import {
+  aboutOf,
+  fanOut,
+  FeedStore,
+  followersAllowed,
+  FollowStore,
+  postsReachFollowers,
+  runItem,
+  type FanOutHost,
+  type Follower,
+  type RunEnded,
+} from "../worker/feed/store.ts";
 import { memorySql } from "./fakes.ts";
 
 const T0 = 1_700_000_000_000;
@@ -137,6 +148,32 @@ describe("feed: keeping items", () => {
     const confirm = { kind: "assumption", ref: "assumption:b1", at: T0 + 21, title: "Confirm", open: { to: "agent", agentId: "b1" } } as const;
     feed.add(confirm, null, aboutOf("agent", "b1", "ann"));
     expect(feed.resolveAbout(aboutOf("agent", "b1", "ann"), "run")).toBe(0);
+  });
+
+  it("makes a run's item where its report went, and at home with nothing of it when that chat is off the record", () => {
+    const brief = { id: "b1", name: "brief", avatar: "br", color: "teal" } as const;
+    const offRecord = new Set(["secret"]);
+    const reaches = (chat: { id: string; kind: string }) => chat.kind !== "off_record" && !offRecord.has(chat.id);
+    const ended = (over: Partial<RunEnded>): RunEnded => ({ agentId: "b1", dueAt: T0, status: "sent", chatId: "home", chatKind: "private", ...over });
+    const feed = new FeedStore(memorySql());
+    // It waited for a sign-in, at home.
+    feed.add(runItem(brief, ended({ status: "needs_sign_in" }), reaches, T0)!.item);
+    expect(feed.counts()).toEqual({ unread: 1, needsYou: 1 });
+    // Then it posted a question only to Ops: answered there, and opened there.
+    const asked = (postedIn: string) => ended({ post: "Ship it?", asks: true, sentAt: T0 + 5, postedIn: { id: postedIn, kind: "group" } });
+    const ops = runItem(brief, asked("ops"), reaches, T0 + 9)!;
+    expect(ops.postShown).toBe(true);
+    expect(ops.item).toMatchObject({ at: T0 + 5, text: "Ship it?", chat: { id: "ops" }, open: { to: "chat", chatId: "ops" }, needsYou: "reply" });
+    // Or only to a chat off the record: the item stays at home, waits on nothing, and says nothing of the report.
+    const hidden = runItem(brief, asked("secret"), reaches, T0 + 9)!;
+    expect(hidden.postShown).toBe(false);
+    expect(hidden.item.text).toBeUndefined();
+    expect(hidden.item).toMatchObject({ at: T0 + 9, title: "@brief sent its report", chat: { id: "home" }, open: { to: "agent", tab: "runs" } });
+    expect(hidden.item.needsYou).toBeUndefined();
+    expect(feed.add(hidden.item)).toBe("updated");
+    expect(feed.counts().needsYou).toBe(0);
+    // A home chat off the record makes no item at all.
+    expect(runItem(brief, ended({ chatKind: "off_record", post: "Ship it?" }), reaches, T0)).toBeNull();
   });
 
   it("lets a chat, or a page or agent, take its items along when it goes", () => {
