@@ -203,10 +203,21 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
       {run.test && <p className="skills-note">A test: nothing was sent or changed. Below is what it would have sent.</p>}
       {run.status === "needs_sign_in" && run.needsSignIn && (
         <p className="form-error">
-          It waits for you to sign in to {run.needsSignIn.join(", ")}. Sign in from a chat (ask pi to connect it); the run goes on by itself after.
+          It waits for you to sign in to{" "}
+          {run.needsSignIn.map((server, index) => (
+            <span key={server}>
+              {index > 0 && ", "}
+              <a href={`/api/mcp/sign-in/${encodeURIComponent(server)}`} target="_blank" rel="noopener">
+                {server}
+              </a>
+            </span>
+          ))}
+          . The run goes on by itself once you do; if several mornings waited, only the newest goes.
         </p>
       )}
       {run.status === "failed" && run.summary && <p className="form-error">{run.summary}</p>}
+      {/* Why nothing went: a condition, or a sign-in that let a newer run go instead. */}
+      {run.status === "not_today" && run.summary && <p className="skills-note">{run.summary}</p>}
 
       <h4 className="run-section">What it sent</h4>
       {run.deliveries.length ? (
