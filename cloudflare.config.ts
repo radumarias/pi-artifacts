@@ -148,6 +148,9 @@ export default defineConfig({
       PAGE_AI_DAILY_USD: bindings.text("0.50"),
       // Calls to pages' models: 20 a minute per person.
       PAGE_AI: bindings.rateLimit({ namespace: "4202", simple: { limit: 20, period: 60 } }),
+      // Turns people give one agent: 10 a minute per person and agent, whoever's agent it is (worker/agents/controller.ts).
+      // A turn past it ends at once, saying so.
+      AGENT_TURNS: bindings.rateLimit({ namespace: "4204", simple: { limit: 10, period: 60 } }),
       // Dictation for browsers whose own speech recognition is missing (Firefox) or cannot reach its service (Brave,
       // Arc, a blocked network): the composer records the clip and a speech-to-text model on Workers AI, through the AI
       // binding, writes it out (worker/dictation.ts). Empty: no such fallback; the browser's own recognition only.

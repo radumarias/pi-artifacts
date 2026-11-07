@@ -9,7 +9,11 @@ import { isObject } from "./util.ts";
 export type ItemRef = { server: string; id: string; title: string; url?: string };
 
 /** What an MCP tool's result carries for the app beside its text (worker/agent/mcp.ts). A type, so pi can store it. */
-export type McpResultDetails = { items: ItemRef[] };
+/**
+ * What an MCP tool's result records beside its output, from the call itself: the server it came from (what a reply's
+ * source chip goes by, whatever the tool map says later), and the records it held.
+ */
+export type McpResultDetails = { server: string; items?: ItemRef[] };
 
 /** Records one tool result gives at most, and one reply shows. */
 const MAX_RESULT_ITEMS = 8;

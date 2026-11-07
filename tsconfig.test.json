@@ -81,6 +81,7 @@
     "worker/artifacts/manifest.ts",
     "worker/auth/access.ts",
     "worker/members.ts",
+    "worker/chat-name.ts",
     "worker/chat-kind.ts",
     "worker/chat-rows.ts",
     "worker/branch.ts",

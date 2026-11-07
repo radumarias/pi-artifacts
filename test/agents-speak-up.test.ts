@@ -21,7 +21,17 @@ import {
   unpromptedInput,
   type GateState,
 } from "../worker/agents/funnel.ts";
-import { agentRouterModel, MAX_ROUTED, NO_AGENT, piPicks, routeAgents, routesAgents, ROUTE_THRESHOLD, selectAgents } from "../worker/agents/router.ts";
+import {
+  agentRouterModel,
+  MAX_ROUTED,
+  NO_AGENT,
+  piPicks,
+  routableAgents,
+  routeAgents,
+  routesAgents,
+  ROUTE_THRESHOLD,
+  selectAgents,
+} from "../worker/agents/router.ts";
 import { routeHistory } from "../worker/agent/route.ts";
 import { ChatRoster } from "../worker/agents/roster.ts";
 import { SpeakUp, type FunnelEvent, type SpeakUpHost } from "../worker/agents/speak-up.ts";
@@ -128,6 +138,20 @@ describe("the agent router", () => {
     expect(routesAgents({ ...open, tagsPerson: true })).toBe(false);
     expect(routesAgents({ ...open, anyOn: false })).toBe(false);
     expect(routesAgents({ ...open, underBudget: false })).toBe(false);
+  });
+
+  it("picks a member's agent for someone else's message only when the member lets it speak unasked", async () => {
+    const entry = (agentId: string, ownerUid: string, off = false) => ({ agentId, ownerUid, off });
+    const roster = [entry("owners", OWNER), entry("anas", "ana"), entry("mias", "mia"), entry("off", OWNER, true)];
+    const asked: string[] = [];
+    const speaksUp = async (e: { agentId: string }) => (asked.push(e.agentId), e.agentId === "mias");
+    // Mia writes: the owner's agent, her own, and none of Ana's, which Ana has not let speak unasked.
+    expect((await routableAgents(roster, OWNER, "mia", speaksUp)).map((e) => e.agentId)).toEqual(["owners", "mias"]);
+    expect(asked).toEqual(["anas"]);
+    // Ana writes: her own agent may answer her; Mia's has speaking unasked on.
+    expect((await routableAgents(roster, OWNER, "ana", speaksUp)).map((e) => e.agentId)).toEqual(["owners", "anas", "mias"]);
+    // A definition that cannot be read leaves its agent out.
+    expect((await routableAgents(roster, OWNER, OWNER, async () => Promise.reject(new Error("gone")))).map((e) => e.agentId)).toEqual(["owners"]);
   });
 
   it("lets pi pay for its picks only when it answers: not past the budget, nor for a message handed to agents", () => {
@@ -370,6 +394,30 @@ describe("agents that speak up", () => {
     expect(capped.events.every((event) => event.refusal === "spend")).toBe(true);
   });
 
+  it("lets a member's agent speak up only when the member lets it, and asks the member's spend, not the chat owner's", async () => {
+    const chat = speakUpChat([]);
+    const theirs = definition("finance", { job: "Reports the totals", speaksUp: false });
+    chat.definitions.set(theirs.id, theirs);
+    chat.roster.add({
+      agentId: theirs.id,
+      ownerUid: "ana",
+      name: "finance-ana",
+      session: "",
+      avatar: theirs.avatar,
+      color: theirs.color,
+      job: theirs.job,
+      seat: "seat",
+    });
+    const asked: string[] = [];
+    chat.host.spendLeft = async (owner) => (asked.push(owner), true);
+    expect(await chat.speakUp.afterPause(talk, { line: "x" })).toBeUndefined();
+    expect(chat.events).toEqual([{ agent: theirs.id, stage: "gates", passed: false, refusal: "agent" }]);
+    // Ana turns it on: it may speak up now, on her account.
+    chat.definitions.set(theirs.id, { ...theirs, speaksUp: true });
+    expect(await chat.speakUp.afterPause(talk, { line: "x" })).toBe(theirs.id);
+    expect(asked).toEqual(["ana", "ana"]);
+  });
+
   it("keeps to the cooldown and the posts a day per agent", async () => {
     const chat = speakUpChat(["finance"]);
     jobs(chat);
@@ -538,6 +586,16 @@ describe("a chat's spend meter", () => {
     expect(spend.refusal()).toBeUndefined();
     await metered.streamSimple(MODEL, { messages: [] } as never).result();
     expect(sent).toHaveLength(2);
+  });
+
+  it("counts a turn another object ran for the chat in its day, without telling it as an answer of its own", () => {
+    const { spend, told } = meter(1_000);
+    spend.count({ tokens: 1_200, costUsd: 0.02 });
+    expect(spend.today()).toEqual({ tokens: 1_200, costUsd: 0.02 });
+    expect(told).toEqual([]);
+    expect(spend.refusal()).toBeDefined();
+    spend.count({ tokens: -5, costUsd: 0 });
+    expect(spend.today().tokens).toBe(1_200);
   });
 
   it("never stops without a budget, and keeps only the newest days", async () => {

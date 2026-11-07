@@ -15,7 +15,7 @@ import {
 } from "../../shared/agents.ts";
 import type { ExportedAgent } from "../../shared/data-export.ts";
 import { isObject, randomHex } from "../../shared/util.ts";
-import type { Sql } from "../members.ts";
+import { addColumns, type Sql } from "../members.ts";
 
 type AgentRow = {
   id: string;
@@ -77,6 +77,8 @@ export class AgentStore {
         agent_id TEXT NOT NULL, chat_id TEXT NOT NULL, shared INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (agent_id, chat_id)
       );
     `);
+    // The chat's owner, for a chat of someone else's the user brought the agent into as a member; added later.
+    addColumns(sql, "agent_chats", { owner_uid: "TEXT" });
   }
 
   list(): AgentDefinition[] {
@@ -223,32 +225,37 @@ export class AgentStore {
    * A chat added the agent (`inChat`), or took it out: the index "used in M chats" and the delete's confirm read. The
    * chat object writes it, as its roster changes.
    */
-  noteChat(agentId: string, chatId: string, inChat: boolean, shared = false): void {
+  noteChat(agentId: string, chatId: string, inChat: boolean, shared = false, ownerUid?: string): void {
     if (!inChat) {
       this.#sql.exec("DELETE FROM agent_chats WHERE agent_id = ? AND chat_id = ?", agentId, chatId);
       return;
     }
     // Only for an agent that is here: a chat that adds one deleted meanwhile leaves no row behind.
     this.#sql.exec(
-      `INSERT INTO agent_chats (agent_id, chat_id, shared) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM agents WHERE id = ?)
-       ON CONFLICT (agent_id, chat_id) DO UPDATE SET shared = excluded.shared`,
+      `INSERT INTO agent_chats (agent_id, chat_id, shared, owner_uid) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM agents WHERE id = ?)
+       ON CONFLICT (agent_id, chat_id) DO UPDATE SET shared = excluded.shared, owner_uid = excluded.owner_uid`,
       agentId,
       chatId,
       shared ? 1 : 0,
+      ownerUid ?? null,
       agentId,
     );
   }
 
-  /** The chats an agent is in, by id, with whether it is shared in each. */
-  chatsOf(agentId: string): { chatId: string; shared: boolean }[] {
+  /** The chats an agent is in, by id, with whether it is shared in each, and the owner of one that is someone else's. */
+  chatsOf(agentId: string): { chatId: string; shared: boolean; ownerUid?: string }[] {
     return this.#sql
-      .exec("SELECT chat_id, shared FROM agent_chats WHERE agent_id = ? ORDER BY chat_id", agentId)
+      .exec("SELECT chat_id, shared, owner_uid FROM agent_chats WHERE agent_id = ? ORDER BY chat_id", agentId)
       .toArray()
-      .map((row) => ({ chatId: row.chat_id as string, shared: row.shared === 1 }));
+      .map((row) => ({
+        chatId: row.chat_id as string,
+        shared: row.shared === 1,
+        ...(row.owner_uid !== null && { ownerUid: row.owner_uid as string }),
+      }));
   }
 
   /** A deleted chat holds no agent any more. */
   forgetChat(chatId: string): void {
-    this.#sql.exec("DELETE FROM agent_chats WHERE chat_id = ?", chatId);
+    this.#sql.exec("DELETE FROM agent_chats WHERE chat_id = ? AND owner_uid IS NULL", chatId);
   }
 }

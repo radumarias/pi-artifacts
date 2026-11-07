@@ -88,6 +88,24 @@ export class ChatSpend {
     return budget !== undefined && this.today().tokens >= budget ? budgetNotice(budget) : undefined;
   }
 
+  /**
+   * Count what a turn another object ran for the chat came to (a member's agent's, in its seat): in the chat's day, which
+   * its budget stops at, but not as an answer of this object's (its owner's object pays for it and counts it there).
+   */
+  count(spent: DaySpend): void {
+    this.#add(Math.max(0, spent.tokens), Math.max(0, spent.costUsd));
+  }
+
+  /** Add to the chat's day (UTC); a new day lets the oldest go (#prune). */
+  #add(tokens: number, costUsd: number): void {
+    if (!tokens && !costUsd) return;
+    const day = budgetDay(this.#now());
+    const key = `${SPEND_KEY}${day}`;
+    const before = this.#kv.get<DaySpend>(key);
+    if (!before) this.#prune(day);
+    this.#kv.put(key, { tokens: (before?.tokens ?? 0) + tokens, costUsd: (before?.costUsd ?? 0) + costUsd } satisfies DaySpend);
+  }
+
   /** Tag the requests of a pi session (an agent's, a run item's); pi's own are "pi". */
   tag(conversation: string, tags: SpendTags): void {
     this.#tags.delete(conversation);
@@ -108,11 +126,7 @@ export class ChatSpend {
     const tokens = calculateContextTokens(usage);
     const costUsd = usage.cost.total;
     if (!tokens && !costUsd) return;
-    const day = budgetDay(this.#now());
-    const key = `${SPEND_KEY}${day}`;
-    const before = this.#kv.get<DaySpend>(key);
-    if (!before) this.#prune(day);
-    this.#kv.put(key, { tokens: (before?.tokens ?? 0) + tokens, costUsd: (before?.costUsd ?? 0) + costUsd } satisfies DaySpend);
+    this.#add(tokens, costUsd);
     try {
       this.#spent({ tokens, costUsd, toolCalls, tags: this.#tagsOf(conversation), ...(conversation && { conversation }) });
     } catch (error) {

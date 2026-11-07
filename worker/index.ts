@@ -24,6 +24,7 @@ import { runsRoute } from "./runs-routes.ts";
 import { feedRoute } from "./feed-routes.ts";
 import type { FeedInput } from "../shared/feed.ts";
 import { chatAgentName } from "./chat-agent.ts";
+import { newestShown } from "./agents/roster.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
 
 export { ChatAgent } from "./chat-agent.ts";
@@ -103,7 +104,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   // The artifact page itself, framed by the viewer, or (/source) the page as written, to read. Whoever may view the page may read it.
   const page = path.match(/^\/u\/([a-z0-9]+)\/v(\d+)(\/source)?$/);
-  if (page && method === "GET") return artifactPage(request, storage, page[1], Number(page[2]), !!page[3]);
+  if (page && method === "GET") return artifactPage(request, storage, uid, page[1], Number(page[2]), !!page[3]);
 
   // Artifact metadata, the MCP proxy, and what a page saves and asks its model.
   const artifact = path.match(/^\/api\/artifacts\/([a-z0-9]+)(\/mcp|\/tools|\/clone|\/seen|\/storage|\/ai|\/discuss)?$/);
@@ -152,8 +153,23 @@ async function route(request: Request, env: Env): Promise<Response> {
       // Not who owns it, only whether the viewer does. The chat it lives in only when asked (?chat), and only to people
       // in that chat, so they can go back to building it there.
       const { chatId, ownerUid: _ownerUid, ...visible } = meta;
-      const inChat = url.searchParams.has("chat") && (await exports.ChatAgent.getByName(chatAgentName(meta.ownerUid, chatId)).isInChat(uid));
-      return json({ ...visible, isOwner: uid === meta.ownerUid, ...(inChat && { chatId }) } satisfies ArtifactView);
+      const isOwner = uid === meta.ownerUid;
+      const chat = exports.ChatAgent.getByName(chatAgentName(meta.ownerUid, chatId));
+      // Not what turns apart from the chat published with their replies not posted: someone else sees the newest
+      // version that is the chat's.
+      const [withheld, inChat] = await Promise.all([
+        isOwner ? undefined : chat.withheldFrom(id, uid),
+        url.searchParams.has("chat") && chat.isInChat(uid),
+      ]);
+      if (withheld?.page) return json({ error: "No such artifact" }, 404);
+      const hidden = new Set(withheld?.versions);
+      const latest = newestShown(visible.latest, hidden);
+      if (!latest) return json({ error: "No such artifact" }, 404);
+      const versions = visible.versions.filter((version) => !hidden.has(version.version));
+      // Nor when a withheld one came out.
+      const updatedAt =
+        latest === visible.latest ? visible.updatedAt : (versions.find((version) => version.version === latest)?.publishedAt ?? visible.updatedAt);
+      return json({ ...visible, latest, updatedAt, versions, isOwner, ...(inChat && { chatId }) } satisfies ArtifactView);
     }
     // A read-only Git token for the artifact's repo, for `git clone`. Only the owner gets one:
     // the repo also holds the version history and the metadata.
@@ -206,7 +222,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   const agents = await agentsRoute(
     request,
     directory,
-    (chatId, agentId) => exports.ChatAgent.getByName(chatAgentName(uid, chatId)).agentDeleted(agentId),
+    // A chat of someone else's the agent's owner brought it into as a member is named after that chat's owner.
+    ({ chatId, ownerUid }, agentId) => exports.ChatAgent.getByName(chatAgentName(ownerUid ?? uid, chatId)).agentDeleted(agentId, uid),
     mcpServers(env),
   );
   if (agents) return agents;
@@ -261,13 +278,21 @@ async function route(request: Request, env: Env): Promise<Response> {
  * One version of a published page, or with `source` its HTML as plain text. Versions never change, so a repeat view
  * is a 304 without reading R2.
  */
-async function artifactPage(request: Request, storage: Storage, id: string, version: number, source: boolean): Promise<Response> {
+async function artifactPage(request: Request, storage: Storage, uid: string, id: string, version: number, source: boolean): Promise<Response> {
   if (!ID_PATTERN.test(id)) return new Response("Not found", { status: 404 });
   const [etag, respond] = source ? [sourceETag(id, version), sourceResponse] : [artifactETag(id, version), artifactResponse];
   const cached = notModified(request, etag);
   if (cached) return cached;
-  const html = await storage.artifacts.readHtml(id, version);
-  return html === null ? new Response("Not found", { status: 404 }) : respond(html, etag);
+  // Not a version a turn apart from the chat published with its reply not posted, but for the owner. Asked while the
+  // page is read: what it holds is not sent unless the viewer may see it.
+  const shown = artifactHome(storage, id).then(async (home) => {
+    if (!home) return false;
+    if (home.ownerUid === uid) return true;
+    const withheld = await exports.ChatAgent.getByName(home.chat).withheldFrom(id, uid);
+    return !withheld.page && !withheld.versions.includes(version);
+  });
+  const [html, may] = await Promise.all([storage.artifacts.readHtml(id, version), shown]);
+  return html === null || !may ? new Response("Not found", { status: 404 }) : respond(html, etag);
 }
 
 function demoCookie(url: URL, value: string, maxAge: number): string {

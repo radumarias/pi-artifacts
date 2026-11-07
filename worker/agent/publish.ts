@@ -8,6 +8,7 @@ import { timedOutReport, type CheckInput, type CheckReport } from "../artifacts/
 import { reviewLook, type Look, type Reviewed } from "../artifacts/look.ts";
 import { checkManifest, MAX_HTML_BYTES } from "../artifacts/manifest.ts";
 import { ReviewStopped, withReview, type PageReview, type PageReviewer } from "../artifacts/review.ts";
+import { newestShown } from "../agents/roster.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import type { ArtifactStore } from "../storage/artifacts.ts";
 import { draftId, passed, type ChatDrafts, type Draft, type DraftCheck, type DraftSummary, type SkillSets } from "../storage/drafts.ts";
@@ -18,7 +19,8 @@ export interface PublishedHost {
   /** This chat's kind, read where it lives (the owner's row of it can lag). */
   kind(): ChatKind;
   directory: {
-    recordArtifact(artifact: ArtifactSummary, seen: boolean, chatKind: ChatKind): unknown;
+    recordArtifact(artifact: ArtifactSummary, seen: boolean, chatKind: ChatKind, held: boolean): unknown;
+    announceArtifact(artifact: ArtifactSummary, chatKind: ChatKind): unknown;
     pageChat(artifactId: string): string | null | Promise<string | null>;
   };
   /** Another chat of the owner's, by id. */
@@ -27,19 +29,37 @@ export interface PublishedHost {
   later(work: Promise<void>): void;
 }
 
+/** The kind of the chat a version belongs to: a version of an off-the-record chat reaches no follower. One that cannot be asked counts as off the record. */
+const kindOf = (host: PublishedHost, chatId: string): ChatKind | Promise<ChatKind> =>
+  chatId === host.chatId
+    ? host.kind()
+    : host
+        .chat(chatId)
+        .chatKind()
+        .catch((): ChatKind => "off_record");
+
 /**
  * What every publish does once a version is out, whoever published it (pi, an agent, a run's page step, which
  * publishes as the page's own chat): record it as `chatId`'s, and, off the publish's path, tell the chat that discusses
  * the page of its new version. ChatAgent's PublishScope.onPublished; a scope sets only its chatId, never its own.
+ * `held`: a turn apart from the chat published it, so its followers and the page's chat hear of it only once its reply
+ * is posted (announcePublished).
  */
-export async function afterPublish(host: PublishedHost, artifact: Omit<ArtifactSummary, "chatId">, chatId: string): Promise<void> {
-  // The chat it belongs to says its kind: a version of an off-the-record chat reaches no follower. One that cannot be
-  // asked counts as off the record.
-  const kind = chatId === host.chatId ? host.kind() : await host.chat(chatId).chatKind().catch((): ChatKind => "off_record");
-  await host.directory.recordArtifact({ ...artifact, chatId }, false, kind);
+export async function afterPublish(host: PublishedHost, artifact: Omit<ArtifactSummary, "chatId">, chatId: string, held = false): Promise<void> {
+  await host.directory.recordArtifact({ ...artifact, chatId }, false, await kindOf(host, chatId), held);
+  if (!held) tellPageChat(host, artifact);
+}
+
+/** A version afterPublish held is the chat's now (its reply was posted): its followers and the page's chat hear of it. */
+export async function announcePublished(host: PublishedHost, artifact: Omit<ArtifactSummary, "chatId">, chatId: string): Promise<void> {
+  await host.directory.announceArtifact({ ...artifact, chatId }, await kindOf(host, chatId));
+  tellPageChat(host, artifact);
+}
+
+/** Off the publish's path: a notice to the chat that discusses the page, if there is one other than the publishing chat. */
+function tellPageChat(host: PublishedHost, artifact: Pick<ArtifactSummary, "id" | "title" | "latest">): void {
   host.later(
     (async () => {
-      // Only a notice, to the chat that discusses the page, if there is one other than the publishing chat.
       const pageChat = await host.directory.pageChat(artifact.id);
       if (!pageChat || pageChat === host.chatId) return;
       await host.chat(pageChat).pageVersion({ id: artifact.id, title: artifact.title, version: artifact.latest });
@@ -53,8 +73,18 @@ export interface PublishScope {
   chatId: string;
   hub: McpHub;
   artifacts: ArtifactStore;
-  /** A version is out, published as `chatId`'s (the scope's): record it, and tell the chat that discusses the page. */
-  onPublished(artifact: Omit<ArtifactSummary, "chatId">, chatId: string): Promise<void>;
+  /**
+   * A version is out, published as `chatId`'s (the scope's) from conversation `session` (none: not by a model's turn,
+   * e.g. a dev publish): record it, and tell the chat that discusses the page.
+   */
+  onPublished(artifact: Omit<ArtifactSummary, "chatId">, chatId: string, session?: string): Promise<void>;
+  /**
+   * What conversation `session` may see and change of the chat's pages and files while turns run apart from the chat
+   * (agents' private turns, in forks of their sessions): unset, or for a chat with none, nothing is withheld.
+   */
+  rulesFor?(session: string): Promise<SessionRules>;
+  /** Conversation `session` is about to save draft `draftId` (writeDraft): whose draft it is (SessionRules.hiddenDraft). */
+  onDrafted?(session: string, draftId: string): void;
   /**
    * Render a page in a headless browser and report on it (worker/artifacts/check.ts), for at most CHECK_MS and until
    * `signal` aborts. Throws BrowserUnavailable without a browser, CheckTimedOut when the page held it too long.
@@ -77,6 +107,37 @@ export interface PublishScope {
   skillSets(names: readonly string[]): Promise<Map<string, { set: string; files: SkillFileInfo[] }>>;
   /** The bytes of one file of a set of a skill's files (SkillFiles), or null when the set has no such file, or is gone. */
   readSkillFile(skill: string, set: string, path: string): Promise<Uint8Array | null>;
+}
+
+/**
+ * What one conversation of the chat may see and change while some run apart from it (an agent's private turn runs in a
+ * fork of its session, whose pages and files are not the chat's until its reply is posted).
+ */
+export interface SessionRules {
+  /** The pages other conversations apart from the chat made, not the chat's yet: this one neither sees nor builds on them. */
+  hidden: ReadonlySet<string>;
+  /** Whether another conversation apart from the chat published this version of a page, not the chat's yet. */
+  hiddenVersion(artifactId: string, version: number): boolean;
+  /** The pages this conversation published while apart from the chat: only it builds on them until they are the chat's. */
+  own: ReadonlySet<string>;
+  /** It runs apart and its owner reviews its reply before it is posted: it changes no page or file the chat already has. */
+  reviewed: boolean;
+  /** Whether a file is the chat's (not one only a conversation apart from it saved). */
+  chatFile(path: string): boolean;
+  /**
+   * Whether a draft is one only other conversations apart from the chat saved, with their replies not posted
+   * (PublishScope.onDrafted): not the chat's yet, so this one neither lists, reads, checks nor publishes it.
+   */
+  hiddenDraft(draftId: string): boolean;
+}
+
+/** Why a reviewed turn apart from the chat may not change a page or file the chat already has, and what to do instead. */
+export function reviewedRefusal(what: "page" | "file"): string {
+  return what === "page"
+    ? "Not published: your reply is reviewed before it is posted, so this turn changes no page the chat already has. " +
+        "Put the change in your reply, or publish it as a new page with new_artifact: true, which stays hidden until your reply is posted."
+    : "Not saved: your reply is reviewed before it is posted, so this turn changes no file the chat already has. " +
+        "Save it under a new name, which stays hidden until your reply is posted.";
 }
 
 /** Which artifact a publish goes to and what the version says (see artifactFor). */
@@ -216,11 +277,18 @@ export interface WriteInput {
   mcp?: McpDeclaration;
   artifact?: ArtifactMeta;
   version?: number;
+  /** The conversation saving it, when a model's turn does: it builds on no draft another one apart from the chat saved. */
+  session?: string;
 }
 
-/** A draft of the chat by its id; else throws, starting with `what`. */
-export async function draftNamed(drafts: ChatDrafts, id: string, what = ""): Promise<Draft> {
-  const draft = await drafts.get(id);
+/** What conversation `session` may see (PublishScope.rulesFor); undefined, not a model's turn, or a chat with no rules: everything. */
+export function rulesOf(scope: PublishScope, session: string | undefined): Promise<SessionRules> | undefined {
+  return session === undefined ? undefined : scope.rulesFor?.(session);
+}
+
+/** A draft of the chat by its id, but none `rules` hide (SessionRules.hiddenDraft); else throws, starting with `what`. */
+export async function draftNamed(drafts: ChatDrafts, id: string, what = "", rules?: SessionRules): Promise<Draft> {
+  const draft = rules?.hiddenDraft(id) ? null : await drafts.get(id);
   if (!draft)
     throw new Error(`${what && `${what} `}No draft "${id}" in this chat: it was published, or dropped as one of the oldest. List them with ${DRAFTS_TOOL}.`);
   return draft;
@@ -232,7 +300,7 @@ export async function draftNamed(drafts: ChatDrafts, id: string, what = ""): Pro
  * Saving a page that is already a draft keeps how its check went.
  */
 export async function writeDraft(scope: PublishScope, input: WriteInput): Promise<Draft & { bytes: number }> {
-  const { draftId: from, edits = [], artifact, version } = input;
+  const { draftId: from, edits = [], artifact, version, session } = input;
   if (input.html !== undefined && (from !== undefined || edits.length))
     throw new Error("Pass a new page as html, or edits with the draft_id or artifact_id they change: not both.");
   if (version !== undefined && (input.html !== undefined || from !== undefined))
@@ -243,7 +311,7 @@ export async function writeDraft(scope: PublishScope, input: WriteInput): Promis
   let reviewed: true | undefined;
   if (html === undefined) {
     if (from !== undefined) {
-      const draft = await draftNamed(drafts, from, "Not saved.");
+      const draft = await draftNamed(drafts, from, "Not saved.", await rulesOf(scope, session));
       html = applyEdits(draft.html, edits);
       mcp ??= draft.manifest.mcp?.servers;
       artifactId ??= draft.artifactId;
@@ -259,6 +327,8 @@ export async function writeDraft(scope: PublishScope, input: WriteInput): Promis
   const manifest = await validPage(scope, html, mcp, "Not saved.");
   const skillSets = await pinSkillFiles(scope, html, "Not saved.");
   const id = await draftId(html, manifest, skillSets);
+  // Whose it is, before it is there to list.
+  if (session !== undefined) scope.onDrafted?.(session, id);
   return drafts.save({ id, html, manifest, artifactId, ...(Object.keys(skillSets).length && { skillSets }), ...(reviewed && { reviewed }) }, null);
 }
 
@@ -284,9 +354,10 @@ export async function checkDraft(
   id: string,
   { review: reviewIt = true, ...options }: Pick<CheckInput, "tests" | "viewport"> & { review?: boolean },
   signal?: AbortSignal,
+  session?: string,
 ): Promise<CheckedDraft> {
-  const drafts = await scope.drafts();
-  const draft = await draftNamed(drafts, id, "Not checked.");
+  const [drafts, rules] = await Promise.all([scope.drafts(), rulesOf(scope, session)]);
+  const draft = await draftNamed(drafts, id, "Not checked.", rules);
   const { html, pageLine } = await pageToRun(scope, draft, "Not checked.");
   // Stops the review when the check fails or could not run: it is no longer waited for, and a review costs.
   const stop = new AbortController();
@@ -422,14 +493,21 @@ export function artifactByTitle(artifacts: readonly ArtifactSummary[], title: st
 
 /**
  * The artifact a publish goes to: the one it names; a new one with newArtifact; else the one the draft was written as a
- * version of (`writtenFor`); else this chat's by its title (artifactByTitle); else a new one.
+ * version of (`writtenFor`); else this chat's by its title (artifactByTitle); else a new one. Never a page `rules` hide
+ * from the publishing conversation: by title it is not found, and named it is no artifact of this chat. With `rules`
+ * reviewed, never a page the chat already has.
  */
-async function artifactFor(scope: PublishScope, target: PublishTarget, writtenFor?: string): Promise<{ id?: string; byTitle?: boolean }> {
-  if (target.artifactId !== undefined) return { id: target.artifactId };
-  if (target.newArtifact) return {};
-  if (writtenFor !== undefined) return { id: writtenFor };
-  const same = artifactByTitle(await scope.chatArtifacts(), target.title);
-  return same ? { id: same.id, byTitle: true } : {};
+async function artifactFor(scope: PublishScope, target: PublishTarget, writtenFor?: string, rules?: SessionRules): Promise<{ id?: string; byTitle?: boolean }> {
+  const named = target.artifactId ?? (target.newArtifact ? undefined : writtenFor);
+  if (named !== undefined && rules?.hidden.has(named)) throw new Error(`Not published: no artifact ${named} in this chat.`);
+  let chosen: { id?: string; byTitle?: boolean } = named !== undefined ? { id: named } : {};
+  if (named === undefined && !target.newArtifact) {
+    const artifacts = await scope.chatArtifacts();
+    const same = artifactByTitle(rules ? artifacts.filter((artifact) => !rules.hidden.has(artifact.id)) : artifacts, target.title);
+    if (same) chosen = { id: same.id, byTitle: true };
+  }
+  if (chosen.id !== undefined && rules?.reviewed && !rules.own.has(chosen.id)) throw new Error(reviewedRefusal("page"));
+  return chosen;
 }
 
 /**
@@ -437,9 +515,9 @@ async function artifactFor(scope: PublishScope, target: PublishTarget, writtenFo
  * (PublishScope.publishUnchecked), one no browser checked, which is checked here first when a browser can, so a page
  * with errors is never published. A published draft goes: its version holds it now.
  */
-export async function publishDraft(scope: PublishScope, input: PublishInput, signal?: AbortSignal): Promise<Published> {
-  const drafts = await scope.drafts();
-  let draft = await draftNamed(drafts, input.draftId, "Not published.");
+export async function publishDraft(scope: PublishScope, input: PublishInput, signal?: AbortSignal, session?: string): Promise<Published> {
+  const [drafts, rules] = await Promise.all([scope.drafts(), rulesOf(scope, session)]);
+  let draft = await draftNamed(drafts, input.draftId, "Not published.", rules);
   // Without the code review: its findings would stop the publish unseen, and the draft would then be reviewed already.
   if (draft.errors === null && scope.publishUnchecked) draft = (await checkDraft(scope, draft.id, { review: false }, signal)).draft;
   const unchecked = draft.errors === null;
@@ -453,7 +531,7 @@ export async function publishDraft(scope: PublishScope, input: PublishInput, sig
   await validPage(scope, draft.html, draft.manifest.mcp?.servers, "Not published.");
   // The version holds the skill files the check ran with: it never changes when the skill does.
   const { html } = await pageToRun(scope, draft, "Not published.");
-  const target = await artifactFor(scope, input, draft.artifactId);
+  const target = await artifactFor(scope, input, draft.artifactId, rules);
   const meta = await scope.artifacts.publishVersion({
     id: target.id,
     ownerUid: scope.uid,
@@ -463,8 +541,24 @@ export async function publishDraft(scope: PublishScope, input: PublishInput, sig
     manifest: draft.manifest,
     message: input.message,
   });
-  await scope.onPublished({ id: meta.id, title: meta.title, latest: meta.latest, updatedAt: meta.updatedAt }, scope.chatId);
+  await scope.onPublished({ id: meta.id, title: meta.title, latest: meta.latest, updatedAt: meta.updatedAt }, scope.chatId, session);
   // Published already: a draft left behind is only clutter, never a reason to fail.
   await drafts.remove(draft.id).catch((error: unknown) => console.error("draft:", errorMessage(error)));
   return { meta, byTitle: target.byTitle, ...(unchecked && { unchecked }) };
+}
+
+/**
+ * The version of `meta` a read takes: `asked`, or the newest up to `newest` this conversation sees (one another
+ * conversation apart from the chat published is not the chat's yet). Throws for an asked version it does not see.
+ */
+export function versionToRead(meta: ArtifactMeta, asked: number | undefined, rules?: SessionRules, newest = meta.latest): number {
+  const hidden = (version: number) => !!rules?.hiddenVersion(meta.id, version);
+  if (asked !== undefined) {
+    // Not one of the versions `meta` lists either: a brought-in page's own chat may hold it (ownArtifact).
+    if (hidden(asked) || !meta.versions.some((version) => version.version === asked))
+      throw new Error(`Artifact ${meta.id} has no version ${asked} in this chat yet.`);
+    return asked;
+  }
+  // Version 1 when it sees none newer.
+  return newestShown(newest, hidden, 2);
 }

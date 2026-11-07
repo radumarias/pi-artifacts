@@ -58,7 +58,7 @@ export interface PageNotice {
 }
 
 /** What a tab saves without editing: the rest of the definition (its trigger, scope, workflow, autonomy) stays as it is. */
-const KEPT = [...COPIED_FIELDS, "autonomy"] as const satisfies readonly (keyof AgentInput)[];
+const KEPT = [...COPIED_FIELDS, "autonomy", "reviewBeforePosting"] as const satisfies readonly (keyof AgentInput)[];
 
 /** A tab of the agent page. Later tabs (workflow and runs, limits, what it knows) add themselves here. */
 export interface AgentTab {
@@ -73,7 +73,7 @@ export const TABS: AgentTab[] = [
   {
     id: "setup",
     label: "Setup",
-    fields: ["name", "job", "instructions", "avatar", "color", "model", "effort", "servers", "sharedServers"],
+    fields: ["name", "job", "instructions", "avatar", "color", "model", "effort", "servers", "sharedServers", "reviewBeforePosting"],
     Component: SetupTab,
   },
   { id: "workflow", label: "Workflow", fields: ["trigger", "scope", "workflow"], Component: WorkflowTab },

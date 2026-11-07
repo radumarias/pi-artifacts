@@ -7,7 +7,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { EntryReactions, Reactions } from "./reactions.ts";
 import type { Attachment, AttachmentInput } from "./attachments.ts";
 import type { Mention, MentionInput } from "./mentions.ts";
-import type { AgentColor, ChatAgentView } from "./agents.ts";
+import type { AgentColor, AgentDraftView, ChatAgentView } from "./agents.ts";
 import type { ChatKind, ChatPage } from "./chat-kinds.ts";
 import type { ChatAgentSettingsView } from "./agent-settings.ts";
 
@@ -631,6 +631,8 @@ export type ChatServerMessage =
   | { type: "callHint"; entry: number }
   /** The chat's agents besides pi (shared/agents.ts): on connect, and whenever one is added, removed, starts or ends a turn. */
   | { type: "agents"; agents: ChatAgentView[] }
+  /** The replies of this person's agents held for them to review (reviewBeforePosting): only their sockets get it. */
+  | { type: "agentDrafts"; drafts: AgentDraftView[] }
   /** The chat's agent settings (shared/agent-settings.ts): on connect, and whenever its owner changes them or an agent is muted. */
   | { type: "agentSettings"; settings: ChatAgentSettingsView }
   /**

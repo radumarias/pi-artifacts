@@ -26,7 +26,7 @@ import { allowedTools } from "../worker/agents/turns.ts";
 import type { AgentEvent, EntryRecord } from "@earendil-works/pi-durable";
 import { CHAT_TURN_KIND } from "../shared/agents.ts";
 import { CHAT_MESSAGE_KIND } from "../shared/protocol.ts";
-import { ChatMemory, MAX_RUN_PAGES, runAskedByOwner, type MemoryAgent } from "../worker/memory/chat.ts";
+import { ChatMemory, MAX_RUN_PAGES, ROOM_SECTION, runAskedByOwner, UNKNOWN_SECTION, type MemoryAgent } from "../worker/memory/chat.ts";
 import { coverageOf } from "../worker/memory/coverage.ts";
 import { UserMemory } from "../worker/memory/memory.ts";
 import { recalledText } from "../worker/memory/tools.ts";
@@ -524,7 +524,8 @@ describe("ChatMemory", () => {
       chatId,
       kind: () => state.kind,
       alone: () => state.alone,
-      agentFor: (conversation) => sessions.get(conversation) ?? null,
+      // As the chat object reads it: "root" is pi's, one in `sessions` an agent's, any other nobody's.
+      agentFor: (conversation) => (conversation === "root" ? null : sessions.get(conversation)),
       piByOwner: async () => state.piByOwner,
       freshPrompt: async (conversation) => {
         fresh.push(conversation);
@@ -578,6 +579,62 @@ describe("ChatMemory", () => {
     // A hand-off saves only what waits for a confirm.
     expect(saved(await host.note("s1", { text: "Prefer short answers.", scope: "agent", kind: "preference" })).note.confirmed).toBe(false);
     expect((await host.recall("s1", "")).notes).toEqual([expect.objectContaining({ text: "Cite sources." })]);
+  });
+
+  it("reads a seat's session as its room: never the owner's own notes, and saves as theirs only on a turn they asked for", async () => {
+    // A seat runs in an object of the member's own with nobody else in it (a private chat as it knows itself), and
+    // here the member's directory knows the room too, so only the reader keeps the owner's own notes out.
+    const owner = directory({ [PRIVATE]: "private", [GROUP]: "group" });
+    saved(owner.memory.add({ text: "My salary is private.", scope: "user" }));
+    saved(owner.memory.add({ text: "Cite sources.", scope: "agent", agentId: RESEARCH }));
+    const { memory, host, sessions } = chat(PRIVATE, "private", true, owner);
+    const seat = (byOwner: boolean, kind: ChatKind | null = "group"): MemoryAgent => ({
+      agentId: RESEARCH,
+      ownerUid: "owner",
+      name: "research",
+      byOwner,
+      room: { chatId: GROUP, kind },
+    });
+    sessions.set("s1", seat(true));
+    const section = await memory.refresh("s1");
+    expect(section).toContain("Cite sources.");
+    expect(section).not.toContain("salary");
+    expect((await host.recall("s1", "salary")).notes).toEqual([]);
+    // What its owner asked for saves as theirs, with the room (never this object's chat); anyone else's waits.
+    const asked = saved(await host.note("s1", { text: "Use metric units.", scope: "agent", kind: "preference" }));
+    expect(asked.note).toMatchObject({ scope: "chat", chatId: GROUP, confirmed: true });
+    sessions.set("s1", seat(false));
+    const other = saved(await host.note("s1", { text: "Answer in French.", scope: "user", kind: "preference" }));
+    expect(other.note).toMatchObject({ scope: "chat", chatId: GROUP, confirmed: false });
+    expect(await host.forget("s1", asked.note.id)).toHaveProperty("error");
+    // Between its turns the room's kind is not known: the kept section is read again, and holds nothing.
+    sessions.set("s1", seat(false, null));
+    expect(await host.section("s1")).toBe(ROOM_SECTION);
+    expect(await host.note("s1", { text: "x", scope: "chat", kind: "preference" })).toHaveProperty("error");
+  });
+
+  it("reads and saves nothing in a seat's session while the room is not one of the owner's chats", async () => {
+    const owner = directory({ [PRIVATE]: "private" });
+    saved(owner.memory.add({ text: "My salary is private.", scope: "user" }));
+    const { memory, host, sessions } = chat(PRIVATE, "private", true, owner);
+    sessions.set("s1", { agentId: RESEARCH, ownerUid: "owner", name: "research", byOwner: true, room: { chatId: GROUP, kind: "group" } });
+    expect(await memory.refresh("s1")).toBe(ROOM_SECTION);
+    expect(await host.note("s1", { text: "Use metric units.", scope: "agent", kind: "preference" })).toHaveProperty("error");
+    // pi's own conversation in the same object is untouched.
+    expect(await memory.refresh()).toContain("salary");
+  });
+
+  it("reads and saves nothing in a session nobody knows, never as pi's", async () => {
+    const owner = directory();
+    saved(owner.memory.add({ text: "My salary is private.", scope: "user" }));
+    saved(owner.memory.add({ text: "Standup is at nine.", scope: "chat", chatId: PRIVATE }));
+    const { memory, host } = chat(PRIVATE, "private", true, owner);
+    expect(await memory.refresh("old-fork")).toBe(UNKNOWN_SECTION);
+    expect((await host.recall("old-fork", "")).notes).toEqual([]);
+    expect(await host.note("old-fork", { text: "Use metric units.", scope: "user", kind: "preference" })).toHaveProperty("error");
+    // pi's own conversation reads as before, and keeps a section of its own.
+    expect(await memory.refresh()).toContain("salary");
+    expect(await host.section("old-fork")).toBe(UNKNOWN_SECTION);
   });
 
   it("keeps a conversation's section for its turn, and counts a note's use once per conversation", async () => {

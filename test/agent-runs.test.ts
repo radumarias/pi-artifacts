@@ -9,7 +9,7 @@ import { answeredIn, findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, wor
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "../worker/agents/runs/runner.ts";
 import { sourceName, SourceCore, type Subscriber } from "../worker/agents/runs/source.ts";
 import { AgentRuns } from "../worker/agents/runs/store.ts";
-import { afterPublish, writeDraft, type PublishedHost, type PublishScope } from "../worker/agent/publish.ts";
+import { afterPublish, announcePublished, writeDraft, type PublishedHost, type PublishScope } from "../worker/agent/publish.ts";
 import type { ChatKind, ChatPage } from "../shared/chat-kinds.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
@@ -1229,6 +1229,7 @@ describe("a run's page step", () => {
       kind: () => "private",
       directory: {
         recordArtifact: (artifact, _seen, kind) => void recorded.push({ chatId: artifact.chatId, latest: artifact.latest, kind }),
+        announceArtifact: () => {},
         pageChat: async (artifactId) => (artifactId === "a1" ? "talk" : null),
       },
       chat: (chatId) => ({
@@ -1242,6 +1243,32 @@ describe("a run's page step", () => {
     await Promise.all(later);
     expect(recorded).toEqual([{ chatId: "c", latest: 4, kind: "page" }]);
     expect(pages).toEqual([{ chat: "talk", page: { id: "a1", title: "Sales brief", version: 4 } }]);
+  });
+
+  it("holds a version a turn apart published from followers and the page's chat until its reply is posted", async () => {
+    const recorded: { latest: number; held: boolean }[] = [];
+    const announced: number[] = [];
+    const pages: number[] = [];
+    const later: Promise<void>[] = [];
+    const host: PublishedHost = {
+      chatId: "home",
+      kind: () => "group",
+      directory: {
+        recordArtifact: (artifact, _seen, _kind, held) => void recorded.push({ latest: artifact.latest, held }),
+        announceArtifact: (artifact) => void announced.push(artifact.latest),
+        pageChat: async () => "talk",
+      },
+      chat: () => ({ chatKind: async () => "group", pageVersion: async (page) => void pages.push(page.version) }),
+      later: (work) => void later.push(work),
+    };
+    const version = { id: "a1", title: "Team", latest: 4, updatedAt: T0 };
+    await afterPublish(host, version, "home", true);
+    await Promise.all(later);
+    // Recorded for the owner's sidebar, but nobody else hears of it yet.
+    expect([recorded, announced, pages]).toEqual([[{ latest: 4, held: true }], [], []]);
+    await announcePublished(host, version, "home");
+    await Promise.all(later);
+    expect([announced, pages]).toEqual([[4], [4]]);
   });
 
   it("publishes a page whose check passes, with the report in it", async () => {

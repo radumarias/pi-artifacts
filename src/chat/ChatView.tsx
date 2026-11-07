@@ -54,6 +54,7 @@ import { workingPhrase } from "./phrase.ts";
 import { ComposerMore } from "./ComposerMore.tsx";
 import { Dictation } from "./Dictation.tsx";
 import { ownMessages, useHistory } from "./history.ts";
+import { AgentDraft } from "./AgentDraft.tsx";
 import { AgentReply } from "./AgentReply.tsx";
 import { ChecklistCard } from "./ChecklistCard.tsx";
 import { CHAT_CHECKLIST_KIND, checklistAt, foldChecklists, type ChatChecklistData } from "../../shared/checklist.ts";
@@ -105,7 +106,7 @@ const GROWS_ITSELF = CSS.supports("field-sizing", "content");
 const atBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 
 export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity, onLeft, onMenu, onOpenChat }: Props) {
-  const { state, connected, people, online, prompt, takeOffer: sendYes, abort, setModel, auto, reactions, react, hints, dropHint, agents, agentSettings, live } =
+  const { state, connected, people, online, prompt, takeOffer: sendYes, abort, setModel, auto, reactions, react, hints, dropHint, agents, agentSettings, live, drafts, setDrafts } =
     useChat(chatId);
   // pi, or an agent of the chat, is working or has turns waiting: Stop stops them all.
   const working = state.busy || agents.some((agent) => agent.busy || agent.queued);
@@ -428,6 +429,9 @@ export function ChatView({ chatId, title, uid, newSince, onArtifact, onActivity,
                       <div key={line.agentId} className="agent-queue-line">
                         {line.text}
                       </div>
+                    ))}
+                    {drafts.map((draft) => (
+                      <AgentDraft key={draft.turn} chatId={chatId} draft={draft} onDone={setDrafts} />
                     ))}
                     <Queue queued={state.queued} incoming={state.incoming} uid={uid} />
                   </div>

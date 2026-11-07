@@ -124,6 +124,12 @@ describe("copies of a shared agent", () => {
     });
   });
 
+  it("lets a copy take review before posting as its new owner sets it, never from the original", () => {
+    const original = { name: "research", job: "Looks.", instructions: "Look.", reviewBeforePosting: true } as AgentInput;
+    expect(copyInput(original, {})).not.toHaveProperty("reviewBeforePosting");
+    expect(copyInput(original, { reviewBeforePosting: true })).toMatchObject({ reviewBeforePosting: true });
+  });
+
   it("finds a free name for a copy", () => {
     const taken = new Set(["research", "research-2", `${"a".repeat(24)}`]);
     const has = (name: string) => taken.has(name);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { freePath, isHidden, MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_UPLOAD_BYTES, underUploads, uploadBatches, uploadPath, uploadTargets } from "../shared/uploads.ts";
-import { FileRefError, filesIndex, MAX_SANDBOX_FILES, outputPaths, resolveFile, resolveRef, sandboxLayout, sandboxPath } from "../worker/agent/file-refs.ts";
+import { FileRefError, filesIndex, MAX_SANDBOX_FILES, outputPaths, resolveFile, resolveRef, sandboxLayout, sandboxPath, saveFiles } from "../worker/agent/file-refs.ts";
 import { filesRoute } from "../worker/files-routes.ts";
 import { deriveUserKey } from "../worker/storage/keys.ts";
 import { normalisePath } from "../worker/storage/paths.ts";
@@ -275,5 +275,28 @@ describe("outputPaths", () => {
     expect(skipped).toHaveLength(2);
     expect(skipped[0]).toBe("a.csv  (same file as out/c1/a.csv)");
     expect(skipped[1]).toMatch(/^bad\*name \(/);
+  });
+});
+
+describe("saving a tool's files", () => {
+  it("names them to the conversation's record before saving any, and saves none once the tool was stopped", async () => {
+    const order: string[] = [];
+    const files = {
+      put: (path: string) => {
+        order.push(`put ${path}`);
+        // Never settles: the object went away mid-save. The record is in already.
+        return new Promise<string>(() => {});
+      },
+    };
+    const onSaving = (session: string, paths: readonly string[]) => void order.push(`record ${session} ${paths.join(",")}`);
+    void saveFiles(files, new Map([[" out/c1/a.csv", "x"]]), { session: "s1", onSaving });
+    await Promise.resolve();
+    expect(order).toEqual(["record s1 out/c1/a.csv", "put  out/c1/a.csv"]);
+
+    order.length = 0;
+    const stopped = new AbortController();
+    stopped.abort();
+    await expect(saveFiles(files, new Map([["out/c1/b.csv", "y"]]), { session: "s1", signal: stopped.signal, onSaving })).rejects.toThrow();
+    expect(order).toEqual([]);
   });
 });

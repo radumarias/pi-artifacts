@@ -921,10 +921,11 @@ export class UserDirectory extends DurableObject<Env> {
 
   /**
    * A version was published. `seen`: the user has it already (an import brought it), so it is not unread. `chatKind`:
-   * the kind of the chat it was published from, as that chat has it now (this user's row of it can lag).
+   * the kind of the chat it was published from, as that chat has it now (this user's row of it can lag). `held`: a turn
+   * apart from the chat published it, so it reaches the page's followers only once its reply is posted (announceArtifact).
    */
-  recordArtifact(artifact: ArtifactSummary, seen = false, chatKind?: ChatKind): void {
-    const before = this.ctx.storage.sql.exec<{ latest: number }>("SELECT latest FROM artifacts WHERE id = ?", artifact.id).toArray()[0]?.latest ?? 0;
+  recordArtifact(artifact: ArtifactSummary, seen = false, chatKind?: ChatKind, held = false): void {
+    const before = this.#latestOf(artifact.id) ?? 0;
     this.ctx.storage.sql.exec(
       `INSERT INTO artifacts (id, title, chat_id, latest, updated_at, seen) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET title = excluded.title, latest = excluded.latest, updated_at = excluded.updated_at, seen = MAX(seen, excluded.seen)`,
@@ -936,10 +937,28 @@ export class UserDirectory extends DurableObject<Env> {
       seen ? artifact.latest : 0,
     );
     this.#changed("artifacts");
-    // A new version reaches the page's followers, unless the chat it was published from is off the record: as it says
-    // (when it told), and as this user's row of it says.
+    if (!seen && !held && artifact.latest > before) this.#announce(artifact, chatKind);
+  }
+
+  /**
+   * A version a turn apart from the chat published (recordArtifact's `held`) is the chat's now: it reaches the page's
+   * followers. Whether a newer one they heard of is out already is the chat's to say (it knows which are still held):
+   * this list's newest can be one that is.
+   */
+  announceArtifact(artifact: ArtifactSummary, chatKind?: ChatKind): void {
+    if (this.#latestOf(artifact.id) === undefined) return;
+    this.#announce(artifact, chatKind);
+  }
+
+  /** The newest version of an artifact this user's list has; undefined for one it lacks. */
+  #latestOf(id: string): number | undefined {
+    return this.ctx.storage.sql.exec<{ latest: number }>("SELECT latest FROM artifacts WHERE id = ?", id).toArray()[0]?.latest;
+  }
+
+  /** A new version reaches the page's followers, unless the chat it was published from is off the record: as it says (when it told), and as this user's row of it says. */
+  #announce(artifact: ArtifactSummary, chatKind?: ChatKind): void {
     const kinds = [this.#rows.kindOf(artifact.chatId), ...(chatKind ? [chatKind] : [])];
-    if (seen || artifact.latest <= before || !mayLeave({ what: "feed" }, ...kinds)) return;
+    if (!mayLeave({ what: "feed" }, ...kinds)) return;
     this.#fanOut(
       "page",
       artifact.id,
@@ -1151,18 +1170,27 @@ export class UserDirectory extends DurableObject<Env> {
     return result;
   }
 
-  /** One of the user's chats added an agent of theirs, took it out, or changed whether it shares it (AgentStore.noteChat). */
-  noteAgentChat(agentId: string, chatId: string, inChat: boolean, shared = false): void {
+  /**
+   * A chat added an agent of the user's, took it out, or changed whether it shares it (AgentStore.noteChat): one of the
+   * user's own, or one of `ownerUid`'s they brought it into as a member.
+   */
+  noteAgentChat(agentId: string, chatId: string, inChat: boolean, shared = false, ownerUid?: string): void {
     // Only the index: the agents list the sidebars read is the same.
-    this.#agents.noteChat(agentId, chatId, inChat, shared);
+    this.#agents.noteChat(agentId, chatId, inChat, shared, ownerUid);
   }
 
-  /** The chats of the user's an agent is in, by title, with whether it is shared there. */
+  /** The chats an agent of the user's is in, by title, with whether it is shared there: theirs, and others' they are in. */
   agentChats(agentId: string): AgentChatUse[] {
-    return this.#agents.chatsOf(agentId).flatMap(({ chatId, shared }) => {
-      const title = this.chatTitle(chatId);
-      return title === null ? [] : [{ chatId, title, shared }];
+    return this.#agents.chatsOf(agentId).flatMap(({ chatId, shared, ownerUid }) => {
+      const title = ownerUid === undefined ? this.chatTitle(chatId) : this.#sharedChatTitle(chatId, ownerUid);
+      return title === null ? [] : [{ chatId, title, shared, ...(ownerUid !== undefined && { ownerUid }) }];
     });
+  }
+
+  /** The title of a chat of `ownerUid`'s the user is in; null when they are not. */
+  #sharedChatTitle(id: string, ownerUid: string): string | null {
+    const [row] = this.ctx.storage.sql.exec<{ title: string }>("SELECT title FROM shared_chats WHERE id = ? AND owner_uid = ?", id, ownerUid).toArray();
+    return row?.title ?? null;
   }
 
   /** Delete one of the user's skills. Built-in ones can only be turned off. */

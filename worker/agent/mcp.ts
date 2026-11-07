@@ -106,7 +106,7 @@ export function mcpExtension(
             }
             return {
               output: text(shown ?? clip(full)),
-              ...(items.length && { details: { items } satisfies McpResultDetails }),
+              details: { server, ...(items.length && { items }) } satisfies McpResultDetails,
             };
           },
         }),

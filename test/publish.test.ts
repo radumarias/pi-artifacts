@@ -8,15 +8,18 @@ import {
   MAX_FAILED_CHECKS,
   publishDraft,
   checkDraft,
+  reviewedRefusal,
   writeDraft,
   type PublishScope,
+  type SessionRules,
 } from "../worker/agent/publish.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../worker/artifacts/browser.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
 import type { ArtifactStore } from "../worker/storage/artifacts.ts";
 import { ChatDrafts, draftId } from "../worker/storage/drafts.ts";
-import { FakeBucket } from "./fakes.ts";
+import { ChatRoster } from "../worker/agents/roster.ts";
+import { FakeBucket, memorySql } from "./fakes.ts";
 
 const artifact = (id: string, title: string, updatedAt: number) => ({ id, title, chatId: "c", latest: 1, updatedAt });
 
@@ -173,6 +176,86 @@ describe("write, check, publish", () => {
     expect(looks).toBe(1);
     await publishDraft(scope, { title: "Prices", draftId: id });
     expect(versions).toEqual([{ id: undefined, html: fixed }]);
+  });
+});
+
+describe("publishing from a conversation apart from the chat", () => {
+  const ok = () => report([]);
+  /** A chat that has "Salaries" (s1, a fork's page not the chat's yet) and "Week" (w1, the chat's), and the rules of `session`. */
+  function apart(rules: (session: string) => Partial<SessionRules>) {
+    const made = chat(ok);
+    const published: { id: string; session?: string }[] = [];
+    made.scope.chatArtifacts = async () => [artifact("s1", "Salaries", 2), artifact("w1", "Week", 1)];
+    made.scope.onPublished = async (meta, _chatId, session) => void published.push({ id: meta.id, ...(session !== undefined && { session }) });
+    made.scope.rulesFor = async (session) => ({
+      hidden: new Set(["s1"]),
+      hiddenVersion: () => false,
+      own: new Set(),
+      reviewed: false,
+      chatFile: () => true,
+      hiddenDraft: () => false,
+      ...rules(session),
+    });
+    const publish = async (target: { title: string; artifactId?: string; newArtifact?: boolean }, session: string) => {
+      const draft = await writeDraft(made.scope, { html: `<p>${target.title} ${Math.random()}</p>` });
+      await checkDraft(made.scope, draft.id, {});
+      return publishDraft(made.scope, { ...target, draftId: draft.id }, undefined, session);
+    };
+    return { ...made, published, publish };
+  }
+
+  it("never takes over a page another conversation apart from the chat made: not by its title, nor by its id", async () => {
+    const { publish, versions, published } = apart(() => ({}));
+    // pi in the shared session publishes a page with the hidden page's title: a new page, not its next version.
+    expect((await publish({ title: "Salaries" }, "1")).meta.id).toBe("new0000000000001");
+    await expect(publish({ title: "Anything", artifactId: "s1" }, "1")).rejects.toThrow("no artifact s1 in this chat");
+    // The chat's own pages go by title as before, and each publish says which conversation it came from.
+    expect((await publish({ title: "week" }, "1")).meta.id).toBe("w1");
+    expect(versions.map((version) => version.id)).toEqual([undefined, "w1"]);
+    expect(published).toEqual([
+      { id: "new0000000000001", session: "1" },
+      { id: "w1", session: "1" },
+    ]);
+  });
+
+  it("lets the fork that made a page build on it, and a reviewed one change no page the chat already has", async () => {
+    const { publish } = apart((session) => (session === "fork" ? { hidden: new Set(), own: new Set(["s1"]), reviewed: true } : {}));
+    expect((await publish({ title: "Salaries" }, "fork")).meta.id).toBe("s1");
+    await expect(publish({ title: "Week" }, "fork")).rejects.toThrow(reviewedRefusal("page"));
+    await expect(publish({ title: "Other", artifactId: "w1" }, "fork")).rejects.toThrow(reviewedRefusal("page"));
+    // A new page it may make: hidden until its reply is posted.
+    expect((await publish({ title: "Week", newArtifact: true }, "fork")).meta.id).toBe("new0000000000001");
+  });
+
+  it("keeps the drafts a conversation apart saved from every other one: none edited from, checked or published", async () => {
+    // "fork" runs apart with its reply not posted (turn 1); "1" is the chat's own conversation. The roster keeps whose
+    // each draft is, as the chat object's does.
+    const roster = new ChatRoster(memorySql(), () => 0);
+    roster.setApart("fork", false, -1, 1);
+    const { scope, versions } = apart((session) => ({ hiddenDraft: (id) => roster.withheldDrafts(session).has(id) }));
+    scope.onDrafted = (session, id) => roster.recordDraft(session, id);
+    const secret = await writeDraft(scope, { html: "<p>salaries</p>", session: "fork" });
+    await checkDraft(scope, secret.id, {}, undefined, "fork");
+    const shared = await writeDraft(scope, { html: "<p>week</p>", session: "1" });
+    // The chat's conversation reads none of it: no edits from it, no check, no publish, whatever its id.
+    const hidden = `No draft "${secret.id}"`;
+    await expect(writeDraft(scope, { draftId: secret.id, edits: [], session: "1" })).rejects.toThrow(hidden);
+    await expect(checkDraft(scope, secret.id, {}, undefined, "1")).rejects.toThrow(hidden);
+    await expect(publishDraft(scope, { title: "Pay", draftId: secret.id }, undefined, "1")).rejects.toThrow(hidden);
+    expect(versions).toEqual([]);
+    // The fork goes on from its own draft, and the chat's from its own.
+    const edited = await writeDraft(scope, { draftId: secret.id, edits: [{ old: "salaries", new: "pay" }], session: "fork" });
+    expect(roster.withheldDrafts("1")).toEqual(new Set([secret.id, edited.id]));
+    await checkDraft(scope, shared.id, {}, undefined, "1");
+    expect((await publishDraft(scope, { title: "Week", draftId: shared.id }, undefined, "1")).meta.id).toBe("w1");
+    // The same page saved from the chat's conversation too is the chat's: both had it.
+    await writeDraft(scope, { html: "<p>salaries</p>", session: "1" });
+    expect(roster.withheldDrafts("1")).toEqual(new Set([edited.id]));
+    // And one the chat had first stays the chat's when a conversation apart saves the same page later.
+    const month = await writeDraft(scope, { html: "<p>month</p>", session: "1" });
+    await writeDraft(scope, { html: "<p>month</p>", session: "fork" });
+    expect(roster.withheldDrafts("1")).toEqual(new Set([edited.id]));
+    await checkDraft(scope, month.id, {}, undefined, "1");
   });
 });
 

@@ -30,6 +30,8 @@ export interface NotesDirectory {
 /**
  * An agent of the chat's roster, by the session a call comes from, with whether its turn now is its owner's. `run`: the
  * session is one of its runs' (an item's, a reply's, a page rebuild's), whose report may go to chats others are in.
+ * `room`: the session is a seat's, this object's owner's agent in someone else's chat (worker/agents/seats/): it reads
+ * as that chat's audience, its kind as the room last gave it (null when no turn of it runs now) and never alone.
  */
 export interface MemoryAgent {
   agentId: string;
@@ -37,7 +39,19 @@ export interface MemoryAgent {
   name: string;
   byOwner: boolean;
   run?: true;
+  room?: { chatId: string; kind: ChatKind | null };
 }
+
+/**
+ * Whose a conversation is: an agent's, pi's (null), or nobody's the chat knows (undefined: a fork whose turn ended, a
+ * seat that left). Only pi's own conversation is pi's: one nobody knows reads and saves nothing, never as pi.
+ */
+export type Whose = MemoryAgent | null | undefined;
+
+/** What a seat's section says when its owner's directory reads and saves nothing there: the chat is not theirs. */
+export const ROOM_SECTION = "This is another person's chat: no memory notes of your owner's are read or saved in it.";
+/** What the section of a conversation nobody knows says (Whose). */
+export const UNKNOWN_SECTION = "No memory notes are read or saved in this conversation.";
 
 /** What ChatMemory needs of the chat object it runs in. */
 export interface ChatMemoryDeps {
@@ -46,8 +60,8 @@ export interface ChatMemoryDeps {
   kind(): ChatKind;
   /** Nobody but the owner is in the chat. */
   alone(): boolean;
-  /** The roster's agent whose conversation `conversation` is; null for pi's. */
-  agentFor(conversation: string): MemoryAgent | null;
+  /** The agent whose conversation `conversation` is; null for pi's, undefined for a session nobody knows (Whose). */
+  agentFor(conversation: string): Whose;
   /** pi's running turn answers only the owner's own messages (runAskedByOwner over its log). */
   piByOwner(): Promise<boolean>;
   /**
@@ -103,8 +117,8 @@ const MAX_SHOWN = 1_000;
 
 /** A conversation's section as its turn started: its text, and the notes it holds. */
 type Section = { text: string; ids: string[] };
-/** A conversation as the memos key it (PI, or its session), and its agent (null for pi's). */
-type Who = { key: string; agent: MemoryAgent | null };
+/** A conversation as the memos key it (PI, or its session), and whose it is. */
+type Who = { key: string; agent: Whose };
 
 /**
  * The memory notes of one chat: who reads and who saves them for each conversation in it (pi's, and each agent's
@@ -136,31 +150,38 @@ export class ChatMemory {
 
   #who(conversation: string): Who {
     const agent = this.#deps.agentFor(conversation);
-    return { key: agent ? conversation : PI, agent };
+    return { key: agent === null ? PI : conversation, agent };
   }
 
-  /** The chat's kind and whether anyone else is in it: a section read under another is not used. */
-  #audience(): string {
-    return `${this.#deps.kind()}:${this.#deps.alone()}`;
+  /** Who reads what `agent`'s conversation says (#reader): a section read for another audience is not used. */
+  #audience(agent: Whose): string {
+    const { chatId, kinds, alone } = this.#reader(agent);
+    return `${chatId}:${kinds.join()}:${alone}`;
   }
 
-  #reader(agent: MemoryAgent | null): MemoryReader {
+  /**
+   * A seat's session reads as its room: that chat's kind, with other people in it, never this object's. One nobody
+   * knows reads as a chat of no known kind, so nothing.
+   */
+  #reader(agent: Whose): MemoryReader {
+    if (agent === undefined) return { chatId: this.#deps.chatId, kinds: [null], alone: false };
+    const room = agent?.room;
     return {
-      chatId: this.#deps.chatId,
-      kinds: [this.#deps.kind()],
-      alone: this.#deps.alone() && !agent?.run,
+      chatId: room ? room.chatId : this.#deps.chatId,
+      kinds: [room ? room.kind : this.#deps.kind()],
+      alone: !room && this.#deps.alone() && !agent?.run,
       ...(agent && { agentId: agent.agentId }),
     };
   }
 
-  async #writer(agent: MemoryAgent | null): Promise<MemoryWriter> {
+  async #writer(agent: Whose): Promise<MemoryWriter> {
     const reader = this.#reader(agent);
-    const byOwner = agent ? agent.byOwner : reader.alone && (await this.#deps.piByOwner().catch(() => false));
+    const byOwner = agent ? agent.byOwner : agent === null && reader.alone && (await this.#deps.piByOwner().catch(() => false));
     return { ...reader, byOwner, learnedBy: agent ? agent.name : AGENT_NAME };
   }
 
   /** Whose notes a conversation reads: its agent's owner's, and pi's owner's (the chat's). */
-  #directory(agent: MemoryAgent | null): NotesDirectory {
+  #directory(agent: Whose): NotesDirectory {
     return this.#deps.directory(agent?.ownerUid ?? this.#deps.ownerUid);
   }
 
@@ -230,7 +251,7 @@ export class ChatMemory {
   /** Read `who`'s section, kept for its turn. Not while a request is prepared (see #section): the next refresh does it. */
   #refresh(who: Who): Promise<Section> {
     const section = this.#read(who.key, who.agent);
-    this.#sections.set(who.key, { audience: this.#audience(), section });
+    this.#sections.set(who.key, { audience: this.#audience(who.agent), section });
     return section;
   }
 
@@ -253,14 +274,14 @@ export class ChatMemory {
    * the owner's own notes and they no longer do: someone joined meanwhile, and a fresh start may have read the context
    * already, so it would never leave them out. They read no more than the first reader, so once is enough.
    */
-  async #readNow<T>(agent: MemoryAgent | null, read: (reader: MemoryReader) => T | Promise<T>): Promise<{ reader: MemoryReader; found: T }> {
+  async #readNow<T>(agent: Whose, read: (reader: MemoryReader) => T | Promise<T>): Promise<{ reader: MemoryReader; found: T }> {
     const reader = this.#reader(agent);
     const found = await read(reader);
     const now = this.#reader(agent);
     return readsOwnNotes(reader) && !readsOwnNotes(now) ? { reader: now, found: await read(now) } : { reader, found };
   }
 
-  async #read(key: string, agent: MemoryAgent | null): Promise<Section> {
+  async #read(key: string, agent: Whose): Promise<Section> {
     const directory = this.#directory(agent);
     try {
       const {
@@ -269,7 +290,8 @@ export class ChatMemory {
       } = await this.#readNow(agent, (reader) => directory.readNotes(reader));
       // Off the record as the owner's directory knows it (its sidebar's kind, or a chat not theirs): say so, as the
       // tools refuse there.
-      if (off) return { text: memorySection({ kinds: ["off_record"] }, []), ids: [] };
+      if (off)
+        return { text: agent === undefined ? UNKNOWN_SECTION : agent?.room ? ROOM_SECTION : memorySection({ kinds: ["off_record"] }, []), ids: [] };
       if (notes.some((note) => note.scope === "user")) this.#markOwn(key);
       const shown = new Set(this.#deps.kv.get<string[]>(SHOWN_KEY + key) ?? []);
       const ids = notes.map((note) => note.id);
@@ -289,7 +311,7 @@ export class ChatMemory {
   /** `who`'s section as it is kept, or read again when the chat's audience changed since. */
   #section(who: Who): Promise<Section> {
     const kept = this.#sections.get(who.key);
-    return kept && kept.audience === this.#audience() ? kept.section : this.#refresh(who);
+    return kept && kept.audience === this.#audience(who.agent) ? kept.section : this.#refresh(who);
   }
 
   /** What the memory tools and section run on (worker/memory/tools.ts). */

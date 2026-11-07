@@ -55,6 +55,22 @@ export function piPicks(state: { calling: boolean; underBudget: boolean; handedO
   return state.calling && state.underBudget && !state.handedOn;
 }
 
+/**
+ * The roster's agents the router may pick for `author`'s message: those that are on, of the chat's owner or of the
+ * author, and another member's only when that member lets it speak unasked (AgentDefinition.speaksUp, read from their
+ * directory by `speaksUp`): its turns run on that member's account. One whose definition cannot be read is left out.
+ */
+export async function routableAgents<E extends { agentId: string; ownerUid: string; off: boolean }>(
+  roster: readonly E[],
+  chatOwner: string,
+  author: string,
+  speaksUp: (entry: E) => Promise<boolean>,
+): Promise<E[]> {
+  const on = roster.filter((entry) => !entry.off);
+  const may = await Promise.all(on.map((entry) => entry.ownerUid === chatOwner || entry.ownerUid === author || speaksUp(entry).catch(() => false)));
+  return on.filter((_, i) => may[i]);
+}
+
 /** An agent of the chat's roster, as the router reads it. */
 export interface RoutableAgent {
   id: string;

@@ -17,12 +17,24 @@ export interface DumpKv {
 
 /**
  * What of a chat object's storage an export carries: its conversation (pi's tables, `pi_…`), its reactions, its
- * owner's name and its agents' roster (their sessions are pi's). Not its members and invites: they are people of the
+ * owner's name, its agents' roster (their sessions are pi's), and which of their forks' pages and files are not the
+ * chat's (chat_agent_forks: their replies were never posted, so they stay out of what members see), with the versions they
+ * published, the files and drafts they saved (chat_agent_fork_pages, chat_agent_fork_files, chat_agent_fork_drafts), and which turns' entries of a
+ * session later turns ran in again are not (chat_agent_apart_windows). Not its members and invites: they are people of the
  * deployment it was made on, whose ids mean nothing on another, so an imported chat starts with nobody in it but its
  * owner. Nor the Lifecycle's jobs (`cf_agents_…`), nor the agents' turns (chat_agent_turns): work still to do, which
  * would run as the importer, unasked.
  */
-const APP_TABLES = ["chat_reactions", "chat_owner", "chat_agents"];
+const APP_TABLES = [
+  "chat_reactions",
+  "chat_owner",
+  "chat_agents",
+  "chat_agent_forks",
+  "chat_agent_fork_pages",
+  "chat_agent_fork_files",
+  "chat_agent_fork_drafts",
+  "chat_agent_apart_windows",
+];
 const PI_TABLE = /^pi_[a-z0-9_]+$/;
 const isCarried = (table: string) => PI_TABLE.test(table) || APP_TABLES.includes(table);
 
@@ -81,7 +93,9 @@ export function dumpChat(
     part.tables.push(entry);
     const filter = FINISHED[name] ? ` AND ${FINISHED[name]}` : "";
     for (;;) {
-      const rows = sql.exec(`SELECT rowid AS ${ROWID}, * FROM "${name}" WHERE rowid > ?${filter} ORDER BY rowid LIMIT ${ROWS_AT_ONCE}`, after).toArray();
+      const rows = sql
+        .exec(`SELECT rowid AS ${ROWID}, * FROM "${name}" WHERE rowid > ?${filter} ORDER BY rowid LIMIT ${ROWS_AT_ONCE}`, after)
+        .toArray();
       for (const row of rows) {
         after = Number(row[ROWID]);
         const cells: SqlRow = {};
@@ -151,7 +165,10 @@ export function restorePart(sql: DumpSql, kv: DumpKv, kvKeys: readonly string[],
       const unknown = names.find((column) => !columns.has(column));
       if (unknown !== undefined || !names.length) throw new DumpError(`${name} has no column ${JSON.stringify(unknown ?? "")}.`);
       const values = names.map((column) => fromCell(row[column], remap));
-      sql.exec(`INSERT OR REPLACE INTO "${name}" (${names.map((column) => `"${column}"`).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`, ...values);
+      sql.exec(
+        `INSERT OR REPLACE INTO "${name}" (${names.map((column) => `"${column}"`).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`,
+        ...values,
+      );
     }
     if (FINISHED[name]) sql.exec(`DELETE FROM "${name}" WHERE NOT (${FINISHED[name]})`);
   }
@@ -199,6 +216,8 @@ export function importedRoster(sql: DumpSql, uid: string, kept: readonly string[
   const has = (table: string) => sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length > 0;
   if (!has("chat_agents")) return { agents: [], through: -1 };
   sql.exec("DELETE FROM chat_agents WHERE agent_id NOT IN (SELECT value FROM json_each(?))", JSON.stringify(kept));
+  // A member's agent ran in its owner's object, who is not in the new chat.
+  if (tableColumns(sql, "chat_agents").has("seat")) sql.exec("DELETE FROM chat_agents WHERE seat IS NOT NULL");
   sql.exec("UPDATE chat_agents SET owner_uid = ?, shared = 0", uid);
   const agents = sql
     .exec("SELECT agent_id FROM chat_agents ORDER BY agent_id")
