@@ -46,3 +46,8 @@ export function mcpServers(env: { MCP_SERVERS?: unknown }): McpServerConfig[] {
 export function oauthServers(env: { MCP_SERVERS?: unknown }): McpServerConfig[] {
   return mcpServers(env).filter((server) => server.auth === "oauth");
 }
+
+/** Their names. */
+export function oauthServerNames(env: { MCP_SERVERS?: unknown }): string[] {
+  return oauthServers(env).map((server) => server.name);
+}

@@ -12,8 +12,8 @@ import { nextRunAt } from "./schedule.ts";
 import { sourceName } from "./source.ts";
 import type { Sql } from "../../members.ts";
 
-/** What a run's alarm carries (`attempt`: from alarms set before retries became plain re-arms, and ignored). */
-export type RunAlarm = { agentId: string; dueAt: number; attempt?: number };
+/** What a run's alarm carries. */
+export type RunAlarm = { agentId: string; dueAt: number };
 /** What a watch's interval carries. */
 export type WatchAlarm = { agentId: string };
 
@@ -45,7 +45,7 @@ export interface RunnerHost extends RunHost {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-type ScheduleRow = { agent_id: string; kind: string; key: string; schedule_id: string | null; due_at: number | null; version: number | null };
+type ScheduleRow = { agent_id: string; kind: string; key: string; schedule_id: string | null; due_at: number | null };
 
 /** How a trigger is set, as a key: a definition saved with the same trigger keeps its alarm. */
 function triggerKey(agent: AgentDefinition): string {
@@ -89,11 +89,8 @@ export class AgentRunner {
         agent_id TEXT PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL, schedule_id TEXT, due_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS agent_watch_last (agent_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS agent_versions (agent_id TEXT PRIMARY KEY, version INTEGER NOT NULL);
     `);
-    // Added later: the definition version a row was set from, so an older one read late does not set it back.
-    if (!sql.exec("SELECT 1 FROM pragma_table_info('agent_schedules') WHERE name = 'version'").toArray().length) {
-      sql.exec("ALTER TABLE agent_schedules ADD COLUMN version INTEGER");
-    }
   }
 
   #one<T>(work: () => Promise<T>): Promise<T> {
@@ -120,17 +117,28 @@ export class AgentRunner {
     return this.#one(() => this.#apply(agentId, agent));
   }
 
+  /**
+   * Whether to act on `agent` as the definition of `agentId`: not when it is older than one acted on before (two saves,
+   * their notices out of order, or a read that came late). Remembers the newest; a deleted agent (null) is forgotten.
+   * Everything that acts on a definition (apply, the home chat's agentChanged) asks this first.
+   */
+  accepts(agentId: string, agent: AgentDefinition | null): boolean {
+    if (!agent) {
+      this.#sql.exec("DELETE FROM agent_versions WHERE agent_id = ?", agentId);
+      return true;
+    }
+    const known = this.#sql.exec("SELECT version FROM agent_versions WHERE agent_id = ?", agentId).toArray()[0] as { version: number } | undefined;
+    if (known && agent.version < known.version) return false;
+    if (known?.version !== agent.version) this.#sql.exec("INSERT OR REPLACE INTO agent_versions (agent_id, version) VALUES (?, ?)", agentId, agent.version);
+    return true;
+  }
+
   async #apply(agentId: string, agent: AgentDefinition | null, after = this.#host.runs.now()): Promise<void> {
+    if (!this.accepts(agentId, agent)) return;
     const row = this.#row(agentId);
-    // A definition read before the one this row was set from (two saves, their notices out of order) changes nothing.
-    if (agent && row?.version != null && agent.version < row.version) return;
     const wanted = agent?.enabled && agent.trigger ? agent : null;
     const key = wanted ? triggerKey(wanted) : "";
-    if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) {
-      // The same alarm, from a newer definition: remembered, so one read before this one does not set it back either.
-      if (wanted.version > (row.version ?? -Infinity)) this.#sql.exec("UPDATE agent_schedules SET version = ? WHERE agent_id = ?", wanted.version, agentId);
-      return;
-    }
+    if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) return;
     if (row) await this.#clear(row);
     if (!wanted) return;
     const trigger = wanted.trigger!;
@@ -138,24 +146,23 @@ export class AgentRunner {
       const dueAt = nextRunAt(trigger, after);
       if (dueAt === null) return;
       const id = await this.#host.alarmAt(dueAt, { agentId, dueAt });
-      this.#setRow({ agent_id: agentId, kind: "schedule", key, schedule_id: id, due_at: dueAt, version: wanted.version });
+      this.#setRow({ agent_id: agentId, kind: "schedule", key, schedule_id: id, due_at: dueAt });
       return;
     }
     let id: string | null = null;
     if (this.#host.sharedWatch(trigger.step)) await this.#host.subscribe(agentId, trigger.step, trigger.everyMinutes);
     else id = await this.#host.alarmEvery(trigger.everyMinutes * 60, { agentId });
-    this.#setRow({ agent_id: agentId, kind: "watch", key, schedule_id: id, due_at: null, version: wanted.version });
+    this.#setRow({ agent_id: agentId, kind: "watch", key, schedule_id: id, due_at: null });
   }
 
   #setRow(row: ScheduleRow): void {
     this.#sql.exec(
-      "INSERT OR REPLACE INTO agent_schedules (agent_id, kind, key, schedule_id, due_at, version) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO agent_schedules (agent_id, kind, key, schedule_id, due_at) VALUES (?, ?, ?, ?, ?)",
       row.agent_id,
       row.kind,
       row.key,
       row.schedule_id,
       row.due_at,
-      row.version,
     );
   }
 
@@ -189,8 +196,10 @@ export class AgentRunner {
    * read or a reset before the next run is set tries it again; setting the next run replaces that alarm.
    */
   async fired({ agentId, dueAt }: RunAlarm): Promise<RunEnd | null> {
+    const reading = this.#host.definition(agentId);
+    reading.catch(() => {}); // awaited below, once the retry is armed
     await this.#one(() => this.#retry(agentId, dueAt));
-    const agent = await this.#host.definition(agentId);
+    const agent = await reading;
     const due = await this.#one(async () => {
       const row = this.#row(agentId);
       const current = agent?.enabled && agent.trigger?.kind === "schedule" && row?.kind === "schedule" && row.key === triggerKey(agent);
@@ -220,9 +229,9 @@ export class AgentRunner {
     if (armed !== null && armed > now) return;
     const next = nextRunAt(JSON.parse(row.key) as Extract<AgentTrigger, { kind: "schedule" }>, Math.max(dueAt, now));
     const again = next === null || now + RETRY_MS < next;
-    const at = again ? now + RETRY_MS : next;
-    const id = await this.#host.alarmAt(at, { agentId, dueAt: again ? dueAt : next });
-    this.#sql.exec("UPDATE agent_schedules SET schedule_id = ?, due_at = ? WHERE agent_id = ?", id, again ? dueAt : next, agentId);
+    const due = again ? dueAt : next;
+    const id = await this.#host.alarmAt(again ? now + RETRY_MS : next, { agentId, dueAt: due });
+    this.#sql.exec("UPDATE agent_schedules SET schedule_id = ?, due_at = ? WHERE agent_id = ?", id, due, agentId);
   }
 
   /** A watch's interval came: read it, and run when its value moved and its condition holds. */
@@ -289,16 +298,17 @@ export class AgentRunner {
       return null;
     }
     if (!fires) return null;
-    const run = this.executor.start({ agent, dueAt: now, why: "watch", watch: value, ...(previous !== undefined && { previous }) });
-    if (!detach) return run;
-    // The run's row is stored before start returns (runs.begin comes before the run's first await).
-    if (this.#host.runs.get(agent.id, now)) {
-      this.#host.waitUntil(run);
-      return null;
+    const start: RunStart = { agent, dueAt: now, why: "watch", watch: value, ...(previous !== undefined && { previous }) };
+    if (!detach) return this.executor.start(start);
+    try {
+      // start stores the run's row before it returns, or throws.
+      this.#host.waitUntil(this.executor.start(start));
+    } catch (error) {
+      if (last) this.#sql.exec("UPDATE agent_watch_last SET fingerprint = ?, at = ? WHERE agent_id = ?", last.fingerprint, last.at, agent.id);
+      else this.#sql.exec("DELETE FROM agent_watch_last WHERE agent_id = ?", agent.id);
+      throw error;
     }
-    if (last) this.#sql.exec("UPDATE agent_watch_last SET fingerprint = ?, at = ? WHERE agent_id = ?", last.fingerprint, last.at, agent.id);
-    else this.#sql.exec("DELETE FROM agent_watch_last WHERE agent_id = ?", agent.id);
-    return run;
+    return null;
   }
 
   /**

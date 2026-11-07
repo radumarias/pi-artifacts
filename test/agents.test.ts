@@ -18,8 +18,10 @@ import {
   defaultColor,
   isDraftAgent,
   isTimeZone,
+  runServers,
   speakerLabel,
   type AgentDefinition,
+  type AgentStep,
 } from "../shared/agents.ts";
 import { AGENT_NAME, calledNames, summonsAgent } from "../shared/mentions.ts";
 
@@ -616,5 +618,14 @@ describe("speakerLabel", () => {
     expect(speakerLabel({ name: "research", kind: "agent" })).toBe("[research · agent]");
     expect(speakerLabel({ name: "Ana", kind: "person", owner: true })).toBe("[Ana · person · your owner]");
     expect(speakerLabel({ name: "Ana", kind: "person", owner: false })).toBe("[Ana · person]");
+  });
+
+  it("names the sign-in servers a run's work step may use, also for instructions run as one", () => {
+    const look: AgentStep = { kind: "look", server: "crm", tool: "weekly", input: {} };
+    const tell: AgentStep = { kind: "tell", to: ["owner"], via: "chat" };
+    expect(runServers({ servers: ["crm", "calendar"], workflow: [look, { kind: "work", prompt: "Sum up." }, tell] }, ["calendar", "mail"])).toEqual(["crm", "calendar"]);
+    expect(runServers({ servers: ["crm", "calendar"], workflow: [look, tell] }, ["calendar"])).toEqual(["crm"]);
+    // No workflow: its instructions run as one work step, whose tools may come from any of its servers.
+    expect(runServers({}, ["calendar"])).toEqual(["calendar"]);
   });
 });

@@ -73,7 +73,7 @@ export async function publishRebuilt(
   try {
     const drafts = await scope.drafts();
     const declared = canonicalJson(seed.manifest.mcp ?? null);
-    for (const id of [...new Set(written)].reverse()) {
+    for (const id of [...written].reverse()) {
       if (id === seed.id) continue;
       const draft = await drafts.get(id);
       if (!draft || draft.artifactId !== meta.id || !(passed(draft) || (draft.errors === null && scope.publishUnchecked))) continue;

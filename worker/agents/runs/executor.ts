@@ -6,6 +6,7 @@
 
 import {
   AUTONOMY_LABELS,
+  workflowOf,
   mayUseServer,
   runServers,
   serversNamed,
@@ -109,15 +110,6 @@ export interface RunStart {
   watch?: Value;
   /** The watch's result before that one, when it was kept: its steps read it as `previous`. */
   previous?: Value;
-}
-
-/** The workflow a definition runs: its own, else its instructions as one work step reported to its home chat. */
-function workflowOf(agent: Pick<AgentDefinition, "workflow" | "instructions">): AgentStep[] {
-  if (agent.workflow?.length) return agent.workflow;
-  return [
-    { kind: "work", prompt: "Do what your instructions say, for this run." },
-    { kind: "tell", to: ["owner"], via: "chat" },
-  ];
 }
 
 /** The name a look step's result goes by: its `as`, else its tool's name as a name. */
@@ -252,21 +244,23 @@ export class RunExecutor {
     const key = `${start.agent.id}:${start.dueAt}`;
     const going = this.#active.get(key);
     if (going) return going.then((end) => ({ ...end, started: false }));
-    const run = this.#run(start).finally(() => this.#active.delete(key));
+    // The run's row is stored before start returns, or start throws: a caller told only that much (a Source) can count on it.
+    const { agent, dueAt, why, test = false, watch, previous } = start;
+    const begun = this.#host.runs.begin(agent.id, dueAt, why, test, {
+      when: whenOf(agent),
+      ...(watch !== undefined && { watch }),
+      ...(previous !== undefined && { previous }),
+      used: { skills: skillsNamed(workflowOf(agent)), servers: serversNamed(agent, { reads: true }), models: [] },
+    });
+    const run = this.#run(agent, begun).finally(() => this.#active.delete(key));
     this.#active.set(key, run);
     return run;
   }
 
-  async #run({ agent, dueAt, why, test = false, watch, previous }: RunStart): Promise<RunEnd> {
+  async #run(agent: AgentDefinition, { run, started }: { run: RunRecord; started: boolean }): Promise<RunEnd> {
     const runs = this.#host.runs;
+    const { dueAt } = run;
     const when = whenOf(agent);
-    const reads = serversNamed(agent, { reads: true });
-    const { run, started } = runs.begin(agent.id, dueAt, why, test, {
-      when,
-      ...(watch !== undefined && { watch }),
-      ...(previous !== undefined && { previous }),
-      used: { skills: skillsNamed(workflowOf(agent)), servers: reads, models: [] },
-    });
     // Ended, or waiting for a sign-in that has not come: an alarm that fires twice sends once.
     if (!started && run.status !== "running") return { status: run.status, started: false };
     this.#host.changed(agent.id);
