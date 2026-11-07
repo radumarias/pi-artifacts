@@ -276,6 +276,9 @@ type PiScan = { through: number; chain?: { hop: number; root: number } };
 const HOME_AGENT_KEY = "homeAgent";
 /** Set while the home agent is on with a trigger: only then can its alarms have gone missing (#reconcileHome). */
 const HOME_RUNS_KEY = "homeRuns";
+/** The interval that wakes this object while a run is going, so a run cut off by a reset goes on soon (#keepResuming). */
+const RESUME_KEY = "runsResume";
+const RESUME_SECONDS = 90;
 /** A run's reads reuse results this young: a run wants today's numbers, and its items often read the same. */
 const RUN_STALE_MS = 60_000;
 /** Who a run's tell step names for its owner's own conversation. */
@@ -406,6 +409,11 @@ export class ChatAgent extends DurableObject<Env> {
     callbacks: {
       run: (payload: RunAlarm) => this.#onAlarm(() => this.runner.fired(payload)),
       watch: (payload: WatchAlarm) => this.#onAlarm(() => this.runner.watchTick(payload)),
+      // The wake itself resumes them (onStart); awake already, the runs still going are left as they are.
+      resume: () => {
+        this.runner.resume();
+        this.#keepResuming();
+      },
     },
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.sockets).use(this.scheduler);
@@ -547,6 +555,7 @@ export class ChatAgent extends DurableObject<Env> {
     // The agents' turns that were running, or waiting, go on: cheap when there are none. So do runs cut off.
     this.turns.resume();
     this.runner.resume();
+    this.#keepResuming();
     this.#reconcileHome();
     // An answer pi gave before the restart may not have been read for the agents it names, even once its run ended.
     this.#scanPi();
@@ -2768,6 +2777,31 @@ export class ChatAgent extends DurableObject<Env> {
     this.ctx.waitUntil(this.runner.reconcile(id).catch((error: unknown) => console.error("agent alarm:", errorMessage(error))));
   }
 
+  #resuming: Promise<void> = Promise.resolve();
+
+  /**
+   * While a run is going, an interval wakes this object every RESUME_SECONDS: the one-shot that started the run has
+   * completed, so after a reset (a deploy mid-run) nothing else would wake it until the next run's alarm, and onStart's
+   * runner.resume picks the run up. Taken down once no run is going. The interval is idempotent, as is this.
+   */
+  #keepResuming(): void {
+    if (this.#gone) return;
+    this.#resuming = this.#resuming
+      .then(async () => {
+        const going = this.runs.unfinished().some((run) => run.status === "running");
+        const id = this.ctx.storage.kv.get<string>(RESUME_KEY);
+        if (going) {
+          if (id !== undefined && (await this.scheduler.get(id))) return;
+          this.ctx.storage.kv.put(RESUME_KEY, (await this.scheduler.every(RESUME_SECONDS, "resume")).id);
+        } else if (id !== undefined) {
+          await this.scheduler.cancel(id);
+          this.ctx.storage.kv.delete(RESUME_KEY);
+        }
+      })
+      .catch((error: unknown) => console.error("agent run wake:", errorMessage(error)));
+    this.ctx.waitUntil(this.#resuming);
+  }
+
   /**
    * A scheduler callback: its work goes on detached, so the job queue (pi's own wake jobs, a retry's backoff) is not held
    * while a run takes minutes; runner.resume picks up a run cut off by a restart. A failed run is the run's to record,
@@ -3026,7 +3060,10 @@ export class ChatAgent extends DurableObject<Env> {
       },
       deliver: (request) => this.#deliverRun(request),
       // Over the owner's sidebar socket: the Runs tab is a page of its own, with no chat socket open.
-      changed: (agentId) => this.ctx.waitUntil(this.#directory.runsChanged(agentId)),
+      changed: (agentId) => {
+        this.ctx.waitUntil(this.#directory.runsChanged(agentId));
+        this.#keepResuming();
+      },
       alarmAt: async (at, payload) => (await this.scheduler.set(new Date(at), "run", payload)).id,
       alarmEvery: async (seconds, payload) => (await this.scheduler.every(seconds, "watch", payload)).id,
       cancelAlarm: async (id) => {
