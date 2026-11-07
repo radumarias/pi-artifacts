@@ -384,6 +384,32 @@ describe("scheduled runs", () => {
     expect(host.askedQuietly).toEqual(["crm"]);
   });
 
+  it("acts at a late sign-in only on runs still waiting once it has read their agents", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    for (const at of [T0, T0 + 1]) {
+      host.clock.now = at;
+      await runner.now(definition.id, false);
+      await host.settled();
+    }
+    host.signIn.delete("crm");
+    host.endings.length = 0;
+    // While signedIn reads the agent, both waiting runs end another way (a newer run went, say).
+    const read = host.definition.bind(host);
+    host.definition = async (id) => {
+      host.runs.skipReplaced(definition.id, T0 + 2, false);
+      return read(id);
+    };
+    expect(await runner.signedIn("crm")).toBe(0);
+    await host.settled();
+    // Each ended once, by the skip; neither was ended again nor started.
+    expect(host.endings.sort()).toEqual([`${T0}:not_today`, `${T0 + 1}:not_today`]);
+    expect(host.delivered).toHaveLength(0);
+    // A row gone (pruned) is not made again by a restart.
+    expect(host.runs.restart(definition.id, T0 + 99)).toBe(false);
+    expect(host.runs.get(definition.id, T0 + 99)).toBeNull();
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {

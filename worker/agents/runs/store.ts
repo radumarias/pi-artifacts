@@ -216,21 +216,39 @@ export class AgentRuns {
   /** The agent's runs before `dueAt` still waiting for a sign-in: one at `dueAt` went, so they are skipped. */
   skipReplaced(agentId: string, dueAt: number, test: boolean): void {
     const where = "agent_id = ? AND due_at < ? AND item = '' AND test = ? AND status = 'needs_sign_in'";
-    for (const row of this.#rows(where, agentId, dueAt, test ? 1 : 0)) {
-      this.update(agentId, row.due_at, { status: "not_today", summary: "Skipped: a newer run went instead." });
-    }
+    for (const row of this.#rows(where, agentId, dueAt, test ? 1 : 0)) this.skipWaiting(agentId, row.due_at, "Skipped: a newer run went instead.");
   }
 
-  /** A run waiting for sign-in goes again: back to running, the servers it waited for forgotten. */
-  restart(agentId: string, dueAt: number): void {
+  /**
+   * End a run that still waits for a sign-in as skipped, saying why. False, and nothing changes, when it no longer waits
+   * (it went again, another skip ended it, or it was pruned): a list read before an await may be stale.
+   */
+  skipWaiting(agentId: string, dueAt: number, summary: string): boolean {
+    const changed =
+      this.#sql.exec(
+        "UPDATE agent_runs SET status = 'not_today', ended_at = ?, summary = ? WHERE agent_id = ? AND due_at = ? AND item = '' AND status = 'needs_sign_in'",
+        this.#now(),
+        summary,
+        agentId,
+        dueAt,
+      ).rowsWritten > 0;
+    const run = changed ? this.get(agentId, dueAt) : null;
+    if (run && !run.test) this.#onEnded?.(run);
+    return changed;
+  }
+
+  /** A run waiting for sign-in goes again: back to running, the servers it waited for forgotten. False when it no longer waits. */
+  restart(agentId: string, dueAt: number): boolean {
     const run = this.get(agentId, dueAt);
-    if (!run || run.status !== "needs_sign_in") return;
+    if (!run || run.status !== "needs_sign_in") return false;
     const { needsSignIn: _, ...detail } = run.detail;
-    this.#sql.exec(
-      "UPDATE agent_runs SET status = 'running', ended_at = NULL, summary = NULL, detail = ? WHERE agent_id = ? AND due_at = ? AND item = ''",
-      JSON.stringify(detail),
-      agentId,
-      dueAt,
+    return (
+      this.#sql.exec(
+        "UPDATE agent_runs SET status = 'running', ended_at = NULL, summary = NULL, detail = ? WHERE agent_id = ? AND due_at = ? AND item = '' AND status = 'needs_sign_in'",
+        JSON.stringify(detail),
+        agentId,
+        dueAt,
+      ).rowsWritten > 0
     );
   }
 
