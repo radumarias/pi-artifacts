@@ -31,8 +31,6 @@ export interface RunnerHost extends RunHost {
   cancelAlarm(id: string): Promise<void>;
   /** When a set alarm fires next (ms); null when it is no longer set (its job ran or was cancelled). */
   alarmTime(id: string): Promise<number | null>;
-  /** The owner's definition of an agent as it is now; null when it is gone. */
-  definition(agentId: string): Promise<AgentDefinition | null>;
   /**
    * Whether a watch's read can be shared with everyone watching the same call (a server whose results all viewers
    * share, and that does not sign in each user): it then goes through a Source object, which polls once for all.

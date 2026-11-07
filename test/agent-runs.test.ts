@@ -367,6 +367,23 @@ describe("scheduled runs", () => {
     expect(host.delivered).toHaveLength(0);
   });
 
+  it("does not wait, nor ask, for a sign-in when its agent was turned off while it went", async () => {
+    const { host, runner, definition } = home();
+    // Turned off during the sign-in check (its waiting runs were skipped then, before this one waited).
+    host.needsSignIn = async () => {
+      host.definitions.set(definition.id, { ...definition, version: 2, enabled: false });
+      return ["crm"];
+    };
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "not_today", summary: `Skipped: @${definition.name} was turned off.` });
+    expect(host.asked).toEqual([]);
+    // A test run still waits, quietly: it goes off or on as asked.
+    await runner.now(definition.id, true);
+    await host.settled();
+    expect(host.askedQuietly).toEqual(["crm"]);
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {

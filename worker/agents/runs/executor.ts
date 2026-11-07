@@ -90,6 +90,8 @@ export interface RunHost {
    * told (a notice, a push) unless `quiet` (a test run).
    */
   signInNeeded(agent: AgentDefinition, servers: readonly string[], quiet: boolean): void;
+  /** The owner's definition of an agent as it is now; null when it is gone. */
+  definition(agentId: string): Promise<AgentDefinition | null>;
   /** A fresh pi session for one item. */
   newSession(): Promise<string>;
   /** Set an item's session up for its work steps: the agent's model (or `model`), instructions and read tools. */
@@ -270,13 +272,13 @@ export class RunExecutor {
     this.#host.changed(agent.id);
     try {
       const missing = await this.#host.needsSignIn(runServers(agent, await this.#host.signInServers()));
-      if (missing.length) return this.#waitForSignIn(agent, run, missing);
+      if (missing.length) return await this.#waitForSignIn(agent, run, missing);
       const elements = await this.#elements(agent);
       const outcomes = await mapLimit(elements, RUN_CONCURRENCY, (element) => this.#item(agent, run, element, when));
       const status = await this.#finish(agent, runs.get(agent.id, dueAt)!, outcomes);
       return { status, started };
     } catch (error) {
-      if (error instanceof SignInNeeded) return this.#waitForSignIn(agent, run, [error.server]);
+      if (error instanceof SignInNeeded) return await this.#waitForSignIn(agent, run, [error.server]);
       runs.update(agent.id, dueAt, { status: "failed", summary: `Failed: ${errorMessage(error)}` });
       return { status: "failed", started };
     } finally {
@@ -284,7 +286,15 @@ export class RunExecutor {
     }
   }
 
-  #waitForSignIn(agent: AgentDefinition, run: RunRecord, servers: string[]): RunEnd {
+  async #waitForSignIn(agent: AgentDefinition, run: RunRecord, servers: string[]): Promise<RunEnd> {
+    // Turned off while it went (its waiting runs were skipped then, before this one waited): it does not wait, nor ask.
+    if (!run.test) {
+      const now = await this.#host.definition(agent.id).catch(() => agent);
+      if (!now?.enabled) {
+        this.#host.runs.update(run.agentId, run.dueAt, { status: "not_today", summary: `Skipped: @${agent.name} was turned off.` });
+        return { status: "not_today", started: true };
+      }
+    }
     // This chat hears when the owner signs in (AgentRunner.signedIn); they are asked to (a notice, a push), unless a test.
     this.#host.signInNeeded(agent, servers, run.test);
     this.#host.runs.update(run.agentId, run.dueAt, {
