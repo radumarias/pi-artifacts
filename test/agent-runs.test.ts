@@ -85,8 +85,10 @@ class FakeHome implements RunnerHost {
     return this.oauth;
   }
   readonly asked: string[] = [];
-  signInNeeded(_agent: AgentDefinition, servers: readonly string[]) {
-    this.asked.push(...servers);
+  /** Asked for a test run: recorded as waiting, nobody told. */
+  readonly askedQuietly: string[] = [];
+  signInNeeded(_agent: AgentDefinition, servers: readonly string[], quiet: boolean) {
+    (quiet ? this.askedQuietly : this.asked).push(...servers);
   }
   async newSession() {
     return `session-${++this.#sessions}`;
@@ -329,7 +331,21 @@ describe("scheduled runs", () => {
     ]);
   });
 
-  it("refuses writes and other people at Inform", async () => {
+  it("restarts a test run waiting for a sign-in, with nobody told", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, true);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "needs_sign_in", test: true });
+    expect(host.asked).toEqual([]);
+    expect(host.askedQuietly).toEqual(["crm"]);
+    host.signIn.delete("crm");
+    expect(await runner.signedIn("crm")).toBe(1);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "sent", test: true });
+  });
+
+    it("refuses writes and other people at Inform", async () => {
     const workflow: AgentStep[] = [{ kind: "do", server: "crm", tool: "update", input: {} }, { kind: "work", prompt: "Report." }];
     const { host, runner, definition } = home(agent({ workflow }));
     await runner.now(definition.id, false);

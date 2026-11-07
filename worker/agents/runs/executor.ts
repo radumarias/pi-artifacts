@@ -81,8 +81,11 @@ export interface RunHost {
   signInServers(): readonly string[];
   /** Which of these servers need their owner to sign in again before a run can read them. */
   needsSignIn(servers: readonly string[]): Promise<string[]>;
-  /** Ask the owner to sign in to these servers again, for `agent`'s run: they are told, and this chat when they do. */
-  signInNeeded(agent: AgentDefinition, servers: readonly string[]): void;
+  /**
+   * `agent`'s run waits for the owner to sign in to these servers again: this chat hears when they do, and they are
+   * told (a notice, a push) unless `quiet` (a test run).
+   */
+  signInNeeded(agent: AgentDefinition, servers: readonly string[], quiet: boolean): void;
   /** A fresh pi session for one item. */
   newSession(): Promise<string>;
   /** Set an item's session up for its work steps: the agent's model (or `model`), instructions and read tools. */
@@ -285,8 +288,8 @@ export class RunExecutor {
   }
 
   #waitForSignIn(agent: AgentDefinition, run: RunRecord, servers: string[]): RunEnd {
-    // The owner is asked to sign in (a notice, a push), and this chat hears when they do (AgentRunner.signedIn).
-    if (!run.test) this.#host.signInNeeded(agent, servers);
+    // This chat hears when the owner signs in (AgentRunner.signedIn); they are asked to (a notice, a push), unless a test.
+    this.#host.signInNeeded(agent, servers, run.test);
     this.#host.runs.update(run.agentId, run.dueAt, {
       status: "needs_sign_in",
       summary: `Waiting for you to sign in to ${servers.join(", ")}.`,

@@ -9,7 +9,7 @@ import { BUILTIN_SKILLS, builtinSkill, parseSkillFile } from "./skills/index.ts"
 import { titleFromMessage, UNNAMED_CHAT } from "./agent/title.ts";
 import type { McpAuthChange, McpAuthRecord, McpAuthStore } from "./mcp/oauth.ts";
 import type { SignInCheck } from "./mcp/background.ts";
-import { McpSignIns } from "./mcp/sign-ins.ts";
+import { McpSignIns, type SignInNeededContext } from "./mcp/sign-ins.ts";
 import { oauthServers } from "./mcp/servers.ts";
 import { chatAgentName } from "./chat-name.ts";
 import { PushSubscriptions, vapidKeys, type PushMessage } from "./push/subscriptions.ts";
@@ -193,7 +193,7 @@ export class UserDirectory extends DurableObject<Env> {
    * A run needs a new sign-in to `server`: a notice with the sign-in link in the sidebar, the browser, and a push when no
    * app is open, once until they sign in. With `chatId`, that chat hears `ChatAgent.signedIn(server)` when they do.
    */
-  notifySignInNeeded(server: string, context: { chatId?: string; what?: string } = {}): Promise<void> {
+  notifySignInNeeded(server: string, context: SignInNeededContext = {}): Promise<void> {
     return this.#signIns.needed(server, context);
   }
 

@@ -194,7 +194,17 @@ describe("sign-ins with nobody present", () => {
     expect(s.chats).toHaveLength(2);
   });
 
-  it("warns once per grant, a few days before it ends, only for servers runs use", async () => {
+  it("records a test run's chat as waiting without telling the user", async () => {
+    const s = setup();
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", quiet: true });
+    expect(s.told).toHaveLength(0);
+    expect(s.pushed).toHaveLength(0);
+    expect(s.signIns.list()[0]?.notice).toBeUndefined();
+    await signIn(s, T0 + DAY);
+    expect(s.chats).toEqual(["chat1:Portal"]);
+  });
+
+    it("warns once per grant, a few days before it ends, only for servers runs use", async () => {
     const s = setup();
     await signIn(s, T0);
     const grant = 30 * DAY;

@@ -3047,10 +3047,13 @@ export class ChatAgent extends DurableObject<Env> {
         const checked = await this.#directory.checkSignIns(servers);
         return servers.filter((server) => checked[server] === "needs_sign_in");
       },
-      signInNeeded: (agent, servers) => {
+      signInNeeded: (agent, servers, quiet) => {
         const directory = this.#directory;
-        const asking = servers.map((server) => directory.notifySignInNeeded(server, { chatId: this.chatId, what: `@${agent.name}` }));
-        this.ctx.waitUntil(Promise.allSettled(asking));
+        const context = { chatId: this.chatId, what: `@${agent.name}`, ...(quiet && { quiet }) };
+        const asking = servers.map((server) =>
+          directory.notifySignInNeeded(server, context).catch((error: unknown) => console.error(`agent sign-in (${server}):`, errorMessage(error))),
+        );
+        this.ctx.waitUntil(Promise.all(asking));
       },
       newSession: async () => (await this.harness.sessions.create()).id,
       configure: (session, agent, model) => this.#configureRun(session, agent, model),
