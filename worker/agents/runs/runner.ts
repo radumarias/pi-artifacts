@@ -113,8 +113,15 @@ export class AgentRunner {
    * Set an agent's alarms from its definition as it is now: its schedule's next run, or its watch; none when it is off,
    * has no trigger, or is gone (`agent` null). A definition saved with the same trigger keeps the alarm it had.
    */
-  apply(agentId: string, agent: AgentDefinition | null): Promise<void> {
-    return this.#one(() => this.#apply(agentId, agent));
+  async apply(agentId: string, agent: AgentDefinition | null): Promise<void> {
+    let moved = true;
+    try {
+      moved = await this.#one(() => this.#apply(agentId, agent));
+    } finally {
+      // Turned on or off, a new time, or gone (or failed halfway): the Runs tab reads its next run again. A run that
+      // fires tells it itself.
+      if (moved) this.#host.changed(agentId);
+    }
   }
 
   /**
@@ -133,19 +140,16 @@ export class AgentRunner {
     return true;
   }
 
-  async #apply(agentId: string, agent: AgentDefinition | null, after = this.#host.runs.now()): Promise<void> {
-    if (!this.accepts(agentId, agent)) return;
+  /** Whether the alarms changed. */
+  async #apply(agentId: string, agent: AgentDefinition | null, after = this.#host.runs.now()): Promise<boolean> {
+    if (!this.accepts(agentId, agent)) return false;
     const row = this.#row(agentId);
     const wanted = agent?.enabled && agent.trigger ? agent : null;
     const key = wanted ? triggerKey(wanted) : "";
-    if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) return;
-    if (!row && !wanted) return;
-    try {
-      await this.#set(agentId, row, wanted, key, after);
-    } finally {
-      // Its next run moved, or went: the Runs tab reads it again.
-      this.#host.changed(agentId);
-    }
+    if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) return false;
+    if (!row && !wanted) return false;
+    await this.#set(agentId, row, wanted, key, after);
+    return true;
   }
 
   async #set(agentId: string, row: ScheduleRow | undefined, wanted: AgentDefinition | null, key: string, after: number): Promise<void> {

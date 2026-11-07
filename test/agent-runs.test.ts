@@ -467,7 +467,7 @@ describe("scheduled runs", () => {
     expect(host.alarms.size).toBe(1);
   });
 
-  it("tells the Runs tab when its next run is set or goes, and not for a save that keeps it", async () => {
+  it("tells the Runs tab when a save sets or drops its next run, and not for a save that keeps it", async () => {
     const { host, runner, definition } = home();
     await runner.apply(definition.id, definition);
     expect(host.told).toEqual([definition.id]);

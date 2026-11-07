@@ -25,8 +25,9 @@ export async function agentsRoute(
 ): Promise<Response | null> {
   const path = new URL(request.url).pathname;
   const method = request.method;
+  // A save over a version changed since is a conflict (409), which the tabs answer by showing the newer one.
   const answer = (result: AgentResult | { error: string } | null, status = 200) =>
-    result && "error" in result ? json(result, 400) : json(result ?? {}, status);
+    result && "error" in result ? json({ error: result.error }, "conflict" in result && result.conflict ? 409 : 400) : json(result ?? {}, status);
   if (path === "/api/agents" && method === "GET") return json(await directory.listAgents());
   if (path === "/api/agents/servers" && method === "GET") {
     const signedIn = new Set(servers.some((server) => server.auth === "oauth") ? await directory.mcpSignedIn() : []);

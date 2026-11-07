@@ -147,7 +147,8 @@ export function isDraftAgent(agent: Pick<AgentDefinition, "origin" | "enabled">)
 }
 
 /** A failed change to an agent, with what to fix. RPC keeps an error's message but not its class. */
-export type AgentResult = AgentDefinition | { error: string };
+/** A save's answer: the definition, or why not; `conflict` when it changed since the version the caller read. */
+export type AgentResult = AgentDefinition | { error: string; conflict?: true };
 
 /** Thrown by checkAgent with what to fix. */
 export class AgentError extends Error {}
@@ -570,7 +571,7 @@ export type ChatAgentReplyData = {
   failed?: string;
   /** Artifacts it published in this turn, for the app to show their cards. */
   published?: { artifactId: string; title: string; version: number }[];
-  /** Set on a run's report (calledBy.schedule): which run, so a reply to it continues that run (shared/runs.ts). */
+  /** Set on a run's report and on a reply continuing it: which run, so a reply to it continues that run (shared/runs.ts). */
   run?: RunRef;
   /** The records its tool results held (shared/items.ts), as chips under the reply: from the servers, never its text. */
   items?: ItemRef[];

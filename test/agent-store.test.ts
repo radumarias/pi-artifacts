@@ -172,6 +172,7 @@ describe("AgentStore: saving", () => {
     expect(mine.version).toBe(2);
     expect(store.save(fields("research", { job: "Theirs." }), "user", undefined, { id: read.id, version: read.version })).toEqual({
       error: expect.stringContaining("changed since you read it (version 2)"),
+      conflict: true,
     });
     expect(store.get(read.id)).toEqual(mine);
     // A save that names no version is not compared.
@@ -309,7 +310,7 @@ describe("AgentStore: turning agents on and off", () => {
     const store = newStore();
     const read = saved(store.save(research, "agent", undefined));
     saved(store.save(fields("research", { job: "Revised behind the user's back." }), "agent", undefined, { id: read.id }));
-    expect(store.setEnabled(read.id, true, read.version)).toEqual({ error: expect.stringContaining("changed since you read it") });
+    expect(store.setEnabled(read.id, true, read.version)).toEqual({ error: expect.stringContaining("changed since you read it"), conflict: true });
     expect(store.get(read.id)).toMatchObject({ enabled: false, origin: "agent", version: 2 });
     expect(saved(store.setEnabled(read.id, true, 2))).toMatchObject({ enabled: true, version: 3 });
     expect(saved(store.setEnabled(read.id, false, 1))).toMatchObject({ enabled: false, version: 4 });
@@ -403,9 +404,9 @@ function request(method: string, path: string, body?: { json?: unknown; text?: s
   return new Request(`https://pi.test${path}`, { method, headers, body: body.text ?? JSON.stringify(body.json) });
 }
 
-/** A 400 answer whose error says `text`. */
-function refused(text: string) {
-  return { status: 400, body: { error: expect.stringContaining(text) } };
+/** A 400 answer whose error says `text` (409 for a save over a newer version). */
+function refused(text: string, status = 400) {
+  return { status, body: { error: expect.stringContaining(text) } };
 }
 
 function routes() {
@@ -500,7 +501,7 @@ describe("agentsRoute", () => {
     const mine = await send("PUT", `/api/agents/${agent.id}`, { json: { ...fields("research", { job: "Mine." }), version: 1 } });
     expect(mine).toMatchObject({ status: 200, body: { id: agent.id, job: "Mine.", version: 2, origin: "user" } });
     const theirs = await send("PUT", `/api/agents/${agent.id}`, { json: { ...fields("research", { job: "Theirs." }), version: 1 } });
-    expect(theirs).toEqual(refused("changed since you read it (version 2)"));
+    expect(theirs).toEqual(refused("changed since you read it (version 2)", 409));
     expect(store.get(agent.id)?.job).toBe("Mine.");
     // Without a version, the last save wins.
     const last = await send("PUT", `/api/agents/${agent.id}`, { json: fields("research", { job: "Theirs." }) });
@@ -554,7 +555,7 @@ describe("agentsRoute", () => {
     const proposal = saved(store.save(research, "agent", undefined));
     saved(store.save(fields("research", { job: "Revised." }), "agent", undefined, { id: proposal.id }));
     const path = `/api/agents/${proposal.id}`;
-    expect(await send("PATCH", path, { json: { enabled: true, version: 1 } })).toEqual(refused("changed since you read it"));
+    expect(await send("PATCH", path, { json: { enabled: true, version: 1 } })).toEqual(refused("changed since you read it", 409));
     const on = await send("PATCH", path, { json: { enabled: true, version: 2 } });
     expect(on).toMatchObject({ status: 200, body: { enabled: true, origin: "user", version: 3 } });
     expect(await send("PATCH", path, { json: { enabled: false } })).toMatchObject({ status: 200, body: { enabled: false, version: 4 } });

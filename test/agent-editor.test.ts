@@ -83,12 +83,14 @@ describe("AgentStore: turning on confirms what was assumed", () => {
 });
 
 describe("a save over an older version", () => {
-  it("is refused in words the tabs know as a conflict, so they start again from the newer one", () => {
+  it("is refused as a conflict, which the tabs know by its 409, so they start again from the newer one", () => {
     const store = newStore();
     const first = saved(store.save(research, "user", false));
     saved(store.save({ ...research, job: "Newer" }, "user", undefined, { id: first.id, version: first.version }));
     const stale = store.save({ ...research, job: "Mine" }, "user", undefined, { id: first.id, version: first.version });
-    expect("error" in stale && isConflict(stale.error)).toBe(true);
+    expect(stale).toMatchObject({ conflict: true });
+    expect(isConflict(Object.assign(new Error("changed"), { status: 409 }))).toBe(true);
+    expect(isConflict(Object.assign(new Error("bad"), { status: 400 }))).toBe(false);
   });
 });
 

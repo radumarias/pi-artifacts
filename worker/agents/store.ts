@@ -109,7 +109,7 @@ export class AgentStore {
     const existing = id === undefined ? null : this.get(id);
     if (id !== undefined && !existing) return { error: "No such agent." };
     if (existing && version !== undefined && existing.version !== version) {
-      return { error: `The agent "${existing.name}" changed since you read it (version ${existing.version}); read it again first.` };
+      return { error: `The agent "${existing.name}" changed since you read it (version ${existing.version}); read it again first.`, conflict: true };
     }
     if (existing && origin === "agent" && existing.origin === "user")
       return { error: `"${existing.name}" is one of the user's own agents; the model cannot change it.` };
@@ -164,7 +164,7 @@ export class AgentStore {
     const existing = this.get(id);
     if (!existing) return { error: "No such agent." };
     if (enabled && version !== undefined && existing.version !== version) {
-      return { error: `The agent "${existing.name}" changed since you read it; read it again before turning it on.` };
+      return { error: `The agent "${existing.name}" changed since you read it; read it again before turning it on.`, conflict: true };
     }
     if (existing.enabled === enabled) return existing;
     const now = Math.max(this.#now(), existing.updatedAt + 1);

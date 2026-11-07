@@ -6,7 +6,7 @@
 import { canonicalJson } from "../../../shared/canonical.ts";
 import type { ArtifactManifest, ArtifactMeta } from "../../../shared/protocol.ts";
 import type { RunDelivery } from "../../../shared/runs.ts";
-import { errorMessage, plural } from "../../../shared/util.ts";
+import { errorMessage, listSome, plural } from "../../../shared/util.ts";
 import { checkDraft, publishDraft, readPageSource, writeDraft, type PublishScope } from "../../agent/publish.ts";
 import { MAX_VERSION_MESSAGE } from "../../storage/artifacts.ts";
 import { passed, type Draft } from "../../storage/drafts.ts";
@@ -109,8 +109,8 @@ export async function readOnlyDeclaration(
 }
 
 /** How a delivery names the write tools a snapshot was published without. */
-export function withoutWrites(dropped: readonly string[]): string {
-  return dropped.length ? ` as a snapshot without ${dropped.join(", ")}, which ${dropped.length === 1 ? "writes" : "write"}` : "";
+function withoutWrites(dropped: readonly string[]): string {
+  return dropped.length ? ` as a snapshot without ${listSome(dropped, 5)}, which ${dropped.length === 1 ? "writes" : "write"}` : "";
 }
 
 async function publishMarked(scope: PublishScope, meta: ArtifactMeta, draftId: string, message: string, mark: string): Promise<RunDelivery> {

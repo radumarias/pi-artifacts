@@ -67,7 +67,7 @@ import {
   type ModelChoice,
   type ModelSetting,
 } from "../shared/models.ts";
-import { deadline, errorMessage, formatBytes, mapLimit, memoAsync, serial, sha256Hex, singleFlight } from "../shared/util.ts";
+import { deadline, errorMessage, formatBytes, listSome, mapLimit, memoAsync, serial, sha256Hex, singleFlight } from "../shared/util.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import type { SkillFileInfo } from "../shared/skill-files.ts";
 import { attachmentContent, parseAttachments, withoutImageData, type ToMarkdown } from "./agent/attachments.ts";
@@ -3311,7 +3311,8 @@ export class ChatAgent extends DurableObject<Env> {
         `${CHECK_TOOL} and fix what it finds. The newest draft that passes is published for you. Answer with one line on what changed.`,
       ...(dropped.length
         ? [
-            `A snapshot only reads: it declares no tools that change data, so ${dropped.join(", ")} ${dropped.length === 1 ? "is" : "are"} left out of it. ` +
+            "A snapshot only reads: it declares no tools that change data, " +
+              `so ${listSome(dropped, 10)} ${dropped.length === 1 ? "is" : "are"} left out of it. ` +
               "Remove or disable the buttons and forms that used them, so none of them is left to fail.",
           ]
         : []),

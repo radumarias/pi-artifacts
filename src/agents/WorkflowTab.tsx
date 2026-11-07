@@ -18,9 +18,10 @@ import { STEP_LABELS, stepSummary } from "../../shared/runs.ts";
 import { errorMessage, isObject } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import type { AgentTabProps } from "./AgentPage.tsx";
-import { CONFLICT_NOTICE, DAY_NAMES, isAssumed, isConflict, runsLabel, SAVE_FIRST } from "./glance.ts";
+import { AssumedBadge } from "./AssumedBadge.tsx";
+import { ASSUMED_FIELDS, CONFLICT_NOTICE, DAY_NAMES, isAssumed, isConflict, runsLabel, SAVE_FIRST, withoutAssumed } from "./glance.ts";
 import { putAgent, reloadAgents } from "./store.ts";
-import { assumedAfter, confirmPart, moveItem, newStep, withKeys, withoutKeys, WORKFLOW_ASSUMED, type Keyed, type WorkflowPart } from "./workflow.ts";
+import { assumedAfter, moveItem, newStep, withKeys, withoutKeys, type Keyed, type WorkflowPart } from "./workflow.ts";
 
 const VIEWER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -119,19 +120,12 @@ function WorkflowForm({
     setRound((n) => n + 1);
   }
   const looksRight = (part: WorkflowPart) => {
-    setAssumed((current) => confirmPart(current, part));
+    setAssumed((current) => withoutAssumed(current, ASSUMED_FIELDS[part]));
     setDirty(true);
   };
   const assumedBadge = (part: WorkflowPart) =>
     !readOnly &&
-    isAssumed(assumed, WORKFLOW_ASSUMED[part]) && (
-      <span className="agent-assumed">
-        <span className="pill assumed">Assumed</span>
-        <button type="button" className="link-button" onClick={() => looksRight(part)}>
-          Looks right
-        </button>
-      </span>
-    );
+    isAssumed(assumed, ASSUMED_FIELDS[part]) && <AssumedBadge onConfirm={() => looksRight(part)} />;
   const change = (next: Partial<Form>) => {
     setForm((current) => ({ ...current, ...next }));
     setDirty(true);
@@ -169,7 +163,7 @@ function WorkflowForm({
       notice({ agentId: agent.id, text: "Saved its workflow." });
     } catch (e) {
       const message = errorMessage(e);
-      if (isConflict(message)) {
+      if (isConflict(e)) {
         // A newer version came meanwhile (the home chat compiles steps after a save, or another editor): the form starts
         // again from it, as the Setup tab does, and the user makes their change again on it.
         setInvalid(new Set());
