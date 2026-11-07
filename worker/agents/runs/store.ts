@@ -276,7 +276,8 @@ export class AgentRuns {
     this.#sql.exec(
       "UPDATE agent_runs SET status = ?, ended_at = ?, summary = ?, detail = ? WHERE agent_id = ? AND due_at = ? AND item = ''",
       status,
-      status === "running" ? null : this.#now(),
+      // A change of detail only (a waiting run marked released) keeps when it ended.
+      status === "running" ? null : change.status ? this.#now() : (run.endedAt ?? this.#now()),
       change.summary ?? run.summary ?? null,
       JSON.stringify({ ...run.detail, ...change.detail }),
       agentId,

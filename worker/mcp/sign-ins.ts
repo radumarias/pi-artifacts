@@ -342,7 +342,10 @@ export class McpSignIns {
     const sql = this.#host.sql;
     // Shown already: once any agent waiting reads it in a step, the notice says so.
     if (sql.exec("SELECT 1 FROM mcp_notices WHERE server = ? AND kind = 'needed'", server).toArray().length) {
-      const marked = stepReads && sql.exec("UPDATE mcp_notices SET step_reads = 1 WHERE server = ? AND step_reads = 0", server).rowsWritten > 0;
+      // It names the agent that reads it in a step, as its text says that one cannot go on without it.
+      const marked =
+        stepReads &&
+        sql.exec("UPDATE mcp_notices SET step_reads = 1, what = ? WHERE server = ? AND step_reads = 0", what ?? null, server).rowsWritten > 0;
       return marked ? "changed" : false;
     }
     sql.exec(

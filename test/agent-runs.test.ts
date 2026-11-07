@@ -362,8 +362,11 @@ describe("scheduled runs", () => {
     host.signIn.delete("crm");
     // The next run is in its sign-in check: restarting the older one now would post twice if this one goes.
     host.runs.begin(definition.id, T0 + 86_400_000, "schedule", false);
+    const waitedSince = host.runs.get(definition.id, T0)?.endedAt;
+    host.clock.now = T0 + 3_600_000;
     expect(await runner.signedIn("crm")).toBe(0);
-    expect(host.runs.get(definition.id, T0)?.status).toBe("needs_sign_in");
+    // Marked released, it keeps when it began to wait: the Runs tab's time is not stretched.
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "needs_sign_in", endedAt: waitedSince, detail: { released: ["crm"] } });
     expect(host.delivered).toHaveLength(0);
   });
 

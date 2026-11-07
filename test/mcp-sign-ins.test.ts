@@ -268,6 +268,9 @@ describe("sign-ins with nobody present", () => {
     await signIn(s, T0 + 2 * DAY);
     await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });
     expect(s.signIns.list()[0]!.stepReads).toBeUndefined();
+    // An agent that reads it in a step waits after one that does not: the notice names the one that cannot go on.
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    expect(s.signIns.list()[0]).toMatchObject({ stepReads: true, waiting: "@brief" });
   });
 
   it("records a test run's chat as waiting without telling the user", async () => {

@@ -22,7 +22,7 @@ const MAX_KEPT_VALUE = 100_000;
 /** How long until a due time is tried again, when its run could not start (a failed read, a reset). */
 const RETRY_MS = 5 * 60_000;
 
-/** What the runner needs besides the executor's host: alarms, the owner's definitions, and shared watches. */
+/** What the runner needs besides the executor's host: alarms and shared watches. */
 export interface RunnerHost extends RunHost {
   /** A one-shot alarm (the chat object's Scheduler): its schedule id. */
   alarmAt(at: number, payload: RunAlarm): Promise<string>;
@@ -39,7 +39,6 @@ export interface RunnerHost extends RunHost {
   subscribe(agentId: string, step: LookStep, everyMinutes: number): Promise<void>;
   /** Leave the Source named `source` (sourceName). */
   unsubscribe(agentId: string, source: string): Promise<void>;
-  /** Keep the object alive for work that outlives the call that started it. */
 }
 
 type ScheduleRow = { agent_id: string; kind: string; key: string; schedule_id: string | null; due_at: number | null };

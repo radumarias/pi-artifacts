@@ -270,8 +270,9 @@ export class RunExecutor {
       .finally(() => this.#active.delete(key))
       .then((end) => {
         // Ended without going: an older run that waited for this one (its sign-in came meanwhile) goes now, on its own.
+        // A run that went on from its row (resumed after a restart, or restarted after a sign-in) counts too.
         const went = end.status !== "failed" && end.status !== "needs_sign_in";
-        if (end.started && !went) this.#host.waitUntil(this.#wakeDeferred(agent.id, dueAt, test));
+        if (!went) this.#host.waitUntil(this.#wakeDeferred(agent.id, dueAt, test));
         return end;
       });
     this.#active.set(key, run);
@@ -288,6 +289,9 @@ export class RunExecutor {
     try {
       const servers = runServers(agent, await this.#host.signInServers());
       let missing = await this.#host.needsSignIn(servers);
+      // Read before the check for a late sign-in below, so no await comes between that and the wait.
+      const off = missing.length ? await this.#turnedOffNow(agent, run) : null;
+      if (off) return off;
       // A sign-in that came while this checked (an older run waits for this one, released): checked once more, not asked.
       const released = missing.length ? (runs.deferred(agent.id, dueAt, run.test)?.detail.released ?? []) : [];
       const again = missing.filter((server) => released.includes(server));
@@ -295,13 +299,13 @@ export class RunExecutor {
         const still = new Set(await this.#host.needsSignIn(again));
         missing = missing.filter((server) => !again.includes(server) || still.has(server));
       }
-      if (missing.length) return await this.#waitForSignIn(agent, run, missing);
+      if (missing.length) return this.#waitForSignIn(agent, run, missing);
       const elements = await this.#elements(agent);
       const outcomes = await mapLimit(elements, RUN_CONCURRENCY, (element) => this.#item(agent, run, element, when));
       const status = await this.#finish(agent, runs.get(agent.id, dueAt)!, outcomes);
       return { status, started };
     } catch (error) {
-      if (error instanceof SignInNeeded) return await this.#waitForSignIn(agent, run, [error.server]);
+      if (error instanceof SignInNeeded) return (await this.#turnedOffNow(agent, run)) ?? this.#waitForSignIn(agent, run, [error.server]);
       runs.update(agent.id, dueAt, { status: "failed", summary: `Failed: ${errorMessage(error)}` });
       return { status: "failed", started };
     } finally {
@@ -323,15 +327,19 @@ export class RunExecutor {
     }
   }
 
-  async #waitForSignIn(agent: AgentDefinition, run: RunRecord, servers: string[]): Promise<RunEnd> {
-    // Turned off while it went (its waiting runs were skipped then, before this one waited): it does not wait, nor ask.
-    if (!run.test) {
-      const now = await this.#host.definition(agent.id).catch(() => agent);
-      if (!now?.enabled) {
-        this.#host.runs.update(run.agentId, run.dueAt, { status: "not_today", summary: turnedOff(agent) });
-        return { status: "not_today", started: true };
-      }
-    }
+  /**
+   * A run about to wait for a sign-in whose agent was turned off (or deleted) while it went: its waiting runs were
+   * skipped then, before this one waited, so it ends skipped and does not wait, nor ask. Null when it may wait (a test).
+   */
+  async #turnedOffNow(agent: AgentDefinition, run: RunRecord): Promise<RunEnd | null> {
+    if (run.test) return null;
+    const now = await this.#host.definition(agent.id).catch(() => agent);
+    if (now?.enabled) return null;
+    this.#host.runs.update(run.agentId, run.dueAt, { status: "not_today", summary: now ? turnedOff(agent) : `Skipped: @${agent.name} was deleted.` });
+    return { status: "not_today", started: true };
+  }
+
+  #waitForSignIn(agent: AgentDefinition, run: RunRecord, servers: string[]): RunEnd {
     // This chat hears when the owner signs in (AgentRunner.signedIn); they are asked to (a notice, a push), unless a test.
     this.#host.signInNeeded(agent, servers, run.test);
     this.#host.runs.update(run.agentId, run.dueAt, {
