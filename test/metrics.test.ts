@@ -111,7 +111,8 @@ describe("Metrics", () => {
     const data = dataset();
     const metrics = new Metrics(data, base);
     const connection: McpConnection = {
-      listTools: async () => [],
+      // A read goes only to a tool the server lists as read-only.
+      listTools: async () => [{ name: "t", description: "", annotations: { readOnlyHint: true } }],
       callTool: async () => ({ content: [{ type: "text", text: "{}" }] }),
       close: async () => {},
     };

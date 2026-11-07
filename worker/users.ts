@@ -17,12 +17,24 @@ import type { PushSubscriptionKeys } from "./push/web-push.ts";
 import { mcpTokensKey } from "./storage/index.ts";
 import type { McpSignInView, SignInNotice } from "../shared/sign-ins.ts";
 import { AgentStore, type AgentSave } from "./agents/store.ts";
+import { LimitsDirectory, type CallEntry } from "./agents/limits/directory.ts";
+import { approvalAsk, approvalFeed, approvalRef } from "./agents/limits/feed.ts";
+import { actorName, LIMIT_FIELDS, type CallLogView, type GuardrailRule, type PendingActionView } from "../shared/limits.ts";
 import { UserMemory, type Learned, type LearnedNote } from "./memory/memory.ts";
 import type { Forgot, MemoryNote, MemoryNoteView, MemoryReader, MemoryWriter, Recalled, ServerCoverage } from "../shared/memory.ts";
 import { ChatRows } from "./chat-rows.ts";
 import { addColumns } from "./members.ts";
 import { mayLeave, type ChatKind, type ChatRef } from "../shared/chat-kinds.ts";
-import { agentFrom, NEEDS_YOU, type FeedInput, type FeedList, type FollowKind, type FollowView } from "../shared/feed.ts";
+import {
+  agentFrom,
+  NEEDS_YOU,
+  runFeedRef,
+  type FeedActionEnd,
+  type FeedInput,
+  type FeedList,
+  type FollowKind,
+  type FollowView,
+} from "../shared/feed.ts";
 import {
   aboutOf,
   FAN_OUT,
@@ -31,6 +43,7 @@ import {
   FollowStore,
   postsReachFollowers,
   runItem,
+  type FeedAdded,
   type Follower,
   type FollowRecord,
   type RunEnded,
@@ -46,7 +59,7 @@ import {
   type AgentResult,
 } from "../shared/agents.ts";
 import { excerpt } from "../shared/replies.ts";
-import { errorMessage, mapLimit, memoAsync, randomHex } from "../shared/util.ts";
+import { errorMessage, isObject, mapLimit, memoAsync, randomHex } from "../shared/util.ts";
 
 /** Where a user's directory keeps what the MCP servers cover (ServerCoverage[]). */
 const COVERAGE_KEY = "serverCoverage";
@@ -120,6 +133,8 @@ export class UserDirectory extends DurableObject<Env> {
   readonly #signIns: McpSignIns;
   /** The browsers the user turned notifications on in (worker/push/subscriptions.ts). */
   readonly #push: PushSubscriptions;
+  /** Their rules for all agents, the log of calls that change data, and the actions waiting for them (worker/agents/limits/). */
+  readonly #limits: LimitsDirectory;
   /** The user's memory notes (worker/memory/). */
   readonly #memory: UserMemory;
   /** What of each sidebar row is this user's alone (pinned, closed, their name for it), chats' kinds, page chats, people (worker/chat-rows.ts). */
@@ -133,6 +148,7 @@ export class UserDirectory extends DurableObject<Env> {
     super(ctx, env);
     this.#agents = new AgentStore(ctx.storage.sql);
     this.#push = new PushSubscriptions(ctx.storage.sql);
+    this.#limits = new LimitsDirectory(ctx.storage.sql, ctx.storage.kv);
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, title TEXT NOT NULL, chat_id TEXT NOT NULL, latest INTEGER NOT NULL, updated_at INTEGER NOT NULL);
@@ -287,8 +303,13 @@ export class UserDirectory extends DurableObject<Env> {
    * owner forgets them. An item from an off-the-record chat is refused here, whoever sends it.
    */
   addFeed(input: FeedInput, follow?: { kind: FollowKind; id: string; ownerUid: string; title?: string }): boolean {
+    return this.#addFeed(input, follow) !== null;
+  }
+
+  /** What `addFeed` did with it, or null when they no longer follow what it is from. */
+  #addFeed(input: FeedInput, follow?: { kind: FollowKind; id: string; ownerUid: string; title?: string }): FeedAdded | null {
     const followed = follow ? this.#follows.get(follow.kind, follow.id, follow.ownerUid) : null;
-    if (follow && !followed) return false;
+    if (follow && !followed) return null;
     if (follow?.title && this.#follows.retitle(follow.kind, follow.id, follow.ownerUid, follow.title)) this.#changed("follows");
     // An agent opens for a follower only from the chat that shares it with them: the one they followed it from.
     if (follow?.kind === "agent" && input.open.to === "agent" && !input.open.chatId) {
@@ -298,22 +319,30 @@ export class UserDirectory extends DurableObject<Env> {
     // What it is about goes with it: a page or agent unfollowed or gone, or one of this user's agents deleted.
     const about = follow ? aboutOf(follow.kind, follow.id, follow.ownerUid) : input.aboutAgent && aboutOf("agent", input.aboutAgent, this.ctx.id.name!);
     const added = this.#feed.add(input, known, about);
-    if (added === "same" || added === "refused") return true;
+    if (added === "same" || added === "refused") return added;
     this.#changed("feed");
-    // A tag pushes on its own (#touch), and a run waiting for a sign-in did already (McpSignIns.needed).
-    if (!input.quiet && (follow || NEEDS_YOU[input.kind])) {
+    // A tag pushes on its own (#touch), a run waiting for a sign-in did already (McpSignIns.needed), and so does an
+    // approval (addNeedsYou, naming who asks).
+    if (!input.quiet && input.kind !== "approval" && (follow || NEEDS_YOU[input.kind])) {
       this.ctx.waitUntil(this.push({ title: "New in your feed", body: "Something new arrived in your feed.", url: "/feed", tag: `feed:${input.kind}` }));
     }
-    return true;
+    return added;
   }
 
   /** This user's feed: the newest items, the unread ones or those needing them when asked, and the counts. */
   feed(filter: { unread?: boolean; needsYou?: boolean }): FeedList {
+    this.#dropExpiredNeedsYou();
     return this.#feed.list(filter);
   }
 
   feedCounts(): Pick<FeedList, "unread" | "needsYou"> {
+    this.#dropExpiredNeedsYou();
     return this.#feed.counts();
+  }
+
+  /** Approvals whose time is past though their chat never said they ended: their feed items wait no more either. */
+  #dropExpiredNeedsYou(): void {
+    for (const { chatId, id } of this.#limits.dropExpired()) this.#endApproval(chatId, id, { status: "expired" });
   }
 
   /**
@@ -443,6 +472,11 @@ export class UserDirectory extends DurableObject<Env> {
         console.error("feed:", errorMessage(error)),
       ),
     );
+  }
+
+  /** A run of one of this user's agents that waited for a sign-in went on: its feed item waits for them no more. */
+  runResumed(agentId: string, dueAt: number): void {
+    this.resolveFeed(runFeedRef(agentId, dueAt));
   }
 
   /**
@@ -879,6 +913,7 @@ export class UserDirectory extends DurableObject<Env> {
     const home = this.ctx.storage.sql.exec<{ agent_id: string | null }>("SELECT agent_id FROM chats WHERE id = ?", id).toArray()[0]?.agent_id;
     this.#signIns.forgetChat(id);
     this.#agents.forgetChat(id);
+    this.#limits.forgetChat(id);
     this.#memory.forgetChat(id);
     // The values its pages saved for this user, which were everyone's defaults.
     this.ctx.storage.sql.exec("DELETE FROM page_values WHERE artifact_id IN (SELECT id FROM artifacts WHERE chat_id = ?)", id);
@@ -891,6 +926,60 @@ export class UserDirectory extends DurableObject<Env> {
     if (this.ctx.storage.sql.exec("DELETE FROM chats WHERE id = ?", id).rowsWritten) this.#changed("chats");
     // An agent's home deleted while the agent is on: it gets a new one, so its schedule and watches go on there.
     if (home && this.#agents.get(home)?.enabled) this.ensureAgentHome(home);
+  }
+
+  // ---- Limits (worker/agents/limits/) ----
+
+  /** The user's rules for all their agents, pi and pages (shared/limits.ts). */
+  guardrails(): GuardrailRule[] {
+    return this.#limits.rules();
+  }
+
+  setGuardrails(input: unknown): GuardrailRule[] | { error: string } {
+    return this.#limits.setRules(input);
+  }
+
+  /** A call that changes data, as the write gate of one of the user's chats let it through, refused or held it. */
+  logCall(entry: CallEntry): void {
+    this.#limits.log(entry);
+  }
+
+  callsSince(server: string, tool: string, since: number): number {
+    return this.#limits.callsSince(server, tool, since);
+  }
+
+  /** The newest calls, of one agent (by id) when given. */
+  calls(agentId?: string, limit?: number): CallLogView[] {
+    return this.#limits.calls(agentId, limit);
+  }
+
+  /**
+   * An action of one of the user's chats waits for them: in their feed's Needs you, where they decide it (not from a
+   * chat off the record: that one only in its chat), and a push when no app is open.
+   */
+  async addNeedsYou(view: PendingActionView, chatKind: ChatKind): Promise<void> {
+    const chatTitle = this.chatTitle(view.chatId) ?? "a chat";
+    this.#dropExpiredNeedsYou();
+    // The feed refuses it from a chat off the record: then only its card there asks, and the push says not even whose or where.
+    const offRecord = this.#addFeed(approvalFeed(view, chatTitle, chatKind)) === "refused";
+    if (!offRecord) this.#limits.addNeedsYou(view);
+    // Only that something waits: the call itself stays in the app.
+    const said = offRecord
+      ? { title: "Something needs your approval", body: "Open the app to see it." }
+      : { title: approvalAsk(view), body: excerpt(`In “${chatTitle}”`, 120) };
+    await this.push({ ...said, url: `/c/${view.chatId}`, tag: approvalRef(view.chatId, view.id) }).catch((error: unknown) =>
+      console.error("push:", errorMessage(error)),
+    );
+  }
+
+  /** An action ended (approved, declined, expired): its feed item waits no more, and keeps how it ended. */
+  removeNeedsYou(chatId: string, id: string, ended: FeedActionEnd): void {
+    this.#limits.removeNeedsYou(chatId, id);
+    this.#endApproval(chatId, id, ended);
+  }
+
+  #endApproval(chatId: string, id: string, ended: FeedActionEnd): void {
+    if (this.#feed.endAction(approvalRef(chatId, id), ended)) this.#changed("feed");
   }
 
   listArtifacts(): ArtifactSummary[] {
@@ -1085,6 +1174,13 @@ export class UserDirectory extends DurableObject<Env> {
     if (origin === "agent") {
       const signIn = new Set(oauthServerNames(this.env));
       input = withoutSignInShares(input, (server) => signIn.has(server));
+      // An agent's limits (how far it goes on its own, its rules, its wait) are its owner's to set, on its Limits tab:
+      // the model's draft keeps the ones it has (the defaults for a new one), whatever it asks for.
+      if (isObject(input)) {
+        const existing = save?.id === undefined ? undefined : this.#agents.get(save.id);
+        const kept = Object.fromEntries(LIMIT_FIELDS.flatMap((field) => (existing?.[field] === undefined ? [] : [[field, existing[field]]])));
+        input = { ...Object.fromEntries(Object.entries(input).filter(([key]) => !(LIMIT_FIELDS as readonly string[]).includes(key))), ...kept };
+      }
     }
     const saved = this.#agents.save(input, origin, enabled, save);
     if ("error" in saved) return saved;

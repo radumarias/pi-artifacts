@@ -7,10 +7,11 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { conditionProblem, MAX_CONDITION } from "./conditions.ts";
 import type { ItemRef } from "./items.ts";
+import { checkRules, GuardrailError, MAX_APPROVAL_HOURS, type GuardrailRule } from "./limits.ts";
 import { AGENT_NAME } from "./mentions.ts";
 import { EFFORT_LABELS } from "./models.ts";
 import type { RunRef } from "./runs.ts";
-import { isObject, withoutUnseen } from "./util.ts";
+import { isObject, isTimeZone, withoutUnseen } from "./util.ts";
 
 /** An agent's handle, as "@name" calls it: a lowercase letter, then letters, digits or hyphens. */
 export const AGENT_NAME_PATTERN = /^[a-z][a-z0-9-]{1,23}$/;
@@ -112,6 +113,10 @@ export interface AgentInput {
   scope?: { list: LookStep; each: true };
   workflow?: AgentStep[];
   autonomy?: AutonomyLevel;
+  /** Rules on the inputs of the calls it makes that change data (shared/limits.ts), besides its owner's for all agents. */
+  guardrails?: GuardrailRule[];
+  /** How long an action of its waits for its owner before it expires; DEFAULT_APPROVAL_HOURS when absent. */
+  approvalHours?: number;
   /** The fields the model guessed, shown as "Assumed" until a person confirms them. */
   assumed?: string[];
   /**
@@ -201,17 +206,6 @@ function names(value: unknown, field: string): string[] | undefined {
 function checkTime(value: unknown): string {
   if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) fail('A schedule\'s time is "HH:MM", 24-hour, such as "07:00".');
   return value;
-}
-
-/** Whether the runtime knows `tz` as an IANA time zone. */
-export function isTimeZone(tz: unknown): tz is string {
-  if (typeof tz !== "string" || !tz || tz.length > 64) return false;
-  try {
-    new Intl.DateTimeFormat("en", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function checkLook(value: unknown, what: string): LookStep {
@@ -412,6 +406,17 @@ export function checkAgent(input: unknown): AgentInput {
     const outside = serversNamed({ trigger, scope, workflow }).find((server) => !servers.includes(server));
     if (outside) fail(`A step names ${outside}, which is not one of the agent's servers: add it to its servers, or change the step.`);
   }
+  let guardrails: GuardrailRule[] | undefined;
+  try {
+    guardrails = input.guardrails === undefined || input.guardrails === null ? undefined : checkRules(input.guardrails);
+  } catch (error) {
+    if (error instanceof GuardrailError) fail(`An agent's limits: ${error.message}`);
+    throw error;
+  }
+  const hours = input.approvalHours ?? undefined;
+  if (hours !== undefined && (typeof hours !== "number" || !Number.isInteger(hours) || hours < 1 || hours > MAX_APPROVAL_HOURS)) {
+    fail(`Actions wait 1 to ${MAX_APPROVAL_HOURS} hours for approval.`);
+  }
   const assumed = names(input.assumed, "assumed fields");
   const speaksUp = input.speaksUp ?? undefined;
   if (speaksUp !== undefined && typeof speaksUp !== "boolean") fail("An agent's speaksUp is true or false.");
@@ -429,6 +434,8 @@ export function checkAgent(input: unknown): AgentInput {
     ...(scope && { scope }),
     ...(workflow && { workflow }),
     ...(autonomy !== undefined && { autonomy: autonomy as AutonomyLevel }),
+    ...(guardrails?.length && { guardrails }),
+    ...(hours !== undefined && { approvalHours: hours as number }),
     ...(assumed?.length && { assumed }),
     ...(speaksUp && { speaksUp: true }),
   };

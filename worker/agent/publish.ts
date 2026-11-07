@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ChatKind, ChatPage } from "../../shared/chat-kinds.ts";
-import { CHECK_TOOL, DRAFTS_TOOL, manifestOf, WRITE_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary } from "../../shared/protocol.ts";
+import { CHECK_TOOL, DRAFTS_TOOL, isReadOnly, manifestOf, WRITE_TOOL, type ArtifactManifest, type ArtifactMeta, type ArtifactSummary } from "../../shared/protocol.ts";
 import { collapseSkillFiles, inlinedSkillFiles, inlineSkillFiles, skillRefs, type InlinedPage, type SkillFileInfo } from "../../shared/skill-files.ts";
 import { errorMessage, formatBytes, plural } from "../../shared/util.ts";
 import { BrowserUnavailable, CheckTimedOut } from "../artifacts/browser.ts";
@@ -73,6 +73,11 @@ export interface PublishScope {
   drafts: () => Promise<ChatDrafts>;
   /** Whether a page may be published unchecked when there is no browser to check it in: local development only. */
   publishUnchecked: boolean;
+  /**
+   * Whether the turn running in a session may publish a page that calls tools that change data: only one that runs its changes
+   * itself (level 4, the owner's own). A page's calls run as its author's, whoever's turn wrote it. Unset: any may.
+   */
+  mayPublishWrites?: (session: string) => Promise<boolean>;
   /** The files of those of the owner's skills named that are on and have any, by name: what a page may name (shared/skill-files.ts). */
   skillSets(names: readonly string[]): Promise<Map<string, { set: string; files: SkillFileInfo[] }>>;
   /** The bytes of one file of a set of a skill's files (SkillFiles), or null when the set has no such file, or is gone. */
@@ -91,7 +96,20 @@ export interface PublishTarget {
 type McpDeclaration = NonNullable<ArtifactManifest["mcp"]>["servers"];
 
 /** A draft to publish, by its id, and where it goes. */
-export type PublishInput = PublishTarget & { draftId: string };
+/** `session`: the pi session whose turn publishes, for PublishScope.mayPublishWrites. */
+export type PublishInput = PublishTarget & { draftId: string; session?: string };
+
+/** The tools a manifest declares that change data (or that their server does not list). */
+export async function declaredWrites(hub: McpHub, manifest: ArtifactManifest): Promise<string[]> {
+  const declared = (manifest.mcp?.servers ?? []).flatMap((entry) => entry.tools.map((tool) => ({ server: entry.server, tool })));
+  const writes = await Promise.all(
+    declared.map(async ({ server, tool }) => {
+      const info = await hub.tool(server, tool).catch(() => undefined);
+      return info && isReadOnly(info) ? [] : [`${server}.${tool}`];
+    }),
+  );
+  return writes.flat();
+}
 
 /** The manifest a page declares, checked against the chat's servers, and the page's size. Throws with what to fix. */
 export async function validPage(scope: PublishScope, html: string, mcp: McpDeclaration | undefined, what: string): Promise<ArtifactManifest> {
@@ -454,6 +472,24 @@ export async function publishDraft(scope: PublishScope, input: PublishInput, sig
   // The version holds the skill files the check ran with: it never changes when the skill does.
   const { html } = await pageToRun(scope, draft, "Not published.");
   const target = await artifactFor(scope, input, draft.artifactId);
+  // A turn that only proposes changes cannot publish a page that makes any: its calls run as the owner's when they
+  // open it, with whatever arguments this version's code passes (a tool the page had already, called anew, too). Nor a
+  // new version of a page that makes them now: taking the owner's calls out of it is a change too.
+  if (input.session !== undefined && scope.mayPublishWrites && !(await scope.mayPublishWrites(input.session))) {
+    const beforeWrites = async (id: string) => {
+      const current = await scope.artifacts.readMeta(id);
+      const before = current ? manifestOf(current, current.latest) : undefined;
+      return before ? declaredWrites(scope.hub, before) : [];
+    };
+    const [now, then] = await Promise.all([declaredWrites(scope.hub, draft.manifest), target.id === undefined ? [] : beforeWrites(target.id)]);
+    const writes = [...new Set([...now, ...then])];
+    if (writes.length) {
+      throw new Error(
+        `Not published: the page calls ${writes.join(", ")}, which change data, so only the owner's own message can publish a version of it. ` +
+          "Tell the owner what you would change; they can ask for it.",
+      );
+    }
+  }
   const meta = await scope.artifacts.publishVersion({
     id: target.id,
     ownerUid: scope.uid,

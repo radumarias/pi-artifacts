@@ -492,9 +492,10 @@ export function artifactExtension(scope: ChatScope): Extension {
             Type.String({ description: "One line on what this version changes, e.g. \"Add a 7-day sparkline\". It becomes the version's commit message." }),
           ),
         }),
-        execute: async (args, _api, context): Promise<ToolExecutionResult<PublishedDetails>> => {
+        execute: async (args, api, context): Promise<ToolExecutionResult<PublishedDetails>> => {
           const target = { title: args.title, artifactId: args.artifact_id, newArtifact: args.new_artifact, message: args.message };
-          const { meta, byTitle, unchecked } = await publishDraft(scope, { ...target, draftId: args.draft_id }, context.abortSignal);
+          const input = { ...target, draftId: args.draft_id, session: String(api.conversationId) };
+          const { meta, byTitle, unchecked } = await publishDraft(scope, input, context.abortSignal);
           const done =
             `Published artifact ${meta.id} version ${meta.latest} ("${meta.title}"). The user now sees it in the preview panel.` +
             (byTitle

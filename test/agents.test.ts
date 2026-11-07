@@ -17,13 +17,13 @@ import {
   defaultAvatar,
   defaultColor,
   isDraftAgent,
-  isTimeZone,
   runServers,
   speakerLabel,
   type AgentDefinition,
   type AgentStep,
 } from "../shared/agents.ts";
 import { AGENT_NAME, calledNames, summonsAgent } from "../shared/mentions.ts";
+import { isTimeZone } from "../shared/util.ts";
 
 const base = { name: "research", job: "Finds sources", instructions: "1. Search.\n2. Summarise." };
 const read = { server: "crm", tool: "list_deals", input: { stage: "open" } };

@@ -1496,6 +1496,128 @@ a.run-marker:hover { color: var(--accent); text-decoration: underline; }
 .sign-in-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .sign-in-text small { color: var(--muted); font-size: 13px; }
 
+/* The agent page's Limits tab (src/agents/LimitsTab.tsx): the form's card, then cards that open and close under it. */
+.limits-tab { display: flex; flex-direction: column; }
+.agent-form select { max-width: 100%; padding: 7px 10px; background: var(--bg); color: var(--text); font-size: 14px; }
+.limit-levels { margin: 0; padding: 0; border: 0; min-width: 0; }
+.limit-levels legend { padding: 0; margin-bottom: 8px; }
+.limit-level-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.limit-level { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); cursor: pointer; }
+.limit-level:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.limit-level.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.limit-level:has(input:focus-visible) { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+/* The radio itself is the whole card: hidden, but still in the tab order and read out. */
+.limit-level input { position: absolute; opacity: 0; pointer-events: none; }
+.limit-level strong { font-size: 14px; }
+.limit-level small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.limit-level.active small { color: var(--text); }
+.limit-rules { display: flex; flex-direction: column; gap: 8px; }
+.limit-rules > p { margin: 0; }
+.limit-rules ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+.limit-rules li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.limit-rules li.editing { display: block; padding: 10px 0; }
+.limit-rule-text { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.limit-rule-text small { color: var(--muted); font-size: 12.5px; }
+.limit-rule-actions { display: flex; gap: 6px; }
+.limit-rule-actions button { padding: 3px 10px; font-size: 13px; }
+.limit-add { align-self: flex-start; padding: 5px 12px; font-size: 13px; font-weight: 500; }
+.agent-form .limit-hours { font-size: 14px; font-weight: 500; }
+.agent-form .limit-hours input { width: 5.5em; margin: 0 4px; padding: 5px 8px; font-size: 14px; }
+.limits-section { margin-top: 14px; gap: 14px; padding: 0; }
+.limits-section > div { padding: 0 20px 20px; }
+.limits-section-head { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 20px; border: 0; border-radius: var(--radius-lg); background: none; color: var(--text); text-align: left; }
+.limits-section-head > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.limits-section-head strong { font-size: 15px; }
+.limits-section-head small { color: var(--muted); font-size: 13px; }
+.limits-section-head svg { flex: none; color: var(--muted); transition: transform 0.15s; }
+.limits-section-head[aria-expanded="true"] svg { transform: rotate(180deg); }
+.limits-section-head:hover strong { text-decoration: underline; }
+.limits-all { display: flex; flex-direction: column; gap: 12px; }
+.limits-all > p { margin: 0; }
+/* One rule being edited: its fields, made from the tool's input schema, in a well under the list. */
+.rule-editor { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.rule-editor-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 14px; }
+.rule-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; }
+.rule-field > span { font-weight: 600; }
+.rule-field.grow { flex: 1 1 240px; }
+.rule-field small { max-width: 44ch; color: var(--muted); font-size: 12px; font-weight: 400; }
+.rule-field small.form-error { color: var(--error); }
+.rule-field .rule-hint { max-width: 60ch; }
+.rule-field .rule-warn, .limit-rule-text .rule-warn { color: var(--working); }
+.rule-editor .rule-field input:not([type="checkbox"], [type="radio"]), .rule-editor textarea, .rule-editor select { background: var(--surface); font-size: 14px; }
+.rule-editor .rule-field input[type="number"] { width: 10em; }
+.rule-editor textarea.code { font-family: var(--font-mono); font-size: 13px; }
+.rule-check { display: flex; align-items: center; gap: 8px; margin-top: 30px; font-size: 13px; }
+.rule-current, .rule-ranges { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.rule-current legend, .rule-ranges legend { padding: 0 4px; font-size: 13px; font-weight: 600; }
+.rule-ranges > small { color: var(--muted); font-size: 12px; }
+.rule-ranges .link-button { align-self: flex-start; font-size: 13px; }
+.rule-range { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13px; }
+.rule-editor .rule-range input:not([type="checkbox"], [type="radio"]) { width: auto; min-width: 0; }
+.rule-editor .rule-range input[type="date"] { width: 11em; }
+.rule-editor .rule-range input:not([type="date"]) { width: 6.5em; }
+.rule-range .icon-button { width: 28px; height: 28px; color: var(--muted); }
+.rule-choices { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.rule-editor-actions { display: flex; gap: 8px; }
+.rule-editor-actions button { padding: 5px 14px; }
+/* The agent's latest calls: when, which tool, what came of it, and why. */
+.limit-calls { display: flex; flex-direction: column; gap: 10px; }
+.limit-calls ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+.limit-calls li { display: grid; grid-template-columns: 7.5em minmax(0, auto) auto minmax(0, 1fr); align-items: baseline; gap: 4px 12px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.limit-call-when { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.limit-call-tool { overflow-wrap: anywhere; font-size: 12.5px; }
+.limit-call-detail { color: var(--muted); overflow-wrap: anywhere; }
+.limit-calls .link-button { align-self: flex-start; font-size: 13px; }
+.pill.limit-outcome { padding: 0 8px; font-size: 11.5px; }
+.pill.limit-outcome.error { border-color: transparent; background: color-mix(in srgb, var(--error) 14%, var(--surface)); color: var(--error); }
+.pill.limit-outcome.held { border-color: transparent; background: var(--accent-soft); color: var(--accent); }
+@media (max-width: 760px) {
+  .limit-level-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .limits-section-head { padding: 12px 14px; }
+  .limits-section > div { padding: 0 14px 14px; }
+  .rule-editor { padding: 12px 10px; }
+  .rule-editor-row > .rule-field { flex: 1 1 100%; }
+  .rule-editor .rule-field input[type="number"] { width: 100%; }
+  .limit-calls li { grid-template-columns: minmax(0, 1fr) auto; }
+  .limit-call-detail { grid-column: 1 / -1; }
+}
+@media (max-width: 420px) {
+  .limit-level-options { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* A held call's card in the chat (src/chat/ActionCard.tsx): the exact call, why it waits, and the owner's buttons. */
+.action-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
+.action-card.running { border-left-color: var(--working); }
+.action-card.done { border-left-color: var(--live); box-shadow: none; }
+.action-card.failed { border-left-color: var(--error); box-shadow: none; }
+.action-card.closed { border-left-color: var(--border); box-shadow: none; }
+.action-card-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 10px; }
+.action-card-head > .avatar { --size: 28px; }
+.action-card-title { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; font-size: 14px; line-height: 1.4; }
+.action-card-title code { font-size: 13px; overflow-wrap: anywhere; }
+.action-card-title small { color: var(--muted); font-size: 13px; }
+.pill.action-expiry { border-color: transparent; background: var(--working-soft); color: var(--working); }
+.action-input pre { margin: 0; padding: 8px 10px; overflow-x: auto; border-radius: 8px; background: var(--surface-2); font-size: 12.5px; line-height: 1.5; }
+.action-input .link-button { margin-top: 4px; font-size: 12.5px; }
+.action-warnings { margin: 0; padding: 6px 10px 6px 26px; border-radius: 8px; background: var(--working-soft); color: var(--working); font-size: 13px; }
+.action-ended { margin: 0; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
+.action-card.done .action-ended { color: var(--live); }
+.action-card.failed .action-ended { color: var(--error); }
+.action-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.action-buttons button { padding: 5px 14px; }
+.action-card > .form-error { margin: 0; font-size: 13px; }
+
+/* An approval in the feed (src/feed/FeedView.tsx): its call, Approve and Decline (Run and Dismiss for a proposal), when it expires. */
+.feed-decision { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; }
+.feed-decision-buttons { display: flex; gap: 6px; }
+.feed-decision-buttons button { padding: 3px 12px; font-size: 13px; }
+.feed-decision small { color: var(--muted); font-size: 12.5px; }
+.feed-decision small.form-error { color: var(--error); }
+@media (pointer: coarse) {
+  .feed-decision-buttons button { padding: 7px 14px; }
+}
 /* The feed (src/feed/): its sidebar entry, its page, and Follow on pages and shared agents. */
 .feed-nav { margin: 2px 0 6px; }
 .sidebar nav a.feed-link svg { flex: none; color: var(--muted); }

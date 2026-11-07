@@ -221,7 +221,11 @@ describe("McpHub with signed-in servers", () => {
 
   it("connects afresh after a sign-in, instead of keeping the failed connection", async () => {
     let signedIn = false;
-    const connection: McpConnection = { listTools: async () => [], callTool: async () => text({ ok: true }), close: async () => {} };
+    const connection: McpConnection = {
+      listTools: async () => [{ name: "price", description: "", annotations: { readOnlyHint: true } }],
+      callTool: async () => text({ ok: true }),
+      close: async () => {},
+    };
     const hub = new McpHub([viewerScoped], async (server) => {
       if (!signedIn) throw new McpFailure({ code: "auth_required", server: server.name, message: "Not signed in." });
       return connection;

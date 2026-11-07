@@ -140,6 +140,7 @@ export function SectionHead({
   open,
   onToggle,
   upward = false,
+  what = `your ${name.toLowerCase()}`,
   children,
 }: {
   name: string;
@@ -148,6 +149,8 @@ export function SectionHead({
   onToggle: (open: boolean) => void;
   /** The section opens above its heading (a panel at the bottom of the sidebar). */
   upward?: boolean;
+  /** What its button's title says it shows or hides: "your artifacts" by default. */
+  what?: string;
   children?: ReactNode;
 }) {
   // In a heading, so moving through the page by headings still finds the section.
@@ -158,7 +161,7 @@ export function SectionHead({
         className="section-head"
         aria-expanded={open}
         onClick={() => onToggle(!open)}
-        title={`${open ? "Hide" : "Show"} your ${name.toLowerCase()}`}
+        title={`${open ? "Hide" : "Show"} ${what}`}
       >
         {name} <small>{count.toLocaleString("en")}</small>
         {children}

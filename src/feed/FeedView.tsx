@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type MouseEvent } from "react";
 import { feedPath, followKey, type FeedItem, type FeedKind, type FeedList, type FollowView } from "../../shared/feed.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
+import { ActionDecision } from "../chat/ActionCard.tsx";
 import { UnreadDot } from "../chat/ChatList.tsx";
 import { AgentAvatar, Avatar } from "../chat/people.tsx";
 import { sentLabel } from "../chat/SentTime.tsx";
@@ -140,6 +141,7 @@ function FeedRow({ item, onOpen, onMark }: { item: FeedItem; onOpen: (event: Mou
             {more ? "Show less" : "Show more"}
           </button>
         )}
+        {item.action && <ActionDecision action={item.action} waiting={item.needsYou === true} />}
         <div className="feed-meta">
           <span className={item.needsYou ? "pill feed-kind needs" : "pill feed-kind"}>
             {item.needsYou && item.kind === "run" ? "Needs you" : KIND_LABEL[item.kind]}

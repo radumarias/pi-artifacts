@@ -11,6 +11,17 @@ export function text(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
 
+/** Whether the runtime knows `tz` as an IANA time zone. */
+export function isTimeZone(tz: unknown): tz is string {
+  if (typeof tz !== "string" || !tz || tz.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The message of anything thrown. */
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

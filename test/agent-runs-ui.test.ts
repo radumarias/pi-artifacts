@@ -38,8 +38,10 @@ describe("the Runs tab's words", () => {
     expect(runStatusLabel({ status: "not_today", test: true }).text).toBe("Not today");
     expect(whyLabel("watch")).toBe("Its watch fired");
     expect(whyLabel("manual")).toBe("Run by hand");
-    expect(itemsLabel({ total: 1, acted: 1, notToday: 0, failed: 0 })).toBe("");
-    expect(itemsLabel({ total: 6, acted: 3, notToday: 3, failed: 0 })).toBe("3 of 6 acted · 3 not today");
+    expect(itemsLabel({ total: 1, acted: 1, notToday: 0, failed: 0, waiting: 0 })).toBe("");
+    expect(itemsLabel({ total: 6, acted: 3, notToday: 3, failed: 0, waiting: 0 })).toBe("3 of 6 acted · 3 not today");
+    expect(itemsLabel({ total: 3, acted: 1, notToday: 0, failed: 0, waiting: 2 })).toBe("1 of 3 acted · 2 wait for you");
+    expect(runStatusLabel({ status: "waiting" })).toEqual({ text: "Waits for you", tone: "draft" });
     expect(deliveryLabel({ kind: "chat", to: "its chat", status: "sent" })).toBe("Posted in its chat");
     expect(deliveryLabel({ kind: "notify", to: "you", status: "recorded" })).toBe("Would notify you");
     expect(deliveryLabel({ kind: "page", to: "Signups brief", status: "failed" })).toBe("Did not update Signups brief");

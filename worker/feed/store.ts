@@ -3,7 +3,7 @@
 
 import { isChatKind, mayLeave, type ChatKind, type ChatRef } from "../../shared/chat-kinds.ts";
 import type { AgentDefinition } from "../../shared/agents.ts";
-import type { RunStatus } from "../../shared/runs.ts";
+import type { EndedRunStatus } from "../../shared/runs.ts";
 import {
   FEED_PAGE,
   MAX_FEED_ITEMS,
@@ -13,7 +13,9 @@ import {
   MAX_FOLLOWS,
   NEEDS_YOU,
   RUN_FEED_TEXT,
+  runFeedRef,
   agentFrom,
+  type FeedActionEnd,
   type FeedInput,
   type FeedItem,
   type FeedKind,
@@ -27,7 +29,7 @@ import { addColumns, type Sql } from "../members.ts";
 type FeedRow = { id: number; kind: FeedKind; at: number; read: number; needs: number; data: string };
 
 /** What a feed row keeps as JSON: the item's fields that are not columns. */
-type FeedData = Pick<FeedItem, "title" | "text" | "from" | "open" | "status">;
+type FeedData = Pick<FeedItem, "title" | "text" | "from" | "open" | "status" | "action">;
 
 /**
  * What `about` names an item by, so a page or agent that is gone takes its items with it: with its owner, since agent
@@ -87,17 +89,20 @@ export class FeedStore {
       ...(input.from && { from: input.from }),
       open: input.open,
       ...(input.status && { status: input.status }),
+      ...(input.action && { action: input.action }),
     };
     const json = JSON.stringify(data);
     const waits = input.needsYou ?? NEEDS_YOU[input.kind];
     const chatId = input.chat?.id ?? (input.open.to === "chat" ? input.open.chatId : null);
     // A reply answers the agent that asked: one with no agent, or in no chat, waits until resolved by its ref.
     const waitsOn = waits === "reply" && chatId ? (input.from?.agent?.id ?? null) : null;
-    const before = this.#sql.exec("SELECT data FROM feed WHERE ref = ?", input.ref).toArray()[0] as { data: string } | undefined;
-    if (before?.data === json) return "same";
+    const before = this.#sql.exec("SELECT data, needs FROM feed WHERE ref = ?", input.ref).toArray()[0] as Pick<FeedRow, "data" | "needs"> | undefined;
     // Asked before, answered since (a run's report, added when the run ends): it waits on nothing.
     const answered = waitsOn !== null && this.#answeredAt(chatId!, waitsOn) >= input.at;
     const needs = answered ? NEEDS.none : waitsOn !== null ? NEEDS.reply : waits ? NEEDS.resolve : NEEDS.none;
+    // The same again changes nothing, unless a resolve wait comes again after it was resolved (a run that went on after
+    // a sign-in, runResumed, and waits for the same one again). A reply wait answered stays answered.
+    if (before?.data === json && (before.needs > 0 || needs !== NEEDS.resolve)) return "same";
     const read = input.quiet || answered ? 1 : 0;
     this.#sql.exec(
       `INSERT INTO feed (kind, ref, at, read, needs, chat_id, about, waits_on, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -115,6 +120,16 @@ export class FeedStore {
     );
     if (!before) this.#prune();
     return before ? "updated" : "added";
+  }
+
+  /**
+   * An approval's action ended: its item keeps how (FeedActionEnd), so a resolved row still says Ran, Failed, Declined
+   * or Expired, and waits no more and is read, as `resolve` leaves it. Returns how many changed (0 for no such item).
+   */
+  endAction(ref: string, ended: FeedActionEnd): number {
+    const sql = `UPDATE feed SET data = json_set(data, '$.action', json_patch(json_extract(data, '$.action'), ?)), needs = 0, read = 1
+       WHERE ref = ? AND json_type(data, '$.action') = 'object'`;
+    return this.#sql.exec(sql, JSON.stringify(ended), ref).rowsWritten;
   }
 
   /** The newest items, only the unread ones or only those needing the person when asked, and the counts. */
@@ -220,7 +235,7 @@ export interface Follower {
 export interface RunEnded {
   agentId: string;
   dueAt: number;
-  status: Exclude<RunStatus, "running">;
+  status: EndedRunStatus;
   summary?: string;
   /** The agent's home conversation, where the run lives, and its kind. */
   chatId: string;
@@ -255,7 +270,7 @@ export function runItem(
   const text = shown ? run.post : run.post ? undefined : run.summary;
   const item: FeedInput = {
     kind: "run",
-    ref: `run:${agent.id}:${run.dueAt}`,
+    ref: runFeedRef(agent.id, run.dueAt),
     // When it asked, if it did: an answer written since, while the run went on, answers it (FeedStore.add).
     at: (asks && run.sentAt) || now,
     title: `@${agent.name} ${asks ? "asks you something" : RUN_FEED_TEXT[run.status]}`,
@@ -264,7 +279,7 @@ export function runItem(
     open: shown ? { to: "chat", chatId: shown.id } : { to: "agent", agentId: agent.id, tab: "runs" },
     chat: shown ?? home,
     status: run.status,
-    // A run waiting for a sign-in waits until it goes on (the same ref, replaced); one that asks, until they answer in its chat.
+    // A run waiting for a sign-in waits until it goes on (runResumed); one that asks, until they answer in its chat.
     ...(run.status === "needs_sign_in" ? { needsYou: true } : asks && { needsYou: "reply" as const }),
     ...(run.status === "not_today" && { quiet: true }),
     aboutAgent: agent.id,

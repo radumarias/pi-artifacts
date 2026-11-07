@@ -11,10 +11,19 @@ export type RunWhy = "schedule" | "watch" | "test" | "manual";
 
 /**
  * How a run ended: `sent` when it acted on at least one item, `not_today` when every item stopped at a condition (no
- * model call), `failed`, or `needs_sign_in` when a server it reads needs its owner to sign in again (kept to retry).
+ * model call), `failed`, `needs_sign_in` when a server it reads needs its owner to sign in again (kept to retry), or
+ * `waiting` while a do step of one of its items is held for its owner's approval (it goes on once they decide).
  */
-export type RunStatus = "running" | "sent" | "not_today" | "failed" | "needs_sign_in";
-export type RunItemStatus = "running" | "acted" | "not_today" | "failed";
+export type RunStatus = "running" | "sent" | "not_today" | "failed" | "needs_sign_in" | "waiting";
+/** `waiting`: stopped at a do step held for its owner; approved it goes on from there, declined or expired it stops. */
+export type RunItemStatus = "running" | "acted" | "not_today" | "failed" | "waiting";
+
+/** How a run ended: not running, and not waiting for a held call (it goes on once its owner decides). */
+export type EndedRunStatus = Exclude<RunStatus, "running" | "waiting">;
+
+export function runEnded(status: RunStatus): status is EndedRunStatus {
+  return status !== "running" && status !== "waiting";
+}
 
 /** One step as a run went through it, for the run detail's "How it got there". */
 export interface RunStepRecord {
@@ -40,8 +49,11 @@ export interface RunDelivery {
   to: string;
   /** What it sent: the report as posted. */
   text?: string;
-  /** `recorded`: a test run's, nothing was sent; `refused`: not at this autonomy level, or not allowed. */
-  status: "sent" | "recorded" | "refused" | "failed";
+  /**
+   * `recorded`: a test run's, nothing was sent; `refused`: not at this autonomy level, or not allowed; `waiting`: held
+   * for its owner (a proposal or an approval, in its home chat and their feed's Needs you).
+   */
+  status: "sent" | "recorded" | "refused" | "waiting" | "failed";
   /** Why it was refused or failed, or what came of it ("Signups brief v38 published"). */
   detail?: string;
   /** The page version a page step published. */
@@ -91,8 +103,8 @@ export interface AgentRunView {
   endedAt?: number;
   /** In dollars, every work step of every item. */
   cost: number;
-  /** How many items it had, acted on, or stopped at a condition ("not today"). */
-  items: { total: number; acted: number; notToday: number; failed: number };
+  /** How many items it had, acted on, stopped at a condition ("not today"), failed, or wait for a decision. */
+  items: { total: number; acted: number; notToday: number; failed: number; waiting: number };
   /** The report's first line, or why it failed. */
   summary?: string;
   /** The servers whose sign-in it waits for (status needs_sign_in). */

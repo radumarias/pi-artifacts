@@ -4,12 +4,14 @@ import { CHAT_AGENT_KIND, CHAT_TURN_KIND, proposedBy, type ChatAgentReplyData } 
 import { entryItems, mergeItems, type ItemRef } from "../../shared/items.ts";
 import { CHAT_MESSAGE_KIND, CHAT_PEOPLE_KIND, publishedBy, type ChatMessageData, type ChatPeopleData } from "../../shared/protocol.ts";
 import { CHAT_BUDGET_KIND, CHAT_COPY_KIND, CHAT_EVENT_KIND, type ChatCopyData } from "../../shared/chat-kinds.ts";
+import { CHAT_ACTION_KIND, type ChatActionData } from "../../shared/limits.ts";
 import { CHAT_CHECKLIST_KIND, checklistOf, type ChatChecklistData } from "../../shared/checklist.ts";
 import { entryOffer } from "../../shared/offers.ts";
 
 /** When an entry was sent, for one that has a time: messages from before chats kept `sentAt` have only the time pi wrote them, and asides not even that. */
 export function sentAt(entry: EntryRecord): number | undefined {
   if (entry.kind === CHAT_AGENT_KIND) return (entry.data as unknown as ChatAgentReplyData).endedAt;
+  if (entry.kind === CHAT_ACTION_KIND) return (entry.data as unknown as ChatActionData).action.createdAt;
   if (entry.kind === CHAT_COPY_KIND) {
     const data = entry.data as unknown as ChatCopyData;
     return data.from === "pi" ? data.sentAt : undefined;
@@ -20,8 +22,8 @@ export function sentAt(entry: EntryRecord): number | undefined {
 
 /**
  * Entries the app shows something for; the others (such as asides for the model) do not end an agent's reply, or start
- * one. Another agent's reply (`chat.agent`) shows as its own message. A checklist's entries show as one card, where it
- * was first posted (inReply says which of them end a reply).
+ * one. Another agent's reply (`chat.agent`) shows as its own message, and a held call (`chat.action`) as its card. A
+ * checklist's entries show as one card, where it was first posted (inReply says which of them end a reply).
  */
 export function shown(entry: EntryRecord): boolean {
   return (
@@ -32,6 +34,7 @@ export function shown(entry: EntryRecord): boolean {
     entry.kind === CHAT_EVENT_KIND ||
     entry.kind === CHAT_BUDGET_KIND ||
     entry.kind === CHAT_COPY_KIND ||
+    entry.kind === CHAT_ACTION_KIND ||
     entry.kind === "pi.user" ||
     isAgent(entry)
   );

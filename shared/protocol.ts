@@ -10,6 +10,7 @@ import type { Mention, MentionInput } from "./mentions.ts";
 import type { AgentColor, ChatAgentView } from "./agents.ts";
 import type { ChatKind, ChatPage } from "./chat-kinds.ts";
 import type { ChatAgentSettingsView } from "./agent-settings.ts";
+import type { PendingActionView } from "./limits.ts";
 
 export type McpErrorCode =
   | "server_not_connected"
@@ -639,6 +640,11 @@ export type ChatServerMessage =
    * call has run; then one batch per commit, until the turn ends (the `agents` message says so).
    */
   | { type: "agentEvents"; agent: string; turn: number; events: unknown[]; toolsElapsedMs?: Record<string, number> }
+  /**
+   * The chat's actions that wait, or waited, for its owner (shared/limits.ts), newest first: on connect, and whenever one
+   * is made or ends. The cards in the log (CHAT_ACTION_KIND entries) show their state from it.
+   */
+  | { type: "actions"; actions: PendingActionView[] }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
   /** Sent to everyone just before the chat closes their sockets, when its owner deleted it. */

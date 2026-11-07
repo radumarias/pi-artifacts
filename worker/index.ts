@@ -21,6 +21,7 @@ import { skillsRoute } from "./skills-routes.ts";
 import { agentsRoute } from "./agents-routes.ts";
 import { memoryRoute } from "./memory-routes.ts";
 import { runsRoute } from "./runs-routes.ts";
+import { limitsRoute } from "./limits-routes.ts";
 import { feedRoute } from "./feed-routes.ts";
 import type { FeedInput } from "../shared/feed.ts";
 import { chatAgentName } from "./chat-agent.ts";
@@ -212,6 +213,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (agents) return agents;
   const runs = await runsRoute(request, uid, directory, env.DEV_TOOLS === "true");
   if (runs) return runs;
+  const limits = await limitsRoute(request, uid, directory, mcpServers(env));
+  if (limits) return limits;
   // The feed, and follows of others' pages and agents (worker/feed-routes.ts).
   const feed = await feedRoute(request, uid, directory, storage);
   if (feed) return feed;

@@ -13,7 +13,7 @@ import {
   type AgentTurnView,
 } from "../../shared/agents.ts";
 import { AUTO_MODEL } from "../../shared/models.ts";
-import { errorMessage, plural, singleFlight } from "../../shared/util.ts";
+import { errorMessage, plural } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { ModelPicker, useCatalog } from "../chat/ModelPicker.tsx";
 import { AgentAvatar } from "../chat/people.tsx";
@@ -23,7 +23,7 @@ import type { AgentSubject, AgentTabProps } from "./AgentPage.tsx";
 import { AssumedBadge } from "./AssumedBadge.tsx";
 import { ASSUMED_FIELDS, CONFLICT_NOTICE, isAssumed, isConflict, withoutAssumed } from "./glance.ts";
 import { goTo } from "./nav.ts";
-import { reloadAgents } from "./store.ts";
+import { readServers, reloadAgents } from "./store.ts";
 
 /** What Auto means for an agent: the model of the chat it answers in. Stable, so the memoized picker keeps it. */
 const CHAT_MODEL = { name: "Chat's model", hint: "Answers with the model of the chat it is in" };
@@ -57,8 +57,6 @@ const SETUP_ASSUMED: Record<string, readonly string[]> = {
 /** The version of the definition a form shows; none for a new one. */
 const versionOf = (subject: AgentSubject) => (subject.kind === "new" ? undefined : subject.agent.version);
 
-/** The deployment's MCP servers, one read for the forms open at once: read again as a form opens, so a sign-in shows. */
-const readServers = singleFlight(api.agentServers);
 
 /** Fields shown together with another one: a Change for them opens that one. */
 const SHOWN_WITH: Record<string, string> = { effort: "model", sharedServers: "servers" };

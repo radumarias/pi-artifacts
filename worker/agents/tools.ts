@@ -32,7 +32,8 @@ export function agentsExtension(scope: AgentsScope): Extension {
           'Draft a new agent for the user when they ask for one ("make me an agent that…", "every morning, check … and tell me"): a named helper with its own job, ' +
           "instructions, model and MCP servers, that people call in a chat with @name, and that can run on a schedule. It is saved turned off; the user reviews it and turns it on. " +
           "Ask only about gaps you cannot fill from the servers' tool lists; list in assumed the fields you guessed (such as servers, trigger, model), so they show as Assumed. " +
-          "Write the instructions as numbered plain steps that work on their own, without this conversation's specifics unless they are the point.",
+          "Write the instructions as numbered plain steps that work on their own, without this conversation's specifics unless they are the point. " +
+          "Its limits (how far it changes things on its own, its rules) are not yours to set: the user sets them on its Limits tab.",
         parameters: Type.Object({
           name: Type.String({
             description: 'Its handle, called as @name: 2 to 24 lowercase letters, digits or hyphens, starting with a letter, e.g. "research".',
@@ -57,12 +58,6 @@ export function agentsExtension(scope: AgentsScope): Extension {
                 'when: "count.total < 10 and (previous == null or previous.total >= 10)"}.',
             }),
           ),
-          autonomy: Type.Optional(
-            Type.Union(
-              [1, 2, 3, 4].map((level) => Type.Literal(level)),
-              { description: "1 inform (default), 2 recommend, 3 approve, 4 run." },
-            ),
-          ),
           assumed: Type.Optional(Type.Array(Type.String(), { description: "The fields you guessed, by name." })),
         }),
         execute: async (args) => {
@@ -76,7 +71,8 @@ export function agentsExtension(scope: AgentsScope): Extension {
           };
           return {
             output: text(
-              `Drafted the agent @${saved.name}, turned off. The user reviews it, tests it and turns it on from its card or under Agents in the sidebar.`,
+              `Drafted the agent @${saved.name}, turned off. The user reviews it, tests it and turns it on from its card or under Agents in the sidebar. ` +
+                `How far it may change things on its own (it starts at Inform: it changes nothing), its rules and its approvals are the user's to set, on its Limits tab.`,
             ),
             details,
           };

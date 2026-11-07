@@ -4,7 +4,7 @@ import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 import { itemsOf, type McpResultDetails } from "../../shared/items.ts";
 import { isReadOnly, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, type ToolInfo } from "../../shared/protocol.ts";
 import { errorMessage } from "../../shared/util.ts";
-import type { McpHub } from "../mcp/hub.ts";
+import { CallHeld, type McpHub } from "../mcp/hub.ts";
 import { clip, MAX_TOOL_TEXT, text } from "./output.ts";
 
 /** Tool names the providers accept: the server's name as a slug, then the MCP tool's name. */
@@ -87,8 +87,16 @@ export function mcpExtension(
           parameters: Type.Unsafe<Record<string, unknown>>((tool.inputSchema as object) ?? { type: "object" }),
           replay: readOnly ? "safe" : "unsafe",
           ...(deferred && { deferred: true as const }),
-          execute: async (args) => {
-            const result = await hub.call(server, tool.name, args);
+          execute: async (args, api) => {
+            let result;
+            try {
+              // Which session calls: the write gate reads who that is, and how far they may go (worker/agents/limits/).
+              result = await hub.call(server, tool.name, args, { kind: "session", session: String(api.conversationId) });
+            } catch (error) {
+              // Refused, or held for the owner: what the model is told, not a failure of the tool.
+              if (error instanceof CallHeld) return { output: text(error.message) };
+              throw error;
+            }
             const payload = result.payload ?? result.content;
             // The records it holds, for the chips under the reply built on it (shared/items.ts): taken here, from what
             // the server returned, never from what the model writes. The model does not read details.
@@ -126,7 +134,9 @@ export function mcpExtension(
     "when they don't, pick by the tool descriptions. One entry may be a portal: a single address in front of several servers, whose " +
     "tools all appear under the portal's name (often prefixed with each server's name), and whose own tools may list or connect the servers behind it. " +
     `When the user asks what is available, or says they have just signed in or connected something, call ${MCP_DISCOVER_TOOL} first, then answer from what it lists. ` +
-    "A tool may answer with a link the user must open (to sign in, for example); pass such links on as they are.\n" +
+    "A tool may answer with a link the user must open (to sign in, for example); pass such links on as they are. " +
+    "A tool that changes data may answer that it did not run: refused by a rule, or held for the owner (a card they press to run it, " +
+    "or an approval they give later). Say so plainly, and do not try to get the same change done another way.\n" +
     (deferred
       ? "Only the tools this message looks likely to need are offered to you; the others listed here are not loaded. " +
         `To call one that is not offered, load it first with ${TOOL_SEARCH_TOOL_NAME}, searching for its agent tool name.\n`

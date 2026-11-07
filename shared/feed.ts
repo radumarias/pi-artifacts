@@ -5,7 +5,8 @@
 // reach it (mayLeave in shared/chat-kinds.ts).
 
 import type { ChatAgentView } from "./agents.ts";
-import type { RunStatus } from "./runs.ts";
+import type { PendingActionView } from "./limits.ts";
+import type { EndedRunStatus, RunStatus } from "./runs.ts";
 
 /** One follow among a person's, as the app names it: two people's agents can share an id, and whose it is tells them apart. */
 export const followKey = (follow: { kind: string; id: string; ownerUid?: string }) => `${follow.kind}:${follow.id}:${follow.ownerUid ?? ""}`;
@@ -108,7 +109,22 @@ export interface FeedInput {
   quiet?: boolean;
   /** The receiver's own agent it is about (its run, its draft): deleting that agent takes the item along. */
   aboutAgent?: string;
+  /** An approval's action, as it was held: the feed decides it from there (Approve, Decline). */
+  action?: FeedAction;
 }
+
+/**
+ * An approval's action as its feed item keeps it: what deciding it there takes, and once decided how it ended (its
+ * result's start), so the resolved item still says so. Not its call's input, which can be large and stays in the chat
+ * (the item's text has the call in one line).
+ */
+export type FeedAction = Pick<PendingActionView, "id" | "chatId" | "kind" | "status" | "expiresAt" | "result" | "decidedAt">;
+
+/** How an approval's action ended, as its feed item keeps it. */
+export type FeedActionEnd = Pick<FeedAction, "status" | "result" | "decidedAt">;
+
+/** How much of an ended action's result its feed item keeps. */
+export const MAX_FEED_RESULT = 300;
 
 /** An item in the feed, as the app lists it. */
 export interface FeedItem {
@@ -122,6 +138,8 @@ export interface FeedItem {
   status?: RunStatus;
   read?: true;
   needsYou?: true;
+  /** An approval's action, as it was held: while the item needs the person, they decide it in the feed. */
+  action?: FeedAction;
 }
 
 /** GET /api/feed: the newest items (filtered as asked), how many are unread, and how many still wait on the person. */
@@ -160,8 +178,11 @@ export function feedPath(open: FeedOpen): string {
   }
 }
 
+/** A run's item in its owner's feed: one per run, its newer state replacing the older. */
+export const runFeedRef = (agentId: string, dueAt: number) => `run:${agentId}:${dueAt}`;
+
 /** A run's end in words, after the agent's name: what its feed item says. */
-export const RUN_FEED_TEXT: Record<Exclude<RunStatus, "running">, string> = {
+export const RUN_FEED_TEXT: Record<EndedRunStatus, string> = {
   sent: "sent its report",
   not_today: "had nothing to report",
   failed: "failed",

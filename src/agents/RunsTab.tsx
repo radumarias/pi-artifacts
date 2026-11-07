@@ -194,7 +194,7 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
           {[
             whyLabel(run.why),
             run.when,
-            run.endedAt !== undefined && `took ${tookFor(run.endedAt - run.startedAt)}`,
+            run.status !== "waiting" && run.endedAt !== undefined && `took ${tookFor(run.endedAt - run.startedAt)}`,
             run.cost > 0 && formatCost(run.cost),
           ]
             .filter(Boolean)
@@ -217,6 +217,12 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
           {signInWayOut(agent, run.needsSignIn).join(" ")}
         </p>
       )}
+      {run.status === "waiting" && (
+        <p className="skills-note">
+          {run.summary ?? "It waits for you to approve a call."} Approve or decline it in the feed's Needs you or in the run's chat: approved, the run goes on
+          from there; declined or expired, that item stops.
+        </p>
+      )}
       {run.status === "failed" && run.summary && <p className="form-error">{run.summary}</p>}
       {/* Why nothing went: a condition, or a sign-in that let a newer run go instead. */}
       {run.status === "not_today" && run.summary && <p className="skills-note">{run.summary}</p>}
@@ -229,7 +235,7 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
           ))}
         </ul>
       ) : (
-        <p className="skills-note">{run.status === "running" ? "Nothing yet: it sends once every item is done." : "Nothing: no item got to a step that sends."}</p>
+        <p className="skills-note">{run.status === "running" || run.status === "waiting" ? "Nothing yet: it sends once every item is done." : "Nothing: no item got to a step that sends."}</p>
       )}
 
       <h4 className="run-section">How it got there</h4>

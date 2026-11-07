@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { AgentDefinition } from "../../shared/agents.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { errorMessage, singleFlight } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
 /** The user's agents as the app last read them: null until the first read answers. */
@@ -68,3 +68,6 @@ export const dropAgent = agentsStore.drop;
 export function useAgents(): AgentsState {
   return useSyncExternalStore(agentsStore.subscribe, agentsStore.get);
 }
+
+/** The deployment's MCP servers, one read for the forms open at once: read again as a form opens, so a sign-in shows. */
+export const readServers = singleFlight(api.agentServers);

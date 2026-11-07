@@ -1,7 +1,7 @@
 import { exports } from "cloudflare:workers";
 import { AGENT_ID_PATTERN } from "../shared/agents.ts";
-import { chatAgentName, type ChatRefusal } from "./chat-agent.ts";
-import { json, readJson } from "./http.ts";
+import { chatAgentName } from "./chat-agent.ts";
+import { answerJson, json, readJson } from "./http.ts";
 import type { UserDirectory } from "./users.ts";
 
 /**
@@ -22,8 +22,7 @@ export async function runsRoute(request: Request, uid: string, directory: Durabl
   if (!match || !AGENT_ID_PATTERN.test(match[2])) return null;
   const [, dev, agentId, what, dueAt, trace] = match;
   if (Boolean(dev) !== (what === "run")) return null;
-  const answer = <T extends object>(result: T | ChatRefusal, status = 200) =>
-    "status" in result && "error" in result ? json({ error: result.error }, result.status) : json(result, status);
+  const answer = answerJson;
   const chat = (home: string) => exports.ChatAgent.getByName(chatAgentName(uid, home));
 
   if (method === "GET" && what === "runs") {

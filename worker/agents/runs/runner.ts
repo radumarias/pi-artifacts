@@ -6,8 +6,8 @@ import { canonicalJson } from "../../../shared/canonical.ts";
 import type { Value } from "../../../shared/conditions.ts";
 import { mayUseServer, runServers, type AgentDefinition, type AgentTrigger, type LookStep } from "../../../shared/agents.ts";
 import { errorMessage, sha256Hex } from "../../../shared/util.ts";
-import { readFor, resultName, RunExecutor, startOf, watchFires, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
-import { turnedOff, type RunRecord } from "./store.ts";
+import { readFor, resultName, RunExecutor, startOf, watchFires, type ActionRunRef, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
+import { turnedOff, type ActedStep, type RunRecord } from "./store.ts";
 import { nextRunAt } from "./schedule.ts";
 import { sourceName } from "./source.ts";
 import type { Sql } from "../../members.ts";
@@ -418,19 +418,34 @@ export class AgentRunner {
     return restarted;
   }
 
+  /**
+   * The owner decided a do step a run's item waited at (approved and ran, failed, declined or expired): the item goes on
+   * from that step with its outcome, and the run then sends what its items reached. Nothing when it no longer waited.
+   */
+  async decided(ref: ActionRunRef, acted: ActedStep): Promise<void> {
+    if (!(await this.executor.decided(ref.agentId, ref.dueAt, ref.item, ref.step, acted))) return;
+    this.#host.changed(ref.agentId);
+    await this.#goOn(this.#host.runs.get(ref.agentId, ref.dueAt)!, (start) => this.executor.again(start));
+  }
+
+  /**
+   * A run that did not end goes on from where its rows say: failed instead when its agent was deleted (one turned off
+   * stops there, RunExecutor).
+   */
+  async #goOn(run: RunRecord, start: (start: RunStart) => Promise<RunEnd> = (one) => this.executor.start(one)): Promise<RunEnd | null> {
+    const agent = await this.#host.definition(run.agentId);
+    if (!agent) {
+      this.#host.runs.update(run.agentId, run.dueAt, { status: "failed", summary: "Failed: the agent was deleted." });
+      return null;
+    }
+    return start(startOf(agent, run));
+  }
+
   /** After a restart: the runs that were going go on, from where their rows say. Cheap when there are none. */
   resume(): void {
     for (const run of this.#host.runs.unfinished()) {
       if (run.status !== "running" || this.executor.busy(run.agentId)) continue;
-      this.#host.waitUntil(
-        this.#host.definition(run.agentId).then((agent) => {
-          if (!agent) {
-            this.#host.runs.update(run.agentId, run.dueAt, { status: "failed", summary: "Failed: the agent was deleted." });
-            return null;
-          }
-          return this.executor.start(startOf(agent, run));
-        }),
-      );
+      this.#host.waitUntil(this.#goOn(run));
     }
   }
 

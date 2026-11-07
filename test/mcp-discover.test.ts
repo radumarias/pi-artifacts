@@ -25,17 +25,20 @@ describe("mcpExtension", () => {
 });
 
 describe("mcpExtension with spill", () => {
-  // One read-only tool whose server answers with `answer`, made into the extension's agent tool.
+  // One read-only tool whose server answers with `answer`, made into the extension's agent tool. The hub runs it with
+  // no write gate, as the server lists it read-only.
   function reportTool(answer: string, spill?: (tool: string, text: string) => Promise<string>) {
+    const report = { name: "reports_run", description: "Run a report", annotations: { readOnlyHint: true } };
     const hub = new McpHub([{ name: "portal", url: "https://example.invalid/mcp" }], async () => ({
-      listTools: async () => [],
+      listTools: async () => [report],
       callTool: async () => ({ content: [{ type: "text", text: answer }] }),
       close: async () => {},
     }));
-    const catalog = new Map([["portal", { tools: [{ name: "reports_run", description: "Run a report", annotations: { readOnlyHint: true } }] }]]);
+    const catalog = new Map([["portal", { tools: [report] }]]);
     const { extension } = mcpExtension(hub, catalog, new Map(), async () => "", { spill });
     const tool = extension.tools!.find((t) => t.name === "portal__reports_run")!;
-    return async () => (await (tool.execute as unknown as (args: object) => Promise<{ output: { text: string }[] }>)({})).output[0].text;
+    const execute = tool.execute as unknown as (args: object, api: { conversationId: string }) => Promise<{ output: { text: string }[] }>;
+    return async () => (await execute({}, { conversationId: "s1" })).output[0].text;
   }
 
   it("says how much is shown and where the whole result is", () => {

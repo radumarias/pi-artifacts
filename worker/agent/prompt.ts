@@ -123,7 +123,8 @@ function piPeople({ owner, members }: ChatPeople, roster: readonly PromptAgent[]
     "possibly while you work. Answer the message that called you, using the talk around it where it helps, and never reply to the talk itself. " +
     "People tag each other with @ and a name; such a tag is for that person, not a call to you. " +
     "Everyone sees the same conversation and previews, and answers go to all of them: address someone by name when it helps. " +
-    "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner." +
+    "Whoever asks, you work with the owner's MCP connections, files and skills, and artifacts you publish belong to the owner. " +
+    "A change to data someone else asks for does not run: it is proposed to the owner as a card they press." +
     others
   );
 }

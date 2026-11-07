@@ -125,6 +125,11 @@ const clockNow = () => Math.floor(Date.now() / TICK_MS) * TICK_MS;
 
 const unsubscribed = () => () => {};
 
+/** The time now, to the clock's 30-second tick, again on each tick while `on`: for an expiry counting down. */
+export function useClock(on = true): number {
+  return useSyncExternalStore(on ? subscribe : unsubscribed, clockNow, clockNow);
+}
+
 /**
  * When a message was sent, under it on hover, how long ago; compact (on a phone), beside it where a drag uncovers it,
  * the time of day, which needs no clock. The full date and time in its tooltip.
