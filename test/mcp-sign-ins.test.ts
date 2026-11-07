@@ -273,6 +273,32 @@ describe("sign-ins with nobody present", () => {
     expect(s.signIns.list()[0]).toMatchObject({ stepReads: true, waiting: "@brief" });
   });
 
+  it("works out a step read from what waits and what runs use, also for the keep-alive's notice and after Dismiss", async () => {
+    const s = setup();
+    await signIn(s, T0);
+    // The keep-alive asks with no wait behind it: the runs' servers say a step reads Portal.
+    s.signIns.setRunServers("chat1", ["Portal"], ["Portal"]);
+    s.answer("needs_sign_in");
+    s.at(T0 + KEEP_ALIVE_MS);
+    await s.signIns.alarm();
+    expect(s.told).toEqual([expect.objectContaining({ kind: "needed", stepReads: true })]);
+    expect(s.pushed[0]).toContain("in a step");
+    expect(s.pushed[0]).not.toContain("Disconnect");
+    expect(s.signIns.list()[0]).toMatchObject({ lapsed: true, stepReads: true });
+    // Dismissed, then asked again by a wait that reads it only in its instructions: the run that reads it in a step
+    // still waits behind it, so the notice says so.
+    s.signIns.setRunServers("chat1", []);
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    s.signIns.dismiss("Portal");
+    await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });
+    expect(s.told.at(-1)).toMatchObject({ stepReads: true });
+    expect(s.pushed.at(-1)).not.toContain("Disconnect");
+    expect(s.signIns.list()[0]).toMatchObject({ notice: "needed", stepReads: true });
+    // Its own later wait without the step read takes it back.
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
+    expect(s.signIns.list()[0]!.stepReads).toBeUndefined();
+  });
+
   it("records a test run's chat as waiting without telling the user", async () => {
     const s = setup();
     await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", quiet: true });

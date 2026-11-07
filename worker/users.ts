@@ -221,8 +221,8 @@ export class UserDirectory extends DurableObject<Env> {
    * For scheduled runs (worker/agents/runs): the servers one chat's runs use, kept refreshed daily and warned about
    * before their grant ends. Replaces that chat's list; empty clears it.
    */
-  setRunServers(chatId: string, servers: readonly string[]): void {
-    this.#signIns.setRunServers(chatId, servers);
+  setRunServers(chatId: string, servers: readonly string[], stepReads: readonly string[] = []): void {
+    this.#signIns.setRunServers(chatId, servers, stepReads);
   }
 
   /** Before a run: whether each server's sign-in works with nobody present (refreshed now). See McpSignIns.check. */
