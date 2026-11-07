@@ -6,7 +6,7 @@ import { canonicalJson } from "../../../shared/canonical.ts";
 import type { Value } from "../../../shared/conditions.ts";
 import { mayUseServer, type AgentDefinition, type AgentTrigger, type LookStep } from "../../../shared/agents.ts";
 import { errorMessage, sha256Hex } from "../../../shared/util.ts";
-import { readFor, resultName, RunExecutor, watchFires, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
+import { readFor, resultName, RunExecutor, startOf, watchFires, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
 import type { RunRecord } from "./store.ts";
 import { nextRunAt } from "./schedule.ts";
 import { sourceName } from "./source.ts";
@@ -54,11 +54,6 @@ function triggerKey(agent: AgentDefinition): string {
 const HASHED = "sha256:";
 
 /** A run to start again from its row: the same due time, and the watch values it started with. */
-function startOf(agent: AgentDefinition, run: RunRecord): RunStart {
-  const { watch, previous } = run.detail as { watch?: Value; previous?: Value };
-  return { agent, dueAt: run.dueAt, why: run.why, test: run.test, watch, previous };
-}
-
 /** A value as it is compared with the last one: its canonical JSON, or a hash of a large one. */
 async function fingerprint(value: Value): Promise<string> {
   const json = canonicalJson(value);
@@ -371,14 +366,18 @@ export class AgentRunner {
         continue;
       }
       // A later run went meanwhile (without the server, after its sign-in lapsed): this one would post after it. One
-      // still going may yet wait too: this one waits for it, and is skipped when it goes (RunExecutor), else restarted at
-      // the next sign-in, when that one waits too.
+      // still going may yet go: this one waits for it, marked released, and is skipped when it goes, or goes itself when
+      // it ends without going (RunExecutor).
       const newer = this.#host.runs.newer(run.agentId, run.dueAt, run.test);
       if (newer === "went") {
         skip(run, "a newer run went since");
         continue;
       }
-      if (newer === "going") continue;
+      if (newer === "going") {
+        const released = [...new Set([...(run.detail.released ?? []), server])];
+        this.#host.runs.update(run.agentId, run.dueAt, { detail: { released } });
+        continue;
+      }
       if (!this.#host.runs.restart(run.agentId, run.dueAt)) continue;
       restarted++;
       this.#host.waitUntil(this.executor.start(startOf(agent, run)));

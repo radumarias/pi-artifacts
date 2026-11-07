@@ -410,6 +410,64 @@ describe("scheduled runs", () => {
     expect(host.runs.get(definition.id, T0 + 99)).toBeNull();
   });
 
+  it("starts an older run released for a newer one once that one ends without going", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    await host.settled();
+    host.signIn.delete("crm");
+    // The next run is in its sign-in check when the sign-in comes: the older one waits for it, released.
+    host.clock.now = T0 + 1;
+    const check = host.needsSignIn.bind(host);
+    let first = true;
+    host.needsSignIn = async (servers) => {
+      if (first) {
+        first = false;
+        await runner.signedIn("crm");
+        expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "needs_sign_in", detail: { released: ["crm"] } });
+      }
+      return check(servers);
+    };
+    // Its read fails, once: it ends failed, without going, and the older run goes after all.
+    let reads = 0;
+    host.values.set("crm.weekly_sales", () => {
+      if (reads++ === 0) throw new Error("crm is down");
+      return { total: 940, lastYear: 1000 };
+    });
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.get(definition.id, T0 + 1)?.status).toBe("failed");
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "sent" });
+    expect(host.delivered).toHaveLength(1);
+  });
+
+  it("checks once more, and does not ask again, when the sign-in came during a newer run's check", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.asked).toEqual(["crm"]);
+    host.clock.now = T0 + 1;
+    const check = host.needsSignIn.bind(host);
+    let first = true;
+    host.needsSignIn = async (servers) => {
+      const missing = await check(servers);
+      if (first) {
+        // Its check saw the old sign-in; the new one lands before the check returns.
+        first = false;
+        host.signIn.delete("crm");
+        await runner.signedIn("crm");
+      }
+      return missing;
+    };
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.get(definition.id, T0 + 1)?.status).toBe("sent");
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: a newer run went instead." });
+    expect(host.asked).toEqual(["crm"]);
+    expect(host.delivered).toHaveLength(1);
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {
