@@ -139,6 +139,16 @@ export class AgentRunner {
     const wanted = agent?.enabled && agent.trigger ? agent : null;
     const key = wanted ? triggerKey(wanted) : "";
     if (row && wanted && row.kind === wanted.trigger!.kind && row.key === key && (row.kind === "watch" || (row.due_at ?? 0) > after)) return;
+    if (!row && !wanted) return;
+    try {
+      await this.#set(agentId, row, wanted, key, after);
+    } finally {
+      // Its next run moved, or went: the Runs tab reads it again.
+      this.#host.changed(agentId);
+    }
+  }
+
+  async #set(agentId: string, row: ScheduleRow | undefined, wanted: AgentDefinition | null, key: string, after: number): Promise<void> {
     if (row) await this.#clear(row);
     if (!wanted) return;
     const trigger = wanted.trigger!;

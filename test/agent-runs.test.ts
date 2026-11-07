@@ -118,7 +118,11 @@ class FakeHome implements RunnerHost {
     this.delivered.push(request);
     return { kind: "chat", to: request.step.kind === "tell" ? request.step.to.join(", ") : "", text: request.text, status: "sent" };
   }
-  changed() {}
+  /** The agents whose runs or next run changed, as the Runs tab hears it. */
+  readonly told: string[] = [];
+  changed(agentId: string) {
+    this.told.push(agentId);
+  }
   async alarmAt(at: number, payload: RunAlarm) {
     const id = `alarm-${++this.#alarmIds}`;
     this.alarms.set(id, { at, payload });
@@ -461,6 +465,17 @@ describe("scheduled runs", () => {
     await runner.apply(definition.id, agent({ version: 2, enabled: false }));
     expect(runner.nextRun(definition.id)).toBe(SEVEN);
     expect(host.alarms.size).toBe(1);
+  });
+
+  it("tells the Runs tab when its next run is set or goes, and not for a save that keeps it", async () => {
+    const { host, runner, definition } = home();
+    await runner.apply(definition.id, definition);
+    expect(host.told).toEqual([definition.id]);
+    await runner.apply(definition.id, { ...definition, version: 2, job: "Changed" });
+    expect(host.told).toHaveLength(1);
+    await runner.apply(definition.id, { ...definition, version: 3, enabled: false });
+    expect(host.told).toEqual([definition.id, definition.id]);
+    expect(runner.nextRun(definition.id)).toBeNull();
   });
 
   it("remembers the newest definition even when it kept the alarm", async () => {
