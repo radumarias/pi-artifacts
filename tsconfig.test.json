@@ -115,6 +115,7 @@
     "worker/dictation.ts",
     "src/chat/dictation-engine.ts",
     "src/agents/glance.ts",
+    "src/agents/AgentTabs.tsx",
     "src/agents/nav.ts",
     "src/agents/runs.ts",
     "src/agents/workflow.ts"

@@ -157,3 +157,6 @@ export function glanceRows(agent: Pick<AgentDefinition, "name" | "trigger" | "sc
     ),
   ];
 }
+
+/** What the page says on what it holds while a tab has changes not saved: leaving the tab, or a new version, would lose them. */
+export const SAVE_FIRST = "Save or undo your changes first";

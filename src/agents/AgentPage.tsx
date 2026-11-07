@@ -12,7 +12,8 @@ import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { AgentAvatar } from "../chat/people.tsx";
 import { MenuButton, opensElsewhere } from "../layout.tsx";
-import { stateLabel } from "./glance.ts";
+import { AgentTabs } from "./AgentTabs.tsx";
+import { SAVE_FIRST, stateLabel } from "./glance.ts";
 import { agentPath, NEW_AGENT, type AgentPlace } from "./nav.ts";
 import { RunsTab } from "./RunsTab.tsx";
 import { SetupTab } from "./SetupTab.tsx";
@@ -191,22 +192,7 @@ export function AgentPage({
           {notice.text}
         </p>
       )}
-      {TABS.length > 1 && (
-        <nav className="agent-tabs" role="tablist" aria-label="Agent">
-          {TABS.map((each) => (
-            <button
-              key={each.id}
-              type="button"
-              role="tab"
-              aria-selected={each.id === tab.id}
-              className={each.id === tab.id ? "agent-tab active" : "agent-tab"}
-              onClick={() => navigate(agentPath({ id: place.id, tab: each.id, chat: place.chat }))}
-            >
-              {each.label}
-            </button>
-          ))}
-        </nav>
-      )}
+      <AgentTabs tabs={TABS} current={tab.id} dirty={dirty} open={(id) => navigate(agentPath({ id: place.id, tab: id, chat: place.chat }))} />
       <div role="tabpanel" aria-label={tab.label}>
         {/* A new tab state for each agent; a tab follows its newer versions itself, keeping changes not yet saved. */}
         <tab.Component
@@ -289,7 +275,7 @@ function AgentHeader({
               type="button"
               className={subject.agent.enabled ? undefined : "primary"}
               disabled={busy || dirty}
-              title={dirty ? "Save or undo your changes first" : undefined}
+              title={dirty ? SAVE_FIRST : undefined}
               onClick={() => void turn(subject.agent, !subject.agent.enabled)}
             >
               {subject.agent.enabled ? "Turn off" : "Turn on"}

@@ -18,7 +18,7 @@ import { STEP_LABELS, stepSummary } from "../../shared/runs.ts";
 import { errorMessage, isObject } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import type { AgentTabProps } from "./AgentPage.tsx";
-import { DAY_NAMES, runsLabel } from "./glance.ts";
+import { DAY_NAMES, runsLabel, SAVE_FIRST } from "./glance.ts";
 import { putAgent } from "./store.ts";
 import { moveItem, newStep, withKeys, withoutKeys, type Keyed } from "./workflow.ts";
 
@@ -282,7 +282,7 @@ function WorkflowForm({
               Undo changes
             </button>
           )}
-          <button type="button" disabled={saving || dirty} title={dirty ? "Save or undo your changes first" : undefined} onClick={() => void compile()}>
+          <button type="button" disabled={saving || dirty} title={dirty ? SAVE_FIRST : undefined} onClick={() => void compile()}>
             Make the steps again from its instructions
           </button>
         </div>
