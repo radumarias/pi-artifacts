@@ -95,7 +95,7 @@ import { formatSkillFile } from "./skills/index.ts";
 import { ChatReactions } from "./reactions.ts";
 import { clearImported, DumpError, dumpChat, hasConversation, importedRoster, restorePart } from "./chat-dump.ts";
 import { idRemapper, type ChatDumpCursor, type ChatDumpPage, type ChatDumpPart, type ChatImportStart } from "../shared/data-export.ts";
-import { checkDraft, FailedChecks, publishDraft, writeDraft, type PublishScope, type PublishTarget, type WriteInput } from "./agent/publish.ts";
+import { afterPublish, checkDraft, FailedChecks, publishDraft, writeDraft, type PublishedHost, type PublishScope, type PublishTarget, type WriteInput } from "./agent/publish.ts";
 import { CheckBrowser } from "./artifacts/browser.ts";
 import { CHECK_MS, checkPage, type Bridge } from "./artifacts/check.ts";
 import { lookFrom } from "./artifacts/look.ts";
@@ -527,7 +527,7 @@ export class ChatAgent extends DurableObject<Env> {
       artifacts: this.storage.artifacts,
       // Deriving the user's key is not free, so derive it once per object.
       files: memoAsync(() => this.storage.userFiles(this.uid)),
-      onPublished: (artifact, chatId) => this.#onPublished(artifact, chatId),
+      onPublished: (artifact, chatId) => afterPublish(this.#published, artifact, chatId),
       broughtIn: (id) => this.#broughtIn().includes(id),
       proposeSkill: (skill) => this.#directory.saveSkill(skill, "agent", false),
       proposeAgent: (input) => this.#directory.saveAgent(input, "agent", false),
@@ -2194,29 +2194,15 @@ export class ChatAgent extends DurableObject<Env> {
     this.sockets.broadcastPeople();
   }
 
-  /**
-   * What every publish does once a version is out, whoever published it (pi, an agent, a run's page step, which
-   * publishes as the page's own chat): record it as `chatId`'s, and, off the publish's path, tell the chat that
-   * discusses the page of its new version. A scope sets only its chatId, never its own onPublished.
-   */
-  async #onPublished(artifact: Omit<ArtifactSummary, "chatId">, chatId: string): Promise<void> {
-    // The chat it belongs to says its kind (the owner's row of it can lag): a version of an off-the-record chat reaches
-    // no follower. One that cannot be asked counts as off the record.
-    const kind =
-      chatId === this.chatId
-        ? this.kinds.kind()
-        : await exports.ChatAgent.getByName(chatAgentName(this.uid, chatId))
-            .chatKind()
-            .catch((): ChatKind => "off_record");
-    await this.#directory.recordArtifact({ ...artifact, chatId }, false, kind);
-    void this.#tellPageChat(artifact).catch((error: unknown) => console.error("page chat:", errorMessage(error)));
-  }
-
-  /** Tell the chat that discusses a page this chat just published a version of, if there is one. Only a notice. */
-  async #tellPageChat(artifact: Omit<ArtifactSummary, "chatId">): Promise<void> {
-    const chatId = await this.#directory.pageChat(artifact.id);
-    if (!chatId || chatId === this.chatId) return;
-    await exports.ChatAgent.getByName(chatAgentName(this.uid, chatId)).pageVersion({ id: artifact.id, title: artifact.title, version: artifact.latest });
+  /** Where `afterPublish` records a version and finds the chat that discusses its page. */
+  get #published(): PublishedHost {
+    return {
+      chatId: this.chatId,
+      kind: () => this.kinds.kind(),
+      directory: this.#directory,
+      chat: (chatId) => exports.ChatAgent.getByName(chatAgentName(this.uid, chatId)),
+      later: (work) => void work.catch((error: unknown) => console.error("page chat:", errorMessage(error))),
+    };
   }
 
   /**

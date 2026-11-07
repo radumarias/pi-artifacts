@@ -9,7 +9,8 @@ import { findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, workSpend } fro
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "../worker/agents/runs/runner.ts";
 import { sourceName, SourceCore, type Subscriber } from "../worker/agents/runs/source.ts";
 import { AgentRuns } from "../worker/agents/runs/store.ts";
-import { writeDraft, type PublishScope } from "../worker/agent/publish.ts";
+import { afterPublish, writeDraft, type PublishedHost, type PublishScope } from "../worker/agent/publish.ts";
+import type { ChatKind, ChatPage } from "../shared/chat-kinds.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
 import { MAX_VERSION_MESSAGE, type ArtifactStore } from "../worker/storage/artifacts.ts";
@@ -890,6 +891,33 @@ describe("a run's page step", () => {
     const pageScope: PublishScope = { ...publishScope, chatId: "page-chat" };
     await publishFindings(pageScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"));
     expect(told).toEqual([{ id: "a1", latest: 4, chatId: "page-chat" }]);
+  });
+
+  it("records a run's version as the page chat's, of its kind, and tells the chat that discusses the page", async () => {
+    // The home chat publishes as the page's chat ("c"); a third chat discusses the page. afterPublish is ChatAgent's
+    // onPublished as it is, with the directory and the other chats as stand-ins.
+    const { publishScope } = scope([]);
+    const recorded: { chatId: string; latest: number; kind: ChatKind }[] = [];
+    const pages: { chat: string; page: ChatPage }[] = [];
+    const later: Promise<void>[] = [];
+    const host: PublishedHost = {
+      chatId: "home",
+      kind: () => "private",
+      directory: {
+        recordArtifact: (artifact, _seen, kind) => void recorded.push({ chatId: artifact.chatId, latest: artifact.latest, kind }),
+        pageChat: async (artifactId) => (artifactId === "a1" ? "talk" : null),
+      },
+      chat: (chatId) => ({
+        chatKind: async () => (chatId === "c" ? "page" : "private"),
+        pageVersion: async (page) => void pages.push({ chat: chatId, page }),
+      }),
+      later: (work) => void later.push(work),
+    };
+    const pageScope: PublishScope = { ...publishScope, chatId: meta.chatId, onPublished: (artifact, chatId) => afterPublish(host, artifact, chatId) };
+    await publishFindings(pageScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"));
+    await Promise.all(later);
+    expect(recorded).toEqual([{ chatId: "c", latest: 4, kind: "page" }]);
+    expect(pages).toEqual([{ chat: "talk", page: { id: "a1", title: "Sales brief", version: 4 } }]);
   });
 
   it("publishes a page whose check passes, with the report in it", async () => {
