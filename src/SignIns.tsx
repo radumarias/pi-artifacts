@@ -37,6 +37,7 @@ export function useSignInAlerts(reload: () => void) {
  * with its sign-in link. It stays until they sign in, or dismiss it.
  */
 export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onChange: (list: McpSignInView[]) => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
   const shown = list.filter((item) => item.notice);
   if (shown.length === 0) return null;
   return (
@@ -49,9 +50,26 @@ export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onCha
             <div className="sign-in-notice-body">
               <strong>{title}</strong>
               <span>{body}</span>
-              <a className="button primary" href={item.link} target="_blank" rel="noopener">
-                Sign in
-              </a>
+              <div className="sign-in-notice-actions">
+                <a className="button primary" href={item.link} target="_blank" rel="noopener">
+                  Sign in
+                </a>
+                {item.lapsed && (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setBusy(item.server);
+                      api
+                        .disconnect(item.server)
+                        .then(onChange, () => {})
+                        .finally(() => setBusy(null));
+                    }}
+                  >
+                    {busy === item.server ? "Disconnecting…" : "Disconnect"}
+                  </button>
+                )}
+              </div>
             </div>
             <button
               type="button"
@@ -72,7 +90,7 @@ export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onCha
 /**
  * From the account menu: the user's sign-ins to servers that sign in each user, each with when they signed in and when
  * it is counted to run out. Disconnect forgets the stored sign-in (its tokens), so nothing of theirs reaches that server
- * until they sign in again.
+ * until they sign in again; for a lapsed one it is also how runs stop waiting for it and go on without the server.
  */
 export function SignInsDialog({
   list,
@@ -116,19 +134,25 @@ export function SignInsDialog({
                   ? item.signedInAt
                     ? `Signed in ${day(item.signedInAt)} · runs out about ${day(item.endsAt!)}`
                     : "Signed in"
-                  : "Not signed in"}
+                  : item.lapsed
+                    ? "Sign-in no longer works · runs wait for it until you sign in again, or Disconnect"
+                    : "Not signed in"}
                 {item.usedByRuns && " · used by scheduled runs"}
               </small>
             </div>
-            {item.signedIn ? (
-              <button type="button" disabled={busy !== null} onClick={() => void disconnect(item.server)}>
-                {busy === item.server ? "Disconnecting…" : "Disconnect"}
-              </button>
-            ) : (
-              <a className="button" href={item.link} target="_blank" rel="noopener">
-                Sign in
-              </a>
-            )}
+            <div className="sign-in-actions">
+              {!item.signedIn && (
+                <a className="button" href={item.link} target="_blank" rel="noopener">
+                  Sign in
+                </a>
+              )}
+              {/* A lapsed sign-in is still waited for: Disconnect is how runs stop waiting for it. */}
+              {(item.signedIn || item.lapsed) && (
+                <button type="button" disabled={busy !== null} onClick={() => void disconnect(item.server)}>
+                  {busy === item.server ? "Disconnecting…" : "Disconnect"}
+                </button>
+              )}
+            </div>
           </li>
         ))}
       </ul>

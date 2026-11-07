@@ -213,7 +213,8 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
               </a>
             </span>
           ))}
-          . The run goes on by itself once you do; if several mornings waited, only the newest goes.
+          . The run goes on by itself once you do; if several mornings waited, only the newest goes. No access any more?
+          Disconnect it under Sign-ins in the account menu, and runs go on without it.
         </p>
       )}
       {run.status === "failed" && run.summary && <p className="form-error">{run.summary}</p>}

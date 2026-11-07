@@ -45,6 +45,8 @@ export type SignInNeededContext = { chatId?: string; what?: string; quiet?: bool
  *   in a chat signs in when the agent gives them the link, a run cannot.
  * - `mcp_waiting`: chats with runs waiting for a sign-in, told when it comes (`onSignedIn`).
  * - `mcp_notices`: what the sidebar shows until the user signs in, or dismisses it.
+ * - `mcp_known`: the servers the user has signed in to and not Disconnected, whatever became of the record since (a
+ *   refused refresh clears its tokens, a refused client all of it): runs that may use one wait for its sign-in.
  *
  * Changes to a record run one at a time: sealing one awaits, and a sign-in and the refreshes of several chats must not
  * overwrite each other. Opened records are kept in memory (this object is their only writer), so the token read every
@@ -58,6 +60,7 @@ export class McpSignIns {
   /** The check of each server under way: a run's check and the keep-alive share one refresh (a rotated refresh token used twice can sign the user out). */
   readonly #checks = new Map<string, Promise<SignInCheck>>();
   #alarmAt: number | null | undefined;
+  #stamping: Promise<void> | undefined;
 
   constructor(host: SignInsHost) {
     this.#host = host;
@@ -73,11 +76,14 @@ export class McpSignIns {
       CREATE TABLE IF NOT EXISTS mcp_run_servers (chat_id TEXT NOT NULL, server TEXT NOT NULL, PRIMARY KEY (chat_id, server));
       CREATE TABLE IF NOT EXISTS mcp_waiting (server TEXT NOT NULL, chat_id TEXT NOT NULL, PRIMARY KEY (server, chat_id));
       CREATE TABLE IF NOT EXISTS mcp_notices (server TEXT PRIMARY KEY, kind TEXT NOT NULL, what TEXT);
+      CREATE TABLE IF NOT EXISTS mcp_known (server TEXT PRIMARY KEY);
     `);
+    // Signed in now: known (records from before the table; one that lapsed before is stamped by its grant when read).
+    sql.exec("INSERT OR IGNORE INTO mcp_known (server) SELECT server FROM mcp_auth WHERE signed_in_at IS NOT NULL");
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = this.#oauthServers().map((server) => server.name);
     const notIn = configured.length ? ` WHERE server NOT IN (${configured.map(() => "?").join(", ")})` : "";
-    for (const table of ["mcp_auth", "mcp_run_servers", "mcp_waiting", "mcp_notices"]) sql.exec(`DELETE FROM ${table}${notIn}`, ...configured);
+    for (const table of ["mcp_auth", "mcp_run_servers", "mcp_waiting", "mcp_notices", "mcp_known"]) sql.exec(`DELETE FROM ${table}${notIn}`, ...configured);
   }
 
   /** The store a connection of this user's uses for one server (McpOAuthClient). */
@@ -99,10 +105,12 @@ export class McpSignIns {
   }
 
   /** The account menu's list: every server that signs in each user, signed in or not. */
-  list(): McpSignInView[] {
+  async list(): Promise<McpSignInView[]> {
+    await this.#stamped();
     const grant = grantMs(this.#host.env);
     const rows = new Map(this.#rows().map((row) => [row.server, row]));
     const runs = new Set(this.#runServers());
+    const known = new Set(this.#knownNow());
     const notices = new Map(
       this.#host.sql
         .exec("SELECT server, kind, what FROM mcp_notices")
@@ -116,6 +124,7 @@ export class McpSignIns {
         server: name,
         signedIn: signedInAt !== undefined,
         ...(signedInAt !== undefined && { signedInAt, endsAt: signedInAt + grant }),
+        ...(signedInAt === undefined && known.has(name) && { lapsed: true as const }),
         usedByRuns: runs.has(name),
         link: signInPath(name),
         ...(notice && { notice: notice.kind, ...(notice.what && { waiting: notice.what }) }),
@@ -124,30 +133,39 @@ export class McpSignIns {
   }
 
   /**
-   * The servers the user has a sign-in record for: signed in now, or once with tokens a refused refresh then cleared
-   * (the record stays, with its grant; Disconnect removes it). A run that may use one waits for its sign-in rather than
-   * going without. A record of a sign-in never finished (a registration, a sign-in under way) is not one.
+   * The servers the user signed in to and has not Disconnected: signed in now, or once, whatever a refused refresh left
+   * of the record. A run that may use one waits for its sign-in rather than going without. A sign-in never finished (a
+   * registration, a sign-in under way) is not one.
    */
   async known(): Promise<string[]> {
-    const servers = await Promise.all(
-      this.#rows().map(async ({ server }) => {
-        const record = await this.record(server);
-        return record.tokens || record.grant ? server : null;
-      }),
-    );
-    return servers.filter((server): server is string => server !== null);
+    await this.#stamped();
+    return this.#knownNow();
   }
 
-  /** Remove a stored sign-in (the account menu's Disconnect). Runs that need it ask for a new one. */
-  disconnect(server: string): Promise<boolean> {
-    return this.#serially(async () => {
-      const removed = this.#host.sql.exec("DELETE FROM mcp_auth WHERE server = ?", server).rowsWritten > 0;
+  #knownNow(): string[] {
+    return this.#host.sql
+      .exec("SELECT server FROM mcp_known")
+      .toArray()
+      .map((row) => row.server as string);
+  }
+
+  /**
+   * Remove a stored sign-in (the account menu's Disconnect), lapsed or not. Nothing waits for it any more: runs waiting
+   * for it go on without the server, and later runs too, until the user signs in again.
+   */
+  async disconnect(server: string): Promise<boolean> {
+    const removed = (await this.#serially(async () => {
+      const sql = this.#host.sql;
+      const removed = sql.exec("DELETE FROM mcp_auth WHERE server = ?", server).rowsWritten > 0;
+      const known = sql.exec("DELETE FROM mcp_known WHERE server = ?", server).rowsWritten > 0;
       this.#opened.delete(server);
-      this.#host.sql.exec("DELETE FROM mcp_notices WHERE server = ?", server);
+      sql.exec("DELETE FROM mcp_notices WHERE server = ?", server);
       this.#host.changed();
       this.#schedule();
-      return removed;
-    }) as Promise<boolean>;
+      return removed || known;
+    })) as boolean;
+    await this.#release(server);
+    return removed;
   }
 
   /**
@@ -228,12 +246,18 @@ export class McpSignIns {
     // tokens that still worked starts a new grant too.
     sql.exec("UPDATE mcp_auth SET signed_in_at = ? WHERE server = ? AND signed_in_at IS NOT NULL", now, server);
     sql.exec("DELETE FROM mcp_notices WHERE server = ?", server);
+    this.#host.changed();
+    this.#schedule();
+    await this.#release(server);
+  }
+
+  /** Tell every chat with runs waiting for `server` that they need not wait (signed in, or Disconnected). */
+  async #release(server: string): Promise<void> {
+    const sql = this.#host.sql;
     const chats = sql
       .exec("SELECT chat_id FROM mcp_waiting WHERE server = ?", server)
       .toArray()
       .map((row) => row.chat_id as string);
-    this.#host.changed();
-    this.#schedule();
     // A chat stays waiting until it heard: one that could not be told is told at the next sign-in.
     await Promise.all(
       chats.map(async (chatId) => {
@@ -368,7 +392,10 @@ export class McpSignIns {
       else if (opened.olderSignIn) this.#host.sql.exec("UPDATE mcp_auth SET signed_in_at = ?, warned_at = 0 WHERE server = ?", this.#now(), server);
       this.#host.changed();
       this.#schedule();
-    } else this.#opened.set(server, opened.record);
+    } else {
+      this.#opened.set(server, opened.record);
+      if (opened.record.tokens || opened.record.grant) this.#host.sql.exec("INSERT OR IGNORE INTO mcp_known (server) VALUES (?)", server);
+    }
     return opened.record;
   }
 
@@ -396,11 +423,27 @@ export class McpSignIns {
         fresh ? 1 : 0,
       );
       this.#opened.set(server, record);
+      if (record.tokens || record.grant) sql.exec("INSERT OR IGNORE INTO mcp_known (server) VALUES (?)", server);
     }
     if (Boolean(before.tokens) !== signedIn) {
       this.#host.changed();
       this.#schedule();
     }
+  }
+
+  /**
+   * Once per object: open each record not yet in `mcp_known`, which stamps it when it holds tokens or a grant (one that
+   * lapsed before the table, whose signed_in_at no longer says it was signed in).
+   */
+  #stamped(): Promise<void> {
+    this.#stamping ??= (async () => {
+      const known = new Set(this.#knownNow());
+      for (const { server } of this.#rows()) if (!known.has(server)) await this.record(server);
+    })().catch((error: unknown) => {
+      this.#stamping = undefined;
+      console.error("sign-ins: reading the records failed:", errorMessage(error));
+    });
+    return this.#stamping;
   }
 
   #rows(): AuthRow[] {
