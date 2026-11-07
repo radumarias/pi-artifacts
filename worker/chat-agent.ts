@@ -147,6 +147,7 @@ import {
   inputOf,
   copiedFields,
   runServers,
+  serversNamed,
   type AgentDefinition,
   type AgentStep,
   type AgentTurnView,
@@ -3211,8 +3212,12 @@ export class ChatAgent extends DurableObject<Env> {
       signInNeeded: (agent, servers, quiet) => {
         const directory = this.#directory;
         const context = { chatId: this.chatId, what: `@${agent.name}`, ...(quiet && { quiet }) };
+        // A server it reads in a step it cannot go without: its notice offers no Disconnect.
+        const steps = new Set(serversNamed(agent, { reads: true }));
         const asking = servers.map((server) =>
-          directory.notifySignInNeeded(server, context).catch((error: unknown) => console.error(`agent sign-in (${server}):`, errorMessage(error))),
+          directory
+            .notifySignInNeeded(server, { ...context, ...(steps.has(server) && { step: true }) })
+            .catch((error: unknown) => console.error(`agent sign-in (${server}):`, errorMessage(error))),
         );
         this.ctx.waitUntil(Promise.all(asking));
       },

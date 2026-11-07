@@ -22,5 +22,9 @@ describe("the sidebar's sign-in notice", () => {
     const never = renderToStaticMarkup(<SignInNotices list={[needed]} onChange={() => {}} />);
     expect(never).not.toContain(">Disconnect</button>");
     expect(never).not.toContain("Disconnect it");
+    // Lapsed, but an agent waiting reads it in a step: Disconnect would not let it go on.
+    const step = renderToStaticMarkup(<SignInNotices list={[{ ...needed, lapsed: true, stepReads: true }]} onChange={() => {}} />);
+    expect(step).not.toContain(">Disconnect</button>");
+    expect(step).toContain("@brief reads Portal in a step: change its steps or turn it off.");
   });
 });

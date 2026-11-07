@@ -18,7 +18,7 @@ import { RUNS_EVENT, useLatest, useVisible } from "../sidebar.ts";
 import type { AgentTabProps } from "./AgentPage.tsx";
 import { runsLabel } from "./glance.ts";
 import { agentPath } from "./nav.ts";
-import { deliveryLabel, deliveryStatusLabel, itemsLabel, itemStatusLabel, runStatusLabel, whyLabel } from "./runs.ts";
+import { deliveryLabel, deliveryStatusLabel, itemsLabel, itemStatusLabel, runStatusLabel, signInWayOut, whyLabel } from "./runs.ts";
 
 /** How often the tab reads again while a run is going. */
 const POLL_MS = 3_000;
@@ -213,8 +213,8 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
               </a>
             </span>
           ))}
-          . The run goes on by itself once you do; if several mornings waited, only the newest goes. Signed in to it before
-          and no access any more? Disconnect it under Sign-ins in the account menu, and runs go on without it.
+          . The run goes on by itself once you do; if several mornings waited, only the newest goes.{" "}
+          {signInWayOut(agent, run.needsSignIn).join(" ")}
         </p>
       )}
       {run.status === "failed" && run.summary && <p className="form-error">{run.summary}</p>}

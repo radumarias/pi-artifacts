@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentStep } from "../shared/agents.ts";
 import { agentPath, agentPlace } from "../src/agents/nav.ts";
 import { stepSummary } from "../shared/runs.ts";
-import { deliveryLabel, deliveryStatusLabel, itemsLabel, runStatusLabel, whyLabel } from "../src/agents/runs.ts";
+import { deliveryLabel, deliveryStatusLabel, itemsLabel, runStatusLabel, signInWayOut, whyLabel } from "../src/agents/runs.ts";
 import { ASSUMED_FIELDS, withoutAssumed } from "../src/agents/glance.ts";
 import { assumedAfter, moveItem, newStep, withKeys, withoutKeys } from "../src/agents/workflow.ts";
 
@@ -69,5 +69,18 @@ describe("the Workflow tab's Assumed", () => {
 
   it("drops a part said to look right, as the names assumed uses go", () => {
     expect(withoutAssumed(["Schedule", "scope"], ASSUMED_FIELDS.runs)).toEqual(["scope"]);
+  });
+});
+
+describe("a run waiting for a sign-in", () => {
+  it("offers Disconnect only for a server its agent does not read in a step", () => {
+    const brief = { name: "brief", workflow: steps };
+    expect(signInWayOut(brief, ["crm"])).toEqual([
+      "@brief reads crm in a step, so it cannot go on without it: no access any more? Change its steps, or turn it off.",
+    ]);
+    expect(signInWayOut(brief, ["calendar"])).toEqual([
+      "Signed in to calendar before and no access any more? Disconnect it under Sign-ins in the account menu, and runs go on without it.",
+    ]);
+    expect(signInWayOut(brief, ["crm", "calendar"])).toHaveLength(2);
   });
 });
