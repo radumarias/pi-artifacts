@@ -504,15 +504,16 @@ export class RunExecutor {
     const failed = items.filter((item) => item.status === "failed");
     // An item stopped after a delivery step still sent it: the run sent something.
     const delivered = deliveries.some((delivery) => delivery.status === "sent" || delivery.status === "recorded");
-    // And one that went out to nobody (every send failed) is no quiet day: the run failed.
+    // And one whose report went out to nobody (every send failed) failed, even with items acted: nobody heard.
     const undelivered = deliveries.find((delivery) => delivery.status === "failed" || delivery.status === "refused");
-    const status: RunStatus = acted.length || delivered ? "sent" : failed.length || undelivered ? "failed" : "not_today";
+    const unsent = !delivered && undelivered;
+    const status: RunStatus = delivered ? "sent" : unsent ? "failed" : acted.length ? "sent" : failed.length ? "failed" : "not_today";
     const first = deliveries.find((delivery) => delivery.text)?.text ?? acted.find((item) => item.text)?.text;
     const summary =
       status === "sent"
         ? firstLine(first ?? `Acted on ${acted.length} of ${items.length}.`)
         : status === "failed"
-          ? `Failed: ${failed[0]?.reason ?? undelivered?.detail ?? "a step failed"}`
+          ? `Failed: ${(unsent ? undelivered.detail : failed[0]?.reason) ?? "a step failed"}`
           : `Not today: ${items[0]?.reason ?? "nothing to report"}`;
     runs.update(agent.id, run.dueAt, { status, summary });
     return status;

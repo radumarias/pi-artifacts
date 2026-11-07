@@ -474,7 +474,17 @@ describe("scheduled runs", () => {
     expect(host.runs.get(definition.id, T0 + 2)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: @brief was off." });
   });
 
-  it("reads only the agent's own servers", async () => {
+  it("fails a run whose items acted when its only delivery failed", async () => {
+    const { host, runner, definition } = home();
+    host.deliver = async () => {
+      throw new Error("chat unreachable");
+    };
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "failed", summary: "Failed: chat unreachable", items: { acted: 1 } });
+  });
+
+    it("reads only the agent's own servers", async () => {
     const { host, runner, definition } = home(agent({ servers: ["other"] }));
     await runner.now(definition.id, false);
     await host.settled();
