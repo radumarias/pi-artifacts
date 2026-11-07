@@ -181,12 +181,15 @@ export class McpSignIns {
   /**
    * The servers a chat's scheduled runs use (worker/agents/runs): replaces that chat's list; an empty list clears it.
    * Those are refreshed daily and warned about before their grant ends. `stepReads`, those its agent reads in a step
-   * (also when it is off, for its tests), say so for its notices: steps changed, a run waiting is offered Disconnect again.
+   * (none while it is off), say so for its notices: steps changed, a run waiting is offered Disconnect again.
    */
-  setRunServers(chatId: string, servers: readonly string[], stepReads: readonly string[] = []): void {
+  setRunServers(chatId: string, servers: readonly string[], stepReads?: readonly string[]): void {
     const oauth = new Set(this.#oauthServers().map((server) => server.name));
-    const steps = [...new Set(stepReads)].filter((server) => oauth.has(server)).sort();
-    if (this.#replace("mcp_step_servers", chatId, steps)) this.#host.changed();
+    // Left out (a caller that knows only the run servers): the chat's step servers stay as they are.
+    if (stepReads) {
+      const steps = [...new Set(stepReads)].filter((server) => oauth.has(server)).sort();
+      if (this.#replace("mcp_step_servers", chatId, steps)) this.#host.changed();
+    }
     const next = [...new Set(servers)].filter((server) => oauth.has(server)).sort();
     if (!this.#replace("mcp_run_servers", chatId, next)) return;
     this.#host.changed();
@@ -249,15 +252,25 @@ export class McpSignIns {
   async needed(server: string, context: SignInNeededContext = {}): Promise<void> {
     if (!this.#oauthServers().some((s) => s.name === server)) return;
     const sql = this.#host.sql;
-    if (context.chatId) sql.exec("INSERT OR IGNORE INTO mcp_waiting (server, chat_id) VALUES (?, ?)", server, context.chatId);
-    if (context.quiet) return;
-    const what = context.what?.slice(0, 80);
+    const { chatId } = context;
+    const added = chatId ? sql.exec("INSERT OR IGNORE INTO mcp_waiting (server, chat_id) VALUES (?, ?)", server, chatId).rowsWritten > 0 : false;
+    // A chat whose agent reads it in a step now waits: the list's stepReads (#stepReads) changed with it.
+    const stepReads = chatId !== undefined && this.#readsInStep(chatId, server);
+    if (context.quiet) {
+      if (added && stepReads) this.#host.changed();
+      return;
+    }
+    // A new notice names what waits, unless another chat's agent reads it in a step and this one does not: its text then
+    // says "An agent reads it in a step", which would name the wrong one.
+    const what = stepReads || !this.#stepReads().has(server) ? context.what?.slice(0, 80) : undefined;
     if (this.#setNotice(server, "needed", what)) {
       await this.#tell({ type: "sign-in", server, kind: "needed", link: signInPath(server), ...(what && { what }), at: this.#now() });
-    } else if (what && context.chatId && this.#readsInStep(context.chatId, server)) {
-      // Up already: it names the agent that reads it in a step, as its text says that one cannot go on without it.
-      if (sql.exec("UPDATE mcp_notices SET what = ? WHERE server = ? AND what IS NOT ?", what, server, what).rowsWritten) this.#host.changed();
+      return;
     }
+    // Up already: it names the agent that reads it in a step, as its text says that one cannot go on without it.
+    const rename = "UPDATE mcp_notices SET what = ? WHERE server = ? AND what IS NOT ?";
+    const named = what !== undefined && stepReads && sql.exec(rename, what, server, what).rowsWritten > 0;
+    if (named || (added && stepReads)) this.#host.changed();
   }
 
   #readsInStep(chatId: string, server: string): boolean {

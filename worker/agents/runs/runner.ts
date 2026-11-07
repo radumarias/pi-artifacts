@@ -179,7 +179,13 @@ export class AgentRunner {
   async #followServers(agent: AgentDefinition): Promise<void> {
     const waiting = this.#host.runs.unfinished().filter((run) => run.agentId === agent.id && run.status === "needs_sign_in");
     if (!waiting.length) return;
-    const uses = new Set(runServers(agent, await this.#host.signInServers()));
+    // A failed read leaves them waiting, as before the change: the alarms are set all the same.
+    const signIn = await this.#host.signInServers().catch((error: unknown) => {
+      console.error("runs: reading the sign-ins for a changed agent failed:", errorMessage(error));
+      return null;
+    });
+    if (!signIn) return;
+    const uses = new Set(runServers(agent, signIn));
     const dropped = [...new Set(waiting.flatMap((run) => run.detail.needsSignIn ?? []))].filter((server) => !uses.has(server));
     if (!dropped.length) return;
     const freed = waiting.filter((run) => run.detail.needsSignIn?.some((server) => dropped.includes(server)));

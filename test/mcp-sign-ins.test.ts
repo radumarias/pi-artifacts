@@ -294,8 +294,12 @@ describe("sign-ins with nobody present", () => {
     s.signIns.dismiss("Portal");
     await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });
     expect(s.told.at(-1)).toMatchObject({ stepReads: true });
+    // It names no agent: @digest does not read it in a step, and the text would say it does.
+    expect(s.told.at(-1)!.what).toBeUndefined();
+    expect(s.pushed.at(-1)).toContain("An agent reads Portal in a step");
     expect(s.pushed.at(-1)).not.toContain("Disconnect");
     expect(s.signIns.list()[0]).toMatchObject({ notice: "needed", stepReads: true });
+    expect(s.signIns.list()[0]!.waiting).toBeUndefined();
     // Its steps no longer read it: that takes it back.
     s.signIns.setRunServers("chat1", [], []);
     expect(s.signIns.list()[0]!.stepReads).toBeUndefined();

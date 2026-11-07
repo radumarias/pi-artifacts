@@ -272,7 +272,14 @@ export class RunExecutor {
         // Ended without going: an older run that waited for this one (its sign-in came meanwhile) goes now, on its own.
         // A run that went on from its row (resumed after a restart, or restarted after a sign-in) counts too.
         const went = end.status !== "failed" && end.status !== "needs_sign_in";
-        if (!went) this.#wakeDeferred(agent.id, dueAt, test);
+        // A failed wake leaves the older run to resume() or a sign-in: this run's end stands.
+        if (!went) {
+          try {
+            this.#wakeDeferred(agent.id, dueAt, test);
+          } catch (error) {
+            console.error("runs: waking a run that waited failed:", errorMessage(error));
+          }
+        }
         return end;
       });
     this.#active.set(key, run);

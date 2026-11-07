@@ -2995,12 +2995,14 @@ export class ChatAgent extends DurableObject<Env> {
       this.runs.forget(agentId);
       this.#broadcastAgents();
     }
-    await this.runner.apply(agentId, agent);
     // The sign-ins its runs read with are kept alive daily and warned about before they end (worker/mcp/sign-ins.ts).
     const runs = agent?.enabled && agent.trigger ? runServers(agent, oauthServerNames(this.env)) : [];
     // Those it reads in a step it cannot go on without: their notices offer no Disconnect (for its runs waiting too).
-    const steps = agent ? [...stepServers(agent)] : [];
+    // Before the alarms and waits follow: a run apply sets going again asks for its sign-ins with these as they are now.
+    // Off, none: turning it off is a way out, so Disconnect is offered again (its waits are skipped).
+    const steps = agent?.enabled ? [...stepServers(agent)] : [];
     await this.#directory.setRunServers(this.chatId, runs, steps).catch((error: unknown) => console.error("agent sign-ins:", errorMessage(error)));
+    await this.runner.apply(agentId, agent);
     if (agent?.enabled && agent.trigger && !agent.workflow?.length) this.ctx.waitUntil(this.#compile(agent).catch(() => {}));
   }
 
