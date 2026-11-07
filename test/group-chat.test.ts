@@ -2,7 +2,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import type { AgentTurnView, ChatAgentView } from "../shared/agents.ts";
 import { matchAgents, matchPicks, splitCalls, type MentionChoice } from "../shared/mentions.ts";
-import { calledByLabel, queueLines, runMarkerText, turnLine } from "../src/chat/agentLines.ts";
+import { calledByLabel, opensRun, queueLines, runMarkerText, turnLine } from "../src/chat/agentLines.ts";
 import { FOLD_PX, folds } from "../src/chat/Fold.tsx";
 import { phraseOf, workingPhrase } from "../src/chat/phrase.ts";
 
@@ -144,5 +144,14 @@ describe("a run's posts in the chat", () => {
     expect(calledByLabel({ calledBy: owner, run, turn: 7 })).toBe("for Ana");
     expect(runMarkerText({ run, turn: 7 })).toBe("Continues a run");
     expect(runMarkerText({ turn: 3 })).toBeNull();
+  });
+});
+
+describe("a run post's link", () => {
+  it("is only for the agent's owner, who alone can open the run", () => {
+    const data = { run: { dueAt: 1, why: "schedule" as const }, ownerUid: "ana" };
+    expect(opensRun(data, "ana")).toBe(true);
+    expect(opensRun(data, "ben")).toBe(false);
+    expect(opensRun({ ownerUid: "ana" }, "ana")).toBe(false);
   });
 });

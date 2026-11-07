@@ -1250,7 +1250,7 @@ a.mention-chip:hover { text-decoration: underline; }
 .sidebar nav .nav-contact-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar nav .nav-contact-text small { color: var(--muted); font-size: 12px; font-weight: 400; }
 .run-marker { display: inline-block; margin-top: 6px; color: var(--muted); font-size: 12px; text-decoration: none; }
-.run-marker:hover { color: var(--accent); text-decoration: underline; }
+a.run-marker:hover { color: var(--accent); text-decoration: underline; }
 .agent-runs, .agent-runs-note { margin-top: 20px; }
 .agent-runs-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .agent-runs-when { display: flex; flex-direction: column; gap: 2px; }

@@ -61,3 +61,8 @@ export function runMarkerText(data: Pick<ChatAgentReplyData, "run" | "turn">): s
   if (!isReport(data)) return "Continues a run";
   return data.run.test ? "Test run: nothing was sent or changed" : "From a run";
 }
+
+/** Whether `viewerUid` may open the run a reply came from: only the agent's owner, whose run it is, can read its page. */
+export function opensRun(data: Pick<ChatAgentReplyData, "run" | "ownerUid">, viewerUid: string): boolean {
+  return Boolean(data.run) && data.ownerUid === viewerUid;
+}

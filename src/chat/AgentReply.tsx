@@ -3,7 +3,7 @@ import type { ChatAgentReplyData } from "../../shared/agents.ts";
 import { everyone, type PublishedDetails } from "../../shared/protocol.ts";
 import { agentPath } from "../agents/nav.ts";
 import { AppLink } from "../layout.tsx";
-import { calledByLabel, runMarkerText } from "./agentLines.ts";
+import { calledByLabel, opensRun, runMarkerText } from "./agentLines.ts";
 import { ArtifactCard } from "./ArtifactCard.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageActions } from "./MessageActions.tsx";
@@ -20,6 +20,7 @@ import { SentTime } from "./SentTime.tsx";
 export function AgentReply({
   data,
   chatId,
+  viewerUid,
   reactions,
   onReply,
   onOpen,
@@ -27,6 +28,8 @@ export function AgentReply({
   data: ChatAgentReplyData;
   /** The chat it is in: the run's page leads back to it. */
   chatId: string;
+  /** Who is looking: only the agent's owner gets the link to the run's page, which only they can open. */
+  viewerUid: string;
   reactions: MessageReactions | null;
   onReply?: () => void;
   onOpen: (artifact: PublishedDetails) => void;
@@ -52,12 +55,15 @@ export function AgentReply({
         <ArtifactCard key={`${artifact.artifactId}:${artifact.version}`} artifact={artifact} onOpen={onOpen} />
       ))}
       {data.failed && <div className="chat-error">{data.failed}</div>}
-      {runPath && marker && (
-        // A run's post, or a reply continuing it: where it came from, opening on how the run got there.
-        <AppLink path={runPath} className="run-marker">
-          {marker} · See how it got there
-        </AppLink>
-      )}
+      {runPath && marker &&
+        (opensRun(data, viewerUid) ? (
+          // A run's post, or a reply continuing it: where it came from, opening on how the run got there.
+          <AppLink path={runPath} className="run-marker">
+            {marker} · See how it got there
+          </AppLink>
+        ) : (
+          <span className="run-marker">{marker}</span>
+        ))}
       {data.text && (
         <>
           <ReactionChips reactions={reactions} />
