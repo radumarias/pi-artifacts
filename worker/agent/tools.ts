@@ -11,6 +11,7 @@ import {
   WRITE_TOOL,
   type ArtifactMeta,
   type CheckedDetails,
+  type WrittenDetails,
   type CheckedResultDetails,
   countFindings,
   type PublishedDetails,
@@ -368,7 +369,8 @@ export function artifactExtension(scope: ChatScope): Extension {
             draft.errors === null
               ? `Check it with ${CHECK_TOOL} and draft_id "${draft.id}".`
               : `This page was checked before: ${draftLine(draft)}. ${draft.errors ? `Fix it with draft_id "${draft.id}" and edits.` : `Publish it with ${PUBLISH_TOOL} and draft_id "${draft.id}".`}`;
-          return { output: text(`Saved as draft "${draft.id}" (${formatBytes(draft.bytes)}). Nothing was checked or published. ${next}`) };
+          const details: WrittenDetails = { draftId: draft.id };
+          return { output: text(`Saved as draft "${draft.id}" (${formatBytes(draft.bytes)}). Nothing was checked or published. ${next}`), details };
         },
       }),
       defineTool({

@@ -4,7 +4,7 @@ import type { Value } from "../shared/conditions.ts";
 import type { ArtifactMeta } from "../shared/protocol.ts";
 import type { RunDelivery } from "../shared/runs.ts";
 import { fillInput, itemKey, itemsOf, reportOf, SignInNeeded, type DeliveryRequest, type WorkResult } from "../worker/agents/runs/executor.ts";
-import { publishedAlready, publishFindings, publishRebuilt, runMark } from "../worker/agents/runs/page.ts";
+import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "../worker/agents/runs/page.ts";
 import { findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, workSpend } from "../worker/agents/runs/report.ts";
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "../worker/agents/runs/runner.ts";
 import { sourceName, SourceCore, type Subscriber } from "../worker/agents/runs/source.ts";
@@ -698,7 +698,7 @@ describe("a run's page step", () => {
 
   it("publishes a page whose check passes, with the report in it", async () => {
     const { publishScope, published } = scope([]);
-    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark(T0, "0"))).toEqual({
+    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"))).toEqual({
       kind: "page",
       to: "Sales brief",
       status: "sent",
@@ -711,7 +711,7 @@ describe("a run's page step", () => {
 
   it("does not publish a page that fails its check, and says so", async () => {
     const { publishScope, published } = scope(["TypeError: x is undefined"]);
-    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark(T0, "0"))).toEqual({
+    expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"))).toEqual({
       kind: "page",
       to: "Sales brief",
       status: "failed",
@@ -722,57 +722,71 @@ describe("a run's page step", () => {
 
   it("publishes once per run: a version with the run's mark is the one it sent", async () => {
     const { publishScope, published, messages } = scope([]);
-    const mark = runMark(T0, "2");
+    const mark = runMark("a1", T0, "2");
     expect(await publishFindings(publishScope, meta, "Sales are up.", "Findings", mark)).toMatchObject({ status: "sent", version: 4 });
     expect(messages).toEqual([`Findings ${mark}`]);
     const after = { ...meta, latest: 4, versions: [...meta.versions, { version: 4, message: messages[0] }] } as unknown as ArtifactMeta;
     expect(publishedAlready(after, mark)).toMatchObject({ status: "sent", version: 4 });
-    expect(publishedAlready(after, runMark(T0, "3"))).toBeNull();
+    expect(publishedAlready(after, runMark("a1", T0, "3"))).toBeNull();
     expect(published).toHaveLength(1);
   });
 
   it("keeps the run's mark in a long message, which the store cuts", async () => {
     const { publishScope, messages } = scope([]);
-    const mark = runMark(T0, "0");
+    const mark = runMark("a1", T0, "0");
     await publishFindings(publishScope, meta, "Sales are up.", `Findings, when ${"signups.count > 10 and ".repeat(20)}true`, mark);
     expect(messages[0].length).toBeLessThanOrEqual(MAX_VERSION_MESSAGE);
     expect(messages[0].endsWith(mark)).toBe(true);
   });
 
-  it("publishes a rebuilt page's checked draft of that page only", async () => {
+  it("publishes the newest checked draft of that page that the rebuild's own session saved", async () => {
     const { publishScope, published, drafts } = scope([]);
     const seed = await writeDraft(publishScope, { artifact: meta, edits: [] });
     const other = await writeDraft(publishScope, { html: "<!doctype html><main>another page</main>" });
     await drafts.recordCheck(other.id, { errors: 0, warnings: 0 });
     // Nothing of this page passed: the other page's draft is not published in its place.
-    expect(await publishRebuilt(publishScope, meta, seed, T0, "Snapshot", runMark(T0, "1"))).toMatchObject({
+    expect(await publishRebuilt(publishScope, meta, seed, [seed.id, other.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({
       status: "failed",
       detail: "page not updated: no draft of it passed its check",
     });
     const rebuilt = await writeDraft(publishScope, { draftId: seed.id, edits: [{ old: "yesterday", new: "today" }] });
     await drafts.recordCheck(rebuilt.id, { errors: 0, warnings: 0 });
-    expect(await publishRebuilt(publishScope, meta, seed, T0, "Snapshot", runMark(T0, "1"))).toMatchObject({ status: "sent", version: 4 });
+    // Saved by someone else (the owner, another run): not this rebuild's.
+    expect(await publishRebuilt(publishScope, meta, seed, [seed.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({ status: "failed" });
+    expect(await publishRebuilt(publishScope, meta, seed, [seed.id, rebuilt.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({
+      status: "sent",
+      version: 4,
+    });
     expect(published).toEqual([expect.stringContaining("<p>today</p>")]);
   });
 
-  it("never publishes a rebuilt page that declares other servers or tools than the page did", async () => {
+  it("never publishes a rebuilt page that declares more than the page's read-only tools", async () => {
     const { publishScope, published, drafts } = scope([]);
+    const tools = [
+      { name: "list_deals", description: "", inputSchema: {}, annotations: { readOnlyHint: true } },
+      { name: "update_deal", description: "", inputSchema: {} },
+    ];
     publishScope.hub = {
       servers: () => [{ name: "crm" }],
       server: (name: string) => (name === "crm" ? { name: "crm" } : undefined),
-      tools: async () => [{ name: "delete_contact", description: "", inputSchema: {} }],
-      tool: async () => ({ name: "delete_contact", description: "", inputSchema: {} }),
+      tools: async () => tools,
+      tool: async (_server: string, name: string) => tools.find((tool) => tool.name === name),
     } as unknown as McpHub;
-    const seed = await writeDraft(publishScope, { artifact: meta, edits: [] });
+    const declared = { mcp: { servers: [{ server: "crm", tools: ["list_deals", "update_deal"] }] } };
+    const page = { ...meta, versions: [{ version: 3, manifest: declared }] } as unknown as ArtifactMeta;
+    const readOnly = await readOnlyDeclaration(declared, async (_server, name) => !!tools.find((tool) => tool.name === name)?.annotations);
+    expect(readOnly).toEqual([{ server: "crm", tools: ["list_deals"] }]);
+    const seed = await writeDraft(publishScope, { artifact: page, edits: [], mcp: readOnly });
+    // The page's own write tool, declared again: a load handler could call it as the owner.
     const widened = await writeDraft(publishScope, {
       draftId: seed.id,
       edits: [{ old: "yesterday", new: "today" }],
-      mcp: [{ server: "crm", tools: ["delete_contact"] }],
+      mcp: declared.mcp.servers,
     });
     await drafts.recordCheck(widened.id, { errors: 0, warnings: 0 });
-    expect(await publishRebuilt(publishScope, meta, seed, T0, "Snapshot", runMark(T0, "1"))).toMatchObject({
+    expect(await publishRebuilt(publishScope, page, seed, [seed.id, widened.id], "Snapshot", runMark("a1", T0, "1"))).toMatchObject({
       status: "failed",
-      detail: "page not updated: the rebuilt page declares other servers or tools than the page did",
+      detail: "page not updated: the rebuilt page declares other servers or tools than its read-only ones",
     });
     expect(published).toEqual([]);
   });

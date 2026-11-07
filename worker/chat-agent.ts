@@ -17,6 +17,7 @@ import {
   isSecondSeatUid,
   type ArtifactSummary,
   manifestOf,
+  writtenBy,
   secondSeat,
   secondSeatUid,
   SOCKET_NOT_A_MEMBER,
@@ -150,7 +151,7 @@ import { reportOf, SignInNeeded, whenOf, type DeliveryRequest } from "./agents/r
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "./agents/runs/runner.ts";
 import { AgentRuns } from "./agents/runs/store.ts";
 import { reportContext, runInstructions, RUN_STEP_KIND, workSpend, type RunStepData } from "./agents/runs/report.ts";
-import { publishedAlready, publishFindings, publishRebuilt, runMark } from "./agents/runs/page.ts";
+import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "./agents/runs/page.ts";
 import { compileWorkflow } from "./agents/runs/compile.ts";
 import { sourceName } from "./agents/runs/source.ts";
 import type { Value } from "../shared/conditions.ts";
@@ -3203,9 +3204,13 @@ export class ChatAgent extends DurableObject<Env> {
     const scope: PublishScope = {
       ...this.scope,
       chatId: meta.chatId,
-      onPublished: (artifact) => this.#directory.recordArtifact({ ...artifact, chatId: meta.chatId }),
+      onPublished: async (artifact) => {
+        await this.#directory.recordArtifact({ ...artifact, chatId: meta.chatId });
+        // As any version: the chat that discusses the page hears of it (its notice, and its agents read the new one).
+        void this.#tellPageChat(artifact).catch((error: unknown) => console.error("page chat:", errorMessage(error)));
+      },
     };
-    const mark = runMark(request.run.dueAt, request.key);
+    const mark = runMark(request.agent.id, request.run.dueAt, request.key);
     // A run that goes on after a restart publishes once: a version with its mark is the one it sent.
     const already = publishedAlready(meta, mark);
     if (already) return already;
@@ -3223,7 +3228,12 @@ export class ChatAgent extends DurableObject<Env> {
     const { agent, run } = request;
     // artifact_read takes this chat's pages and the ones brought in.
     this.#bringIn([meta.id]);
-    const seed = await writeDraft(scope, { artifact: meta, edits: [] });
+    // The page as it is, declaring only its read-only tools: a snapshot never writes as the owner (publishRebuilt).
+    const mcp = await readOnlyDeclaration(manifestOf(meta, meta.latest), async (server, name) => {
+      const tool = await this.hub.tool(server, name).catch(() => undefined);
+      return !!tool && isReadOnly(tool);
+    });
+    const seed = await writeDraft(scope, { artifact: meta, edits: [], mcp });
     const session = request.session ?? (await this.harness.sessions.create()).id;
     await this.#configureRun(session, agent, undefined, ["artifact_read", WRITE_TOOL, CHECK_TOOL]);
     const operationId = `run:${agent.id}:${run.dueAt}:page:${request.key}`;
@@ -3234,8 +3244,9 @@ export class ChatAgent extends DurableObject<Env> {
         `draft_id "${seed.id}" and edits (a new page written whole is not this page's and is not published), check the new draft with ` +
         `${CHECK_TOOL} and fix what it finds. The newest draft that passes is published for you. Answer with one line on what changed.`,
     ].join("\n\n");
-    const { result } = await this.#runStep(session, prompt, operationId);
-    const delivery = await publishRebuilt(scope, meta, seed, run.dueAt, `Snapshot, ${whenOf(agent)}`, mark);
+    const { result, entries } = await this.#runStep(session, prompt, operationId);
+    const written = entries.flatMap((entry) => writtenBy(entry) ?? []);
+    const delivery = await publishRebuilt(scope, meta, seed, written, `Snapshot, ${whenOf(agent)}`, mark);
     // The seed is only the page as it was: left behind, each run's would push the owner's own drafts out of the chat's.
     await (await scope.drafts()).remove(seed.id).catch((error: unknown) => console.error("draft:", errorMessage(error)));
     return delivery.status === "failed" && result.reason ? { ...delivery, detail: `${delivery.detail} (${result.reason})` } : delivery;

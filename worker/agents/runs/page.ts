@@ -4,16 +4,16 @@
 // its other deliveries. Each version a run publishes carries the run's mark, so a run that goes on publishes once.
 
 import { canonicalJson } from "../../../shared/canonical.ts";
-import type { ArtifactMeta } from "../../../shared/protocol.ts";
+import type { ArtifactManifest, ArtifactMeta } from "../../../shared/protocol.ts";
 import type { RunDelivery } from "../../../shared/runs.ts";
 import { errorMessage, plural } from "../../../shared/util.ts";
 import { checkDraft, publishDraft, readPageSource, writeDraft, type PublishScope } from "../../agent/publish.ts";
 import { MAX_VERSION_MESSAGE } from "../../storage/artifacts.ts";
-import { passed, type Draft, type DraftSummary } from "../../storage/drafts.ts";
+import { passed, type Draft } from "../../storage/drafts.ts";
 import { findingsEdit } from "./report.ts";
 
-/** What a version a run published says it is: the run's due time and the delivery's key. */
-export const runMark = (dueAt: number, key: string): string => `[run ${dueAt}/${key}]`;
+/** What a version a run published says it is: the agent, the run's due time and the delivery's key. */
+export const runMark = (agentId: string, dueAt: number, key: string): string => `[run ${agentId}/${dueAt}/${key}]`;
 
 const notUpdated = (meta: ArtifactMeta, why: string): RunDelivery => ({ kind: "page", to: meta.title, status: "failed", detail: `page not updated: ${why}` });
 
@@ -57,32 +57,48 @@ export async function publishFindings(
 }
 
 /**
- * A rebuilt page: the newest draft of `meta`'s page saved since `since` (the run's due time) that passed its check,
- * other than `seed` (the page as it was, which the model was given to change), published as its next version. A draft
- * of another page, or of none, or one declaring other MCP servers or tools than the seed, is never published here.
+ * A rebuilt page: of the drafts the rebuild's own session saved (`written`, oldest first), the newest that is of this
+ * page and passed its check, published as its next version. Its MCP declaration must be the seed's, which holds only
+ * the page's read-only tools (a snapshot never writes as the owner, whatever the report's data asked for): a draft of
+ * another page, of another session, or declaring anything else is never published here.
  */
 export async function publishRebuilt(
   scope: PublishScope,
   meta: ArtifactMeta,
   seed: Pick<Draft, "id" | "manifest">,
-  since: number,
+  written: readonly string[],
   message: string,
   mark: string,
 ): Promise<RunDelivery> {
   try {
     const drafts = await scope.drafts();
-    const checked = (one: DraftSummary) => passed(one) || (one.errors === null && scope.publishUnchecked);
-    const found = (await drafts.list()).find((one) => one.artifactId === meta.id && one.id !== seed.id && one.savedAt >= since && checked(one));
-    const draft = found && (await drafts.get(found.id));
-    if (!draft) return notUpdated(meta, "no draft of it passed its check");
-    // A run reads as its owner with nobody watching: its snapshot may change what the page shows, never what it may
-    // call (a server or write tool the report's data asked for would run as the owner when they next open it).
-    if (canonicalJson(draft.manifest.mcp ?? null) !== canonicalJson(seed.manifest.mcp ?? null))
-      return notUpdated(meta, "the rebuilt page declares other servers or tools than the page did");
-    return await publishMarked(scope, meta, draft.id, message, mark);
+    const declared = canonicalJson(seed.manifest.mcp ?? null);
+    for (const id of [...new Set(written)].reverse()) {
+      if (id === seed.id) continue;
+      const draft = await drafts.get(id);
+      if (!draft || draft.artifactId !== meta.id || !(passed(draft) || (draft.errors === null && scope.publishUnchecked))) continue;
+      if (canonicalJson(draft.manifest.mcp ?? null) !== declared)
+        return notUpdated(meta, "the rebuilt page declares other servers or tools than its read-only ones");
+      return await publishMarked(scope, meta, draft.id, message, mark);
+    }
+    return notUpdated(meta, "no draft of it passed its check");
   } catch (error) {
     return notUpdated(meta, errorMessage(error));
   }
+}
+
+/** A page's MCP declaration with only its read-only tools (`readOnly` says which): what a snapshot of it may call. */
+export async function readOnlyDeclaration(
+  manifest: ArtifactManifest | undefined,
+  readOnly: (server: string, tool: string) => Promise<boolean>,
+): Promise<NonNullable<ArtifactManifest["mcp"]>["servers"]> {
+  const servers = await Promise.all(
+    (manifest?.mcp?.servers ?? []).map(async (entry) => {
+      const kept = await Promise.all(entry.tools.map(async (tool) => ((await readOnly(entry.server, tool)) ? tool : null)));
+      return { server: entry.server, tools: kept.filter((tool): tool is string => tool !== null) };
+    }),
+  );
+  return servers.filter((entry) => entry.tools.length);
 }
 
 async function publishMarked(scope: PublishScope, meta: ArtifactMeta, draftId: string, message: string, mark: string): Promise<RunDelivery> {

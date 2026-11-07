@@ -222,6 +222,18 @@ export function publishedBy(entry: EntryRecord): PublishedDetails | undefined {
   return details?.artifactId && details.version ? (details as PublishedDetails) : undefined;
 }
 
+/** What a draft's save returns besides its text: the draft it saved (what a run's rebuild publishes, writtenBy). */
+export type WrittenDetails = { draftId: string };
+
+/** The draft a save's result made, read from the session that saved it. */
+export function writtenBy(entry: EntryRecord): string | undefined {
+  if (entry.kind !== "pi.tool-result") return undefined;
+  const message = entry.model?.[0] as ToolResultMessage | undefined;
+  if (message?.toolName !== WRITE_TOOL || message.isError) return undefined;
+  const id = (message.details as Partial<WrittenDetails> | undefined)?.draftId;
+  return typeof id === "string" ? id : undefined;
+}
+
 /** The tool that renders a page in a headless browser before it is published, and what its result shows in the chat. */
 export const CHECK_TOOL = "artifact_check";
 export type CheckedDetails = {
