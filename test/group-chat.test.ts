@@ -2,7 +2,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import type { AgentTurnView, ChatAgentView } from "../shared/agents.ts";
 import { matchAgents, matchPicks, splitCalls, type MentionChoice } from "../shared/mentions.ts";
-import { queueLines, turnLine } from "../src/chat/agentLines.ts";
+import { calledByLabel, queueLines, runMarkerText, turnLine } from "../src/chat/agentLines.ts";
 import { FOLD_PX, folds } from "../src/chat/Fold.tsx";
 import { phraseOf, workingPhrase } from "../src/chat/phrase.ts";
 
@@ -130,5 +130,19 @@ describe("queue lines and runs", () => {
     expect(turnLine(turn({ status: "running", endedAt: undefined }), 7_000)).toBe("Ana asked · 6s · working");
     expect(turnLine(turn({ status: "queued", startedAt: undefined, endedAt: undefined }), 0)).toBe("Ana asked · waiting");
     expect(turnLine(turn({ calledBy: { name: "x", schedule: true } }), 0)).toBe("on its schedule · 14s · done");
+  });
+});
+
+describe("a run's posts in the chat", () => {
+  const owner = { name: "Ana", uid: "ana" };
+  const run = { dueAt: 1, why: "schedule" as const };
+
+  it("labels the report by why the run went, and a reply continuing it by who asked", () => {
+    expect(calledByLabel({ calledBy: { name: "schedule", schedule: true }, run, turn: 0 })).toBe("on its schedule");
+    expect(runMarkerText({ run, turn: 0 })).toBe("From a run");
+    expect(runMarkerText({ run: { ...run, why: "test", test: true }, turn: 0 })).toBe("Test run: nothing was sent or changed");
+    expect(calledByLabel({ calledBy: owner, run, turn: 7 })).toBe("for Ana");
+    expect(runMarkerText({ run, turn: 7 })).toBe("Continues a run");
+    expect(runMarkerText({ turn: 3 })).toBeNull();
   });
 });
