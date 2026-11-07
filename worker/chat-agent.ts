@@ -1342,8 +1342,9 @@ export class ChatAgent extends DurableObject<Env> {
     // The agents of the roster it calls ("@research"), who take turns of their own (worker/agents/). A message that
     // calls only them is not pi's to answer, even in a chat nobody shares. Told for sure once the mentions are known.
     const repliesTo = quote && "agent" in quote ? quote.agentId : undefined;
-    // In an agent's home conversation, a message that calls nobody else is the agent's, not pi's.
-    const home = this.#homeSpeaker();
+    // In an agent's home conversation, a message that calls nobody else is the agent's, not pi's: while the chat's kind
+    // answers every message. With members in it, only a summons or a reply runs an agent, as in any other chat.
+    const home = everyMessage ? this.#homeSpeaker() : undefined;
     const speakersOf = (named: readonly Mention[] = []) => {
       const called = speakersFor(text, this.roster.list(), repliesTo, named);
       if (!called.length && home !== undefined && !summonsAgent(text, named) && !repliesToAgent) called.push(home);
