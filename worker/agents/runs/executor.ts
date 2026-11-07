@@ -298,6 +298,9 @@ export class RunExecutor {
       if (again.length) {
         const still = new Set(await this.#host.needsSignIn(again));
         missing = missing.filter((server) => !again.includes(server) || still.has(server));
+        // Turned off during that check: asked again, as before it.
+        const off = missing.length ? await this.#turnedOffNow(agent, run) : null;
+        if (off) return off;
       }
       if (missing.length) return this.#waitForSignIn(agent, run, missing);
       const elements = await this.#elements(agent);

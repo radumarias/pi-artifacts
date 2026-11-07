@@ -540,6 +540,27 @@ describe("scheduled runs", () => {
     expect(host.runs.get(id, T0)?.detail.released).not.toContain("calendar");
   });
 
+  it("does not wait when its agent is turned off during the late-sign-in check", async () => {
+    const { host, runner, definition } = home();
+    const id = definition.id;
+    host.runs.begin(id, T0, "schedule", false);
+    host.runs.update(id, T0, { status: "needs_sign_in", detail: { needsSignIn: ["crm"], released: ["crm"] } });
+    host.signIn.add("crm");
+    const check = host.needsSignIn.bind(host);
+    let checks = 0;
+    host.needsSignIn = async (servers) => {
+      // The second check is the one for the released sign-in: the agent is turned off while it goes.
+      if (++checks === 2) host.definitions.set(id, { ...definition, version: 2, enabled: false });
+      return check(servers);
+    };
+    host.clock.now = T0 + 1;
+    await runner.executor.start({ agent: definition, dueAt: T0 + 1, why: "schedule" });
+    await host.settled();
+    expect(checks).toBe(2);
+    expect(host.runs.get(id, T0 + 1)).toMatchObject({ status: "not_today", summary: `Skipped: @${definition.name} was turned off.` });
+    expect(host.asked).toEqual([]);
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {
