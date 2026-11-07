@@ -21,6 +21,11 @@ export interface McpSignInView {
   notice?: SignInNoticeKind;
   /** With the `needed` notice: what is waiting ("Daily brief"). */
   waiting?: string;
+  /**
+   * With the `needed` notice: an agent waiting reads the server in a step, so it cannot go on without it: Disconnect is
+   * no way out for it, only changing the agent or turning it off.
+   */
+  stepReads?: true;
 }
 
 /** `needed`: a run, or the daily refresh, found the sign-in no longer works. `ending`: the grant ends in a few days. */
@@ -36,21 +41,37 @@ export interface SignInNotice {
   what?: string;
   /** With `ending`: when the grant is counted to end. */
   endsAt?: number;
+  /** An agent waiting reads the server in a step (McpSignInView.stepReads). */
+  stepReads?: true;
   at: number;
 }
 
+/** What to do about an agent that reads these servers in a step, when its owner has no access to them any more. */
+export function readsInStepText(agent: string, servers: readonly string[]): string {
+  return `${agent} reads ${servers.join(", ")} in a step, so it cannot go on without it: change its steps or turn it off.`;
+}
+
+/** Whether a notice offers Disconnect: for a sign-in that lapsed, unless an agent waiting reads the server in a step. */
+export function offersDisconnect(view: { lapsed?: boolean; stepReads?: boolean }): boolean {
+  return Boolean(view.lapsed && !view.stepReads);
+}
+
 /**
- * One line for a notice: what the user reads in the sidebar and in the browser's notification. Only a `lapsed` sign-in
- * (McpSignInView.lapsed) can be Disconnected, so only its text offers that.
+ * One line for a notice: what the user reads in the sidebar and in the browser's notification. It offers Disconnect only
+ * as `offersDisconnect` does; an agent that reads the server in a step is told to be changed or turned off instead.
  */
 export function signInNoticeText(
-  notice: Pick<SignInNotice, "server" | "kind" | "what" | "endsAt"> & { lapsed?: boolean },
+  notice: Pick<SignInNotice, "server" | "kind" | "what" | "endsAt" | "stepReads"> & { lapsed?: boolean },
 ): { title: string; body: string } {
   if (notice.kind === "ending") {
     const when = notice.endsAt ? ` around ${new Date(notice.endsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : " soon";
     return { title: `Sign in to ${notice.server} again`, body: `Your sign-in runs out${when}. Sign in again so scheduled runs keep working.` };
   }
-  const way = notice.lapsed ? " No access any more? Disconnect it, and runs go on without it." : "";
+  const way = notice.stepReads
+    ? ` No access any more? ${readsInStepText(notice.what ?? "An agent", [notice.server])}`
+    : offersDisconnect(notice)
+      ? " No access any more? Disconnect it, and runs go on without it."
+      : "";
   return {
     title: `Sign in to ${notice.server}`,
     body: notice.what

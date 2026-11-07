@@ -38,10 +38,20 @@ type RunRow = {
   reply_session: string | null;
 };
 
+/** Why a run of an agent turned off did not go. */
+export function turnedOff(agent: { name: string }): string {
+  return `Skipped: @${agent.name} was turned off.`;
+}
+
 /** What a run's own row keeps besides its status: what it sent, and what it waits for. */
 export interface RunDetail {
   deliveries: RunDelivery[];
   needsSignIn?: string[];
+  /**
+   * The sign-ins it waits for that came while a newer run of the agent was going: it waits for that run instead, and
+   * goes when that one ends without going (RunExecutor). A newer run that would wait for one of them checks once more.
+   */
+  released?: string[];
   when?: string;
   used?: { skills: string[]; servers: string[]; models: string[] };
   /** The watch result that started it, for its steps to read as `watch`, and the one before it (`previous`). */
@@ -216,22 +226,46 @@ export class AgentRuns {
   /** The agent's runs before `dueAt` still waiting for a sign-in: one at `dueAt` went, so they are skipped. */
   skipReplaced(agentId: string, dueAt: number, test: boolean): void {
     const where = "agent_id = ? AND due_at < ? AND item = '' AND test = ? AND status = 'needs_sign_in'";
-    for (const row of this.#rows(where, agentId, dueAt, test ? 1 : 0)) {
-      this.update(agentId, row.due_at, { status: "not_today", summary: "Skipped: a newer run went instead." });
-    }
+    for (const row of this.#rows(where, agentId, dueAt, test ? 1 : 0)) this.skipWaiting(agentId, row.due_at, "Skipped: a newer run went instead.");
   }
 
-  /** A run waiting for sign-in goes again: back to running, the servers it waited for forgotten. */
-  restart(agentId: string, dueAt: number): void {
+  /**
+   * End a run that still waits for a sign-in as skipped, saying why. False, and nothing changes, when it no longer waits
+   * (it went again, another skip ended it, or it was pruned): a list read before an await may be stale.
+   */
+  skipWaiting(agentId: string, dueAt: number, summary: string): boolean {
+    const waiting = "agent_id = ? AND due_at = ? AND item = '' AND status = 'needs_sign_in'";
+    const changed =
+      this.#sql.exec(
+        `UPDATE agent_runs SET status = 'not_today', ended_at = ?, summary = ? WHERE ${waiting}`,
+        this.#now(),
+        summary,
+        agentId,
+        dueAt,
+      ).rowsWritten > 0;
+    const run = changed ? this.get(agentId, dueAt) : null;
+    if (run && !run.test) this.#onEnded?.(run);
+    return changed;
+  }
+
+  /** The newest of the agent's runs before `dueAt` waiting for a newer one to end (detail.released), if any. */
+  deferred(agentId: string, dueAt: number, test: boolean): RunRecord | null {
+    const where = "agent_id = ? AND due_at < ? AND item = '' AND test = ? AND status = 'needs_sign_in' ORDER BY due_at DESC";
+    return this.#rows(where, agentId, dueAt, test ? 1 : 0).map(recordOf).find((run) => run.detail.released?.length) ?? null;
+  }
+
+  /** A run waiting for sign-in goes again: back to running, the servers it waited for forgotten. False when it no longer waits. */
+  restart(agentId: string, dueAt: number): boolean {
     const run = this.get(agentId, dueAt);
-    if (!run || run.status !== "needs_sign_in") return;
-    const { needsSignIn: _, ...detail } = run.detail;
+    if (!run || run.status !== "needs_sign_in") return false;
+    const { needsSignIn: _, released: __, ...detail } = run.detail;
     this.#sql.exec(
       "UPDATE agent_runs SET status = 'running', ended_at = NULL, summary = NULL, detail = ? WHERE agent_id = ? AND due_at = ? AND item = ''",
       JSON.stringify(detail),
       agentId,
       dueAt,
     );
+    return true;
   }
 
   /** Change what a run's row keeps: its status (an end once it is not running), summary, detail. */
@@ -242,7 +276,8 @@ export class AgentRuns {
     this.#sql.exec(
       "UPDATE agent_runs SET status = ?, ended_at = ?, summary = ?, detail = ? WHERE agent_id = ? AND due_at = ? AND item = ''",
       status,
-      status === "running" ? null : this.#now(),
+      // A change of detail only (a waiting run marked released) keeps when it ended.
+      status === "running" ? null : change.status ? this.#now() : (run.endedAt ?? this.#now()),
       change.summary ?? run.summary ?? null,
       JSON.stringify({ ...run.detail, ...change.detail }),
       agentId,

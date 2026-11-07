@@ -251,6 +251,28 @@ describe("sign-ins with nobody present", () => {
     }
   });
 
+  it("offers no Disconnect for a server an agent waiting reads in a step, which it cannot go on without", async () => {
+    const s = setup();
+    await signIn(s, T0);
+    s.answer("needs_sign_in");
+    s.at(T0 + DAY);
+    await s.signIns.check(["Portal"]);
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    expect(s.signIns.list()[0]).toMatchObject({ lapsed: true, notice: "needed", stepReads: true });
+    expect(s.pushed[0]).toContain("An agent reads Portal in a step, so it cannot go on without it: change its steps or turn it off.");
+    expect(s.pushed[0]).not.toContain("Disconnect");
+    // Another agent's wait, which could go without it, does not take that back.
+    await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });
+    expect(s.signIns.list()[0]!.stepReads).toBe(true);
+    // Signed in again: the notice goes, and the next one starts afresh.
+    await signIn(s, T0 + 2 * DAY);
+    await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });
+    expect(s.signIns.list()[0]!.stepReads).toBeUndefined();
+    // An agent that reads it in a step waits after one that does not: the notice names the one that cannot go on.
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    expect(s.signIns.list()[0]).toMatchObject({ stepReads: true, waiting: "@brief" });
+  });
+
   it("records a test run's chat as waiting without telling the user", async () => {
     const s = setup();
     await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", quiet: true });

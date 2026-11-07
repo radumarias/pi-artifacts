@@ -6,8 +6,8 @@ import { canonicalJson } from "../../../shared/canonical.ts";
 import type { Value } from "../../../shared/conditions.ts";
 import { mayUseServer, type AgentDefinition, type AgentTrigger, type LookStep } from "../../../shared/agents.ts";
 import { errorMessage, sha256Hex } from "../../../shared/util.ts";
-import { readFor, resultName, RunExecutor, watchFires, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
-import type { RunRecord } from "./store.ts";
+import { readFor, resultName, RunExecutor, startOf, watchFires, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
+import { turnedOff, type RunRecord } from "./store.ts";
 import { nextRunAt } from "./schedule.ts";
 import { sourceName } from "./source.ts";
 import type { Sql } from "../../members.ts";
@@ -22,7 +22,7 @@ const MAX_KEPT_VALUE = 100_000;
 /** How long until a due time is tried again, when its run could not start (a failed read, a reset). */
 const RETRY_MS = 5 * 60_000;
 
-/** What the runner needs besides the executor's host: alarms, the owner's definitions, and shared watches. */
+/** What the runner needs besides the executor's host: alarms and shared watches. */
 export interface RunnerHost extends RunHost {
   /** A one-shot alarm (the chat object's Scheduler): its schedule id. */
   alarmAt(at: number, payload: RunAlarm): Promise<string>;
@@ -31,8 +31,6 @@ export interface RunnerHost extends RunHost {
   cancelAlarm(id: string): Promise<void>;
   /** When a set alarm fires next (ms); null when it is no longer set (its job ran or was cancelled). */
   alarmTime(id: string): Promise<number | null>;
-  /** The owner's definition of an agent as it is now; null when it is gone. */
-  definition(agentId: string): Promise<AgentDefinition | null>;
   /**
    * Whether a watch's read can be shared with everyone watching the same call (a server whose results all viewers
    * share, and that does not sign in each user): it then goes through a Source object, which polls once for all.
@@ -41,8 +39,6 @@ export interface RunnerHost extends RunHost {
   subscribe(agentId: string, step: LookStep, everyMinutes: number): Promise<void>;
   /** Leave the Source named `source` (sourceName). */
   unsubscribe(agentId: string, source: string): Promise<void>;
-  /** Keep the object alive for work that outlives the call that started it. */
-  waitUntil(promise: Promise<unknown>): void;
 }
 
 type ScheduleRow = { agent_id: string; kind: string; key: string; schedule_id: string | null; due_at: number | null };
@@ -54,12 +50,6 @@ function triggerKey(agent: AgentDefinition): string {
 }
 
 const HASHED = "sha256:";
-
-/** A run to start again from its row: the same due time, and the watch values it started with. */
-function startOf(agent: AgentDefinition, run: RunRecord): RunStart {
-  const { watch, previous } = run.detail as { watch?: Value; previous?: Value };
-  return { agent, dueAt: run.dueAt, why: run.why, test: run.test, watch, previous };
-}
 
 /** A value as it is compared with the last one: its canonical JSON, or a hash of a large one. */
 async function fingerprint(value: Value): Promise<string> {
@@ -176,13 +166,9 @@ export class AgentRunner {
    */
   #skipWaiting(agent: AgentDefinition): void {
     const waiting = this.#host.runs.unfinished().filter((run) => run.agentId === agent.id && run.status === "needs_sign_in" && !run.test);
-    for (const run of waiting) this.#skip(run, `Skipped: @${agent.name} was turned off.`);
-    if (waiting.length) this.#host.changed(agent.id);
-  }
-
-  /** A run waiting for a sign-in that will not go: it ends as skipped, saying why. */
-  #skip(run: RunRecord, summary: string): void {
-    this.#host.runs.update(run.agentId, run.dueAt, { status: "not_today", summary });
+    let skipped = 0;
+    for (const run of waiting) if (this.#host.runs.skipWaiting(run.agentId, run.dueAt, turnedOff(agent))) skipped++;
+    if (skipped) this.#host.changed(agent.id);
   }
 
   #setRow(row: ScheduleRow): void {
@@ -364,7 +350,8 @@ export class AgentRunner {
     const waiting = this.#host.runs.unfinished().filter((run) => run.status === "needs_sign_in" && run.detail.needsSignIn?.includes(server));
     // Oldest first: the last one per agent (and per kind, a test apart from the real ones) is its newest.
     const newest = new Map(waiting.map((run) => [`${run.agentId}:${run.test}`, run]));
-    const skip = (run: RunRecord, why: string) => this.#skip(run, `Skipped once you signed in: ${why}.`);
+    // The list was read before the definitions' await: a run another path ended meanwhile (it went, a skip) is left be.
+    const skip = (run: RunRecord, why: string) => this.#host.runs.skipWaiting(run.agentId, run.dueAt, `Skipped once you signed in: ${why}.`);
     const agentIds = [...new Set(waiting.map((run) => run.agentId))];
     const definitions = new Map(await Promise.all(agentIds.map(async (id) => [id, await this.#host.definition(id)] as const)));
     let restarted = 0;
@@ -376,15 +363,19 @@ export class AgentRunner {
         continue;
       }
       // A later run went meanwhile (without the server, after its sign-in lapsed): this one would post after it. One
-      // still going may yet wait too: this one waits for it, and is skipped when it goes (RunExecutor), else restarted at
-      // the next sign-in, when that one waits too.
+      // still going may yet go: this one waits for it, marked released, and is skipped when it goes, or goes itself when
+      // it ends without going (RunExecutor).
       const newer = this.#host.runs.newer(run.agentId, run.dueAt, run.test);
       if (newer === "went") {
         skip(run, "a newer run went since");
         continue;
       }
-      if (newer === "going") continue;
-      this.#host.runs.restart(run.agentId, run.dueAt);
+      if (newer === "going") {
+        const released = [...new Set([...(run.detail.released ?? []), server])];
+        this.#host.runs.update(run.agentId, run.dueAt, { detail: { released } });
+        continue;
+      }
+      if (!this.#host.runs.restart(run.agentId, run.dueAt)) continue;
       restarted++;
       this.#host.waitUntil(this.executor.start(startOf(agent, run)));
     }

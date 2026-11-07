@@ -362,9 +362,113 @@ describe("scheduled runs", () => {
     host.signIn.delete("crm");
     // The next run is in its sign-in check: restarting the older one now would post twice if this one goes.
     host.runs.begin(definition.id, T0 + 86_400_000, "schedule", false);
+    const waitedSince = host.runs.get(definition.id, T0)?.endedAt;
+    host.clock.now = T0 + 3_600_000;
     expect(await runner.signedIn("crm")).toBe(0);
-    expect(host.runs.get(definition.id, T0)?.status).toBe("needs_sign_in");
+    // Marked released, it keeps when it began to wait: the Runs tab's time is not stretched.
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "needs_sign_in", endedAt: waitedSince, detail: { released: ["crm"] } });
     expect(host.delivered).toHaveLength(0);
+  });
+
+  it("does not wait, nor ask, for a sign-in when its agent was turned off while it went", async () => {
+    const { host, runner, definition } = home();
+    // Turned off during the sign-in check (its waiting runs were skipped then, before this one waited).
+    host.needsSignIn = async () => {
+      host.definitions.set(definition.id, { ...definition, version: 2, enabled: false });
+      return ["crm"];
+    };
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "not_today", summary: `Skipped: @${definition.name} was turned off.` });
+    expect(host.asked).toEqual([]);
+    // A test run still waits, quietly: it goes off or on as asked.
+    await runner.now(definition.id, true);
+    await host.settled();
+    expect(host.askedQuietly).toEqual(["crm"]);
+  });
+
+  it("acts at a late sign-in only on runs still waiting once it has read their agents", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    for (const at of [T0, T0 + 1]) {
+      host.clock.now = at;
+      await runner.now(definition.id, false);
+      await host.settled();
+    }
+    host.signIn.delete("crm");
+    host.endings.length = 0;
+    // While signedIn reads the agent, both waiting runs end another way (a newer run went, say).
+    const read = host.definition.bind(host);
+    host.definition = async (id) => {
+      host.runs.skipReplaced(definition.id, T0 + 2, false);
+      return read(id);
+    };
+    expect(await runner.signedIn("crm")).toBe(0);
+    await host.settled();
+    // Each ended once, by the skip; neither was ended again nor started.
+    expect(host.endings.sort()).toEqual([`${T0}:not_today`, `${T0 + 1}:not_today`]);
+    expect(host.delivered).toHaveLength(0);
+    // A row gone (pruned) is not made again by a restart.
+    expect(host.runs.restart(definition.id, T0 + 99)).toBe(false);
+    expect(host.runs.get(definition.id, T0 + 99)).toBeNull();
+  });
+
+  it("starts an older run released for a newer one once that one ends without going", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    await host.settled();
+    host.signIn.delete("crm");
+    // The next run is in its sign-in check when the sign-in comes: the older one waits for it, released.
+    host.clock.now = T0 + 1;
+    const check = host.needsSignIn.bind(host);
+    let first = true;
+    host.needsSignIn = async (servers) => {
+      if (first) {
+        first = false;
+        await runner.signedIn("crm");
+        expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "needs_sign_in", detail: { released: ["crm"] } });
+      }
+      return check(servers);
+    };
+    // Its read fails, once: it ends failed, without going, and the older run goes after all.
+    let reads = 0;
+    host.values.set("crm.weekly_sales", () => {
+      if (reads++ === 0) throw new Error("crm is down");
+      return { total: 940, lastYear: 1000 };
+    });
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.get(definition.id, T0 + 1)?.status).toBe("failed");
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "sent" });
+    expect(host.delivered).toHaveLength(1);
+  });
+
+  it("checks once more, and does not ask again, when the sign-in came during a newer run's check", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.asked).toEqual(["crm"]);
+    host.clock.now = T0 + 1;
+    const check = host.needsSignIn.bind(host);
+    let first = true;
+    host.needsSignIn = async (servers) => {
+      const missing = await check(servers);
+      if (first) {
+        // Its check saw the old sign-in; the new one lands before the check returns.
+        first = false;
+        host.signIn.delete("crm");
+        await runner.signedIn("crm");
+      }
+      return missing;
+    };
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.get(definition.id, T0 + 1)?.status).toBe("sent");
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: a newer run went instead." });
+    expect(host.asked).toEqual(["crm"]);
+    expect(host.delivered).toHaveLength(1);
   });
 
   it("finds a sign-in failure mid-run too", async () => {

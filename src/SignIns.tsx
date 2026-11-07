@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { signInNoticeText, type McpSignInView, type SignInNotice } from "../shared/sign-ins.ts";
+import { offersDisconnect, signInNoticeText, type McpSignInView, type SignInNotice } from "../shared/sign-ins.ts";
 import { errorMessage } from "../shared/util.ts";
 import { api } from "./api.ts";
 import { Icon } from "./Icon.tsx";
@@ -76,6 +76,7 @@ export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onCha
           endsAt: item.endsAt,
           what: item.waiting,
           lapsed: item.lapsed,
+          stepReads: item.stepReads,
         });
         return (
           <div key={item.server} className={`sign-in-notice ${item.notice}`}>
@@ -87,7 +88,7 @@ export function SignInNotices({ list, onChange }: { list: McpSignInView[]; onCha
                 <a className="button primary" href={item.link} target="_blank" rel="noopener">
                   Sign in
                 </a>
-                {item.lapsed && <DisconnectButton server={item.server} busy={busy} onClick={(server) => void disconnect(server)} />}
+                {offersDisconnect(item) && <DisconnectButton server={item.server} busy={busy} onClick={(server) => void disconnect(server)} />}
               </div>
               {failed?.server === item.server && <span className="form-error">{failed.error}</span>}
             </div>
