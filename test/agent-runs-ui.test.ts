@@ -3,7 +3,7 @@ import type { AgentStep } from "../shared/agents.ts";
 import { agentPath, agentPlace } from "../src/agents/nav.ts";
 import { stepSummary } from "../shared/runs.ts";
 import { deliveryLabel, deliveryStatusLabel, itemsLabel, runStatusLabel, whyLabel } from "../src/agents/runs.ts";
-import { moveItem, newStep, withKeys, withoutKeys } from "../src/agents/workflow.ts";
+import { assumedAfter, confirmPart, moveItem, newStep, withKeys, withoutKeys } from "../src/agents/workflow.ts";
 
 const steps: AgentStep[] = [
   { kind: "look", server: "crm", tool: "weekly_sales", input: {}, as: "sales" },
@@ -50,5 +50,23 @@ describe("the Runs tab's words", () => {
     expect(path).toBe("/agents/a1b2c3d4e5f60718?tab=runs&run=1762480800000");
     expect(agentPlace(new URL(path, "https://app.test"))).toMatchObject({ tab: "runs", run: 1_762_480_800_000 });
     expect(agentPlace(new URL("/agents/a1b2c3d4e5f60718?run=nope", "https://app.test"))).not.toHaveProperty("run");
+  });
+});
+
+describe("the Workflow tab's Assumed", () => {
+  const before = { trigger: { kind: "schedule", at: "07:00", tz: "Europe/Bucharest" } as const, workflow: steps };
+  const assumed = ["trigger", "scope", "tells", "servers"];
+
+  it("drops a part the user changed, and only that", () => {
+    expect(assumedAfter(assumed, before, before)).toEqual(assumed);
+    expect(assumedAfter(assumed, before, { ...before, trigger: { kind: "schedule", at: "08:00", tz: "Europe/Bucharest" } })).toEqual(["scope", "tells", "servers"]);
+    // A tell step changed: its recipients are the user's now; other steps changing says nothing of them.
+    const told: AgentStep[] = [steps[0], steps[1], { kind: "tell", to: ["owner"], via: "chat" }];
+    expect(assumedAfter(assumed, before, { ...before, workflow: told })).toEqual(["trigger", "scope", "servers"]);
+    expect(assumedAfter(assumed, before, { ...before, workflow: [steps[1], steps[0], steps[2]] })).toEqual(assumed);
+  });
+
+  it("drops a part said to look right, as the names assumed uses go", () => {
+    expect(confirmPart(["Schedule", "scope"], "runs")).toEqual(["scope"]);
   });
 });
