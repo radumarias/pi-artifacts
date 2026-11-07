@@ -203,18 +203,22 @@ export class AgentRuns {
   }
 
   /**
-   * Whether a run of the agent (a test, or a real one, as `test` says) went after `dueAt`: is going, sent, or found
-   * nothing to do. One that failed or waits for a sign-in too replaced nothing.
+   * What became of the runs of the agent (a test, or a real one, as `test` says) after `dueAt`: `went` when one was sent
+   * or found nothing to do, `going` when one is still going (it may yet wait for a sign-in too), else null (none, or
+   * they failed or wait as well, which replaced nothing).
    */
-  hasNewer(agentId: string, dueAt: number, test: boolean): boolean {
-    return (
-      this.#rows(
-        "agent_id = ? AND due_at > ? AND item = '' AND test = ? AND status IN ('running', 'sent', 'not_today') LIMIT 1",
-        agentId,
-        dueAt,
-        test ? 1 : 0,
-      ).length > 0
-    );
+  newer(agentId: string, dueAt: number, test: boolean): "went" | "going" | null {
+    const where = "agent_id = ? AND due_at > ? AND item = '' AND test = ? AND status IN ('sent', 'not_today', 'running')";
+    const statuses = new Set(this.#rows(where, agentId, dueAt, test ? 1 : 0).map((row) => row.status));
+    return statuses.has("sent") || statuses.has("not_today") ? "went" : statuses.has("running") ? "going" : null;
+  }
+
+  /** The agent's runs before `dueAt` still waiting for a sign-in: one at `dueAt` went, so they are skipped. */
+  skipReplaced(agentId: string, dueAt: number, test: boolean): void {
+    const where = "agent_id = ? AND due_at < ? AND item = '' AND test = ? AND status = 'needs_sign_in'";
+    for (const row of this.#rows(where, agentId, dueAt, test ? 1 : 0)) {
+      this.update(agentId, row.due_at, { status: "not_today", summary: "Skipped: a newer run went instead." });
+    }
   }
 
   /** A run waiting for sign-in goes again: back to running, the servers it waited for forgotten. */

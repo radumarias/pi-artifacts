@@ -251,9 +251,9 @@ export class UserDirectory extends DurableObject<Env> {
     return this.#signIns.onSignedIn(server);
   }
 
-  /** The servers this user has a sign-in record for, signed in now or lapsed (not Disconnected), by name. */
-  async mcpSignInRecords(): Promise<string[]> {
-    return (await this.#signIns.known()).sort();
+  /** The servers this user has signed in to, now or before a refused refresh (not Disconnected), by name. */
+  mcpSignInRecords(): string[] {
+    return this.#signIns.known().sort();
   }
 
   /** The servers this user has signed in to (tokens kept), by name: never the tokens. */

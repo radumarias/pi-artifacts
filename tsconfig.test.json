@@ -120,6 +120,9 @@
     "src/agents/AgentTabs.tsx",
     "src/agents/nav.ts",
     "src/agents/runs.ts",
-    "src/agents/workflow.ts"
+    "src/agents/workflow.ts",
+    "src/SignIns.tsx",
+    "src/push.ts",
+    "src/sidebar.ts"
   ]
 }

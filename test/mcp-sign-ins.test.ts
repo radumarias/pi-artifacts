@@ -196,10 +196,10 @@ describe("sign-ins with nobody present", () => {
 
   it("keeps a lapsed sign-in among the known ones until Disconnect", async () => {
     const s = setup();
-    expect(await s.signIns.known()).toEqual([]);
+    expect(s.signIns.known()).toEqual([]);
     // A sign-in started and never finished (its registration, its state) is no sign-in to wait for.
     await s.signIns.update("Portal", { set: { client: CLIENT, state: "Portal~x", redirectUrl: "https://pi.test/cb" } });
-    expect(await s.signIns.known()).toEqual([]);
+    expect(s.signIns.known()).toEqual([]);
     // The callback's code exchange saves the tokens with their grant.
     s.at(T0);
     await s.signIns.update("Portal", { set: { tokens: TOKENS, grant: "g1" } });
@@ -209,9 +209,46 @@ describe("sign-ins with nobody present", () => {
     expect(await s.signIns.check(["Portal"])).toEqual({ Portal: "needs_sign_in" });
     // The refused refresh ended the grant (signed out), but the record says the user signs in to it.
     expect(s.signIns.list()[0]!.signedIn).toBe(false);
-    expect(await s.signIns.known()).toEqual(["Portal"]);
+    expect(s.signIns.known()).toEqual(["Portal"]);
     await s.signIns.disconnect("Portal");
-    expect(await s.signIns.known()).toEqual([]);
+    expect(s.signIns.known()).toEqual([]);
+  });
+
+  it("shows a lapsed sign-in with Disconnect, which lets the runs waiting for it go on without it", async () => {
+    const s = setup();
+    await signIn(s, T0);
+    s.answer("needs_sign_in");
+    s.at(T0 + DAY);
+    await s.signIns.check(["Portal"]);
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
+    expect(s.signIns.list()[0]).toMatchObject({ signedIn: false, lapsed: true, notice: "needed" });
+    expect(await s.signIns.disconnect("Portal")).toBe(true);
+    // The waiting chat hears it as it would a sign-in: its runs check again, and go on without the server.
+    expect(s.chats).toEqual(["chat1:Portal"]);
+    expect(s.signIns.known()).toEqual([]);
+    const after = s.signIns.list()[0]!;
+    expect(after.lapsed).toBeUndefined();
+    expect(after.notice).toBeUndefined();
+  });
+
+  it("keeps a sign-in known whatever a refused refresh leaves of its record, and from before the table", async () => {
+    // A refused client: the OAuth client clears everything, and its retry registers again (no tokens, a sign-in under way).
+    const refused = setup();
+    await signIn(refused, T0);
+    await refused.signIns.update("Portal", { clear: "all" });
+    await refused.signIns.update("Portal", { set: { client: CLIENT, state: "Portal~y", redirectUrl: "https://pi.test/cb" } });
+    expect(refused.signIns.known()).toEqual(["Portal"]);
+    // Records from before the table count, whatever they hold: signed in, lapsed with or without a grant (from before
+    // grants), or even never finished, which Disconnect then forgets.
+    const records = [{ client: CLIENT, tokens: TOKENS }, { client: CLIENT, grant: "g1" }, { client: CLIENT }, { client: CLIENT, verifier: "v" }];
+    for (const record of records) {
+      const sql = memorySql();
+      await setup({ sql }).signIns.update("Portal", { set: record });
+      sql.exec("DROP TABLE mcp_known");
+      const later = setup({ sql });
+      expect(later.signIns.known()).toEqual(["Portal"]);
+      expect(later.signIns.list()[0]).toMatchObject("tokens" in record ? { signedIn: true } : { signedIn: false, lapsed: true });
+    }
   });
 
   it("records a test run's chat as waiting without telling the user", async () => {

@@ -9,7 +9,8 @@ import { answeredIn, findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, wor
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "../worker/agents/runs/runner.ts";
 import { sourceName, SourceCore, type Subscriber } from "../worker/agents/runs/source.ts";
 import { AgentRuns } from "../worker/agents/runs/store.ts";
-import { writeDraft, type PublishScope } from "../worker/agent/publish.ts";
+import { afterPublish, writeDraft, type PublishedHost, type PublishScope } from "../worker/agent/publish.ts";
+import type { ChatKind, ChatPage } from "../shared/chat-kinds.ts";
 import type { CheckReport } from "../worker/artifacts/check.ts";
 import type { McpHub } from "../worker/mcp/hub.ts";
 import { MAX_VERSION_MESSAGE, type ArtifactStore } from "../worker/storage/artifacts.ts";
@@ -312,7 +313,7 @@ describe("scheduled runs", () => {
     expect(reads.host.runs.list(reads.definition.id)[0]).toMatchObject({ status: "sent" });
   });
 
-  it("skips a waiting run once a newer one went, when the sign-in comes late", async () => {
+  it("skips a waiting run once a newer one went, before the sign-in comes", async () => {
     const { host, runner, definition } = home();
     host.signIn.add("crm");
     await runner.now(definition.id, false);
@@ -322,12 +323,13 @@ describe("scheduled runs", () => {
     host.clock.now = T0 + 86_400_000;
     await runner.now(definition.id, false);
     await host.settled();
+    // It was skipped as the newer one went, before the sign-in came.
+    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: a newer run went instead." });
     expect(await runner.signedIn("crm")).toBe(0);
-    expect(host.runs.get(definition.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: a newer run went since." });
     expect(host.delivered).toHaveLength(1);
   });
 
-  it("counts as newer only a run that went: not one that failed or waits for a sign-in too", () => {
+  it("says a newer run went only once one ended, and that one is going while it may yet wait", () => {
     const { host, definition } = home();
     const id = definition.id;
     host.runs.begin(id, T0, "schedule", false);
@@ -336,12 +338,33 @@ describe("scheduled runs", () => {
     host.runs.update(id, T0 + 1, { status: "failed" });
     host.runs.begin(id, T0 + 2, "schedule", false);
     host.runs.update(id, T0 + 2, { status: "needs_sign_in" });
-    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
     host.runs.begin(id, T0 + 3, "schedule", true);
-    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
+    host.runs.update(id, T0 + 3, { status: "sent" });
+    // Failed, waiting too, or a test's: none replaced it.
+    expect(host.runs.newer(id, T0, false)).toBeNull();
+    host.runs.begin(id, T0 + 5, "schedule", false);
+    expect(host.runs.newer(id, T0, false)).toBe("going");
     host.runs.begin(id, T0 + 4, "schedule", false);
     host.runs.update(id, T0 + 4, { status: "not_today" });
-    expect(host.runs.hasNewer(id, T0, false)).toBe(true);
+    expect(host.runs.newer(id, T0, false)).toBe("went");
+    // Once one went, the older ones waiting are skipped; others are left as they are.
+    host.runs.skipReplaced(id, T0 + 4, false);
+    expect(host.runs.get(id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: a newer run went instead." });
+    expect(host.runs.get(id, T0 + 2)?.status).toBe("not_today");
+    expect(host.runs.get(id, T0 + 1)?.status).toBe("failed");
+  });
+
+  it("leaves a waiting run waiting when a sign-in comes while a newer run is still going", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    await runner.now(definition.id, false);
+    await host.settled();
+    host.signIn.delete("crm");
+    // The next run is in its sign-in check: restarting the older one now would post twice if this one goes.
+    host.runs.begin(definition.id, T0 + 86_400_000, "schedule", false);
+    expect(await runner.signedIn("crm")).toBe(0);
+    expect(host.runs.get(definition.id, T0)?.status).toBe("needs_sign_in");
+    expect(host.delivered).toHaveLength(0);
   });
 
   it("finds a sign-in failure mid-run too", async () => {
@@ -939,6 +962,33 @@ describe("a run's page step", () => {
     const pageScope: PublishScope = { ...publishScope, chatId: "page-chat" };
     await publishFindings(pageScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"));
     expect(told).toEqual([{ id: "a1", latest: 4, chatId: "page-chat" }]);
+  });
+
+  it("records a run's version as the page chat's, of its kind, and tells the chat that discusses the page", async () => {
+    // The home chat publishes as the page's chat ("c"); a third chat discusses the page. afterPublish is ChatAgent's
+    // onPublished as it is, with the directory and the other chats as stand-ins.
+    const { publishScope } = scope([]);
+    const recorded: { chatId: string; latest: number; kind: ChatKind }[] = [];
+    const pages: { chat: string; page: ChatPage }[] = [];
+    const later: Promise<void>[] = [];
+    const host: PublishedHost = {
+      chatId: "home",
+      kind: () => "private",
+      directory: {
+        recordArtifact: (artifact, _seen, kind) => void recorded.push({ chatId: artifact.chatId, latest: artifact.latest, kind }),
+        pageChat: async (artifactId) => (artifactId === "a1" ? "talk" : null),
+      },
+      chat: (chatId) => ({
+        chatKind: async () => (chatId === "c" ? "page" : "private"),
+        pageVersion: async (page) => void pages.push({ chat: chatId, page }),
+      }),
+      later: (work) => void later.push(work),
+    };
+    const pageScope: PublishScope = { ...publishScope, chatId: meta.chatId, onPublished: (artifact, chatId) => afterPublish(host, artifact, chatId) };
+    await publishFindings(pageScope, meta, "Sales are up.", "Findings", runMark("a1", T0, "0"));
+    await Promise.all(later);
+    expect(recorded).toEqual([{ chatId: "c", latest: 4, kind: "page" }]);
+    expect(pages).toEqual([{ chat: "talk", page: { id: "a1", title: "Sales brief", version: 4 } }]);
   });
 
   it("publishes a page whose check passes, with the report in it", async () => {
