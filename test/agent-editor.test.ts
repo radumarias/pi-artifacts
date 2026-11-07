@@ -12,7 +12,7 @@ import {
   type AgentServerInfo,
 } from "../shared/agents.ts";
 import { checkManifest, EXPORT_FORMAT, EXPORT_VERSION, idRemapper, type ChatDumpPart, type ExportedAgent } from "../shared/data-export.ts";
-import { glanceRows, instructionSteps, runsLabel, stateLabel } from "../src/agents/glance.ts";
+import { glanceRows, instructionSteps, isConflict, runsLabel, stateLabel } from "../src/agents/glance.ts";
 import { agentPath, agentPlace } from "../src/agents/nav.ts";
 import { ChatRoster } from "../worker/agents/roster.ts";
 import { AgentStore } from "../worker/agents/store.ts";
@@ -79,6 +79,16 @@ describe("AgentStore: turning on confirms what was assumed", () => {
     // A save keeps the guesses the user has not confirmed yet, as the form sends them.
     const again = saved(store.save({ ...research, assumed: ["model"] }, "user", undefined, { id: on.id }));
     expect(saved(store.setEnabled(again.id, false)).assumed).toEqual(["model"]);
+  });
+});
+
+describe("a save over an older version", () => {
+  it("is refused in words the tabs know as a conflict, so they start again from the newer one", () => {
+    const store = newStore();
+    const first = saved(store.save(research, "user", false));
+    saved(store.save({ ...research, job: "Newer" }, "user", undefined, { id: first.id, version: first.version }));
+    const stale = store.save({ ...research, job: "Mine" }, "user", undefined, { id: first.id, version: first.version });
+    expect("error" in stale && isConflict(stale.error)).toBe(true);
   });
 });
 

@@ -18,8 +18,8 @@ import { STEP_LABELS, stepSummary } from "../../shared/runs.ts";
 import { errorMessage, isObject } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import type { AgentTabProps } from "./AgentPage.tsx";
-import { DAY_NAMES, runsLabel, SAVE_FIRST } from "./glance.ts";
-import { putAgent } from "./store.ts";
+import { CONFLICT_NOTICE, DAY_NAMES, isConflict, runsLabel, SAVE_FIRST } from "./glance.ts";
+import { putAgent, reloadAgents } from "./store.ts";
 import { moveItem, newStep, withKeys, withoutKeys, type Keyed } from "./workflow.ts";
 
 const VIEWER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -151,7 +151,15 @@ function WorkflowForm({
       setDirty(false);
       notice({ agentId: agent.id, text: "Saved its workflow." });
     } catch (e) {
-      setError(errorMessage(e));
+      const message = errorMessage(e);
+      if (isConflict(message)) {
+        // A newer version came meanwhile (the home chat compiles steps after a save, or another editor): the form starts
+        // again from it, as the Setup tab does, and the user makes their change again on it.
+        setInvalid(new Set());
+        setDirty(false);
+        notice({ agentId: agent.id, text: CONFLICT_NOTICE, error: true });
+        await reloadAgents();
+      } else setError(message);
     } finally {
       setSaving(false);
     }

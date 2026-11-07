@@ -160,3 +160,11 @@ export function glanceRows(agent: Pick<AgentDefinition, "name" | "trigger" | "sc
 
 /** What the page says on what it holds while a tab has changes not saved: leaving the tab, or a new version, would lose them. */
 export const SAVE_FIRST = "Save or undo your changes first";
+
+/** Whether a save was refused because the agent changed since the form read it (the store's version check). */
+export function isConflict(message: string): boolean {
+  return /changed since you read it/.test(message);
+}
+
+/** What a tab says when a save met a newer version, which it shows in place of the user's changes. */
+export const CONFLICT_NOTICE = "Someone changed this agent since you opened it, so it was reloaded with their changes. Make yours again.";
