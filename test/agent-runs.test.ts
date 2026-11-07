@@ -325,6 +325,23 @@ describe("scheduled runs", () => {
     expect(host.delivered).toHaveLength(1);
   });
 
+  it("counts as newer only a run that went: not one that failed or waits for a sign-in too", () => {
+    const { host, definition } = home();
+    const id = definition.id;
+    host.runs.begin(id, T0, "schedule", false);
+    host.runs.update(id, T0, { status: "needs_sign_in" });
+    host.runs.begin(id, T0 + 1, "schedule", false);
+    host.runs.update(id, T0 + 1, { status: "failed" });
+    host.runs.begin(id, T0 + 2, "schedule", false);
+    host.runs.update(id, T0 + 2, { status: "needs_sign_in" });
+    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
+    host.runs.begin(id, T0 + 3, "schedule", true);
+    expect(host.runs.hasNewer(id, T0, false)).toBe(false);
+    host.runs.begin(id, T0 + 4, "schedule", false);
+    host.runs.update(id, T0 + 4, { status: "not_today" });
+    expect(host.runs.hasNewer(id, T0, false)).toBe(true);
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {

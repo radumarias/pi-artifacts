@@ -69,6 +69,15 @@ function triggerOf(form: Form): AgentTrigger | undefined {
   return undefined;
 }
 
+/** What a save of `form` sends for the parts this tab edits. */
+function partsOf(form: Form): Pick<AgentInput, "trigger" | "scope" | "workflow"> {
+  return {
+    trigger: triggerOf(form),
+    scope: form.each ? { list: form.list, each: true } : undefined,
+    workflow: form.steps.length ? withoutKeys(form.steps) : undefined,
+  };
+}
+
 /**
  * The Workflow tab: when the agent runs on its own (a time, or a watch), whether it runs once for each item of a list,
  * and its steps, which the app runs one by one: only "Work out" calls the model. Steps can be edited, added, removed
@@ -150,15 +159,14 @@ function WorkflowForm({
     setSaving(true);
     setError(null);
     try {
-      const fields = {
-        trigger: triggerOf(form),
-        scope: form.each ? { list: form.list, each: true as const } : undefined,
-        workflow: form.steps.length ? withoutKeys(form.steps) : undefined,
-      };
-      // A part the user changed is theirs now: no longer Assumed.
-      const left = assumedAfter(assumed, agent, fields);
+      const fields = partsOf(form);
+      // A part the user changed is theirs now: no longer Assumed. Compared as the form would save the agent unchanged,
+      // so what the form only writes differently (all seven days, say) is no change.
+      const left = assumedAfter(assumed, partsOf(formOf(agent)), fields);
       const saved = await save({ ...fields, assumed: left.length ? left : undefined }, version);
       setVersion(saved.version);
+      // The form goes on from what was saved: a part saved as the user's shows as Assumed no more.
+      setAssumed(saved.assumed ?? []);
       setDirty(false);
       notice({ agentId: agent.id, text: "Saved its workflow." });
     } catch (e) {

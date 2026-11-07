@@ -196,16 +196,22 @@ describe("sign-ins with nobody present", () => {
 
   it("keeps a lapsed sign-in among the known ones until Disconnect", async () => {
     const s = setup();
-    expect(s.signIns.known()).toEqual([]);
-    await signIn(s, T0);
+    expect(await s.signIns.known()).toEqual([]);
+    // A sign-in started and never finished (its registration, its state) is no sign-in to wait for.
+    await s.signIns.update("Portal", { set: { client: CLIENT, state: "Portal~x", redirectUrl: "https://pi.test/cb" } });
+    expect(await s.signIns.known()).toEqual([]);
+    // The callback's code exchange saves the tokens with their grant.
+    s.at(T0);
+    await s.signIns.update("Portal", { set: { tokens: TOKENS, grant: "g1" } });
+    await s.signIns.onSignedIn("Portal");
     s.answer("needs_sign_in");
     s.at(T0 + DAY);
     expect(await s.signIns.check(["Portal"])).toEqual({ Portal: "needs_sign_in" });
     // The refused refresh ended the grant (signed out), but the record says the user signs in to it.
     expect(s.signIns.list()[0]!.signedIn).toBe(false);
-    expect(s.signIns.known()).toEqual(["Portal"]);
+    expect(await s.signIns.known()).toEqual(["Portal"]);
     await s.signIns.disconnect("Portal");
-    expect(s.signIns.known()).toEqual([]);
+    expect(await s.signIns.known()).toEqual([]);
   });
 
   it("records a test run's chat as waiting without telling the user", async () => {

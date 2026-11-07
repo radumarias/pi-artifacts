@@ -55,7 +55,7 @@ export function AgentReply({
         <ArtifactCard key={`${artifact.artifactId}:${artifact.version}`} artifact={artifact} onOpen={onOpen} />
       ))}
       {data.failed && <div className="chat-error">{data.failed}</div>}
-      {runPath && marker &&
+      {runPath &&
         (opensRun(data, viewerUid) ? (
           // A run's post, or a reply continuing it: where it came from, opening on how the run got there.
           <AppLink path={runPath} className="run-marker">

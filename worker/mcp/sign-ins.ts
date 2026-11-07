@@ -125,10 +125,17 @@ export class McpSignIns {
 
   /**
    * The servers the user has a sign-in record for: signed in now, or once with tokens a refused refresh then cleared
-   * (the record stays; Disconnect removes it). A run that may use one waits for its sign-in rather than going without.
+   * (the record stays, with its grant; Disconnect removes it). A run that may use one waits for its sign-in rather than
+   * going without. A record of a sign-in never finished (a registration, a sign-in under way) is not one.
    */
-  known(): string[] {
-    return this.#rows().map((row) => row.server);
+  async known(): Promise<string[]> {
+    const servers = await Promise.all(
+      this.#rows().map(async ({ server }) => {
+        const record = await this.record(server);
+        return record.tokens || record.grant ? server : null;
+      }),
+    );
+    return servers.filter((server): server is string => server !== null);
   }
 
   /** Remove a stored sign-in (the account menu's Disconnect). Runs that need it ask for a new one. */

@@ -97,15 +97,21 @@ export async function readOnlyDeclaration(
   manifest: ArtifactManifest | undefined,
   readOnly: (server: string, tool: string) => Promise<boolean>,
 ): Promise<{ servers: NonNullable<ArtifactManifest["mcp"]>["servers"]; dropped: string[] }> {
-  const dropped: string[] = [];
-  const servers = await Promise.all(
+  const entries = await Promise.all(
     (manifest?.mcp?.servers ?? []).map(async (entry) => {
-      const kept = await Promise.all(entry.tools.map(async (tool) => ((await readOnly(entry.server, tool)) ? tool : null)));
-      entry.tools.forEach((tool, index) => kept[index] === null && dropped.push(`${entry.server}.${tool}`));
-      return { server: entry.server, tools: kept.filter((tool): tool is string => tool !== null) };
+      const keeps = await Promise.all(entry.tools.map((tool) => readOnly(entry.server, tool)));
+      return {
+        server: entry.server,
+        tools: entry.tools.filter((_, index) => keeps[index]),
+        dropped: entry.tools.filter((_, index) => !keeps[index]).map((tool) => `${entry.server}.${tool}`),
+      };
     }),
   );
-  return { servers: servers.filter((entry) => entry.tools.length), dropped };
+  // In the declaration's order, whichever server's listing answers first.
+  return {
+    servers: entries.filter((entry) => entry.tools.length).map(({ server, tools }) => ({ server, tools })),
+    dropped: entries.flatMap((entry) => entry.dropped),
+  };
 }
 
 /** How a delivery names the write tools a snapshot was published without. */
