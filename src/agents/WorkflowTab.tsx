@@ -121,13 +121,17 @@ function WorkflowForm({
   const [round, setRound] = useState(0);
   useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
   useEffect(() => () => onDirty?.(false), [onDirty]);
-  // A newer version (saved here, or changed elsewhere) shows at once while the form has no changes of its own.
-  if (agent.version !== version && !dirty) {
+  /** The form as the agent has it now, with no changes of the user's: on Undo, a refused save, or a newer version. */
+  const startOver = () => {
     setVersion(agent.version);
     setForm(formOf(agent));
     setAssumed(agent.assumed ?? []);
+    setInvalid(new Set());
+    setDirty(false);
     setRound((n) => n + 1);
-  }
+  };
+  // A newer version (saved here, or changed elsewhere) shows at once while the form has no changes of its own.
+  if (agent.version !== version && !dirty) startOver();
   const looksRight = (part: WorkflowPart) => {
     setAssumed((current) => withoutAssumed(current, ASSUMED_FIELDS[part]));
     setDirty(true);
@@ -173,9 +177,9 @@ function WorkflowForm({
       const message = errorMessage(e);
       if (isConflict(e)) {
         // A newer version came meanwhile (the home chat compiles steps after a save, or another editor): the form starts
-        // again from it, as the Setup tab does, and the user makes their change again on it.
-        setInvalid(new Set());
-        setDirty(false);
+        // again from it, as the Setup tab does, and the user makes their change again on it. Reset here, so a reload
+        // that fails leaves the version read before, not the user's edits marked as saved.
+        startOver();
         notice({ agentId: agent.id, text: CONFLICT_NOTICE, error: true });
         await reloadAgents();
       } else setError(message);
@@ -299,13 +303,7 @@ function WorkflowForm({
             <button
               type="button"
               disabled={saving}
-              onClick={() => {
-                setForm(formOf(agent));
-                setAssumed(agent.assumed ?? []);
-                setInvalid(new Set());
-                setDirty(false);
-                setRound((n) => n + 1);
-              }}
+              onClick={() => startOver()}
             >
               Undo changes
             </button>
