@@ -569,7 +569,25 @@ describe("watches", () => {
     expect(host.left).toEqual([source]);
   });
 
-  it("leaves a Source it no longer watches through, and runs nothing for it", async () => {
+  it("answers a Source once the run is stored, and rejects so the value comes again when it could not be", async () => {
+    const { host, runner, definition } = home(watched("signups.today < 50"));
+    host.shared = true;
+    await runner.apply(definition.id, definition);
+    const source = await sourceName((definition.trigger as { step: LookStep }).step);
+    const begin = host.runs.begin.bind(host.runs);
+    host.runs.begin = () => {
+      throw new Error("storage reset");
+    };
+    await expect(runner.sourceMoved(definition.id, { today: 40 }, source, { detach: true })).rejects.toThrow("storage reset");
+    host.runs.begin = begin;
+    // The same value, told again: handled now, with the run going on after the answer.
+    expect(await runner.sourceMoved(definition.id, { today: 40 }, source, { detach: true })).toBeNull();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ why: "watch" });
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "sent" });
+  });
+
+    it("leaves a Source it no longer watches through, and runs nothing for it", async () => {
     const { host, runner, definition } = home(watched("signups.today < 50"));
     host.shared = true;
     await runner.apply(definition.id, definition);

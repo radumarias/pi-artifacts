@@ -234,9 +234,10 @@ export class AgentRunner {
 
   /**
    * The Source named `source` says the value the agent watches through it moved. A Source that is not the agent's watch
-   * as it is now (its trigger changed, it is off or gone, or the server is no longer one of its own) is left.
+   * as it is now (its trigger changed, it is off or gone, or the server is no longer one of its own) is left. With
+   * `detach`, see moved.
    */
-  async sourceMoved(agentId: string, value: Value, source: string): Promise<RunEnd | null> {
+  async sourceMoved(agentId: string, value: Value, source: string, options: { detach?: boolean } = {}): Promise<RunEnd | null> {
     const agent = await this.#host.definition(agentId);
     const step = agent?.enabled && agent.trigger?.kind === "watch" ? agent.trigger.step : null;
     if (!step || !mayUseServer(agent!, step.server) || !this.#host.sharedWatch(step) || (await sourceName(step)) !== source) {
@@ -247,7 +248,7 @@ export class AgentRunner {
       else if (mayUseServer(agent!, step.server)) await this.#one(() => this.#resubscribe(agentId, agent!, source));
       return null;
     }
-    return this.moved(agent!, value);
+    return this.moved(agent!, value, options);
   }
 
   /** The agent's row says it watches through the Source named `source`, which it left: set its watch again from `agent`. */
@@ -259,12 +260,19 @@ export class AgentRunner {
     await this.#apply(agentId, agent);
   }
 
-  /** A watch read `value`: a run when it differs from the last one and the condition holds over it (and `previous`). */
-  async moved(agent: AgentDefinition, value: Value): Promise<RunEnd | null> {
+  /**
+   * A watch read `value`: a run when it differs from the last one and the condition holds over it (and `previous`).
+   * With `detach`, the run goes on in the background and this resolves once its row is stored, so a caller that is told
+   * it was handled (a Source) can count on the run; when the row could not be stored, the value is forgotten again and
+   * this rejects, so the same value is handled when it comes again.
+   */
+  async moved(agent: AgentDefinition, value: Value, { detach = false } = {}): Promise<RunEnd | null> {
     if (agent.trigger?.kind !== "watch") return null;
     const now = this.#host.runs.now();
     const print = await fingerprint(value);
-    const last = this.#sql.exec("SELECT fingerprint FROM agent_watch_last WHERE agent_id = ?", agent.id).toArray()[0] as { fingerprint: string } | undefined;
+    const last = this.#sql.exec("SELECT fingerprint, at FROM agent_watch_last WHERE agent_id = ?", agent.id).toArray()[0] as
+      | { fingerprint: string; at: number }
+      | undefined;
     if (last?.fingerprint === print) return null;
     this.#sql.exec("INSERT OR REPLACE INTO agent_watch_last (agent_id, fingerprint, at) VALUES (?, ?, ?)", agent.id, print, now);
     // A small value is kept as its JSON, so the condition can compare with it; a large one only as its hash.
@@ -277,7 +285,16 @@ export class AgentRunner {
       return null;
     }
     if (!fires) return null;
-    return this.executor.start({ agent, dueAt: now, why: "watch", watch: value, ...(previous !== undefined && { previous }) });
+    const run = this.executor.start({ agent, dueAt: now, why: "watch", watch: value, ...(previous !== undefined && { previous }) });
+    if (!detach) return run;
+    // The run's row is stored before start returns (runs.begin comes before the run's first await).
+    if (this.#host.runs.get(agent.id, now)) {
+      this.#host.waitUntil(run);
+      return null;
+    }
+    if (last) this.#sql.exec("UPDATE agent_watch_last SET fingerprint = ?, at = ? WHERE agent_id = ?", last.fingerprint, last.at, agent.id);
+    else this.#sql.exec("DELETE FROM agent_watch_last WHERE agent_id = ?", agent.id);
+    return run;
   }
 
   /**

@@ -2976,9 +2976,11 @@ export class ChatAgent extends DurableObject<Env> {
    * A Source this chat's agent watches through says its value moved. The run it may start goes on here, off the
    * Source's poll: the Source does not wait for its subscribers' runs.
    */
-  sourceMoved(agentId: string, value: Value, source: string): void {
+  async sourceMoved(agentId: string, value: Value, source: string): Promise<void> {
     if (this.#gone) return;
-    this.ctx.waitUntil(this.runner.sourceMoved(agentId, value, source).catch((error: unknown) => console.error("agent watch:", errorMessage(error))));
+    // Resolves once the run's row is stored (the run goes on detached): a failure before that rejects, and the Source
+    // tells this chat again at its next poll.
+    await this.runner.sourceMoved(agentId, value, source, { detach: true });
   }
 
   /**
