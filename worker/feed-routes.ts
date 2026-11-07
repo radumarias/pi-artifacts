@@ -14,7 +14,7 @@ import type { UserDirectory } from "./users.ts";
  *   POST   /api/feed/read           {ids} or {all: true}, with {read: false} to mark unread again: the unread count
  *   GET    /api/follows             what they follow
  *   POST   /api/follows             {kind: "page", id} or {kind: "agent", id, chatId}: follow it
- *   DELETE /api/follows/:kind/:id   stop following it
+ *   DELETE /api/follows/:kind/:id   stop following it (an agent: ?owner=, whose it is)
  * Following needs what opening the target needs: a page anyone signed in may open (pages are shared by link), as long
  * as it exists; an agent only someone in a chat where its owner shares it (ChatAgent.sharedAgent). Nobody follows their
  * own: those reach them already. POST bodies are JSON (readJson), so another site cannot follow for them. Null for
@@ -53,7 +53,10 @@ export async function feedRoute(request: Request, uid: string, directory: Durabl
   }
   const one = path.match(/^\/api\/follows\/([a-z]+)\/([a-z0-9]+)$/);
   if (one && method === "DELETE" && isFollowKind(one[1])) {
-    return json(await directory.unfollow(one[1], one[2], url.searchParams.get("chat") ?? undefined));
+    const owner = url.searchParams.get("owner") ?? undefined;
+    // Unnamed, which person's agent is not known: refused rather than answered as if it were stopped.
+    if (one[1] === "agent" && !owner) return json({ error: "Name whose agent it is: ?owner=." }, 400);
+    return json(await directory.unfollow(one[1], one[2], owner));
   }
   return null;
 }

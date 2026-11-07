@@ -212,7 +212,7 @@ export interface Follower {
   via?: { ownerUid: string; chatId: string };
 }
 
-/** A follow as the follower keeps it: with whose the target is, which the app is never told. */
+/** A follow as the follower keeps it: with whose the target is, which the app is told only for an agent. */
 export interface FollowRecord extends FollowView {
   ownerUid: string;
   /** For an agent: the owner of the chat it is shared in (with `chatId`). */
@@ -269,14 +269,9 @@ export class FollowStore {
     return row ? followOf(row) : null;
   }
 
-  /**
-   * The follow the app names (it never knows whose a target is): by kind and id, and for an agent the chat it was
-   * followed from, which tells two people's agents with one id apart.
-   */
-  find(kind: FollowKind, id: string, chatId?: string): FollowRecord | null {
-    const row = this.#sql
-      .exec("SELECT * FROM follows WHERE kind = ? AND target_id = ? AND (? IS NULL OR chat_id = ?) ORDER BY at DESC", kind, id, chatId ?? null, chatId ?? null)
-      .toArray()[0];
+  /** A followed page, which the app names by id alone (a page's id is the same for everyone). */
+  findPage(id: string): FollowRecord | null {
+    const row = this.#sql.exec("SELECT * FROM follows WHERE kind = 'page' AND target_id = ? ORDER BY at DESC", id).toArray()[0];
     return row ? followOf(row) : null;
   }
 
@@ -285,14 +280,14 @@ export class FollowStore {
     return this.#sql.exec("SELECT * FROM follows WHERE chat_owner = ? AND chat_id = ?", chatOwner, chatId).toArray().map(followOf);
   }
 
-  /** What this person follows, newest first, as the app lists it (never whose it is). */
+  /** What this person follows, newest first, as the app lists it: whose it is only for an agent, as its chat shows. */
   list(): FollowView[] {
     return this.#sql
       .exec("SELECT * FROM follows ORDER BY at DESC")
       .toArray()
       .map((row) => {
-        const { ownerUid: _owner, chatOwner: _chatOwner, ...view } = followOf(row);
-        return view;
+        const { ownerUid, chatOwner: _chatOwner, ...view } = followOf(row);
+        return view.kind === "agent" ? { ...view, ownerUid } : view;
       });
   }
 

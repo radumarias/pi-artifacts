@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { FeedList, FollowKind, FollowView } from "../../shared/feed.ts";
+import { findFollow, type FeedList, type FollowKind, type FollowView } from "../../shared/feed.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 
@@ -70,14 +70,11 @@ export function useFollows(): Loaded<FollowView[]> {
   return useSyncExternalStore(follows.subscribe, follows.get);
 }
 
-/** Whether the user follows a page or agent, and a way to follow it or stop. */
-export function useFollow(kind: FollowKind, id: string, chatId?: string) {
+/** Whether the user follows a page or `ownerUid`'s agent, and a way to follow it or stop. */
+export function useFollow(kind: FollowKind, id: string, chatId?: string, ownerUid?: string) {
   const { value, error } = useFollows();
-  // A follow of an agent belongs to the chat it was made from, and shows from any chat that shares it: stopping it
-  // stops that one. The one from this chat first, when two people's agents share an id.
-  const same = (follow: FollowView) => follow.kind === kind && follow.id === id;
-  const found = value?.find((follow) => same(follow) && follow.chatId === chatId) ?? value?.find(same);
-  const toggle = async () => follows.put(found ? await api.unfollow(kind, id, found.chatId) : await api.follow(kind, id, chatId));
+  const found = value && findFollow(value, { kind, id, ownerUid });
+  const toggle = async () => follows.put(found ? await api.unfollow(found) : await api.follow(kind, id, chatId));
   return { known: value !== null, following: Boolean(found), toggle, error };
 }
 

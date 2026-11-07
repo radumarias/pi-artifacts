@@ -345,11 +345,11 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /**
-   * Stop following what the app names (kind, id, and for an agent the chat it was followed from): its owner forgets
-   * this user, and its items leave the feed. Returns what this user follows now.
+   * Stop following what the app names (a page by id, an agent by id and whose it is): its owner forgets this user, and
+   * its items leave the feed. Returns what this user follows now.
    */
-  async unfollow(kind: FollowKind, id: string, chatId?: string): Promise<FollowView[]> {
-    const had = this.#follows.find(kind, id, chatId);
+  async unfollow(kind: FollowKind, id: string, ownerUid?: string): Promise<FollowView[]> {
+    const had = kind === "page" ? this.#follows.findPage(id) : ownerUid ? this.#follows.get(kind, id, ownerUid) : null;
     if (had) {
       this.#dropFollow(had);
       // Not told, the owner forgets them at its next post (addFeed answers false): the follow is gone here either way.

@@ -304,7 +304,7 @@ function AgentHeader({
             <>
               <span className="pill agent-state off">{subject.agent.ownerName}’s · read-only</span>
               {/* Its posts reach the follower's feed while its owner shares it in this chat, and they are in it. */}
-              <FollowButton kind="agent" id={subject.agent.id} chatId={subject.chatId} />
+              <FollowButton kind="agent" id={subject.agent.id} chatId={subject.chatId} ownerUid={subject.agent.ownerUid} />
             </>
           )
         )}

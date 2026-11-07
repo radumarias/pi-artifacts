@@ -38,11 +38,11 @@ export function FeedNav({ active, navigate }: { active: boolean; navigate: (path
 }
 
 /**
- * Follow a page or an agent someone else owns (an agent from the chat that shares it, `chatId`): its new versions,
- * chats or posts then reach the user's feed. "Following" stops it.
+ * Follow a page or an agent someone else owns (an agent from the chat that shares it, `chatId`, and whose it is,
+ * `ownerUid`): its new versions, chats or posts then reach the user's feed. "Following" stops it.
  */
-export function FollowButton({ kind, id, chatId }: { kind: FollowKind; id: string; chatId?: string }) {
-  const { known, following, toggle, error: loadError } = useFollow(kind, id, chatId);
+export function FollowButton({ kind, id, chatId, ownerUid }: { kind: FollowKind; id: string; chatId?: string; ownerUid?: string }) {
+  const { known, following, toggle, error: loadError } = useFollow(kind, id, chatId, ownerUid);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const click = async () => {

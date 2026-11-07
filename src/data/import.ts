@@ -1,5 +1,4 @@
 import { ARCHIVE, checkManifest, MAX_IMPORT_FILE_BYTES, type ExportedArtifact, type ExportedChat } from "../../shared/data-export.ts";
-import { followKey } from "../../shared/feed.ts";
 import type { ArtifactMeta } from "../../shared/protocol.ts";
 import { readZipFile, storedRange, zipDirectory, type ZipItem, type ZipSource } from "../../shared/unzip.ts";
 import { errorMessage, formatBytes, isObject, mapLimit, toBase64 } from "../../shared/util.ts";
@@ -183,10 +182,12 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
   });
 
   // Last, as following by hand checks: only what the importer may open here (the same deployment) is followed again.
-  const have = new Set(follows.length ? (await api.follows().catch(() => [])).map(followKey) : []);
+  // An export does not say whose a followed agent is: the chat it was followed from tells it apart.
+  const keyOf = (follow: { kind: string; id: string; chatId?: string }) => `${follow.kind}:${follow.id}:${follow.chatId ?? ""}`;
+  const have = new Set(follows.length ? (await api.follows().catch(() => [])).map(keyOf) : []);
   await mapLimit(follows, PARALLEL, (follow) =>
     attempt(`Follow of ${follow.kind} ${follow.id}`, async () => {
-      if (have.has(followKey(follow))) {
+      if (have.has(keyOf(follow))) {
         report.skipped.follows++;
         return;
       }
