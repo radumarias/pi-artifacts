@@ -6,7 +6,6 @@
 
 import {
   AUTONOMY_LABELS,
-  hasWork,
   mayUseServer,
   runServers,
   serversNamed,
@@ -341,8 +340,9 @@ export class RunExecutor {
     let status: RunItemStatus = "acted";
     let reason: string | undefined;
     try {
-      // The value that started a watch's run goes into its session first, so its work steps see what fired it.
-      if (trigger && watched !== undefined && hasWork(workflowOf(agent))) {
+      // The value that started a watch's run goes into its session first: its work steps, and a reply to its report
+      // (a fork of this session), see what fired it.
+      if (trigger && watched !== undefined) {
         const { server, tool } = trigger.step;
         const read = `${server}.${tool}, as ${resultName(trigger.step)} and watch`;
         const text = `The watch that started this run (${read}) read:\n${clip(jsonOf(watched), MAX_RESULT_CHARS)}`;

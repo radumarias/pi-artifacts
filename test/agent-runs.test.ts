@@ -610,7 +610,15 @@ describe("watches", () => {
     expect(host.runs.get(definition.id, run.dueAt)!.detail).toMatchObject({ watch: { count: 5 }, previous: { count: 3 } });
   });
 
-  it("reads a watch named __proto__ like any other name", async () => {
+  it("writes the value that fired a watch even with no work step, for a reply to its report to see", async () => {
+    const { host, runner, definition } = home(watched("signups.today < 50"));
+    const workflow: AgentStep[] = [{ kind: "tell", to: ["owner"], via: "chat" }];
+    expect(await runner.moved({ ...definition, workflow }, { today: 40 })).toMatchObject({ status: "sent" });
+    expect(host.works).toHaveLength(0);
+    expect([...host.writes.values()].some((write) => write.text.includes('"today":40'))).toBe(true);
+  });
+
+    it("reads a watch named __proto__ like any other name", async () => {
     const step: LookStep = { kind: "look", server: "crm", tool: "signups", input: {}, as: "__proto__" };
     const { runner, definition } = home(
       agent({ trigger: { kind: "watch", step, everyMinutes: 60, when: "__proto__.count > 2" }, workflow: [{ kind: "work", prompt: "Say." }] }),
