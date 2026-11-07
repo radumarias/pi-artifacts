@@ -299,6 +299,22 @@ describe("sign-ins with nobody present", () => {
     expect(s.signIns.list()[0]!.stepReads).toBeUndefined();
   });
 
+  it("offers Disconnect again once the waiting agent's steps no longer read the server", async () => {
+    const s = setup();
+    await signIn(s, T0);
+    s.answer("needs_sign_in");
+    s.at(T0 + DAY);
+    await s.signIns.check(["Portal"]);
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    expect(s.signIns.list()[0]!.stepReads).toBe(true);
+    // Its steps changed: the instructions' tools may still use Portal, so it waits on, but Disconnect lets it go.
+    s.signIns.setRunServers("chat1", ["Portal"], []);
+    expect(s.signIns.list()[0]).toMatchObject({ lapsed: true, notice: "needed" });
+    expect(s.signIns.list()[0]!.stepReads).toBeUndefined();
+    s.signIns.setRunServers("chat1", ["Portal"], ["Portal"]);
+    expect(s.signIns.list()[0]!.stepReads).toBe(true);
+  });
+
   it("records a test run's chat as waiting without telling the user", async () => {
     const s = setup();
     await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", quiet: true });

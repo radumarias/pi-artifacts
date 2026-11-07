@@ -313,6 +313,29 @@ describe("scheduled runs", () => {
     expect(reads.host.runs.list(reads.definition.id)[0]).toMatchObject({ status: "sent" });
   });
 
+  it("lets a waiting run go once its agent's steps no longer use the server, and keeps it waiting while they do", async () => {
+    const { host, runner, definition } = home(agent({ servers: ["crm", "calendar"] }));
+    host.oauth.push("calendar");
+    host.signIn.add("calendar");
+    await runner.apply(definition.id, definition);
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "needs_sign_in", needsSignIn: ["calendar"] });
+    // A change that still uses calendar (its work step's tools may come from it): it waits on.
+    const renamed = { ...definition, job: "Morning sales", version: definition.version + 1 };
+    host.definitions.set(definition.id, renamed);
+    await runner.apply(definition.id, renamed);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]?.status).toBe("needs_sign_in");
+    // Its steps changed so nothing uses calendar: it goes again with the servers it uses now.
+    const changed = { ...renamed, servers: ["crm"], version: renamed.version + 1 };
+    host.definitions.set(definition.id, changed);
+    await runner.apply(definition.id, changed);
+    await host.settled();
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "sent" });
+    expect(host.delivered).toHaveLength(1);
+  });
+
   it("skips a waiting run once a newer one went, before the sign-in comes", async () => {
     const { host, runner, definition } = home();
     host.signIn.add("crm");

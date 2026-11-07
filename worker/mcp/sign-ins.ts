@@ -181,7 +181,8 @@ export class McpSignIns {
 
   /**
    * The servers a chat's scheduled runs use (worker/agents/runs): replaces that chat's list; an empty list clears it.
-   * Those are refreshed daily and warned about before their grant ends.
+   * Those are refreshed daily and warned about before their grant ends. `stepReads`, those its agent reads in a step,
+   * also say so for its runs waiting now: steps changed so it no longer reads one, its notice offers Disconnect again.
    */
   setRunServers(chatId: string, servers: readonly string[], stepReads: readonly string[] = []): void {
     const oauth = new Set(this.#oauthServers().map((server) => server.name));
@@ -189,6 +190,13 @@ export class McpSignIns {
     const next = [...new Set(servers)].filter((server) => oauth.has(server)).sort();
     const key = (server: string, step: boolean) => `${server}${step ? " step" : ""}`;
     const sql = this.#host.sql;
+    let waits = 0;
+    for (const row of sql.exec("SELECT server, step_reads FROM mcp_waiting WHERE chat_id = ?", chatId).toArray()) {
+      const server = row.server as string;
+      const step = steps.has(server) ? 1 : 0;
+      if (row.step_reads !== step) waits += sql.exec("UPDATE mcp_waiting SET step_reads = ? WHERE server = ? AND chat_id = ?", step, server, chatId).rowsWritten;
+    }
+    if (waits) this.#host.changed();
     const now = sql
       .exec("SELECT server, step_reads FROM mcp_run_servers WHERE chat_id = ? ORDER BY server", chatId)
       .toArray()

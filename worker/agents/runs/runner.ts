@@ -4,7 +4,7 @@
 
 import { canonicalJson } from "../../../shared/canonical.ts";
 import type { Value } from "../../../shared/conditions.ts";
-import { mayUseServer, type AgentDefinition, type AgentTrigger, type LookStep } from "../../../shared/agents.ts";
+import { mayUseServer, runServers, type AgentDefinition, type AgentTrigger, type LookStep } from "../../../shared/agents.ts";
 import { errorMessage, sha256Hex } from "../../../shared/util.ts";
 import { readFor, resultName, RunExecutor, startOf, watchFires, type RunEnd, type RunHost, type RunStart } from "./executor.ts";
 import { turnedOff, type RunRecord } from "./store.ts";
@@ -134,6 +134,7 @@ export class AgentRunner {
   async #apply(agentId: string, agent: AgentDefinition | null, after = this.#host.runs.now()): Promise<boolean> {
     if (!this.accepts(agentId, agent)) return false;
     if (agent && !agent.enabled) this.#skipWaiting(agent);
+    if (agent) await this.#followServers(agent);
     const row = this.#row(agentId);
     const wanted = agent?.enabled && agent.trigger ? agent : null;
     const key = wanted ? triggerKey(wanted) : "";
@@ -169,6 +170,18 @@ export class AgentRunner {
     let skipped = 0;
     for (const run of waiting) if (this.#host.runs.skipWaiting(run.agentId, run.dueAt, turnedOff(agent))) skipped++;
     if (skipped) this.#host.changed(agent.id);
+  }
+
+  /**
+   * The agent changed: its runs waiting for a sign-in to a server it no longer uses (its steps changed) go again as if
+   * signed in, and check the servers it uses now. A server it still uses keeps them waiting until a sign-in or Disconnect.
+   */
+  async #followServers(agent: AgentDefinition): Promise<void> {
+    const waiting = this.#host.runs.unfinished().filter((run) => run.agentId === agent.id && run.status === "needs_sign_in");
+    if (!waiting.length) return;
+    const uses = new Set(runServers(agent, await this.#host.signInServers()));
+    const dropped = new Set(waiting.flatMap((run) => run.detail.needsSignIn ?? []).filter((server) => !uses.has(server)));
+    for (const server of dropped) await this.signedIn(server, agent.id);
   }
 
   #setRow(row: ScheduleRow): void {
@@ -344,14 +357,16 @@ export class AgentRunner {
   /**
    * The owner signed in to `server`: of each agent's runs waiting for it, the newest goes again and the older ones are
    * skipped (three mornings of waiting would post three near-same reports). The runs of an agent now off are skipped,
-   * a test's apart. Returns how many went again.
+   * a test's apart. Returns how many went again. With `only`, just that agent's runs: it no longer uses the server.
    */
-  async signedIn(server: string): Promise<number> {
-    const waiting = this.#host.runs.unfinished().filter((run) => run.status === "needs_sign_in" && run.detail.needsSignIn?.includes(server));
+  async signedIn(server: string, only?: string): Promise<number> {
+    const waiting = this.#host.runs
+      .unfinished()
+      .filter((run) => run.status === "needs_sign_in" && run.detail.needsSignIn?.includes(server) && (!only || run.agentId === only));
     // Oldest first: the last one per agent (and per kind, a test apart from the real ones) is its newest.
     const newest = new Map(waiting.map((run) => [`${run.agentId}:${run.test}`, run]));
     // The list was read before the definitions' await: a run another path ended meanwhile (it went, a skip) is left be.
-    const skip = (run: RunRecord, why: string) => this.#host.runs.skipWaiting(run.agentId, run.dueAt, `Skipped once you signed in: ${why}.`);
+    const skip = (run: RunRecord, why: string) => this.#host.runs.skipWaiting(run.agentId, run.dueAt, `Skipped once ${only ? `it stopped using ${server}` : "you signed in"}: ${why}.`);
     const agentIds = [...new Set(waiting.map((run) => run.agentId))];
     const definitions = new Map(await Promise.all(agentIds.map(async (id) => [id, await this.#host.definition(id)] as const)));
     let restarted = 0;
