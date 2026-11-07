@@ -38,7 +38,7 @@ export function instructionSteps(instructions: string): { steps: string[]; rest:
   return { steps, rest };
 }
 
-const DAY_NAMES: Record<Weekday, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+export const DAY_NAMES: Record<Weekday, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
 const WEEKEND: readonly Weekday[] = ["sat", "sun"];
 
 /** The days a schedule names, in words: "Every day", "Weekdays", "Mon, Wed". */

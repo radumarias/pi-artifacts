@@ -1,78 +1,52 @@
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useState } from "react";
 import type { AgentDefinition } from "../../shared/agents.ts";
+import { textOf } from "../../shared/canonical.ts";
+import { firstLine } from "../../shared/replies.ts";
 import type { AgentRunDetail, AgentRunList, AgentRunView, RunDelivery, RunItemView } from "../../shared/runs.ts";
 import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
+import { blocks, userText } from "../chat/entries.ts";
 import { Markdown } from "../chat/Markdown.tsx";
-import { sentLabel } from "../chat/SentTime.tsx";
+import { calendarDay, sentLabel } from "../chat/SentTime.tsx";
 import { formatCost } from "../chat/spend.ts";
-import { StepRun, StepsProvider } from "../chat/Steps.tsx";
-import type { StepItem } from "../chat/stepRuns.ts";
-import { RUNS_EVENT } from "../chat/useChat.ts";
-import { opensElsewhere } from "../layout.tsx";
+import { StepRun, StepsProvider, tookFor } from "../chat/Steps.tsx";
+import { stepItem, type StepItem } from "../chat/stepRuns.ts";
+import { AppLink } from "../layout.tsx";
+import { RUNS_EVENT, useLatest, useVisible } from "../sidebar.ts";
 import type { AgentTabProps } from "./AgentPage.tsx";
 import { runsLabel } from "./glance.ts";
 import { agentPath } from "./nav.ts";
-import { anyRunning, deliveryLabel, itemsLabel, itemStatusLabel, runStatusLabel, took, whyLabel } from "./runs.ts";
+import { deliveryLabel, deliveryStatusLabel, itemsLabel, itemStatusLabel, runStatusLabel, whyLabel } from "./runs.ts";
 
 /** How often the tab reads again while a run is going. */
 const POLL_MS = 3_000;
 
-/** A link inside the app: it follows the page's navigate, and opens in a new tab or window as asked. */
-function AppLink({ path, navigate, className, children }: { path: string; navigate: (path: string) => void; className?: string; children: ReactNode }) {
-  return (
-    <a
-      href={path}
-      className={className}
-      onClick={(event) => {
-        if (opensElsewhere(event)) return;
-        event.preventDefault();
-        navigate(path);
-      }}
-    >
-      {children}
-    </a>
-  );
-}
-
 /**
- * Read `load` now, again when `key` changes, every POLL_MS while `polling` says so, and when this agent's home chat
- * says its runs changed (RUNS_EVENT, while that chat is open somewhere in this window).
+ * Read `load` while the page is in view: now, again when `key` changes or the page comes back into view, when the
+ * sidebar's socket says this agent's runs changed, and POLL_MS after each read while `polling` says so (a step's
+ * progress within an item has no notice of its own). Only the newest read's answer is kept.
  */
-function useRead<T>(load: () => Promise<T>, agentId: string, key: string, polling: (value: T) => boolean) {
-  const [value, setValue] = useState<T | null>(null);
+function useRead<T>(load: () => Promise<T>, agentId: string, key: string, polling: (value: T) => boolean = () => false) {
   const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-  const again = useCallback(() => setTick((n) => n + 1), []);
+  const [value, read] = useLatest<T | null>(load, null, (e) => setError(e && errorMessage(e)));
+  const visible = useVisible();
   useEffect(() => {
-    let live = true;
-    load().then(
-      (read) => {
-        if (!live) return;
-        setValue(read);
-        setError(null);
-      },
-      (e: unknown) => live && setError(errorMessage(e)),
-    );
-    return () => {
-      live = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, tick]);
+    if (visible) read();
+  }, [key, visible, read]);
   useEffect(() => {
-    const changed = (event: Event) => (event as CustomEvent<string>).detail === agentId && again();
+    const changed = (event: Event) => (event as CustomEvent<string>).detail === agentId && read();
     addEventListener(RUNS_EVENT, changed);
     return () => removeEventListener(RUNS_EVENT, changed);
-  }, [agentId, again]);
-  const poll = value !== null && polling(value);
+  }, [agentId, read]);
+  const poll = visible && value !== null && polling(value);
   useEffect(() => {
     if (!poll) return;
-    const timer = setTimeout(again, POLL_MS);
+    const timer = setTimeout(read, POLL_MS);
     return () => clearTimeout(timer);
-  }, [poll, tick, again]);
-  return { value, error, again };
+  }, [poll, value, read]);
+  return { value, error, again: read };
 }
 
 /**
@@ -80,7 +54,7 @@ function useRead<T>(load: () => Promise<T>, agentId: string, key: string, pollin
  * got there, item by item, down to each item's full trace. Only for the user's own agents.
  */
 export function RunsTab({ subject, place, navigate }: AgentTabProps) {
-  if (subject.kind !== "own" || !place || !navigate) {
+  if (subject.kind !== "own") {
     return <p className="skills-note agent-runs-note">{subject.kind === "new" ? "Save the agent first: its runs show here." : "Only its owner sees an agent's runs."}</p>;
   }
   return place.run === undefined ? (
@@ -91,7 +65,12 @@ export function RunsTab({ subject, place, navigate }: AgentTabProps) {
 }
 
 function RunList({ agent, chat, navigate }: { agent: AgentDefinition; chat?: string; navigate: (path: string) => void }) {
-  const { value, error, again } = useRead<AgentRunList>(() => api.agentRuns(agent.id), agent.id, agent.id, (read) => anyRunning(read.runs));
+  const { value, error, again } = useRead<AgentRunList>(
+    () => api.agentRuns(agent.id),
+    agent.id,
+    agent.id,
+    (read) => read.runs.some((run) => run.status === "running"),
+  );
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
   const runs = runsLabel(agent.trigger);
@@ -120,7 +99,7 @@ function RunList({ agent, chat, navigate }: { agent: AgentDefinition; chat?: str
         </div>
         <div className="agent-runs-actions">
           {value?.homeChatId && (
-            <AppLink path={`/c/${value.homeChatId}`} navigate={navigate} className="button-link">
+            <AppLink path={`/c/${value.homeChatId}`} navigate={navigate} className="button">
               Open its chat
             </AppLink>
           )}
@@ -141,10 +120,7 @@ function RunList({ agent, chat, navigate }: { agent: AgentDefinition; chat?: str
               <AppLink path={agentPath({ id: agent.id, tab: "runs", chat, run: run.dueAt })} navigate={navigate} className="run-row">
                 <RunPill run={run} />
                 <span className="run-row-text">
-                  <span className="run-row-when">
-                    {sentLabel(run.startedAt, now)} · {whyLabel(run.why)}
-                    {itemsLabel(run.items) && ` · ${itemsLabel(run.items)}`}
-                  </span>
+                  <span className="run-row-when">{[sentLabel(run.startedAt, now), whyLabel(run.why), itemsLabel(run.items)].filter(Boolean).join(" · ")}</span>
                   {run.summary && <span className="run-row-summary">{run.summary}</span>}
                 </span>
                 {run.cost > 0 && <span className="run-row-cost">{formatCost(run.cost)}</span>}
@@ -157,13 +133,14 @@ function RunList({ agent, chat, navigate }: { agent: AgentDefinition; chat?: str
   );
 }
 
-/** A time ahead, as the runs list says it: "today at 07:00", "Mon at 07:00", or the date. */
+/** A time ahead, as the runs list says it: "today at 7:00 AM", "Monday at 7:00 AM", or the date. */
 function aheadLabel(at: number, now: number): string {
-  const time = new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const day = new Date(at).toDateString();
-  if (day === new Date(now).toDateString()) return `today at ${time}`;
-  if (day === new Date(now + 86_400_000).toDateString()) return `tomorrow at ${time}`;
-  if (at - now < 6 * 86_400_000) return `${new Date(at).toLocaleDateString([], { weekday: "long" })} at ${time}`;
+  const time = new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  // In calendar days, so a change of clocks between now and then does not move it.
+  const days = Math.round((calendarDay(at) - calendarDay(now)) / 86_400_000);
+  if (days === 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  if (days < 7) return `${new Date(at).toLocaleDateString([], { weekday: "long" })} at ${time}`;
   return `${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })} at ${time}`;
 }
 
@@ -191,16 +168,29 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
   );
   if (!run) return <section className="agent-runs">{back}<p className={error ? "form-error" : "skills-note"}>{error ? `Could not read this run: ${error}` : "Reading the run…"}</p></section>;
   const scoped = run.itemsList.length > 1 || Boolean(run.itemsList[0]?.label);
+  const items = itemsLabel(run.items);
+  const used = (
+    [
+      ["Read", run.used.servers],
+      ["Skills", run.used.skills],
+      ["Models", run.used.models],
+    ] as const
+  ).filter(([, names]) => names.length);
   return (
     <section className="agent-runs run-detail">
       {back}
       <header className="run-detail-head">
         <RunPill run={run} />
-        <h3>{new Date(run.startedAt).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</h3>
+        <h3>{new Date(run.startedAt).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</h3>
         <small>
-          {whyLabel(run.why)} · {run.when}
-          {took(run.startedAt, run.endedAt) && ` · took ${took(run.startedAt, run.endedAt)}`}
-          {run.cost > 0 && ` · ${formatCost(run.cost)}`}
+          {[
+            whyLabel(run.why),
+            run.when,
+            run.endedAt !== undefined && `took ${tookFor(run.endedAt - run.startedAt)}`,
+            run.cost > 0 && formatCost(run.cost),
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </small>
       </header>
       {run.test && <p className="skills-note">A test: nothing was sent or changed. Below is what it would have sent.</p>}
@@ -223,33 +213,21 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
       )}
 
       <h4 className="run-section">How it got there</h4>
-      {scoped && <p className="skills-note">{itemsLabel(run.items) || `${run.itemsList.length} item`}</p>}
+      {scoped && <p className="skills-note">{items || `${run.itemsList.length} item`}</p>}
       <ol className="run-items">
         {run.itemsList.map((item) => (
           <RunItem key={item.item} agentId={agent.id} dueAt={run.dueAt} item={item} scoped={scoped} />
         ))}
       </ol>
 
-      {(run.used.servers.length > 0 || run.used.skills.length > 0 || run.used.models.length > 0) && (
+      {used.length > 0 && (
         <dl className="run-used">
-          {run.used.servers.length > 0 && (
-            <div>
-              <dt>Read</dt>
-              <dd>{run.used.servers.join(", ")}</dd>
+          {used.map(([what, names]) => (
+            <div key={what}>
+              <dt>{what}</dt>
+              <dd>{names.join(", ")}</dd>
             </div>
-          )}
-          {run.used.skills.length > 0 && (
-            <div>
-              <dt>Skills</dt>
-              <dd>{run.used.skills.join(", ")}</dd>
-            </div>
-          )}
-          {run.used.models.length > 0 && (
-            <div>
-              <dt>Models</dt>
-              <dd>{run.used.models.join(", ")}</dd>
-            </div>
-          )}
+          ))}
         </dl>
       )}
     </section>
@@ -257,12 +235,12 @@ function RunPage({ agent, dueAt, chat, navigate }: { agent: AgentDefinition; due
 }
 
 function Delivery({ delivery }: { delivery: RunDelivery }) {
-  const tone = delivery.status === "sent" ? "on" : delivery.status === "recorded" ? "draft" : delivery.status === "failed" ? "error" : "off";
+  const state = deliveryStatusLabel(delivery.status);
   return (
     <li className="run-delivery">
       <div className="run-delivery-line">
         <span>{deliveryLabel(delivery)}</span>
-        <span className={`pill run-state ${tone}`}>{{ sent: "Sent", recorded: "Recorded", refused: "Not sent", failed: "Failed" }[delivery.status]}</span>
+        <span className={`pill run-state ${state.tone}`}>{state.text}</span>
       </div>
       {delivery.detail && <small>{delivery.detail}</small>}
       {delivery.text && (
@@ -276,6 +254,8 @@ function Delivery({ delivery }: { delivery: RunDelivery }) {
 
 function RunItem({ agentId, dueAt, item, scoped }: { agentId: string; dueAt: number; item: RunItemView; scoped: boolean }) {
   const [trace, setTrace] = useState(false);
+  // Read on the first Show, then kept: hiding it again only hides it.
+  const [opened, setOpened] = useState(false);
   return (
     <li className={`run-item ${item.status}`}>
       {scoped && (
@@ -295,7 +275,7 @@ function RunItem({ agentId, dueAt, item, scoped }: { agentId: string; dueAt: num
               {step.detail && <small>{step.detail}</small>}
             </span>
             <span className="run-step-time">
-              {step.ms >= 100 && took(0, step.ms)}
+              {step.ms >= 100 && tookFor(step.ms)}
               {step.cost ? ` · ${formatCost(step.cost)}` : ""}
             </span>
           </li>
@@ -304,30 +284,35 @@ function RunItem({ agentId, dueAt, item, scoped }: { agentId: string; dueAt: num
       </ol>
       {item.reason && item.status !== "acted" && <p className={item.status === "failed" ? "form-error" : "skills-note"}>{item.reason}</p>}
       {item.session && (
-        <button type="button" className="link-button" aria-expanded={trace} onClick={() => setTrace(!trace)}>
+        <button
+          type="button"
+          className="link-button"
+          aria-expanded={trace}
+          onClick={() => {
+            setTrace(!trace);
+            setOpened(true);
+          }}
+        >
           {trace ? "Hide its full trace" : "Show its full trace"}
         </button>
       )}
-      {trace && <RunTrace agentId={agentId} dueAt={dueAt} item={item.item} />}
+      {opened && (
+        <div hidden={!trace}>
+          <RunTrace agentId={agentId} dueAt={dueAt} item={item.item} />
+        </div>
+      )}
     </li>
   );
 }
 
-/** One item's session as it ran: what it was given, its steps (as the chat shows them) and what it answered. */
-function RunTrace({ agentId, dueAt, item }: { agentId: string; dueAt: number; item: string }) {
-  const [entries, setEntries] = useState<EntryRecord[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    api.agentRunTrace(agentId, dueAt, item).then(
-      ({ entries }) => live && setEntries(entries),
-      (e: unknown) => live && setError(errorMessage(e)),
-    );
-    return () => {
-      live = false;
-    };
-  }, [agentId, dueAt, item]);
-  if (error) return <p className="form-error">Could not read its trace: {error}</p>;
+/**
+ * One item's session as it ran: what it was given, its steps (each as the chat shows a step) and what it answered. Read
+ * again as the run moves on; the same props across the run page's reads render nothing new.
+ */
+const RunTrace = memo(function RunTrace({ agentId, dueAt, item }: { agentId: string; dueAt: number; item: string }) {
+  const { value, error } = useRead(() => api.agentRunTrace(agentId, dueAt, item), agentId, `${agentId}:${dueAt}:${item}`);
+  const entries = value?.entries;
+  if (error && !entries) return <p className="form-error">Could not read its trace: {error}</p>;
   if (!entries) return <p className="skills-note">Reading its trace…</p>;
   if (!entries.length) return <p className="skills-note">Its session has nothing yet.</p>;
   return (
@@ -339,18 +324,17 @@ function RunTrace({ agentId, dueAt, item }: { agentId: string; dueAt: number; it
       </StepsProvider>
     </div>
   );
-}
+});
 
 function TraceEntry({ entry }: { entry: EntryRecord }) {
   const message = entry.model?.[0];
   if (message?.role === "assistant") {
     const answer = message as AssistantMessage;
-    const items: StepItem[] = answer.content.flatMap((block, i): StepItem[] => {
-      if (block?.type === "toolCall") return [{ kind: "tool", key: block.id, call: block, streaming: false }];
-      if (block?.type === "thinking" && !block.redacted && block.thinking.trim()) return [{ kind: "thought", key: `${entry.id}:${i}`, text: block.thinking }];
-      return [];
+    const items = answer.content.flatMap((block, i): StepItem[] => {
+      const step = stepItem(answer, block, i, false);
+      return step ? [step] : [];
     });
-    const text = answer.content.flatMap((block) => (block?.type === "text" && block.text ? [block.text] : [])).join("\n\n");
+    const text = textOf(blocks(answer.content), "\n\n");
     return (
       <>
         {items.length > 0 && <StepRun items={items} />}
@@ -363,20 +347,14 @@ function TraceEntry({ entry }: { entry: EntryRecord }) {
     );
   }
   if (message?.role === "user") {
-    const said = message as UserMessage;
-    const text = typeof said.content === "string" ? said.content : said.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n");
+    const text = userText(message as UserMessage);
     if (!text) return null;
     return (
       <details className="run-trace-input">
-        <summary>{firstLineOf(text)}</summary>
+        <summary>{firstLine(text, 120)}</summary>
         <pre>{text}</pre>
       </details>
     );
   }
   return null;
-}
-
-function firstLineOf(text: string): string {
-  const line = text.split("\n").find((part) => part.trim()) ?? "";
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }

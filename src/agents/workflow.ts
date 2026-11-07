@@ -44,6 +44,7 @@ export function moveItem<T>(items: readonly T[], from: number, to: number): T[] 
 export function newStep(kind: AgentStep["kind"]): AgentStep {
   switch (kind) {
     case "look":
+    case "do":
       return { kind, server: "", tool: "", input: {} };
     case "work":
       return { kind, prompt: "" };
@@ -51,33 +52,11 @@ export function newStep(kind: AgentStep["kind"]): AgentStep {
       return { kind, condition: "" };
     case "if":
       return { kind, condition: "", then: [] };
-    case "do":
-      return { kind, server: "", tool: "", input: {} };
     case "tell":
       return { kind, to: ["owner"], via: "chat" };
     case "page":
       return { kind, artifactId: "", edit: "findings" };
     case "handOver":
       return { kind, agent: "" };
-  }
-}
-
-/** What a step's card says when closed: "sales.weekly_sales as sales", "sales vs lastYear < -5%". */
-export function stepSummary(step: AgentStep): string {
-  switch (step.kind) {
-    case "look":
-    case "do":
-      return step.server || step.tool ? `${step.server}.${step.tool}${step.kind === "look" && step.as ? ` as ${step.as}` : ""}` : "(not set)";
-    case "work":
-      return step.prompt.split("\n")[0] || "(not set)";
-    case "onlyIf":
-    case "if":
-      return step.condition || "(not set)";
-    case "tell":
-      return `${step.to.join(", ")} ${step.via === "notify" ? "as a notification" : typeof step.via === "object" ? `through ${step.via.server}.${step.via.tool}` : "in chat"}`;
-    case "page":
-      return `${step.artifactId || "(not set)"}, ${step.edit === "findings" ? "its findings" : "rebuilt"}`;
-    case "handOver":
-      return step.agent ? `@${step.agent}` : "(not set)";
   }
 }

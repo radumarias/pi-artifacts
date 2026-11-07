@@ -3023,7 +3023,8 @@ export class ChatAgent extends DurableObject<Env> {
         return { status: result.status, ...(result.text !== undefined && { text: result.text }), ...(result.reason && { reason: result.reason }), ...workSpend(entries) };
       },
       deliver: (request) => this.#deliverRun(request),
-      changed: (agentId) => this.sockets.broadcast({ type: "runs", agentId }),
+      // Over the owner's sidebar socket: the Runs tab is a page of its own, with no chat socket open.
+      changed: (agentId) => this.ctx.waitUntil(this.#directory.runsChanged(agentId)),
       alarmAt: async (at, payload) => (await this.scheduler.set(new Date(at), "run", payload)).id,
       alarmEvery: async (seconds, payload) => (await this.scheduler.every(seconds, "watch", payload)).id,
       cancelAlarm: async (id) => {
@@ -3178,7 +3179,8 @@ export class ChatAgent extends DurableObject<Env> {
     }
     const { agent } = request;
     this.turns.call([entry.agentId], {
-      calledBy: { name: agent.name, agentId: agent.id, schedule: true },
+      // For the agent whose run handed it over: "for @signups".
+      calledBy: { name: agent.name, agentId: agent.id },
       ask: askOf({ name: agent.name, kind: "agent" }, request.text, MAX_ASK_CHARS),
       // A run's hand-over can only read, as any turn its owner did not give, and its chain never hands pi a turn.
       byOwner: false,

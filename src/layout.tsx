@@ -9,6 +9,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
+import { goTo } from "./agents/nav.ts";
 import { Icon } from "./Icon.tsx";
 
 /**
@@ -98,6 +99,33 @@ export function useMediaQuery(query: string): boolean {
 
 /** A click that should open a link the browser's way (a new tab or window), not in the app. */
 export const opensElsewhere = (event: ReactMouseEvent) => event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+
+/** A link inside the app: it follows `navigate` (else the history, as `goTo`), and opens in a new tab or window as asked. */
+export function AppLink({
+  path,
+  navigate = goTo,
+  className,
+  children,
+}: {
+  path: string;
+  navigate?: (path: string) => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      href={path}
+      className={className}
+      onClick={(event) => {
+        if (opensElsewhere(event)) return;
+        event.preventDefault();
+        navigate(path);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
 
 /** The check for a stored open/closed (or on/off) setting. */
 export const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";

@@ -43,8 +43,8 @@ export interface AgentTabProps {
   /** Whether the tab has changes not saved yet: the header holds what would make a new version meanwhile. */
   onDirty?: (dirty: boolean) => void;
   /** Where the page is (a tab that opens deeper, as Runs on one run, reads it) and how to go elsewhere in the app. */
-  place?: AgentPlace;
-  navigate?: (path: string) => void;
+  place: AgentPlace;
+  navigate: (path: string) => void;
 }
 
 /** A line under the page's header, about one agent: the page of another says nothing of it. */

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   inputOf,
   MAX_WATCH_MINUTES,
@@ -14,15 +14,14 @@ import {
   type Weekday,
 } from "../../shared/agents.ts";
 import { conditionProblem } from "../../shared/conditions.ts";
-import { STEP_LABELS } from "../../shared/runs.ts";
-import { errorMessage } from "../../shared/util.ts";
+import { STEP_LABELS, stepSummary } from "../../shared/runs.ts";
+import { errorMessage, isObject } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import type { AgentTabProps } from "./AgentPage.tsx";
-import { runsLabel } from "./glance.ts";
+import { DAY_NAMES, runsLabel } from "./glance.ts";
 import { putAgent } from "./store.ts";
-import { moveItem, newStep, stepSummary, withKeys, withoutKeys, type Keyed } from "./workflow.ts";
+import { moveItem, newStep, withKeys, withoutKeys, type Keyed } from "./workflow.ts";
 
-const DAY_LABELS: Record<Weekday, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
 const VIEWER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 type When = "asked" | "schedule" | "watch";
@@ -41,18 +40,22 @@ interface Form {
   steps: Keyed[];
 }
 
-const EMPTY_LOOK: LookStep = { kind: "look", server: "", tool: "", input: {} };
+const EMPTY_LOOK = newStep("look") as LookStep;
 
-function formOf(agent: Pick<AgentDefinition, "trigger" | "scope" | "workflow">): Form {
-  const trigger = agent.trigger;
+/** The fields this tab edits; the page's save keeps the rest. */
+type WorkflowFields = Pick<AgentInput, "trigger" | "scope" | "workflow">;
+
+function formOf(agent: WorkflowFields): Form {
+  const schedule = agent.trigger?.kind === "schedule" ? agent.trigger : undefined;
+  const watch = agent.trigger?.kind === "watch" ? agent.trigger : undefined;
   return {
-    when: trigger ? trigger.kind : "asked",
-    at: trigger?.kind === "schedule" ? trigger.at : "07:00",
-    tz: trigger?.kind === "schedule" ? trigger.tz : VIEWER_ZONE,
-    days: trigger?.kind === "schedule" ? (trigger.days ?? [...WEEKDAYS]) : [...WEEKDAYS],
-    watch: trigger?.kind === "watch" ? trigger.step : EMPTY_LOOK,
-    everyMinutes: trigger?.kind === "watch" ? trigger.everyMinutes : 60,
-    condition: trigger?.kind === "watch" ? trigger.when : "",
+    when: agent.trigger?.kind ?? "asked",
+    at: schedule?.at ?? "07:00",
+    tz: schedule?.tz ?? VIEWER_ZONE,
+    days: schedule?.days ?? [...WEEKDAYS],
+    watch: watch?.step ?? EMPTY_LOOK,
+    everyMinutes: watch?.everyMinutes ?? 60,
+    condition: watch?.when ?? "",
     each: Boolean(agent.scope),
     list: agent.scope?.list ?? EMPTY_LOOK,
     steps: withKeys(agent.workflow ?? []),
@@ -73,19 +76,28 @@ function triggerOf(form: Form): AgentTrigger | undefined {
  */
 export function WorkflowTab({ subject, save, notice, onDirty }: AgentTabProps) {
   if (subject.kind === "new") return <p className="skills-note agent-runs-note">Save the agent first: its workflow is made from its instructions.</p>;
-  return <WorkflowForm agent={subject.agent} readOnly={subject.kind === "shared"} save={save} notice={notice} onDirty={onDirty} />;
+  const own = subject.kind === "own" ? subject.agent : undefined;
+  return (
+    <WorkflowForm
+      agent={subject.agent}
+      save={own && ((fields: WorkflowFields) => save({ ...inputOf(own), ...fields }))}
+      notice={notice}
+      onDirty={onDirty}
+    />
+  );
 }
 
 function WorkflowForm({
   agent,
-  readOnly,
   save,
   notice,
   onDirty,
 }: {
-  agent: Pick<AgentDefinition, "id" | "trigger" | "scope" | "workflow" | "name"> & Partial<AgentDefinition>;
-  readOnly: boolean;
-} & Pick<AgentTabProps, "save" | "notice" | "onDirty">) {
+  agent: Pick<AgentDefinition, "id"> & WorkflowFields;
+  /** Saves the tab's fields; none for someone else's agent, which shows read-only. */
+  save?: (fields: WorkflowFields) => Promise<AgentDefinition>;
+} & Pick<AgentTabProps, "notice" | "onDirty">) {
+  const readOnly = !save;
   const [form, setForm] = useState(() => formOf(agent));
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -96,29 +108,31 @@ function WorkflowForm({
     setForm((current) => ({ ...current, ...next }));
     setDirty(true);
   };
-  const markInvalid = (id: string, bad: boolean) =>
-    setInvalid((current) => {
-      if (current.has(id) === bad) return current;
-      const next = new Set(current);
-      if (bad) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  const conditionError = form.when === "watch" && form.condition.trim() ? conditionProblem(form.condition) : null;
+  // Stable, so a JSON field's effect that takes its mark back runs only as the field goes away.
+  const markInvalid = useCallback(
+    (id: string, bad: boolean) =>
+      setInvalid((current) => {
+        if (current.has(id) === bad) return current;
+        const next = new Set(current);
+        if (bad) next.add(id);
+        else next.delete(id);
+        return next;
+      }),
+    [],
+  );
+  const conditionError = form.when === "watch" ? problemOf(form.condition) : null;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (readOnly || !("version" in agent)) return;
+    if (!save) return;
     setSaving(true);
     setError(null);
     try {
-      const fields: AgentInput = {
-        ...inputOf(agent as AgentDefinition),
+      await save({
         trigger: triggerOf(form),
         scope: form.each ? { list: form.list, each: true } : undefined,
         workflow: form.steps.length ? withoutKeys(form.steps) : undefined,
-      };
-      await save(fields);
+      });
       setDirty(false);
       notice({ agentId: agent.id, text: "Saved its workflow." });
     } catch (e) {
@@ -142,7 +156,7 @@ function WorkflowForm({
 
   const schedule = runsLabel(triggerOf(form));
   return (
-    <form className="agent-form workflow-form" onSubmit={submit}>
+    <form className="agent-form workflow-form" onSubmit={submit} onInvalidCapture={openAround}>
       <fieldset className="workflow-section" disabled={readOnly}>
         <legend className="agent-label">When it runs on its own</legend>
         <div className="workflow-when" role="radiogroup" aria-label="When it runs">
@@ -175,7 +189,7 @@ function WorkflowForm({
                       checked={form.days.includes(day)}
                       onChange={(e) => change({ days: e.target.checked ? WEEKDAYS.filter((d) => d === day || form.days.includes(d)) : form.days.filter((d) => d !== day) })}
                     />
-                    {DAY_LABELS[day]}
+                    {DAY_NAMES[day]}
                   </label>
                 ))}
               </div>
@@ -207,7 +221,7 @@ function WorkflowForm({
             {conditionError && <p className="form-error">{conditionError}</p>}
           </>
         )}
-        {schedule && form.when !== "asked" && (
+        {schedule && (
           <p className="skills-note">
             {schedule.value}
             {schedule.note && ` · ${schedule.note}`}
@@ -293,7 +307,7 @@ function JsonField({ id, value, onChange, markInvalid }: { id: string; value: St
               setText(e.target.value);
               try {
                 const parsed: unknown = JSON.parse(e.target.value || "{}");
-                if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("An input is a JSON object, as {}.");
+                if (!isObject(parsed)) throw new Error("An input is a JSON object, as {}.");
                 setProblem(null);
                 markInvalid(id, false);
                 onChange(parsed as StepInput);
@@ -334,10 +348,7 @@ function LookFields({
               id={htmlId}
               value={look.as ?? ""}
               placeholder={look.tool || "sales"}
-              onChange={(e) => {
-                const { as: _, ...rest } = look;
-                onChange(e.target.value ? { ...rest, as: e.target.value } : rest);
-              }}
+              onChange={(e) => onChange(withOptional(look, "as", e.target.value))}
             />
           )}
         </Field>
@@ -382,7 +393,7 @@ function StepList({
             key={step.key}
             className={over === index ? "workflow-step over" : "workflow-step"}
             draggable={!readOnly}
-            onDragStart={(event: DragEvent) => {
+            onDragStart={(event) => {
               dragging.current = index;
               event.dataTransfer.effectAllowed = "move";
             }}
@@ -473,7 +484,7 @@ function StepFields({ step, onChange, markInvalid, readOnly }: { step: Keyed; on
       );
     case "onlyIf":
     case "if": {
-      const problem = s.condition.trim() ? conditionProblem(s.condition) : null;
+      const problem = problemOf(s.condition);
       return (
         <>
           <Field label={s.kind === "if" ? "If" : "Only if"} hint="over the results by their names: sales.total vs sales.lastYear < -5%" grow>
@@ -553,6 +564,16 @@ function StepFields({ step, onChange, markInvalid, readOnly }: { step: Keyed; on
         </Field>
       );
   }
+}
+
+/** What is wrong with a condition, once there is one to check. */
+function problemOf(condition: string): string | null {
+  return condition.trim() ? conditionProblem(condition) : null;
+}
+
+/** A field the browser finds invalid may sit in a closed step: open its cards, so the browser can point at it. */
+function openAround(event: FormEvent) {
+  for (let at = (event.target as HTMLElement).closest("details"); at; at = at.parentElement?.closest("details") ?? null) at.open = true;
 }
 
 /** `step` with an optional text field set, or left out when empty. */

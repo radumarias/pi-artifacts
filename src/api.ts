@@ -262,8 +262,8 @@ export const api = {
   shareChatAgent: (chatId: string, agentId: string, shared: boolean) => request<ChatAgentView[]>(chatPath(chatId, `/agents/${agentId}`), send("PATCH", { shared })),
   /** The user's own copy of an agent shared in a chat, with their changes: saved off, with where it came from. */
   copyAgent: (chatId: string, agentId: string, changes: AgentChanges & { version: number }) => request<AgentDefinition>(chatPath(chatId, `/agents/${agentId}/copy`), post(changes)),
-  /** A dry run of an agent on today's data, nothing sent or changed. Throws with status 404 where testing is not there yet. */
-  testAgent: (id: string) => request<{ dueAt: number; homeChatId: string }>(`/api/agents/${id}/test`, post({})),
+  /** A dry run of an agent on today's data, nothing sent or changed: the due time of the run it started. */
+  testAgent: (id: string) => request<{ dueAt: number }>(`/api/agents/${id}/test`, post({})),
   /** An agent's runs, newest first, when it runs next, and its own chat (null before its first run). */
   agentRuns: (id: string) => request<AgentRunList>(`/api/agents/${id}/runs`),
   /** One run of an agent in full: its items and their steps, what it sent, what it used. */

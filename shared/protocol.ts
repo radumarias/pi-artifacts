@@ -331,9 +331,15 @@ export interface ChatRowChange {
 
 /**
  * What the sidebar's socket (GET /api/me/ws) sends: the name of a list that changed, so the app reads it again. A
- * MentionNotice, or a SignInNotice (shared/sign-ins.ts), comes as JSON.
+ * MentionNotice, a RunsNotice, or a SignInNotice (shared/sign-ins.ts), comes as JSON.
  */
 export type SidebarList = "chats" | "artifacts" | "skills" | "agents" | "sign-ins";
+
+/** A run of one of the user's agents started, moved on or ended: an open Runs tab of that agent reads it again. */
+export interface RunsNotice {
+  type: "runs";
+  agentId: string;
+}
 
 /** Someone tagged this user in a shared chat: the app shows it, and the browser too when it may and the app is not in view. */
 export interface MentionNotice {
@@ -613,8 +619,6 @@ export type ChatServerMessage =
    * call has run; then one batch per commit, until the turn ends (the `agents` message says so).
    */
   | { type: "agentEvents"; agent: string; turn: number; events: unknown[]; toolsElapsedMs?: Record<string, number> }
-  /** A run of the agent whose home this chat is started, moved on or ended: its runs list is read again. */
-  | { type: "runs"; agentId: string }
   /** Sent just before the chat closes a removed person's socket, in case the close code is lost on the way. */
   | { type: "removed" }
   /** Sent to everyone just before the chat closes their sockets, when its owner deleted it. */

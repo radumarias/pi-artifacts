@@ -30,7 +30,7 @@ export function endedEarly(message: AssistantMessage): boolean {
 }
 
 /** A message's block as a step, or nothing for text (and for a thought with nothing to show). */
-function stepItem(message: AssistantMessage, block: AssistantMessage["content"][number] | undefined, i: number, streaming: boolean): StepItem | undefined {
+export function stepItem(message: AssistantMessage, block: AssistantMessage["content"][number] | undefined, i: number, streaming: boolean): StepItem | undefined {
   if (block?.type === "toolCall") return { kind: "tool", key: block.id, call: block, streaming };
   // By the block's own index, which stays the same once the message lands, so an opened thought stays open.
   if (block?.type === "thinking" && !block.redacted && block.thinking.trim()) return { kind: "thought", key: `${message.timestamp}:${i}`, text: block.thinking };

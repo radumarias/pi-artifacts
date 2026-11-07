@@ -1,22 +1,28 @@
 // What the Runs tab says of a run, in plain functions the tests read without a browser.
 
-import type { AgentRunView, RunDelivery, RunItemStatus, RunStatus, RunWhy } from "../../shared/runs.ts";
+import type { AgentRunView, RunDelivery, RunDeliveryKind, RunItemStatus, RunStatus, RunWhy } from "../../shared/runs.ts";
 
-/** A run's status as its pill says it, and the pill's tone. */
-export function runStatusLabel(run: Pick<AgentRunView, "status" | "test">): { text: string; tone: "on" | "draft" | "off" | "error" } {
-  const labels: Record<RunStatus, { text: string; tone: "on" | "draft" | "off" | "error" }> = {
-    running: { text: "Running", tone: "draft" },
-    sent: { text: run.test ? "Would send" : "Sent", tone: "on" },
-    not_today: { text: "Not today", tone: "off" },
-    failed: { text: "Failed", tone: "error" },
-    needs_sign_in: { text: "Needs sign-in", tone: "error" },
-  };
-  return labels[run.status];
+/** A pill's tone, as the stylesheet colours it. */
+export type Tone = "on" | "draft" | "off" | "error";
+
+const RUN_STATUS: Record<RunStatus, { text: string; tone: Tone }> = {
+  running: { text: "Running", tone: "draft" },
+  sent: { text: "Sent", tone: "on" },
+  not_today: { text: "Not today", tone: "off" },
+  failed: { text: "Failed", tone: "error" },
+  needs_sign_in: { text: "Needs sign-in", tone: "error" },
+};
+
+/** A run's status as its pill says it, and the pill's tone: a test that acted "Would send". */
+export function runStatusLabel(run: Pick<AgentRunView, "status" | "test">): { text: string; tone: Tone } {
+  return run.test && run.status === "sent" ? { ...RUN_STATUS.sent, text: "Would send" } : RUN_STATUS[run.status];
 }
 
-/** What started a run, in words. */
+const WHY: Record<RunWhy, string> = { schedule: "On its schedule", watch: "Its watch fired", test: "A test run", manual: "Run by hand" };
+
+/** What started a run, in words: the runs list says it as is, a run's post in its byline in lower case. */
 export function whyLabel(why: RunWhy): string {
-  return { schedule: "On its schedule", watch: "Its watch fired", test: "Test it", manual: "Run now" }[why];
+  return WHY[why];
 }
 
 /** An item's status, in words. */
@@ -32,33 +38,29 @@ export function itemsLabel(items: AgentRunView["items"]): string {
     .join(" · ");
 }
 
-/** Where a delivery went, in words: "Posted in its chat", "Notified you", "Page Signups brief", "Handed to @finance". */
+/** Each kind of delivery as done, as a test would have done it, and as not done. */
+const DELIVERY_WORDS: Record<RunDeliveryKind, [done: string, would: string, not: string]> = {
+  chat: ["Posted in", "Would post in", "Did not post in"],
+  notify: ["Notified", "Would notify", "Did not notify"],
+  page: ["Updated", "Would update", "Did not update"],
+  handOver: ["Handed to", "Would hand to", "Did not hand to"],
+  tool: ["Called", "Would call", "Did not call"],
+};
+
+/** Where a delivery went, in words: "Posted in its chat", "Would notify you", "Did not update Signups brief". */
 export function deliveryLabel(delivery: Pick<RunDelivery, "kind" | "to" | "status">): string {
-  const would = delivery.status === "recorded";
-  switch (delivery.kind) {
-    case "chat":
-      return `${would ? "Would post" : "Posted"} in ${delivery.to}`;
-    case "notify":
-      return `${would ? "Would notify" : "Notified"} ${delivery.to}`;
-    case "page":
-      return `${would ? "Would update" : "Updated"} ${delivery.to}`;
-    case "handOver":
-      return `${would ? "Would hand" : "Handed"} to ${delivery.to}`;
-    default:
-      return `${would ? "Would call" : "Called"} ${delivery.to}`;
-  }
+  const [done, would, not] = DELIVERY_WORDS[delivery.kind];
+  return `${delivery.status === "sent" ? done : delivery.status === "recorded" ? would : not} ${delivery.to}`;
 }
 
-/** How long a run or item took, from start to end: "0.4s", "12s", "3 min". */
-export function took(startedAt: number, endedAt: number | undefined): string {
-  if (endedAt === undefined) return "";
-  const ms = Math.max(0, endedAt - startedAt);
-  if (ms < 10_000) return `${(ms / 1_000).toFixed(1)}s`;
-  if (ms < 120_000) return `${Math.round(ms / 1_000)}s`;
-  return `${Math.round(ms / 60_000)} min`;
-}
+const DELIVERY_STATUS: Record<RunDelivery["status"], { text: string; tone: Tone }> = {
+  sent: { text: "Sent", tone: "on" },
+  recorded: { text: "Recorded", tone: "draft" },
+  refused: { text: "Not sent", tone: "off" },
+  failed: { text: "Failed", tone: "error" },
+};
 
-/** Whether a list of runs has one still going: the tab reads it again soon. */
-export function anyRunning(runs: readonly Pick<AgentRunView, "status">[]): boolean {
-  return runs.some((run) => run.status === "running");
+/** A delivery's status as its pill says it, and the pill's tone. */
+export function deliveryStatusLabel(status: RunDelivery["status"]): { text: string; tone: Tone } {
+  return DELIVERY_STATUS[status];
 }

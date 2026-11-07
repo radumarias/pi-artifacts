@@ -1,6 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { ModelSetting } from "../shared/models.ts";
-import { PAGE_STORAGE_LIMITS, SOCKET_PING, MAX_CHAT_TITLE, type ArtifactSummary, type ChatStatus, type ChatSummary, type ChatRowChange, type MentionNotice, type Person, type SidebarList } from "../shared/protocol.ts";
+import { PAGE_STORAGE_LIMITS, SOCKET_PING, MAX_CHAT_TITLE, type ArtifactSummary, type ChatStatus, type ChatSummary, type ChatRowChange, type MentionNotice, type Person, type RunsNotice, type SidebarList } from "../shared/protocol.ts";
 import type { ExportedAgent, ExportedChat, ExportedPageValues, ExportedSkill, ExportStart, ImportedSettings } from "../shared/data-export.ts";
 import type { SkillFileInfo } from "../shared/skill-files.ts";
 import { checkSystemPrompt, type ChatSystemPrompt } from "../shared/system-prompt.ts";
@@ -259,7 +259,7 @@ export class UserDirectory extends DurableObject<Env> {
   }
 
   /** Tell the open sidebars that a list changed, or that someone tagged this user. */
-  #changed(message: SidebarList | MentionNotice | SignInNotice): void {
+  #changed(message: SidebarList | MentionNotice | RunsNotice | SignInNotice): void {
     const sent = typeof message === "string" ? message : JSON.stringify(message);
     for (const ws of this.ctx.getWebSockets()) {
       try {
@@ -380,6 +380,11 @@ export class UserDirectory extends DurableObject<Env> {
     this.#tellHome(home, agentId, agent);
     // A deleted agent's conversation stays, as an ordinary chat.
     if (!agent && this.ctx.storage.sql.exec("UPDATE chats SET agent_id = NULL WHERE agent_id = ?", agentId).rowsWritten) this.#changed("chats");
+  }
+
+  /** A run of agent `agentId` started, moved on or ended (its home chat says so): an open Runs tab reads it again. */
+  runsChanged(agentId: string): void {
+    this.#changed({ type: "runs", agentId });
   }
 
   /**

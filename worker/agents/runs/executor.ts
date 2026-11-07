@@ -17,11 +17,12 @@ import {
   type StepValue,
 } from "../../../shared/agents.ts";
 import { ConditionError, evaluate, holds, type Value } from "../../../shared/conditions.ts";
-import { excerpt } from "../../../shared/replies.ts";
+import { excerpt, firstLine } from "../../../shared/replies.ts";
 import {
   MAX_RUN_ITEMS,
   RUN_CONCURRENCY,
   STEP_LABELS,
+  stepSummary,
   type RunDelivery,
   type RunItemStatus,
   type RunItemView,
@@ -550,10 +551,7 @@ function targetOf(step: DeliveryRequest["step"]): string {
 }
 
 function deliveryLabel(step: DeliveryRequest["step"]): string {
-  if (step.kind === "page") return `${STEP_LABELS.page} ${step.artifactId}, ${step.edit === "findings" ? "its findings" : "rebuilt"}`;
-  if (step.kind === "handOver") return `${STEP_LABELS.handOver} to @${step.agent}`;
-  const via = typeof step.via === "object" ? `through ${step.via.server}.${step.via.tool}` : step.via === "chat" ? "in chat" : "as a notification";
-  return `${STEP_LABELS.tell} ${step.to.join(", ")} ${via}`;
+  return `${STEP_LABELS[step.kind]} ${stepSummary(step)}`;
 }
 
 /** A test run's delivery: what it would have sent, and to whom. */
@@ -570,11 +568,6 @@ export function whenOf(agent: Pick<AgentDefinition, "trigger">): string {
 }
 
 /** The first line of a text with anything on it, cut to `max`. */
-function firstLine(text: string, max = 140): string {
-  return excerpt(text.split("\n").find((part) => part.trim()) ?? "", max);
-}
-
-
 /** A condition scope with no prototype: a result named "__proto__" or "constructor" is a name like any other. */
 function bareScope(): Record<string, Value> {
   return Object.create(null) as Record<string, Value>;

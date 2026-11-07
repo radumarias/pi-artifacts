@@ -1,8 +1,9 @@
 import { useRef } from "react";
 import type { ChatAgentReplyData } from "../../shared/agents.ts";
 import { everyone, type PublishedDetails } from "../../shared/protocol.ts";
-import { agentPath, goTo } from "../agents/nav.ts";
-import { opensElsewhere } from "../layout.tsx";
+import { agentPath } from "../agents/nav.ts";
+import { whyLabel } from "../agents/runs.ts";
+import { AppLink } from "../layout.tsx";
 import { callerName } from "./agentLines.ts";
 import { ArtifactCard } from "./ArtifactCard.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -14,9 +15,7 @@ import { SentTime } from "./SentTime.tsx";
 
 /** Who gave an agent the turn it answers, as its byline says it. */
 function calledByLabel(calledBy: ChatAgentReplyData["calledBy"], run: ChatAgentReplyData["run"]): string {
-  if (run?.test) return "a test run";
-  if (run?.why === "watch") return "its watch fired";
-  if (run?.why === "manual") return "run by hand";
+  if (run) return whyLabel(run.test ? "test" : run.why).toLowerCase();
   return calledBy.schedule ? "on its schedule" : `for ${callerName(calledBy)}`;
 }
 
@@ -58,17 +57,9 @@ export function AgentReply({
       {data.failed && <div className="chat-error">{data.failed}</div>}
       {runPath && (
         // A run's post: where it came from, opening on how the run got there. A reply to it continues the run.
-        <a
-          className="run-marker"
-          href={runPath}
-          onClick={(event) => {
-            if (opensElsewhere(event)) return;
-            event.preventDefault();
-            goTo(runPath);
-          }}
-        >
+        <AppLink path={runPath} className="run-marker">
           {data.run?.test ? "Test run: nothing was sent or changed" : "From a run"} · See how it got there
-        </a>
+        </AppLink>
       )}
       {data.text && (
         <>

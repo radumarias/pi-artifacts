@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MentionNotice, SidebarList } from "../shared/protocol.ts";
+import type { MentionNotice, RunsNotice, SidebarList } from "../shared/protocol.ts";
 import type { SignInNotice } from "../shared/sign-ins.ts";
 import { isObject, text } from "../shared/util.ts";
 import { api, keepAlive } from "./api.ts";
@@ -7,6 +7,8 @@ import { api, keepAlive } from "./api.ts";
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
 const LOAD_DELAY_MS = 150;
 const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills", "agents", "sign-ins"];
+/** The window event the sidebar's socket raises when a run of one of the user's agents moved on (detail: its id). */
+export const RUNS_EVENT = "pi-agent-runs";
 
 /**
  * A value read by `read`, and a stable `load` that reads it again. Reads can overlap: only the newest one's answer is
@@ -58,17 +60,19 @@ export function useSidebarSocket(
   signIn.current = onSignIn;
 
   useEffect(() => {
-    const pending = new Map<SidebarList, ReturnType<typeof setTimeout>>();
-    const load = (list: SidebarList) => {
-      clearTimeout(pending.get(list));
+    const pending = new Map<string, ReturnType<typeof setTimeout>>();
+    // Once per burst for each key: a list's load, or an agent's runs.
+    const later = (key: string, then: () => void) => {
+      clearTimeout(pending.get(key));
       pending.set(
-        list,
+        key,
         setTimeout(() => {
-          pending.delete(list);
-          current.current[list]?.();
+          pending.delete(key);
+          then();
         }, LOAD_DELAY_MS),
       );
     };
+    const load = (list: SidebarList) => later(list, () => current.current[list]?.());
     let closed = false;
     let attempt = 0;
     let ws: WebSocket | undefined;
@@ -86,6 +90,10 @@ export function useSidebarSocket(
         const notice = parseNotice(event.data);
         if (notice?.type === "mention") mentioned.current?.(notice);
         else if (notice?.type === "sign-in") signIn.current?.(notice);
+        else if (notice?.type === "runs") {
+          const { agentId } = notice;
+          later(`runs:${agentId}`, () => dispatchEvent(new CustomEvent(RUNS_EVENT, { detail: agentId })));
+        }
       };
       ws.onclose = () => {
         if (!closed) retry = setTimeout(open, Math.min(1_000 * 2 ** attempt++, 30_000));
@@ -102,10 +110,12 @@ export function useSidebarSocket(
   }, []);
 }
 
-function parseNotice(data: unknown): MentionNotice | SignInNotice | null {
+function parseNotice(data: unknown): MentionNotice | RunsNotice | SignInNotice | null {
   try {
     const notice: unknown = typeof data === "string" ? JSON.parse(data) : null;
     if (!isObject(notice)) return null;
+    const agentId = notice.type === "runs" ? text(notice.agentId) : undefined;
+    if (agentId) return { type: "runs", agentId };
     if (notice.type === "mention" && text(notice.chatId)) return notice as unknown as MentionNotice;
     return notice.type === "sign-in" && text(notice.server) && text(notice.link) ? (notice as unknown as SignInNotice) : null;
   } catch {
