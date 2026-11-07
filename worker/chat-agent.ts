@@ -152,7 +152,7 @@ import { ChatRoster, type AgentTurn, type RosterEntry } from "./agents/roster.ts
 import { reportOf, SignInNeeded, whenOf, type DeliveryRequest } from "./agents/runs/executor.ts";
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "./agents/runs/runner.ts";
 import { AgentRuns, type RunRecord } from "./agents/runs/store.ts";
-import { reportContext, runInstructions, RUN_STEP_KIND, workSpend, type RunStepData } from "./agents/runs/report.ts";
+import { answeredIn, reportContext, runInstructions, RUN_STEP_KIND, workSpend, type RunStepData } from "./agents/runs/report.ts";
 import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "./agents/runs/page.ts";
 import { compileWorkflow } from "./agents/runs/compile.ts";
 import { sourceName } from "./agents/runs/source.ts";
@@ -171,6 +171,7 @@ import {
   type BranchedFrom,
   type ChatEventData,
   type ChatKind,
+  type ChatRef,
   type ChatMemberVia,
   type ChatPage,
 } from "../shared/chat-kinds.ts";
@@ -2761,7 +2762,7 @@ export class ChatAgent extends DurableObject<Env> {
       text: excerpt(reply.text, MAX_FEED_TEXT),
       from: agentFrom({ id: reply.agentId, name: reply.name, avatar: reply.avatar, color: reply.color }),
       open: { to: "chat", chatId: this.chatId },
-      chat: { id: this.chatId, kind: this.kinds.kind() },
+      chat: this.#chatRef(),
     });
     this.ctx.waitUntil(added.catch((error: unknown) => console.error("feed:", errorMessage(error))));
   }
@@ -3079,11 +3080,11 @@ export class ChatAgent extends DurableObject<Env> {
    * an agent of this chat's owner that is on its roster. Its session here reads the report as context, so a reply
    * here can be about it. Placed once per `requestId`.
    */
-  async postRun(reply: ChatAgentReplyData, context: string, requestId: string): Promise<ChatRefusal | { sentAt: number }> {
+  async postRun(reply: ChatAgentReplyData, context: string, requestId: string): Promise<ChatRefusal | { sentAt: number; chat: ChatRef }> {
     if (this.#gone) return refuse(404, DELETED);
     const entry = this.roster.get(reply.agentId);
     if (reply.ownerUid !== this.uid || !entry) return refuse(403, `@${reply.name} is not in this chat.`);
-    return { sentAt: await this.#placeRun(reply, context, requestId, entry) };
+    return { sentAt: await this.#placeRun(reply, context, requestId, entry), chat: this.#chatRef() };
   }
 
   /** A run's report in this chat's log, and as context in the agent's session here when it has one; when it was placed. */
@@ -3243,9 +3244,19 @@ export class ChatAgent extends DurableObject<Env> {
       ...(run.summary && { summary: run.summary }),
       chatId: this.chatId,
       chatKind: this.kinds.kind(),
-      ...(posted?.text && { post: posted.text, ...(posted.sentAt && { sentAt: posted.sentAt }), ...(asksUser(posted.text) && { asks: true }) }),
+      ...(posted?.text && {
+        post: posted.text,
+        ...(posted.sentAt && { sentAt: posted.sentAt }),
+        ...(posted.chat && { postedIn: posted.chat }),
+        ...(asksUser(posted.text) && { asks: true }),
+      }),
     });
     this.ctx.waitUntil(ended.catch((error: unknown) => console.error("feed:", errorMessage(error))));
+  }
+
+  /** This chat, with its kind as it is now. */
+  #chatRef(): ChatRef {
+    return { id: this.chatId, kind: this.kinds.kind() };
   }
 
   /** A run's report as a post of its agent's, carrying the run. */
@@ -3301,6 +3312,7 @@ export class ChatAgent extends DurableObject<Env> {
         text: request.text,
         status: "sent",
         sentAt,
+        chat: this.#chatRef(),
         ...(others.length && { detail: `not ${others.join(", ")}: at Inform, an agent notifies only its owner` }),
       };
     }
@@ -3309,27 +3321,31 @@ export class ChatAgent extends DurableObject<Env> {
     const targets = [...new Set(step.to.map((to) => to.trim()).map((to) => (isOwner(to) ? "owner" : to)))];
     const chats = targets.every(isOwner) ? [] : (await this.#directory.listChats()).filter((chat) => !chat.sharedBy);
     const outcomes = await Promise.all(
-      targets.map(async (target): Promise<{ sent: string; at: number } | { refused: string }> => {
+      targets.map(async (target): Promise<{ sent: string; at: number; chat: ChatRef } | { refused: string }> => {
         const requestId = `run-post:${agent.id}:${request.run.dueAt}:${request.key}:${target}`;
         if (isOwner(target)) {
-          return { sent: "its chat", at: await this.#placeRun(this.#runReply(request), context, requestId, this.roster.get(agent.id)) };
+          const at = await this.#placeRun(this.#runReply(request), context, requestId, this.roster.get(agent.id));
+          return { sent: "its chat", at, chat: this.#chatRef() };
         }
         const chat = chats.find((one) => one.id === target) ?? chats.find((one) => one.title.toLowerCase() === target.toLowerCase());
         if (!chat) return { refused: `${target} (no such chat of yours)` };
         const answer = await exports.ChatAgent.getByName(chatAgentName(this.uid, chat.id)).postRun(this.#runReply(request), context, requestId);
-        return "error" in answer ? { refused: `${chat.title} (${answer.error})` } : { sent: chat.title, at: answer.sentAt };
+        if ("error" in answer) return { refused: `${chat.title} (${answer.error})` };
+        return { sent: chat.title, at: answer.sentAt, chat: answer.chat };
       }),
     );
-    // When it was first placed, not before: a message sent while it was being posted never saw it.
-    const sentAt = Math.min(...outcomes.flatMap((outcome) => ("sent" in outcome ? [outcome.at] : [])));
-    const sent = outcomes.flatMap((outcome) => ("sent" in outcome ? [outcome.sent] : []));
+    // Where its owner answers it: home when it went there, else the first chat it went to; dated when it was placed
+    // there, not before, as a message sent while it was being posted never saw it.
+    const placed = outcomes.flatMap((outcome) => ("sent" in outcome ? [outcome] : []));
+    const answered = answeredIn(placed, this.chatId);
+    const sent = placed.map((outcome) => outcome.sent);
     const refused = outcomes.flatMap((outcome) => ("refused" in outcome ? [outcome.refused] : []));
     return {
       kind: "chat",
       to: [...sent, ...refused].join(", ") || step.to.join(", "),
       text: request.text,
       status: sent.length ? "sent" : "refused",
-      ...(sent.length && { sentAt }),
+      ...(answered && { sentAt: answered.at, chat: answered.chat }),
       ...(refused.length && { detail: `not posted to ${refused.join(", ")}` }),
     };
   }

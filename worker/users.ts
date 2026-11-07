@@ -19,7 +19,7 @@ import type { McpSignInView, SignInNotice } from "../shared/sign-ins.ts";
 import { AgentStore, type AgentSave } from "./agents/store.ts";
 import { ChatRows } from "./chat-rows.ts";
 import { addColumns } from "./members.ts";
-import { mayLeave, type ChatKind } from "../shared/chat-kinds.ts";
+import { mayLeave, type ChatKind, type ChatRef } from "../shared/chat-kinds.ts";
 import { agentFrom, NEEDS_YOU, RUN_FEED_TEXT, type FeedInput, type FeedList, type FeedOpen, type FollowKind, type FollowView } from "../shared/feed.ts";
 import type { RunStatus } from "../shared/runs.ts";
 import { aboutOf, FAN_OUT, fanOut, FeedStore, FollowStore, postsReachFollowers, type Follower, type FollowRecord } from "./feed/store.ts";
@@ -80,8 +80,9 @@ export interface RunEnded {
   chatKind: ChatKind;
   /** The report it posted (in a chat or as a notification), if it did: what its followers may read. */
   post?: string;
-  /** When its report was posted (RunDelivery.sentAt). */
+  /** When its report was posted (RunDelivery.sentAt), and in which chat (its `chat`): where its owner answers it. */
   sentAt?: number;
+  postedIn?: ChatRef;
   /** Its post ends on a question to its owner. */
   asks?: boolean;
 }
@@ -443,6 +444,12 @@ export class UserDirectory extends DurableObject<Env> {
     const from = agentFrom(agent);
     const text = run.post ?? run.summary;
     const open: FeedOpen = { to: "agent", agentId: agent.id, tab: "runs" };
+    // The run read in its home chat: off the record there, nothing of it reaches the feed, wherever its report went
+    // (FeedStore.add checks only the chat the item names), as the sender says or as this user's row says.
+    const home = this.#rows.kindOf(run.chatId);
+    if (!mayLeave({ what: "feed" }, run.chatKind, ...(home ? [home] : []))) return;
+    // A report posted only to another chat (a chat step to it) is answered there, and opens there.
+    const chat = run.postedIn ?? { id: run.chatId, kind: run.chatKind };
     this.addFeed({
       kind: "run",
       ref: `run:${agent.id}:${run.dueAt}`,
@@ -451,15 +458,16 @@ export class UserDirectory extends DurableObject<Env> {
       title: `@${agent.name} ${run.asks ? "asks you something" : RUN_FEED_TEXT[run.status]}`,
       ...(text && { text }),
       from,
-      open: run.post ? { to: "chat", chatId: run.chatId } : open,
-      chat: { id: run.chatId, kind: run.chatKind },
+      open: run.post ? { to: "chat", chatId: chat.id } : open,
+      chat,
       status: run.status,
       // A run waiting for a sign-in waits until it goes on (the same ref, replaced); one that asks, until they answer in its chat.
       ...(run.status === "needs_sign_in" ? { needsYou: true } : run.asks && { needsYou: "reply" as const }),
       ...(run.status === "not_today" && { quiet: true }),
       aboutAgent: agent.id,
     });
-    if (!run.post || !mayLeave({ what: "feed" }, run.chatKind, this.#rows.kindOf(run.chatId))) return;
+    // Neither the home chat, where the run read, nor the one it posted to may be off the record.
+    if (!run.post || !mayLeave({ what: "feed" }, run.chatKind, home, chat.kind, this.#rows.kindOf(chat.id))) return;
     const signIn = new Set(oauthServerNames(this.env));
     const all = mcpServers(this.env).map((server) => server.name);
     if (!postsReachFollowers(agent, all, (server) => signIn.has(server))) return;

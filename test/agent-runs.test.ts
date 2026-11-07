@@ -5,7 +5,7 @@ import type { ArtifactMeta } from "../shared/protocol.ts";
 import { KEPT_RUNS, type RunDelivery } from "../shared/runs.ts";
 import { fillInput, itemKey, itemsOf, reportOf, SignInNeeded, type DeliveryRequest, type WorkResult } from "../worker/agents/runs/executor.ts";
 import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "../worker/agents/runs/page.ts";
-import { findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, workSpend } from "../worker/agents/runs/report.ts";
+import { answeredIn, findingsEdit, FINDINGS_END, FINDINGS_START, reportHtml, workSpend } from "../worker/agents/runs/report.ts";
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "../worker/agents/runs/runner.ts";
 import { sourceName, SourceCore, type Subscriber } from "../worker/agents/runs/source.ts";
 import { AgentRuns } from "../worker/agents/runs/store.ts";
@@ -551,6 +551,13 @@ describe("scheduled runs", () => {
     expect(host.endings).toEqual([`${T0 + 1}:not_today`]);
     expect(host.runs.get(definition.id, T0 + 1)).toBeNull();
     expect(host.runs.get(definition.id, T0 + 3)).not.toBeNull();
+  });
+
+  it("has a report answered in its home chat when it went there, else in the first chat it went to", () => {
+    const chat = (id: string) => ({ chat: { id, kind: "private" as const }, at: 1 });
+    expect(answeredIn([chat("ops"), chat("home")], "home")?.chat.id).toBe("home");
+    expect(answeredIn([chat("ops"), chat("sales")], "home")?.chat.id).toBe("ops");
+    expect(answeredIn([], "home")).toBeUndefined();
   });
 
   it("fails a run whose items acted when its only delivery failed", async () => {

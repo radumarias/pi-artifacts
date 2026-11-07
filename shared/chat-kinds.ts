@@ -12,6 +12,12 @@ import type { Person } from "./protocol.ts";
  */
 export type ChatKind = "private" | "group" | "page" | "off_record";
 
+/** A chat, with its kind as the chat itself said it. */
+export interface ChatRef {
+  id: string;
+  kind: ChatKind;
+}
+
 export const CHAT_KINDS: readonly ChatKind[] = ["private", "group", "page", "off_record"];
 
 export function isChatKind(value: unknown): value is ChatKind {
