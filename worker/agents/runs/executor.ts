@@ -272,7 +272,7 @@ export class RunExecutor {
         // Ended without going: an older run that waited for this one (its sign-in came meanwhile) goes now, on its own.
         // A run that went on from its row (resumed after a restart, or restarted after a sign-in) counts too.
         const went = end.status !== "failed" && end.status !== "needs_sign_in";
-        if (!went) this.#host.waitUntil(this.#wakeDeferred(agent.id, dueAt, test));
+        if (!went) this.#wakeDeferred(agent.id, dueAt, test);
         return end;
       });
     this.#active.set(key, run);
@@ -313,18 +313,37 @@ export class RunExecutor {
     }
   }
 
-  /** The newest older run that waited for the one at `dueAt` to end: it starts again, unless its agent is off. */
-  async #wakeDeferred(agentId: string, dueAt: number, test: boolean): Promise<void> {
+  /**
+   * The run at `dueAt` ended without going: the newest older run released for it (its sign-in came while this one went)
+   * goes now. Its row is running again before any await, so a reset meanwhile leaves it to resume(), not waiting with
+   * nothing to wake it. It does not go when it is replaced: by a newer run that went, or by this one, which waits itself
+   * (only the newest goes); a newer one still going wakes it in turn.
+   */
+  #wakeDeferred(agentId: string, dueAt: number, test: boolean): void {
     const runs = this.#host.runs;
     const deferred = runs.deferred(agentId, dueAt, test);
     if (!deferred) return;
-    try {
-      const agent = await this.#host.definition(agentId);
-      if (!agent || (!test && !agent.enabled) || !runs.restart(agentId, deferred.dueAt)) return;
-      await this.start(startOf(agent, deferred));
-    } catch (error) {
-      console.error("runs: starting a run that waited failed:", errorMessage(error));
+    const newer = runs.newer(agentId, deferred.dueAt, test);
+    if (newer === "going") return;
+    const waits = runs.get(agentId, dueAt)?.status === "needs_sign_in";
+    if (newer === "went" || waits) {
+      runs.skipWaiting(agentId, deferred.dueAt, `Skipped: a newer run ${waits && newer !== "went" ? "waits" : "went"} instead.`);
+      this.#host.changed(agentId);
+      return;
     }
+    if (!runs.restart(agentId, deferred.dueAt)) return;
+    this.#host.changed(agentId);
+    this.#host.waitUntil(
+      (async () => {
+        const agent = await this.#host.definition(agentId);
+        if (!agent || (!test && !agent.enabled)) {
+          const summary = agent ? turnedOff(agent) : "Failed: the agent was deleted.";
+          runs.update(agentId, deferred.dueAt, { status: agent ? "not_today" : "failed", summary });
+          return;
+        }
+        await this.start(startOf(agent, { ...deferred, status: "running" }));
+      })().catch((error: unknown) => console.error("runs: starting a run that waited failed (resume() goes on with it):", errorMessage(error))),
+    );
   }
 
   /**

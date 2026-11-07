@@ -471,6 +471,60 @@ describe("scheduled runs", () => {
     expect(host.delivered).toHaveLength(1);
   });
 
+  describe("an older run released for a newer one", () => {
+    /** The run at T0 waits for crm, released: its sign-in came while a newer run went. */
+    function released() {
+      const setup = home();
+      const id = setup.definition.id;
+      setup.host.runs.begin(id, T0, "schedule", false);
+      setup.host.runs.update(id, T0, { status: "needs_sign_in", detail: { needsSignIn: ["crm"], released: ["crm"] } });
+      return { ...setup, id };
+    }
+    /** The newer run's read fails once, so it ends failed without going. */
+    function failOnce(host: ReturnType<typeof home>["host"]) {
+      let reads = 0;
+      host.values.set("crm.weekly_sales", () => {
+        if (reads++ === 0) throw new Error("crm is down");
+        return { total: 940, lastYear: 1000 };
+      });
+    }
+
+    it("is running again before the wake awaits anything, so resume() goes on with it after a reset", async () => {
+      const { host, runner, definition, id } = released();
+      failOnce(host);
+      // The wake's read of the agent fails (the object reset, or the directory is down).
+      host.failDefinition = true;
+      await runner.executor.start({ agent: definition, dueAt: T0 + 1, why: "schedule" });
+      await host.settled();
+      expect(host.runs.get(id, T0 + 1)?.status).toBe("failed");
+      expect(host.runs.get(id, T0)?.status).toBe("running");
+      host.failDefinition = false;
+      runner.resume();
+      await host.settled();
+      expect(host.runs.get(id, T0)?.status).toBe("sent");
+      expect(host.delivered).toHaveLength(1);
+    });
+
+    it("stays released while a newer run still goes, and is replaced by one that waits itself", async () => {
+      const going = released();
+      // A third run is still going when the second fails: that one wakes it, or replaces it, in turn.
+      going.host.runs.begin(going.id, T0 + 2, "schedule", false);
+      failOnce(going.host);
+      await going.runner.executor.start({ agent: going.definition, dueAt: T0 + 1, why: "schedule" });
+      await going.host.settled();
+      expect(going.host.runs.get(going.id, T0)).toMatchObject({ status: "needs_sign_in", detail: { released: ["crm"] } });
+      expect(going.host.delivered).toHaveLength(0);
+
+      // The newer run waits for a sign-in itself: only the newest goes, so the older one is skipped.
+      const waits = released();
+      waits.host.signIn.add("crm");
+      await waits.runner.executor.start({ agent: waits.definition, dueAt: T0 + 1, why: "schedule" });
+      await waits.host.settled();
+      expect(waits.host.runs.get(waits.id, T0 + 1)?.status).toBe("needs_sign_in");
+      expect(waits.host.runs.get(waits.id, T0)).toMatchObject({ status: "not_today", summary: "Skipped: a newer run waits instead." });
+    });
+  });
+
   it("finds a sign-in failure mid-run too", async () => {
     const { host, runner, definition } = home();
     host.values.set("crm.weekly_sales", () => {
