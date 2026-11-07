@@ -1081,6 +1081,8 @@ export class UserDirectory extends DurableObject<Env> {
     const saved = this.#agents.save(input, origin, enabled, save);
     if ("error" in saved) return saved;
     this.#agentChanged(saved.id);
+    // Saved off (a PUT with enabled false turns it off as PATCH does).
+    if (!saved.enabled) this.#agentOff(saved.id);
     // A draft the model made with fields it guessed: the user is asked, in the feed, to confirm them.
     if (origin === "agent" && !saved.enabled && saved.assumed?.length) {
       this.addFeed({
@@ -1107,9 +1109,13 @@ export class UserDirectory extends DurableObject<Env> {
     if (!("error" in result) && result.version !== before) this.#agentChanged(id);
     // Turning it on confirms its guesses (AgentStore.setEnabled clears them).
     if (!("error" in result) && result.enabled) this.resolveFeed(assumptionRef(id));
-    // Off, its runs wait on nothing more: no sign-in or answer is needed for a run that will not go on.
-    if (!("error" in result) && !result.enabled && this.#feed.resolveAbout(aboutOf("agent", id, this.ctx.id.name!), "run")) this.#changed("feed");
+    if (!("error" in result) && !result.enabled) this.#agentOff(id);
     return result;
+  }
+
+  /** One of this user's agents is off: its runs wait on nothing more, no sign-in or answer is needed for a run that will not go on. */
+  #agentOff(id: string): void {
+    if (this.#feed.resolveAbout(aboutOf("agent", id, this.ctx.id.name!), "run")) this.#changed("feed");
   }
 
   deleteAgent(id: string): { error: string } | null {

@@ -176,16 +176,25 @@ export class AgentRuns {
     return { run: this.get(agentId, dueAt)!, started: written > 0 };
   }
 
-  /** Keep the newest KEPT_RUNS runs of an agent, items included. */
+  /**
+   * Keep the newest KEPT_RUNS runs of an agent, items included. A real run still waiting for a sign-in ends as it goes
+   * (skipped, as a newer run would skip it): its owner's feed hears of it, so its item waits no more.
+   */
   #prune(agentId: string): void {
-    this.#sql.exec(
-      `DELETE FROM agent_runs WHERE agent_id = ? AND due_at < (
-         SELECT MIN(due_at) FROM (SELECT due_at FROM agent_runs WHERE agent_id = ? AND item = '' ORDER BY due_at DESC LIMIT ?)
-       )`,
-      agentId,
-      agentId,
-      KEPT_RUNS,
-    );
+    const gone = this.#sql
+      .exec(
+        `DELETE FROM agent_runs WHERE agent_id = ? AND due_at < (
+           SELECT MIN(due_at) FROM (SELECT due_at FROM agent_runs WHERE agent_id = ? AND item = '' ORDER BY due_at DESC LIMIT ?)
+         ) RETURNING *`,
+        agentId,
+        agentId,
+        KEPT_RUNS,
+      )
+      .toArray() as RunRow[];
+    for (const row of gone) {
+      if (row.item !== RUN || row.test || row.status !== "needs_sign_in") continue;
+      this.#onEnded?.({ ...recordOf(row), status: "not_today", summary: "Skipped: too old to go on." });
+    }
   }
 
   get(agentId: string, dueAt: number): RunRecord | null {
