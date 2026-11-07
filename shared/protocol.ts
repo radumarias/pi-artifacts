@@ -345,7 +345,7 @@ export interface ChatRowChange {
  * What the sidebar's socket (GET /api/me/ws) sends: the name of a list that changed, so the app reads it again. A
  * MentionNotice, a RunsNotice, or a SignInNotice (shared/sign-ins.ts), comes as JSON.
  */
-export type SidebarList = "chats" | "artifacts" | "skills" | "agents" | "sign-ins" | "feed" | "follows";
+export type SidebarList = "chats" | "artifacts" | "skills" | "agents" | "sign-ins" | "feed" | "follows" | "memory";
 
 /** A run of one of the user's agents started, moved on or ended: an open Runs tab of that agent reads it again. */
 export interface RunsNotice {

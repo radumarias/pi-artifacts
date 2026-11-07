@@ -337,6 +337,25 @@ export class AgentRuns {
     this.#sql.exec("UPDATE agent_runs SET reply_session = ? WHERE agent_id = ? AND due_at = ? AND item = '' AND reply_session IS NULL", session, agentId, dueAt);
   }
 
+  /**
+   * The agent whose run works in `session`: an item's, a reply's (a fork of an item's) or a delivery's (a page
+   * rebuild's, kept in the run's detail). Null for a session no run of this chat's made.
+   */
+  agentOfSession(session: string): string | null {
+    const row = this.#sql
+      .exec(
+        // Only where a session is kept: its columns, and the delivery sessions of the run's own row (never the rest of its detail).
+        `SELECT agent_id FROM agent_runs WHERE session = ? OR reply_session = ?
+           OR (item = '' AND instr(detail, ?) > 0 AND json_valid(detail) AND EXISTS (SELECT 1 FROM json_each(detail, '$.sessions') WHERE value = ?)) LIMIT 1`,
+        session,
+        session,
+        JSON.stringify(session),
+        session,
+      )
+      .toArray()[0];
+    return row ? (row.agent_id as string) : null;
+  }
+
   /** Forget an agent's runs (it was deleted). */
   forget(agentId: string): void {
     this.#sql.exec("DELETE FROM agent_runs WHERE agent_id = ?", agentId);

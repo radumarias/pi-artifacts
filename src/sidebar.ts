@@ -6,7 +6,7 @@ import { api, keepAlive } from "./api.ts";
 
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
 const LOAD_DELAY_MS = 150;
-const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills", "agents", "sign-ins", "feed", "follows"];
+const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills", "agents", "sign-ins", "feed", "follows", "memory"];
 /**
  * The window event the sidebar's socket raises when a run of one of the user's agents moved on (detail: its id), or,
  * as it opens again, when any may have while it was closed (detail: null).

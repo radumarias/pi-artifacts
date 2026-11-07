@@ -83,6 +83,11 @@ export class AgentStore {
     return (this.#sql.exec("SELECT * FROM agents ORDER BY name").toArray() as AgentRow[]).map(definitionOf);
   }
 
+  /** The agents' names, by id: without reading their definitions. */
+  names(): Map<string, string> {
+    return new Map(this.#sql.exec("SELECT id, name FROM agents").toArray().map((row) => [row.id as string, row.name as string]));
+  }
+
   get(id: string): AgentDefinition | null {
     const row = this.#sql.exec("SELECT * FROM agents WHERE id = ?", id).toArray()[0] as AgentRow | undefined;
     return row ? definitionOf(row) : null;

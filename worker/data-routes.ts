@@ -23,6 +23,7 @@ import {
   type ImportPlanRequest,
 } from "../shared/data-export.ts";
 import { AGENT_ID_PATTERN } from "../shared/agents.ts";
+import { MAX_NOTES } from "../shared/memory.ts";
 import { ID_PATTERN, isOwnedBy } from "../shared/protocol.ts";
 import { MAX_SKILL_FILE_BYTES, MAX_SKILL_FILES } from "../shared/skill-files.ts";
 import { SKILL_NAME_PATTERN } from "../shared/skills.ts";
@@ -62,6 +63,8 @@ type Directory = DurableObjectStub<UserDirectory>;
  *                                             puts it in the user's list
  *   POST /api/me/import/artifacts/:id/versions one version, in order (ArtifactVersionImport)
  *   POST /api/me/import/page-values           what pages saved ([ExportedPageValues]), for pages that saved nothing here
+ *   POST /api/me/import/memory                {notes, agents}: the memory notes, after the chats and agents they name;
+ *                                             `agents` maps the export's agent ids to theirs here. Answers each one's result
  * Imports add to what is here and never replace it, so an import that stopped part way is run again from the start.
  * JSON bodies take a JSON content type only, and a file comes by PUT: neither can be sent by another site's form.
  * Returns null for any other path.
@@ -98,6 +101,11 @@ export async function dataRoute(request: Request, uid: string, directory: Direct
     return json(result, "error" in result ? 400 : 200);
   }
   if (path === "/api/me/import/page-values") return importPageValues(request, uid, directory, storage);
+  if (path === "/api/me/import/memory") {
+    const body = await readJson<{ notes?: unknown; agents?: unknown }>(request);
+    if (!Array.isArray(body?.notes) || body.notes.length > MAX_NOTES) return json({ error: `Expected {notes: [up to ${MAX_NOTES} notes], agents?}.` }, 400);
+    return json(await directory.importNotes(body.notes, idMap(body.agents, AGENT_ID_PATTERN)));
+  }
   return null;
 }
 
@@ -186,6 +194,15 @@ async function importPlan(body: ImportPlanRequest, uid: string, directory: Direc
   return { chats: Object.fromEntries(chatIds.map((id) => [id, has.has(id) ? "exists" : "new"])), artifacts: Object.fromEntries(artifacts) };
 }
 
+/** An export's id → this account's id map: only ids on both sides, since they are put in place of one another. */
+function idMap(pairs: unknown, pattern: RegExp): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(isObject(pairs) ? pairs : {}).filter(
+      (pair): pair is [string, string] => pattern.test(pair[0]) && typeof pair[1] === "string" && pattern.test(pair[1]),
+    ),
+  );
+}
+
 /** One step of a chat's import: begin, each part (rows), its drafts, then finish. */
 async function importChat(request: Request, uid: string, directory: Directory, storage: Storage, chatId: string, step: string): Promise<Response | null> {
   // A chat in the user's list is theirs already: an import never writes over one.
@@ -196,13 +213,6 @@ async function importChat(request: Request, uid: string, directory: Directory, s
   if (step === "begin") {
     const start = body as Partial<ChatImportStart> | null;
     if (typeof start?.from !== "string" || !isObject(start.artifacts)) return json({ error: "Expected {from, artifacts}." }, 400);
-    // Only ids on both sides: they are put in place of one another in the chat's rows.
-    const idMap = (pairs: unknown, pattern: RegExp) =>
-      Object.fromEntries(
-        Object.entries(isObject(pairs) ? pairs : {}).filter(
-          (pair): pair is [string, string] => pattern.test(pair[0]) && typeof pair[1] === "string" && pattern.test(pair[1]),
-        ),
-      );
     return answer(await chat.importBegin({ from: start.from, artifacts: idMap(start.artifacts, ID_PATTERN), agents: idMap(start.agents, AGENT_ID_PATTERN) }));
   }
   if (step === "rows") {

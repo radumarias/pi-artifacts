@@ -10,6 +10,8 @@ import { dataRoute } from "./data-routes.ts";
 import { dictationRoute } from "./dictation.ts";
 import { filesRoute } from "./files-routes.ts";
 import { json, readJson } from "./http.ts";
+import type { UserDirectory } from "./users.ts";
+import type { MemoryKind, MemoryScope, ServerCoverage } from "../shared/memory.ts";
 import { chatRoute, discussRoute } from "./chat-routes.ts";
 import { mcpRoute } from "./mcp-routes.ts";
 import { pushRoute } from "./push-routes.ts";
@@ -17,6 +19,7 @@ import { mcpServers } from "./mcp/servers.ts";
 import { catalogSource, loadCatalog } from "./models.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { agentsRoute } from "./agents-routes.ts";
+import { memoryRoute } from "./memory-routes.ts";
 import { runsRoute } from "./runs-routes.ts";
 import { feedRoute } from "./feed-routes.ts";
 import type { FeedInput } from "../shared/feed.ts";
@@ -213,6 +216,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   const feed = await feedRoute(request, uid, directory, storage);
   if (feed) return feed;
 
+  const memory = await memoryRoute(request, directory);
+  if (memory) return memory;
+
   // A chat's Durable Object is named after its owner's verified uid; others reach it only once they joined by an invite.
   const chat = await chatRoute(request, directory, { uid, name: identity.email ?? uid }, (owner) => storage.userFiles(owner));
   if (chat) return chat;
@@ -234,6 +240,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json(saved, "error" in saved ? 400 : 201);
   }
 
+  // Save notes as agents learn them in a chat, and what servers cover, to try the Memory view without the model. Needs DEV_TOOLS=true.
+  if (path === "/api/dev/memory" && method === "POST" && env.DEV_TOOLS === "true") return devMemory(request, directory);
   // Add an item to the caller's own feed, to try the feed without runs or a model. Needs DEV_TOOLS=true.
   if (path === "/api/dev/feed" && method === "POST" && env.DEV_TOOLS === "true") {
     const item = await readJson<FeedInput>(request);
@@ -265,4 +273,24 @@ async function artifactPage(request: Request, storage: Storage, id: string, vers
 function demoCookie(url: URL, value: string, maxAge: number): string {
   const secure = url.protocol === "https:" ? "; Secure" : "";
   return `${DEMO_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
+}
+
+/** See /api/dev/memory: {learn?: [{chatId, text, scope, kind, agentId?, learnedBy?, byOwner?}], coverage?: [ServerCoverage]}. */
+async function devMemory(request: Request, directory: DurableObjectStub<UserDirectory>): Promise<Response> {
+  const body = await readJson<{ learn?: Record<string, unknown>[]; coverage?: ServerCoverage[] }>(request);
+  if (!body) return json({ error: "Expected JSON." }, 400);
+  if (Array.isArray(body.coverage)) await directory.noteCoverage(body.coverage);
+  const learned = [];
+  for (const note of body.learn ?? []) {
+    const chatId = String(note.chatId);
+    const kind = await directory.chatKind(chatId);
+    const agentId = typeof note.agentId === "string" ? note.agentId : undefined;
+    learned.push(
+      await directory.learnNote(
+        { chatId, kinds: [kind], alone: kind === "private", byOwner: note.byOwner !== false, learnedBy: String(note.learnedBy ?? "pi"), ...(agentId && { agentId }) },
+        { text: note.text, scope: note.scope as MemoryScope, kind: note.kind as MemoryKind },
+      ),
+    );
+  }
+  return json(learned);
 }

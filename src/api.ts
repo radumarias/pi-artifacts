@@ -22,6 +22,7 @@ import type { ChatKind } from "../shared/chat-kinds.ts";
 import type { FeedList, FollowKind, FollowView } from "../shared/feed.ts";
 import type { ModelCatalog } from "../shared/models.ts";
 import type { McpSignInView } from "../shared/sign-ins.ts";
+import type { MemoryNote, MemoryNoteView, NoteChange, NoteInput, ServerCoverage } from "../shared/memory.ts";
 import type { ChatSystemPrompt } from "../shared/system-prompt.ts";
 import { skillPath, type SkillInfo, type SkillInput } from "../shared/skills.ts";
 import { FILE_ROUTE, VIEW_PARAM, ZIP_ROUTE } from "../shared/uploads.ts";
@@ -253,6 +254,13 @@ export const api = {
   },
   subscribePush: (subscription: PushSubscriptionJSON) => request<object>("/api/push/subscribe", post(subscription)),
   unsubscribePush: (endpoint: string) => request<object>("/api/push/unsubscribe", post({ endpoint })),
+  /** The user's memory notes, forgotten ones too, and what each MCP server covers. */
+  memory: () => request<{ notes: MemoryNoteView[]; coverage: ServerCoverage[] }>("/api/memory"),
+  addNote: (note: NoteInput) => request<MemoryNote>("/api/memory", post(note)),
+  changeNote: (id: string, change: NoteChange) => request<MemoryNote>(`/api/memory/${id}`, send("PATCH", change)),
+  forgetNote: (id: string) => request<MemoryNote>(`/api/memory/${id}/forget`, post({})),
+  restoreNote: (id: string) => request<MemoryNote>(`/api/memory/${id}/restore`, post({})),
+  deleteNote: (id: string) => request<object>(`/api/memory/${id}`, { method: "DELETE" }),
   /** The MCP servers an agent may use, and which this user signed in to. */
   agentServers: () => request<AgentServerInfo[]>("/api/agents/servers"),
   /** The chats one of the user's agents is in, with whether it is shared in each. */
@@ -372,4 +380,6 @@ export const dataApi = {
     request<object>(`/api/me/import/chats/${chatId}/finish`, post(chat)),
   importArtifactVersion: (id: string, version: ArtifactVersionImport) => request<{ latest: number }>(`/api/me/import/artifacts/${id}/versions`, post(version)),
   importPageValues: (values: ExportedPageValues[]) => request<{ imported: number }>("/api/me/import/page-values", post(values)),
+  importNotes: (notes: readonly unknown[], agents: Record<string, string>) =>
+    request<({ id: string; skipped?: true } | { error: string })[]>("/api/me/import/memory", post({ notes, agents })),
 };

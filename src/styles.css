@@ -1136,6 +1136,31 @@ a.mention-chip:hover { text-decoration: underline; }
 .skill details { margin-top: 6px; font-size: 13px; color: var(--muted); }
 .skill summary { cursor: pointer; }
 .skill pre { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); padding: 8px 10px; border-radius: 8px; font-size: 12px; color: var(--text); max-height: 320px; overflow: auto; }
+/* Memory: the user's notes (src/memory/), as a page and as an agent's Knows tab. */
+.memory-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 4px; }
+.memory-list { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.memory-note { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.memory-note.unconfirmed { border-color: color-mix(in srgb, var(--working) 45%, var(--border)); }
+.memory-note.forgotten { opacity: 0.7; background: var(--surface-2); }
+.memory-note.forgotten .memory-text { text-decoration: line-through; text-decoration-color: var(--muted); }
+.memory-text { margin: 0; overflow-wrap: anywhere; }
+.memory-pin { margin-right: 6px; color: var(--accent); font-size: 10px; vertical-align: 2px; }
+.memory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--muted); font-size: 12.5px; }
+.memory-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.memory-actions > button { padding: 3px 9px; font-size: 13px; }
+.memory-edit { display: flex; flex-direction: column; gap: 8px; }
+.memory-form textarea { resize: vertical; }
+.memory-edit textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; resize: vertical; }
+.memory-edit label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
+.memory-edit select, .memory-form select { max-width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.memory-reach { margin-top: 28px; border-top: 1px solid var(--border); }
+.memory-reach h3 { margin: 20px 0 6px; font-size: 15px; }
+.memory-reach .skill-list { margin: 8px 0; }
+.memory-files { margin: 6px 0 0; padding-left: 18px; font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.memory-skills { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.knows-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; margin-top: 4px; }
+.knows-head p { margin: 0; max-width: 62ch; }
+.skills.memory .skills-head .menu-button { margin-bottom: 8px; }
 .form-error { color: var(--error); }
 
 /* Agents (src/agents/): the sidebar's section, an agent's page with its tabs, and the draft card in a chat. */

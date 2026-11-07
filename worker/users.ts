@@ -17,6 +17,8 @@ import type { PushSubscriptionKeys } from "./push/web-push.ts";
 import { mcpTokensKey } from "./storage/index.ts";
 import type { McpSignInView, SignInNotice } from "../shared/sign-ins.ts";
 import { AgentStore, type AgentSave } from "./agents/store.ts";
+import { UserMemory, type Learned, type LearnedNote } from "./memory/memory.ts";
+import type { Forgot, MemoryNote, MemoryNoteView, MemoryReader, MemoryWriter, Recalled, ServerCoverage } from "../shared/memory.ts";
 import { ChatRows } from "./chat-rows.ts";
 import { addColumns } from "./members.ts";
 import { mayLeave, type ChatKind } from "../shared/chat-kinds.ts";
@@ -35,6 +37,9 @@ import {
 } from "../shared/agents.ts";
 import { excerpt } from "../shared/replies.ts";
 import { errorMessage, mapLimit, memoAsync, randomHex } from "../shared/util.ts";
+
+/** Where a user's directory keeps what the MCP servers cover (ServerCoverage[]). */
+const COVERAGE_KEY = "serverCoverage";
 
 /** One user's OAuth state for one MCP server. `uid` must come from a verified identity. */
 export function mcpAuthStore(uid: string, server: string): McpAuthStore {
@@ -122,6 +127,8 @@ export class UserDirectory extends DurableObject<Env> {
   readonly #signIns: McpSignIns;
   /** The browsers the user turned notifications on in (worker/push/subscriptions.ts). */
   readonly #push: PushSubscriptions;
+  /** The user's memory notes (worker/memory/). */
+  readonly #memory: UserMemory;
   /** What of each sidebar row is this user's alone (pinned, closed, their name for it), chats' kinds, page chats, people (worker/chat-rows.ts). */
   readonly #rows: ChatRows;
   /** What came in for this user across their chats, pages and agents (worker/feed/store.ts). */
@@ -152,6 +159,13 @@ export class UserDirectory extends DurableObject<Env> {
     addColumns(sql, "chats", { ...read, shared: "INTEGER NOT NULL DEFAULT 0" });
     addColumns(sql, "shared_chats", read);
     this.#rows = new ChatRows(ctx.storage.sql);
+    this.#memory = new UserMemory(ctx.storage.sql, {
+      // Only the user's own chats keep notes: one shared with them is its owner's.
+      chatKind: (id) => (this.hasChat(id) ? this.#rows.kindOf(id) : null),
+      chatTitles: () => this.#rows.ownTitles(),
+      agentNames: () => this.#agents.names(),
+      changed: () => this.#changed("memory"),
+    });
     this.#feed = new FeedStore(ctx.storage.sql);
     this.#follows = new FollowStore(ctx.storage.sql);
     // The files of a skill imported as a package (SkillPackageFiles as JSON).
@@ -877,6 +891,7 @@ export class UserDirectory extends DurableObject<Env> {
     const home = this.ctx.storage.sql.exec<{ agent_id: string | null }>("SELECT agent_id FROM chats WHERE id = ?", id).toArray()[0]?.agent_id;
     this.#signIns.forgetChat(id);
     this.#agents.forgetChat(id);
+    this.#memory.forgetChat(id);
     // The values its pages saved for this user, which were everyone's defaults.
     this.ctx.storage.sql.exec("DELETE FROM page_values WHERE artifact_id IN (SELECT id FROM artifacts WHERE chat_id = ?)", id);
     // Its pages are gone: whoever follows them stops; and its items leave this user's feed.
@@ -1120,6 +1135,7 @@ export class UserDirectory extends DurableObject<Env> {
   deleteAgent(id: string): { error: string } | null {
     const refused = this.#agents.delete(id);
     if (refused) return refused;
+    this.#memory.forgetAgent(id);
     this.#agentChanged(id);
     // Its followers stop following it, and its items (runs, guesses to confirm) leave this user's feed.
     this.#targetGone("agent", id);
@@ -1160,6 +1176,73 @@ export class UserDirectory extends DurableObject<Env> {
     const deleted = this.ctx.storage.sql.exec("DELETE FROM skills WHERE name = ?", name).rowsWritten;
     if (deleted) this.#changed("skills");
     return deleted ? null : { error: `No skill named "${name}".` };
+  }
+
+  /** A note the user writes under Memory. */
+  addNote(input: unknown): MemoryNote | { error: string } {
+    return this.#memory.add(input);
+  }
+
+  /** The user changes a note: its text, pin, a confirm, or where it goes. */
+  changeNote(id: string, change: unknown): MemoryNote | { error: string } {
+    return this.#memory.change(id, change);
+  }
+
+  forgetNote(id: string): MemoryNote | { error: string } {
+    return this.#memory.forget(id);
+  }
+
+  restoreNote(id: string): MemoryNote | { error: string } {
+    return this.#memory.restore(id);
+  }
+
+  deleteNote(id: string): { error: string } | null {
+    return this.#memory.delete(id);
+  }
+
+  /** A note the model saves in one of the user's chats, which says who reads and asks there (UserMemory.learn). */
+  learnNote(writer: MemoryWriter, note: LearnedNote): Learned {
+    return this.#memory.learn(writer, note);
+  }
+
+  /** The notes a conversation's prompt holds (UserMemory.read). */
+  readNotes(reader: MemoryReader): { notes: MemoryNote[]; more: number; off?: true } {
+    return this.#memory.read(reader);
+  }
+
+  /** Count a read of each note: they entered a conversation's prompt. */
+  useNotes(ids: readonly string[]): void {
+    this.#memory.use(ids);
+  }
+
+  recallNotes(reader: MemoryReader, query: string, shown: readonly string[], offset?: number): Recalled {
+    return this.#memory.recall(reader, query, shown, offset);
+  }
+
+  /** The model forgets a note in a conversation (UserMemory.forgetFor). Only its id: the chat never gets its text. */
+  forgetNoteFor(writer: MemoryWriter, id: string): Forgot {
+    const forgotten = this.#memory.forgetFor(writer, id);
+    return "error" in forgotten ? forgotten : { id: forgotten.id };
+  }
+
+  /** Notes from an export (UserMemory.import), with the ids the import gave the agents it brought. */
+  importNotes(notes: readonly unknown[], agents?: Record<string, string>): ({ id: string; skipped?: true } | { error: string })[] {
+    return this.#memory.import(notes, agents);
+  }
+
+  /** What the Memory view shows: every note, and what the servers cover. */
+  memoryView(): { notes: MemoryNoteView[]; coverage: ServerCoverage[] } {
+    return { notes: this.#memory.list(), coverage: this.serverCoverage() };
+  }
+
+  /** What the MCP servers cover, as one of the user's chats last listed them: what Memory shows of the data agents reach. */
+  serverCoverage(): ServerCoverage[] {
+    return this.ctx.storage.kv.get<ServerCoverage[]>(COVERAGE_KEY) ?? [];
+  }
+
+  /** One of the user's chats listed the servers: only a view, kept for the servers this deployment has. */
+  noteCoverage(servers: readonly ServerCoverage[]): void {
+    this.ctx.storage.kv.put(COVERAGE_KEY, servers);
   }
 
   /** The model and effort the user last picked in any chat: what their new chats start on. Checked by the chat that reads it. */
@@ -1266,6 +1349,7 @@ export class UserDirectory extends DurableObject<Env> {
         builtinSkillsOff: sql.exec<{ name: string }>("SELECT name FROM builtin_skills_off ORDER BY name").toArray().map((row) => row.name),
         skills,
         agents: this.#agents.list().map(exportedAgent),
+        memory: this.#memory.exported(),
         follows: this.#follows.list().map(({ kind, id, chatId }) => ({ kind, id, ...(chatId && { chatId }) })),
         pageValues: [...values].map(([artifactId, entries]): ExportedPageValues => ({ artifactId, values: entries })),
       },

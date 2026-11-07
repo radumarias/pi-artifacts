@@ -6,7 +6,7 @@ import { errorMessage, formatBytes, isObject, mapLimit, toBase64 } from "../../s
 import { api, dataApi, type DraftJson } from "../api.ts";
 import type { Progress } from "./export.ts";
 
-export const KINDS = ["chats", "artifacts", "files", "skills", "agents", "follows"] as const;
+export const KINDS = ["chats", "artifacts", "files", "skills", "agents", "follows", "notes"] as const;
 type Kind = (typeof KINDS)[number];
 
 /** What an import did: how many of each kind went in, how many were here already, and what failed, with why. */
@@ -60,7 +60,7 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
   const follows = (manifest.account.follows ?? []).filter(isObject);
   const steps = {
     done: 0,
-    total: 2 + manifest.account.skills.length + agents.length + fileItems.length + manifest.chats.length + manifest.artifacts.length + follows.length,
+    total: 3 + manifest.account.skills.length + agents.length + fileItems.length + manifest.chats.length + manifest.artifacts.length + follows.length,
   };
   const step = (now: string) => onProgress({ ...steps, now });
   /** Run one step: its failure is reported under `what`, and the import goes on. Whether it went in. */
@@ -180,6 +180,15 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
   await attempt("What pages saved", async () => {
     const values = manifest.account.pageValues.map((entry) => ({ ...entry, artifactId: newId(entry.artifactId) }));
     if (values.length) await dataApi.importPageValues(values);
+  });
+  // After the chats and agents, which notes for a chat or an agent go with.
+  await attempt("Memory notes", async () => {
+    const notes = manifest.account.memory ?? [];
+    if (!notes.length) return;
+    (await dataApi.importNotes(notes, agentIds)).forEach((result, i) => {
+      if ("error" in result) report.failed.push(`Memory note “${String(notes[i]?.text ?? "").slice(0, 40)}”: ${result.error}`);
+      else report[result.skipped ? "skipped" : "imported"].notes++;
+    });
   });
 
   // Last, as following by hand checks: only what the importer may open here (the same deployment) is followed again.

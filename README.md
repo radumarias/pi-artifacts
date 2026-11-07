@@ -594,6 +594,28 @@ instructions, model and effort, and the MCP servers it may use.
   model no other tool, and refuses a call to one. Only the owner's messages are instructions to it (its own prompt says so); the
   others are information. Like pi, it acts as the owner: their sign-ins, files, skills, and pages owned by them.
 
+### Memory notes
+
+pi and the agents keep short notes between conversations (`worker/memory/`, rules in `shared/memory.ts`), in a
+`memory` table in the owner's `UserDirectory`. Each note has a scope that says who reads it:
+
+- **Just me** (`user`): read only where nobody but the owner reads the replies, a private chat with nobody else in it.
+- **This agent** (`agent`): read by that agent's sessions wherever it works, shared chats included.
+- **This chat** (`chat`): read by pi and every agent in that chat, and nowhere else.
+
+The model saves notes with `memory_note`, looks further with `memory_recall` and forgets with `memory_forget`. A
+preference is kept at once; a fact (something an agent computes with) waits, unconfirmed and unread, until the owner
+confirms it under Memory, as a proposed skill waits until turned on. What is learned in a chat others are in stays with
+that chat until the owner moves it. pi can't tell whose words it follows in a shared chat, so there it reads only the
+chat's notes, and what it saves waits for a confirm; an agent's turn its owner didn't ask for gets only
+`memory_recall`. Nothing is saved from, or read in, a chat off the record (`mayLeave`, checked against both the chat's
+kind and the one the owner's sidebar holds). The notes a conversation reads go into its prompt as the last section,
+set when its turn starts, oldest first, so a new note changes only the end of the prompt; each note counts a use the
+first time a conversation's prompt holds it, and for each recall. The Memory page (`/memory`) and each agent's Knows
+tab list, add, edit, pin, move, confirm, forget and bring back notes, and show what the agents reach: the MCP servers
+(with what each says it covers, as a chat last listed them), the owner's files and their skills. Export and import
+carry the notes.
+
 ## Models
 
 Each chat picks its model and effort above the message box. The picker (`src/chat/ModelPicker.tsx`, choices from

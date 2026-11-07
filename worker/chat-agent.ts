@@ -143,7 +143,6 @@ import {
   type ChatAgentReplyData,
   type ChatAgents,
   type ChatAgentView,
-  type ChatTurnData,
   type SharedAgentView,
 } from "../shared/agents.ts";
 import { AgentTurns, sessionOf, type TurnHost } from "./agents/controller.ts";
@@ -159,7 +158,22 @@ import { sourceName } from "./agents/runs/source.ts";
 import type { Value } from "../shared/conditions.ts";
 import { runRef, type AgentRunDetail, type AgentRunList, type RunDelivery, type RunRef } from "../shared/runs.ts";
 import { agentsExtension } from "./agents/tools.ts";
-import { agentInstructions, allowedTools, askOf, assistantText, attachedNote, MAX_ASK_CHARS, messageAskKey, runTools, speakersFor } from "./agents/turns.ts";
+import { ChatMemory, runAskedByOwner, type MemoryAgent } from "./memory/chat.ts";
+import { freshPrompt } from "./memory/fresh.ts";
+import { memoryExtension } from "./memory/tools.ts";
+import { coverageOf } from "./memory/coverage.ts";
+import {
+  agentInstructions,
+  allowedTools,
+  askOf,
+  assistantText,
+  attachedNote,
+  MAX_ASK_CHARS,
+  messageAskKey,
+  piLogEntry,
+  runTools,
+  speakersFor,
+} from "./agents/turns.ts";
 import {
   answersEveryMessage,
   CHAT_CONTEXT_KIND,
@@ -386,6 +400,19 @@ export class ChatAgent extends DurableObject<Env> {
   /** The chat's agents besides pi, each in a session of its own, and their turns (worker/agents/). */
   readonly roster = new ChatRoster(this.ctx.storage.sql);
   readonly turns = new AgentTurns(this.#turnHost());
+  /** The memory notes each conversation of the chat reads and saves: pi's and each agent's (worker/memory/). */
+  readonly memory = new ChatMemory({
+    ownerUid: this.uid,
+    chatId: this.chatId,
+    kind: () => this.kinds.kind(),
+    alone: () => !this.members.hasAny(),
+    agentFor: (conversation) => this.#memoryAgent(conversation),
+    piByOwner: () => runAskedByOwner(this.#log({ order: "descending" }), this.uid),
+    freshPrompt: async (session) =>
+      freshPrompt(session === undefined ? await this.#root() : await this.#conversation(session), await this.harness.pi()),
+    directory: (uid) => this.#index(uid),
+    kv: this.ctx.storage.kv,
+  });
   readonly reactions = new ChatReactions(this.ctx.storage.sql);
   readonly sockets = new ChatSockets({
     events: () => this.harness.session().events(),
@@ -531,6 +558,32 @@ export class ChatAgent extends DurableObject<Env> {
     this.registry.install(agentsExtension(scope));
     if (env.SANDBOX_ENABLED === "true") this.registry.install(sandboxExtension(scope));
     this.registry.install(systemPromptExtension(() => this.#systemPrompts()));
+    this.registry.install(memoryExtension(this.memory.host()));
+  }
+
+  /**
+   * The roster agent whose conversation `conversation` is, for its memory notes: its own session, a turn's own (a
+   * reply to a run's report, in a fork of the run's), or one of its runs' (only reading tools, nobody asking: never
+   * the owner's turn). Null for pi's.
+   */
+  #memoryAgent(conversation: string): MemoryAgent | null {
+    // pi's own conversation is no agent's, whatever a run's rows hold.
+    if (conversation === String(ROOT_CONVERSATION_ID)) return null;
+    const entries = this.roster.list();
+    const running = this.roster.allRunning();
+    const turn = running.find((each) => {
+      const entry = entries.find((known) => known.agentId === each.agentId);
+      return !!entry && sessionOf(entry, each) === conversation;
+    });
+    // Asked only when neither knows it, or for a turn in a session of its own (a reply's, which may be a run's): it
+    // looks through the runs' rows.
+    const known = turn?.agentId ?? entries.find((each) => each.session === conversation)?.agentId;
+    const ran = known === undefined || turn?.session !== undefined ? this.runs.agentOfSession(conversation) : null;
+    const agentId = known ?? ran ?? undefined;
+    if (agentId === undefined) return null;
+    // A run's agent is on its home roster; one taken off it still reads only its own notes, never pi's.
+    const entry = entries.find((each) => each.agentId === agentId);
+    return { agentId, ownerUid: entry?.ownerUid ?? this.uid, name: entry?.name ?? "agent", byOwner: turn?.byOwner === true, ...(ran && { run: true }) };
   }
 
   /** The uid is this object's name, which the Worker sets from a verified identity. */
@@ -1189,6 +1242,8 @@ export class ChatAgent extends DurableObject<Env> {
       else this.registry.uninstall(this.#toolSearch);
       const deferring = deferred && !this.#mcp.deferred;
       this.#mcp = { key: installed, listing, generation, deferred };
+      // What the servers cover, for the owner's Memory view: only a view, off the refresh's path.
+      if (catalog.size) void this.#directory.noteCoverage(coverageOf(catalog)).catch((error: unknown) => console.error("coverage:", errorMessage(error)));
       // Deferred from now on (enough tools came, or the object just started): every one is offered until a message's
       // pick narrows them, so a running reply (one that just called mcp_discover) keeps the tools it was using.
       if (deferring) await this.#offerAllTools(extension);
@@ -1424,6 +1479,7 @@ export class ChatAgent extends DurableObject<Env> {
       recent && this.refreshSkills({ text: skillText, recent }),
       calling && this.refreshFiles(),
       calling && this.refreshUserPrompt(),
+      calling && this.memory.refresh(),
     ]);
     // The files they named of their own are named too: "@pi notes.md" is not a call.
     const named = [...mentions, ...own];
@@ -1910,6 +1966,12 @@ export class ChatAgent extends DurableObject<Env> {
     else this.#tellKind(person.uid);
     this.#tellShared();
     this.#meet([person]);
+    this.#audienceChanged();
+  }
+
+  /** More people may read the chat now: no conversation's prompt keeps the owner's own notes (ChatMemory). */
+  #audienceChanged(): void {
+    this.ctx.waitUntil(this.memory.audienceChanged());
   }
 
   /**
@@ -2061,6 +2123,7 @@ export class ChatAgent extends DurableObject<Env> {
     const to = kind as ChatKind;
     if (to === from) return this.peopleFor(by.uid);
     this.kinds.setKind(to);
+    this.#audienceChanged();
     // "Only you": a link sent before must not let anyone in, which would make it a group again (#joined).
     if (to === "private") this.members.revokeInvites();
     const removed = plan.removed.map(personOf);
@@ -2089,6 +2152,7 @@ export class ChatAgent extends DurableObject<Env> {
     this.members.setOwnerName(by);
     this.kinds.setKind("page");
     this.kinds.setPage(page);
+    this.#audienceChanged();
     this.#bringIn([page.id]);
     await this.#contextWrite("page", pageNote(page, "discusses"));
     return null;
@@ -2627,15 +2691,14 @@ export class ChatAgent extends DurableObject<Env> {
     for await (const page of this.#log({ order: "ascending", minEntryId: (through + 1) as EntryId })) {
       for (const entry of page) {
         through = entry.id as number;
-        if (entry.kind === CHAT_TURN_KIND) {
-          const data = entry.data as Partial<ChatTurnData> | undefined;
+        const seen = piLogEntry(entry);
+        if (!seen) continue;
+        if ("reply" in seen) {
+          if (seen.reply.stopReason === "stop") this.turns.fromPi(assistantText(seen.reply), through, chain);
+        } else if (seen.input === "handOff") {
+          const { data } = seen;
           chain = typeof data?.hop === "number" && typeof data.root === "number" ? { hop: data.hop, root: data.root } : undefined;
-        } else if (entry.kind === "pi.user" || (entry.kind === CHAT_MESSAGE_KIND && !(entry.data as Partial<ChatMessageData> | undefined)?.aside)) {
-          chain = undefined;
-        } else if (entry.kind === "pi.assistant") {
-          const message = entry.model?.[0];
-          if (message?.role === "assistant" && message.stopReason === "stop") this.turns.fromPi(assistantText(message), through, chain);
-        }
+        } else chain = undefined;
       }
       if (this.#gone) return;
       this.ctx.storage.kv.put(PI_SCAN_KEY, { through, ...(chain && { chain }) } satisfies PiScan);
@@ -2653,7 +2716,7 @@ export class ChatAgent extends DurableObject<Env> {
     return { text: ask, recent: memoAsync(() => this.#recentEntries()) };
   }
 
-  /** The owner's tools, skills, files and prompt as they are now, before an agent's turn or one handed to pi (`ask`). */
+  /** The owner's tools, skills, files and prompt as they are now, before an agent's turn or run, or one handed to pi (`ask`). */
   async #refreshForTurn(ask: string): Promise<void> {
     await Promise.all([this.refreshMcpTools(), this.refreshSkills(this.#skillsForTurn(ask)), this.refreshFiles(), this.refreshUserPrompt()]);
   }
@@ -2695,11 +2758,13 @@ export class ChatAgent extends DurableObject<Env> {
       },
       handToPi: async (input, data) => {
         await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));
-        await this.#refreshForTurn(input);
+        // A hand-off: nobody may have asked for it, so pi saves nothing as the owner in its run (runAskedByOwner).
+        await Promise.all([this.#refreshForTurn(input), this.memory.refresh()]);
         // The handing turn names the input: handed again after a restart, it is placed once. Its entry says which chain
         // pi's answer is in (#piScan).
         try {
-          await this.harness.submit(input, { operationId: `pi-turn:${data.turn}`, whenBusy: "followUp", entry: { kind: CHAT_TURN_KIND, data } });
+          const operationId = `pi-turn:${data.turn}`;
+          await this.harness.submit(input, { operationId, whenBusy: "followUp", entry: { kind: CHAT_TURN_KIND, data } });
         } catch (error) {
           this.#resumeSettle();
           throw error;
@@ -2785,7 +2850,8 @@ export class ChatAgent extends DurableObject<Env> {
    * harness offers and runs no other.
    */
   async #configureAgent(entry: RosterEntry, agent: AgentDefinition, turn: AgentTurn): Promise<void> {
-    await this.#refreshForTurn(turn.ask);
+    // The memory notes of the session the turn runs in: its agent's, or its own (a reply to a run's report).
+    await Promise.all([this.#refreshForTurn(turn.ask), this.memory.refresh(sessionOf(entry, turn))]);
     const allowed = (installed: readonly string[]) =>
       allowedTools(installed, this.#mcpTools, agent, turn.byOwner, (server) => this.hub.server(server)?.auth === "oauth");
     await this.#configureSession(sessionOf(entry, turn), this.#agentChoice(agent), agentInstructions(agent, this.#nameOf(entry.ownerUid)), allowed);
@@ -3199,7 +3265,7 @@ export class ChatAgent extends DurableObject<Env> {
    * place of the servers' (so nothing a server returns can steer what it writes).
    */
   async #configureRun(session: string, agent: AgentDefinition, model: string | undefined, pageTools?: readonly string[]): Promise<void> {
-    await this.#runRefresh(agent);
+    await Promise.all([this.#runRefresh(agent), this.memory.refresh(session)]);
     const allowed = (installed: readonly string[]) =>
       pageTools ? [...runTools(installed, new Map(), agent), ...pageTools] : runTools(installed, this.#mcpTools, agent);
     await this.#configureSession(session, this.#agentChoice(agent, model), runInstructions(agent, this.#nameOf(this.uid)), allowed);

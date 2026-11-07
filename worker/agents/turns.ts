@@ -4,8 +4,18 @@
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
-import { CHAT_AGENT_KIND, MAX_HOPS, mayUseServer, speakerLabel, type AgentDefinition, type ChatAgentReplyData } from "../../shared/agents.ts";
+import {
+  CHAT_AGENT_KIND,
+  CHAT_TURN_KIND,
+  MAX_HOPS,
+  mayUseServer,
+  speakerLabel,
+  type AgentDefinition,
+  type ChatAgentReplyData,
+  type ChatTurnData,
+} from "../../shared/agents.ts";
 import { textOf } from "../../shared/canonical.ts";
+import { MEMORY_RECALL_TOOL } from "../../shared/memory.ts";
 import { CHAT_CONTEXT_KIND, CHAT_COPY_KIND, type ChatCopyData } from "../../shared/chat-kinds.ts";
 import { entryItems, mergeItems, type ItemRef } from "../../shared/items.ts";
 import { AGENT_NAME, calledNames, type Mention } from "../../shared/mentions.ts";
@@ -50,6 +60,27 @@ export function handOffs(text: string, from: string, hop: number, roster: readon
   const on = roster.filter((entry) => entry.agentId !== from);
   const names = [...on.map((entry) => entry.name), ...(from === AGENT_NAME ? [] : [AGENT_NAME])];
   return calledNames(text, names).map((name) => (name === AGENT_NAME ? AGENT_NAME : on.find((entry) => entry.name === name)!.agentId));
+}
+
+/**
+ * What an entry of pi's log is to its runs: an agent's hand-off (chat.turn), a person's message (not an aside), another
+ * input, or a reply of pi's; undefined for the rest. One reading for every scan of the log (#piScan, runAskedByOwner).
+ */
+export type PiLogEntry =
+  | { input: "handOff"; data: Partial<ChatTurnData> | undefined }
+  | { input: "message"; uid: string | undefined }
+  | { input: "other" }
+  | { reply: AssistantMessage };
+
+export function piLogEntry(entry: Pick<EntryRecord, "kind" | "data" | "model">): PiLogEntry | undefined {
+  if (entry.kind === CHAT_TURN_KIND) return { input: "handOff", data: entry.data as Partial<ChatTurnData> | undefined };
+  if (entry.kind === "pi.user") return { input: "other" };
+  if (entry.kind === CHAT_MESSAGE_KIND) {
+    const data = entry.data as Partial<ChatMessageData> | undefined;
+    return data?.aside ? undefined : { input: "message", uid: data?.uid };
+  }
+  const reply = entry.kind === "pi.assistant" ? entry.model?.[0] : undefined;
+  return reply?.role === "assistant" ? { reply } : undefined;
 }
 
 /** The text of an assistant message: its text blocks, without its thinking or tool calls. */
@@ -219,11 +250,11 @@ export function askOf(speaker: Parameters<typeof speakerLabel>[0], text: string,
 /** Tools an agent's session never has: they act for pi in the log (reactions). */
 const NEVER_FOR_AGENTS = ["react"];
 /**
- * The app's tools a turn its owner did not ask for may use: reading the pages of the chat and the owner's skills, and
- * loading a deferred tool it may use. Every other tool of the app writes, runs code, reads the owner's private files,
+ * The app's tools a turn its owner did not ask for may use: reading the pages of the chat and the owner's skills, the
+ * memory notes the session reads anyway, and loading a deferred tool it may use. Every other tool of the app writes, runs code, reads the owner's private files,
  * or lists the owner's servers and sign-ins, and a tool added later is left out until it is named here.
  */
-const READ_TOOLS = ["artifact_read", "artifact_history", "artifact_diff", "activate_skill", "read_skill_resource", TOOL_SEARCH_TOOL_NAME];
+const READ_TOOLS = ["artifact_read", "artifact_history", "artifact_diff", "activate_skill", "read_skill_resource", MEMORY_RECALL_TOOL, TOOL_SEARCH_TOOL_NAME];
 
 /**
  * The tools a turn may use, by name, of `tools` (every tool installed), as an allow-list: a tool installed after the
