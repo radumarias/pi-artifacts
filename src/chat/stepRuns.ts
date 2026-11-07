@@ -1,6 +1,6 @@
 import type { AssistantMessage, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { published, shown } from "./entries.ts";
+import { showsAsCard, shown } from "./entries.ts";
 
 /** One step of the agent's: a tool call, or a thought. `key` stays the same once a streamed message lands. */
 export type StepItem = { kind: "tool"; key: string; call: ToolCall; streaming: boolean } | { kind: "thought"; key: string; text: string };
@@ -79,8 +79,9 @@ export function stepRuns(entries: readonly EntryRecord[], breaks: ReadonlySet<nu
       [places, run] = placeSteps(message, id, false, run);
       if (places.size) byEntry.set(id, places);
     } else if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
-      // A result shows as a step of its call, except a published artifact (a card) and one whose call is not in the chat.
-      if (published(entry) || !calls.has((message as ToolResultMessage).toolCallId)) run = undefined;
+      // A result shows as a step of its call, except a card (a published artifact, a drafted agent) and one whose call
+      // is not in the chat.
+      if (showsAsCard(entry) || !calls.has((message as ToolResultMessage).toolCallId)) run = undefined;
     } else run = undefined;
   }
   // Only now: a run takes the steps of later messages too.

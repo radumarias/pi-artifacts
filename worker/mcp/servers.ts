@@ -28,6 +28,11 @@ export function sharesResults(server: McpServerConfig): boolean {
   return server.cacheScope !== "viewer";
 }
 
+/** Whether one read of a server serves everyone who watches it: its results are shared and nobody signs in to it. */
+export function watchableForAll(server: McpServerConfig): boolean {
+  return server.auth !== "oauth" && sharesResults(server);
+}
+
 /** The servers from the MCP_SERVERS binding (cloudflare.config.ts), checked. */
 export function mcpServers(env: { MCP_SERVERS?: unknown }): McpServerConfig[] {
   const list = Array.isArray(env.MCP_SERVERS) ? env.MCP_SERVERS : [];
@@ -35,4 +40,9 @@ export function mcpServers(env: { MCP_SERVERS?: unknown }): McpServerConfig[] {
     (entry): entry is McpServerConfig =>
       typeof entry?.name === "string" && /^[A-Za-z0-9][A-Za-z0-9 _-]{0,40}$/.test(entry.name) && typeof entry.url === "string" && /^https?:\/\//.test(entry.url),
   );
+}
+
+/** The servers that sign in each user (`auth: "oauth"`). */
+export function oauthServers(env: { MCP_SERVERS?: unknown }): McpServerConfig[] {
+  return mcpServers(env).filter((server) => server.auth === "oauth");
 }

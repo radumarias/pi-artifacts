@@ -1,7 +1,7 @@
 import { UID_PATTERN } from "../../shared/protocol.ts";
 import { ArtifactStore } from "./artifacts.ts";
 import { ChatDrafts } from "./drafts.ts";
-import { deriveUserKey } from "./keys.ts";
+import { deriveUserAesKey, deriveUserKey } from "./keys.ts";
 import { ModelCache } from "./model-cache.ts";
 import { SkillFiles } from "./skill-files.ts";
 import { UserFiles } from "./user-files.ts";
@@ -54,6 +54,18 @@ export class Storage {
 
 /** A fixed key for local demo mode only, so `pnpm dev` works without secrets. */
 const DEMO_MASTER_KEY = btoa("pi-artifacts local demo key, never used when deployed");
+
+/**
+ * The key a user's stored MCP sign-ins (OAuth tokens) are encrypted with in their UserDirectory (worker/mcp/sealed.ts).
+ * From MCP_TOKENS_KEY when set; else from FILES_MASTER_KEY under a label of its own, so a deployment needs no new secret
+ * and the key still differs from the user's file key. `uid` must come from a verified identity.
+ */
+export async function mcpTokensKey(env: Env, uid: string): Promise<CryptoKey> {
+  if (!UID_PATTERN.test(uid)) throw new Error("Invalid user id.");
+  const own = (env as { MCP_TOKENS_KEY?: string }).MCP_TOKENS_KEY;
+  if (own) return deriveUserAesKey(own, "MCP_TOKENS_KEY", "pi-artifacts/mcp-tokens/v1", uid);
+  return deriveUserAesKey(masterSecret(env), "FILES_MASTER_KEY", "pi-artifacts/mcp-tokens-from-files/v1", uid);
+}
 
 function masterSecret(env: Env): string {
   const secret = (env as { FILES_MASTER_KEY?: string }).FILES_MASTER_KEY;

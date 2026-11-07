@@ -1,6 +1,7 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
+import { AGENT_PROPOSE_TOOL } from "../../shared/agents.ts";
 import {
   CHECK_TOOL,
   DRAFTS_TOOL,
@@ -113,6 +114,7 @@ const LABELS: Record<string, string> = {
   files_read: "Read file",
   files_write: "Write file",
   skill_propose: "Propose skill",
+  [AGENT_PROPOSE_TOOL]: "Draft agent",
   [MCP_DISCOVER_TOOL]: "List MCP servers",
 };
 
@@ -160,6 +162,7 @@ const SAID: Record<string, (n: number) => string> = {
   files_read: some("read", "a file", "file"),
   files_write: some("wrote", "a file", "file"),
   skill_propose: some("proposed", "a skill", "skill"),
+  [AGENT_PROPOSE_TOOL]: some("drafted", "an agent", "agent"),
   [MCP_DISCOVER_TOOL]: again("looked up MCP servers"),
   tool_search: again("searched for tools"),
   react: again("reacted"),

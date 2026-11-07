@@ -5,8 +5,11 @@
 // autonomy level) are stored here too, for the scheduler.
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { conditionProblem, MAX_CONDITION } from "./conditions.ts";
+import type { ItemRef } from "./items.ts";
 import { AGENT_NAME } from "./mentions.ts";
 import { EFFORT_LABELS } from "./models.ts";
+import type { RunRef } from "./runs.ts";
 import { isObject } from "./util.ts";
 
 /** An agent's handle, as "@name" calls it: a lowercase letter, then letters, digits or hyphens. */
@@ -52,8 +55,13 @@ export type StepValue = {} | null;
 /** A tool's input in a step. */
 export type StepInput = { [key: string]: StepValue };
 
-/** An MCP read through the hub, run in code: no model is involved. */
-export type LookStep = { kind: "look"; server: string; tool: string; input: StepInput };
+/**
+ * An MCP read through the hub, run in code: no model is involved. `as` names its result for the conditions and inputs
+ * of later steps (`{{as.path}}` in an input); its tool's name, as a name, when absent.
+ */
+export type LookStep = { kind: "look"; server: string; tool: string; input: StepInput; as?: string };
+/** A name a look step's result goes by: a letter, then letters, digits or underscores. */
+export const RESULT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
 
 /** One step of a workflow compiled from an agent's instructions. Only `work` calls a model. A type, so pi can store it. */
 export type AgentStep =
@@ -125,6 +133,12 @@ export interface AgentDefinition extends AgentInput {
   updatedAt: number;
   /** Set on a copy someone made of an agent another person shared: where it came from. */
   copiedFrom?: { owner: string; id: string; version: number };
+}
+
+/** A definition's own fields, as checkAgent and saving take them: its id, look and bookkeeping left out. */
+export function inputOf(agent: AgentDefinition): AgentInput {
+  const { id: _i, avatar: _a, color: _c, origin: _o, enabled: _e, version: _v, createdAt: _cr, updatedAt: _u, copiedFrom: _f, ...input } = agent;
+  return input;
 }
 
 /** Whether a definition is a proposal waiting for its owner: made by the model and not turned on yet. */
@@ -202,7 +216,18 @@ function checkLook(value: unknown, what: string): LookStep {
   // Plain JSON, kept small: it is stored with the definition and read back as JSON anyway.
   const json = JSON.stringify(input);
   if (json.length > MAX_STEP_INPUT) fail(`${what}'s input is too long (at most ${MAX_STEP_INPUT} characters as JSON).`);
-  return { kind: "look", server, tool, input: JSON.parse(json) as StepInput };
+  const as = value.as ?? undefined;
+  if (as !== undefined && (typeof as !== "string" || !RESULT_NAME_PATTERN.test(as)))
+    fail(`${what}'s result name ("as") is a letter, then letters, digits or underscores, as in "signups".`);
+  return { kind: "look", server, tool, input: JSON.parse(json) as StepInput, ...(as !== undefined && { as }) };
+}
+
+/** A condition, trimmed and parsed (shared/conditions.ts): one that does not parse is refused with what is wrong. */
+function condition(value: unknown, what: { needs: string; its: string }): string {
+  const text = str(value, what, MAX_CONDITION)!;
+  const problem = conditionProblem(text);
+  if (problem) fail(`${what.its} does not read: ${problem}`);
+  return text;
 }
 
 function checkTrigger(value: unknown): AgentTrigger | undefined {
@@ -225,12 +250,50 @@ function checkTrigger(value: unknown): AgentTrigger | undefined {
       kind: "watch",
       step: checkLook(value.step, "A watch's step"),
       everyMinutes: every,
-      when: str(value.when, field("A watch", "a", "condition"), 500)!,
+      when: condition(value.when, field("A watch", "a", "condition")),
     };
   }
   fail('An agent\'s trigger is a "schedule" or a "watch".');
 }
 
+/** Whether an agent may use a server: every one when it has no `servers` list, else those on it. */
+export function mayUseServer(agent: Pick<AgentDefinition, "servers">, server: string): boolean {
+  return !agent.servers || agent.servers.includes(server);
+}
+
+/** The key of step `index` of the steps at `path`: what a run's trace, deliveries and operation ids go by. */
+export function stepKey(path: string, index: number): string {
+  return path ? `${path}.${index}` : String(index);
+}
+
+/** Every step of a workflow with its key, in order, those inside ifs (at `<key>.then.<i>`, `<key>.else.<i>`) too. */
+export function* walkSteps(steps: readonly AgentStep[], path = ""): Generator<{ key: string; step: AgentStep }> {
+  for (const [index, step] of steps.entries()) {
+    const key = stepKey(path, index);
+    yield { key, step };
+    if (step.kind === "if") {
+      yield* walkSteps(step.then, `${key}.then`);
+      yield* walkSteps(step.else ?? [], `${key}.else`);
+    }
+  }
+}
+
+/**
+ * The servers a definition's trigger, scope and steps name, nested steps included: those it reads (`reads`: look
+ * steps, its scope's and its watch's), else those it calls too (do steps, a tell through a tool).
+ */
+export function serversNamed(agent: Pick<AgentDefinition, "trigger" | "scope" | "workflow">, { reads = false } = {}): string[] {
+  const found = new Set<string>();
+  if (agent.trigger?.kind === "watch") found.add(agent.trigger.step.server);
+  if (agent.scope) found.add(agent.scope.list.server);
+  for (const { step } of walkSteps(agent.workflow ?? [])) {
+    if (step.kind === "look") found.add(step.server);
+    else if (reads) continue;
+    else if (step.kind === "do") found.add(step.server);
+    else if (step.kind === "tell" && typeof step.via === "object") found.add(step.via.server);
+  }
+  return [...found];
+}
 /** A workflow's steps, counting those inside an if's branches toward MAX_WORKFLOW_STEPS. */
 function checkSteps(value: unknown, depth = 0, count = { steps: 0 }): AgentStep[] {
   if (!Array.isArray(value)) fail("A workflow is a list of steps.");
@@ -248,11 +311,11 @@ function checkSteps(value: unknown, depth = 0, count = { steps: 0 }): AgentStep[
         return { kind: "work", prompt: str(step.prompt, field("A work step", "a", "prompt"), 4_000)!, ...(skill && { skill }), ...(model && { model }) };
       }
       case "onlyIf":
-        return { kind: "onlyIf", condition: str(step.condition, field("An onlyIf step", "a", "condition"), 500)! };
+        return { kind: "onlyIf", condition: condition(step.condition, field("An onlyIf step", "a", "condition")) };
       case "if":
         return {
           kind: "if",
-          condition: str(step.condition, field("An if step", "a", "condition"), 500)!,
+          condition: condition(step.condition, field("An if step", "a", "condition")),
           then: checkSteps(step.then, depth + 1, count),
           ...(step.else != null && { else: checkSteps(step.else, depth + 1, count) }),
         };
@@ -307,6 +370,11 @@ export function checkAgent(input: unknown): AgentInput {
       ? undefined
       : { list: checkLook(isObject(input.scope) ? input.scope.list : undefined, "A scope's list"), each: true as const };
   const workflow = input.workflow === undefined || input.workflow === null ? undefined : checkSteps(input.workflow);
+  if (servers) {
+    // A run reads and calls only the servers the agent may use, as its work steps' tools do.
+    const outside = serversNamed({ trigger, scope, workflow }).find((server) => !servers.includes(server));
+    if (outside) fail(`A step names ${outside}, which is not one of the agent's servers: add it to its servers, or change the step.`);
+  }
   const assumed = names(input.assumed, "assumed fields");
   return {
     name,
@@ -353,6 +421,103 @@ export interface ChatAgentView {
   queued?: number;
   /** Its owner turned it off since it was added: it does not answer until they turn it on again. */
   off?: true;
+  /** The turn it works on now (with `busy`): who gave it, how many hand-offs led to it, and how long it has run, as of this view. */
+  running?: { turn: number; calledBy: ChatAgentReplyData["calledBy"]; hop: number; elapsedMs: number };
+  /** The oldest turn waiting for it (with `queued`): who gave it, and how many hand-offs led to it. */
+  next?: { calledBy: ChatAgentReplyData["calledBy"]; hop: number };
+  /** Its latest turn that ended, and how: a stopped one posts no reply, so the chat says it stopped. */
+  ended?: { turn: number; status: Exclude<AgentTurnStatus, "queued" | "running"> };
+  /** Its owner shares it with the people of this chat: they can open it read-only, and copy it (SharedAgentView). */
+  shared?: true;
+}
+
+/** An MCP server of the deployment, as the agent editor lists it: whether it signs in each user, and this one now. */
+export interface AgentServerInfo {
+  name: string;
+  /** It signs in each user (MCP OAuth): an agent reads it as its owner, so a shared chat would see what the owner sees. */
+  signsIn: boolean;
+  /** This user has signed in to it. */
+  signedIn?: true;
+}
+
+/** One chat an agent is in, as its owner's directory keeps it (the chats tell it when they add or remove the agent). */
+export interface AgentChatUse {
+  chatId: string;
+  /** The chat's title in the owner's list. */
+  title: string;
+  /** Whether its owner shares the agent with the people of that chat. */
+  shared: boolean;
+}
+
+/**
+ * An agent its owner shares with a chat, as the people in that chat may open it: what it does and how, never who it
+ * is signed in as. It keeps running as its owner; a change someone else makes is saved as their own copy.
+ */
+export type SharedAgentView = Pick<AgentDefinition, CopiedField | "id" | "version"> & {
+  ownerUid: string;
+  ownerName: string;
+  /** Its latest turns in this chat, newest first. */
+  turns: AgentTurnView[];
+};
+
+/** The fields of a definition a copy takes from the one it copies: what it does, never its state or who made it. */
+export const COPIED_FIELDS = [
+  "name",
+  "avatar",
+  "color",
+  "job",
+  "instructions",
+  "model",
+  "effort",
+  "servers",
+  "sharedServers",
+  "trigger",
+  "scope",
+  "workflow",
+] as const satisfies readonly (keyof AgentInput)[];
+export type CopiedField = (typeof COPIED_FIELDS)[number];
+
+/** Changes to a definition's fields, as a request carries them: null clears an optional one (checkAgent reads it as none). */
+export type AgentChanges = { [K in keyof AgentInput]?: AgentInput[K] | null };
+
+/**
+ * A definition the model drafted, without the servers that sign in each user (`signsIn`) among those it shares: a
+ * shared chat could make it read what its owner sees there. Only its owner adds one, in Setup, under its warning.
+ */
+export function withoutSignInShares(input: unknown, signsIn: (server: string) => boolean): unknown {
+  if (!isObject(input) || !Array.isArray(input.sharedServers)) return input;
+  return { ...input, sharedServers: input.sharedServers.filter((server) => typeof server !== "string" || !signsIn(server)) };
+}
+
+/** The fields a copy takes of `agent`, those it has. */
+export function copiedFields(agent: Pick<AgentInput, CopiedField>): Pick<AgentInput, CopiedField> {
+  const fields: AgentChanges = {};
+  for (const field of COPIED_FIELDS) if (agent[field] !== undefined) Object.assign(fields, { [field]: agent[field] });
+  return fields as Pick<AgentInput, CopiedField>;
+}
+
+/**
+ * The fields of someone's copy of `original`: what they changed (`changes`, a request's body, checked by checkAgent when
+ * saved), else the original's. Only the fields a copy takes: never its state, its guesses or where it came from.
+ */
+export function copyInput(original: Pick<AgentInput, CopiedField>, changes: AgentChanges): AgentChanges {
+  const fields: AgentChanges = {};
+  for (const field of COPIED_FIELDS) {
+    const value = Object.hasOwn(changes, field) ? changes[field] : original[field];
+    if (value !== undefined) Object.assign(fields, { [field]: value });
+  }
+  return fields;
+}
+
+/** A free handle for a copy of `name` among `taken`: the name itself, else "name-2", "name-3"… within the pattern's length. */
+export function copyName(name: string, taken: (name: string) => boolean): string | null {
+  if (!taken(name)) return name;
+  for (let n = 2; n < 100; n++) {
+    const suffix = `-${n}`;
+    const candidate = `${name.slice(0, 24 - suffix.length).replace(/-+$/, "")}${suffix}`;
+    if (!taken(candidate)) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -381,6 +546,10 @@ export type ChatAgentReplyData = {
   failed?: string;
   /** Artifacts it published in this turn, for the app to show their cards. */
   published?: { artifactId: string; title: string; version: number }[];
+  /** Set on a run's report (calledBy.schedule): which run, so a reply to it continues that run (shared/runs.ts). */
+  run?: RunRef;
+  /** The records its tool results held (shared/items.ts), as chips under the reply: from the servers, never its text. */
+  items?: ItemRef[];
 };
 
 export type AgentTurnStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -429,3 +598,14 @@ export function speakerLabel(speaker: { name: string; kind: "person" | "agent"; 
 export const AGENT_PROPOSE_TOOL = "agent_propose";
 /** What agent_propose's result carries, for the app to show the draft card. A type, so pi can store it. */
 export type AgentProposedDetails = { agentId: string; name: string; version: number; assumed?: string[] };
+
+/** The agent a proposal's result drafted, which shows as a draft card; undefined for any other entry. */
+export function proposedBy(entry: { kind: string; model?: readonly unknown[] }): AgentProposedDetails | undefined {
+  if (entry.kind !== "pi.tool-result") return undefined;
+  const message = entry.model?.[0] as { toolName?: string; isError?: boolean; details?: unknown } | undefined;
+  if (message?.toolName !== AGENT_PROPOSE_TOOL || message.isError) return undefined;
+  const details = message.details as Partial<AgentProposedDetails> | undefined;
+  return typeof details?.agentId === "string" && AGENT_ID_PATTERN.test(details.agentId) && typeof details.name === "string"
+    ? (details as AgentProposedDetails)
+    : undefined;
+}

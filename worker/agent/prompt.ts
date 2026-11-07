@@ -1,4 +1,4 @@
-import { defineExtension, section, type AgentEvent, type EntryRecord, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, section, type AgentEvent, type AgentState, type EntryRecord, type Extension } from "@earendil-works/pi-durable";
 import type { Message } from "@earendil-works/pi-ai";
 import { AGENT_NAME, AGENT_TOKEN } from "../../shared/mentions.ts";
 import type { ChatPeople } from "../../shared/protocol.ts";
@@ -139,23 +139,52 @@ function agentPeople({ owner, members }: ChatPeople, roster: readonly PromptAgen
 }
 
 /**
- * An event for a browser: each `pi.system` entry in it keeps its place, but not the prompt's sections and tools. Nobody's
- * app shows them, and they are the owner's (their system prompt, the list of their files, their MCP tools): this keeps
- * them off the browsers of the people they share the chat with. Only hygiene, not a boundary: the agent acts as the
- * owner, and may tell anyone in the chat what it was told. Entries come only in these four events; copies only what changes.
+ * An event for a browser: each `pi.system` entry in it keeps its place, but not the prompt's sections and tools, and the
+ * session's state only its model and effort (never its instructions or tool lists). Nobody's app shows them, and they
+ * are the owner's (their system prompt, the list of their files, their MCP tools): this keeps them off the browsers of
+ * the people they share the chat with. Only hygiene, not a boundary: the agent acts as the owner, and may tell anyone in
+ * the chat what it was told. Every event type is named, so a new one fails the typecheck until it is placed here;
+ * copies only what changes.
  */
 export function withoutSystemPrompt(event: AgentEvent): AgentEvent {
   switch (event.type) {
     case "snapshot":
-      return event.entries.some(isSystem) ? { ...event, entries: event.entries.map(promptless) } : event;
+      return { ...event, agent: shownAgent(event.agent), ...(event.entries.some(isSystem) && { entries: event.entries.map(promptless) }) };
+    case "agent_changed":
+      return { ...event, agent: shownAgent(event.agent) };
     case "message_end":
     case "entry_appended":
       return isSystem(event.entry) ? { ...event, entry: promptless(event.entry) } : event;
     case "tool_execution_end":
       return event.entry && isSystem(event.entry) ? { ...event, entry: promptless(event.entry) } : event;
-    default:
+    // The system message starts as an event of its own before its entry lands, with all of it.
+    case "message_start":
+      return event.message.role === "system" ? { ...event, message: { role: "system", content: "", timestamp: event.message.timestamp } as Message } : event;
+    case "run_start":
+    case "run_end":
+    case "turn_start":
+    case "turn_end":
+    case "message_update":
+    case "tool_execution_start":
+    case "tool_execution_update":
+    case "inbox_update":
+    case "submission":
+    case "auto_retry_start":
+    case "auto_retry_end":
+    case "deferred_poll":
+    case "usage_changed":
+    case "task_failed":
+    case "compaction_start":
+    case "compaction_end":
       return event;
+    default:
+      return event satisfies never;
   }
+}
+
+/** What a browser reads of a session's state: its model and effort. */
+function shownAgent(agent: AgentState): AgentState {
+  return { ...(agent.model && { model: agent.model }), ...(agent.thinkingLevel && { thinkingLevel: agent.thinkingLevel }) };
 }
 
 const isSystem = (entry: EntryRecord) => entry.kind === "pi.system";

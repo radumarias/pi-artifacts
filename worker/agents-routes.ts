@@ -1,5 +1,7 @@
-import { AGENT_ID_PATTERN, type AgentResult } from "../shared/agents.ts";
+import { AGENT_ID_PATTERN, type AgentResult, type AgentServerInfo } from "../shared/agents.ts";
+import { errorMessage } from "../shared/util.ts";
 import { json, readJson } from "./http.ts";
+import type { McpServerConfig } from "./mcp/servers.ts";
 import type { UserDirectory } from "./users.ts";
 
 /**
@@ -9,21 +11,36 @@ import type { UserDirectory } from "./users.ts";
  *   GET    /api/agents/:id      one
  *   PUT    /api/agents/:id      {…fields, version?, enabled?}: change one; `version` is the one read, and a newer one refuses
  *   PATCH  /api/agents/:id      {enabled, version?}: turn one on or off
- *   DELETE /api/agents/:id      delete one; chats that have it drop it at their next turn
+ *   GET    /api/agents/servers  the deployment's MCP servers an agent may use ([AgentServerInfo]), and which this user signed in to
+ *   GET    /api/agents/:id/chats  the chats it is in ([AgentChatUse]), as they told the user's directory
+ *   DELETE /api/agents/:id      delete one; the chats it is in drop it now (`dropFromChat`), and any other at its next turn
  * Every body is JSON (readJson), so another site cannot make an agent, turned on, for a signed-in user.
  * Returns null for any other path.
  */
-export async function agentsRoute(request: Request, directory: DurableObjectStub<UserDirectory>): Promise<Response | null> {
+export async function agentsRoute(
+  request: Request,
+  directory: DurableObjectStub<UserDirectory>,
+  dropFromChat: (chatId: string, agentId: string) => Promise<void>,
+  servers: readonly Pick<McpServerConfig, "name" | "auth">[],
+): Promise<Response | null> {
   const path = new URL(request.url).pathname;
   const method = request.method;
   const answer = (result: AgentResult | { error: string } | null, status = 200) =>
     result && "error" in result ? json(result, 400) : json(result ?? {}, status);
   if (path === "/api/agents" && method === "GET") return json(await directory.listAgents());
+  if (path === "/api/agents/servers" && method === "GET") {
+    const signedIn = new Set(servers.some((server) => server.auth === "oauth") ? await directory.mcpSignedIn() : []);
+    return json(
+      servers.map(({ name, auth }): AgentServerInfo => ({ name, signsIn: auth === "oauth", ...(auth === "oauth" && signedIn.has(name) && { signedIn: true }) })),
+    );
+  }
   if (path === "/api/agents" && method === "POST") {
     const body = await readJson<{ enabled?: unknown }>(request);
     if (!body || typeof body !== "object") return json({ error: "Expected an agent as JSON (content-type: application/json)." }, 400);
     return answer(await directory.saveAgent(body, "user", body.enabled !== false), 201);
   }
+  const chats = path.match(/^\/api\/agents\/([a-f0-9]+)\/chats$/);
+  if (chats && method === "GET" && AGENT_ID_PATTERN.test(chats[1])) return json(await directory.agentChats(chats[1]));
   const one = path.match(/^\/api\/agents\/([a-f0-9]+)$/);
   if (!one || !AGENT_ID_PATTERN.test(one[1])) return null;
   const id = one[1];
@@ -46,9 +63,15 @@ export async function agentsRoute(request: Request, directory: DurableObjectStub
     return answer(await directory.setAgentEnabled(id, body.enabled, body.version as number | undefined));
   }
   if (method === "DELETE") {
-    // Its only refusal is that there is no such agent, as GET answers it.
+    // Read before the delete, which forgets them. Its only refusal is that there is no such agent, as GET answers it.
+    const inChats = await directory.agentChats(id);
     const refused = await directory.deleteAgent(id);
-    return refused ? json(refused, 404) : json({});
+    if (refused) return json(refused, 404);
+    // Each chat's roster drops it at the agent's next turn anyway: a chat that cannot be told now is only logged.
+    await Promise.all(
+      inChats.map(({ chatId }) => dropFromChat(chatId, id).catch((error: unknown) => console.error("agent delete:", errorMessage(error)))),
+    );
+    return json({});
   }
   return null;
 }

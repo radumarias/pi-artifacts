@@ -12,6 +12,7 @@ import {
   type ChatDumpPage,
   type ChatDumpPart,
   type ChatImportStart,
+  type ExportedAgent,
   type ExportedChat,
   type ExportedPageValues,
   type ExportedSkill,
@@ -21,6 +22,7 @@ import {
   type ImportPlan,
   type ImportPlanRequest,
 } from "../shared/data-export.ts";
+import { AGENT_ID_PATTERN } from "../shared/agents.ts";
 import { ID_PATTERN, isOwnedBy } from "../shared/protocol.ts";
 import { MAX_SKILL_FILE_BYTES, MAX_SKILL_FILES } from "../shared/skill-files.ts";
 import { SKILL_NAME_PATTERN } from "../shared/skills.ts";
@@ -52,6 +54,8 @@ type Directory = DurableObjectStub<UserDirectory>;
  *   POST /api/me/import/plan                  what importing the zip's chats and artifacts does here (ImportPlan)
  *   POST /api/me/import/account               the settings, where the user has none of their own yet
  *   POST /api/me/import/skills                one skill with its files; skipped when the user has one of that name
+ *   POST /api/me/import/agents                {agent}: one agent; skipped when the user has one of that name. Answers
+ *                                             the id it has here, for the chats' rosters (ChatImportStart.agents)
  *   PUT  /api/me/import/files/<path>          one file, as the body; skipped when there is one at that path
  *   POST /api/me/import/chats/:id/begin|rows|drafts|finish
  *                                             a chat: begin (ChatImportStart), each part, its drafts, then finish, which
@@ -87,6 +91,12 @@ export async function dataRoute(request: Request, uid: string, directory: Direct
     return json({ applied: await directory.importSettings(body) });
   }
   if (path === "/api/me/import/skills") return importSkill(request, uid, directory, storage);
+  if (path === "/api/me/import/agents") {
+    const agent = (await readJson<{ agent?: ExportedAgent }>(request))?.agent;
+    if (!isObject(agent) || typeof agent.name !== "string") return json({ error: "Expected {agent}." }, 400);
+    const result = await directory.importAgent(agent as unknown as ExportedAgent);
+    return json(result, "error" in result ? 400 : 200);
+  }
   if (path === "/api/me/import/page-values") return importPageValues(request, uid, directory, storage);
   return null;
 }
@@ -186,12 +196,14 @@ async function importChat(request: Request, uid: string, directory: Directory, s
   if (step === "begin") {
     const start = body as Partial<ChatImportStart> | null;
     if (typeof start?.from !== "string" || !isObject(start.artifacts)) return json({ error: "Expected {from, artifacts}." }, 400);
-    const artifacts = Object.fromEntries(
-      Object.entries(start.artifacts).filter(
-        (pair): pair is [string, string] => ID_PATTERN.test(pair[0]) && typeof pair[1] === "string" && ID_PATTERN.test(pair[1]),
-      ),
-    );
-    return answer(await chat.importBegin({ from: start.from, artifacts }));
+    // Only ids on both sides: they are put in place of one another in the chat's rows.
+    const idMap = (pairs: unknown, pattern: RegExp) =>
+      Object.fromEntries(
+        Object.entries(isObject(pairs) ? pairs : {}).filter(
+          (pair): pair is [string, string] => pattern.test(pair[0]) && typeof pair[1] === "string" && pattern.test(pair[1]),
+        ),
+      );
+    return answer(await chat.importBegin({ from: start.from, artifacts: idMap(start.artifacts, ID_PATTERN), agents: idMap(start.agents, AGENT_ID_PATTERN) }));
   }
   if (step === "rows") {
     if (!isObject(body) || !Array.isArray(body.tables)) return json({ error: "Expected a part of a chat's export." }, 400);
@@ -214,9 +226,9 @@ async function importChat(request: Request, uid: string, directory: Directory, s
   // finish
   const info = body as Partial<ExportedChat> | null;
   if (typeof info?.title !== "string") return json({ error: "Expected {title, createdAt, updatedAt}." }, 400);
-  const refused = await chat.importFinish();
-  if (refused) return answer(refused);
-  await directory.importChat({ id: chatId, title: info.title, createdAt: Number(info.createdAt) || 0, updatedAt: Number(info.updatedAt) || 0 });
+  const finished = await chat.importFinish();
+  if ("error" in finished) return answer(finished);
+  await directory.importChat({ id: chatId, title: info.title, createdAt: Number(info.createdAt) || 0, updatedAt: Number(info.updatedAt) || 0 }, finished.kind);
   return json({});
 }
 

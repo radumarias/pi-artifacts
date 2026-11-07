@@ -18,6 +18,7 @@ export function ComposerMore({
   history,
   onRecall,
   compact,
+  onMakeAgent,
 }: {
   mentionLabel: string;
   onMention: () => void;
@@ -25,6 +26,8 @@ export function ComposerMore({
   /** The same function from one render to the next, so the open list does not draw again as a reply streams in. */
   onRecall: (message: Recalled) => void;
   compact: boolean;
+  /** Ask pi to draft an agent: the message box starts the ask, and the viewer says what the agent is for. */
+  onMakeAgent?: () => void;
 }) {
   // The menu, or in its place the list of earlier messages.
   const [open, setOpen] = useState<"menu" | "history" | null>(null);
@@ -77,12 +80,34 @@ export function ComposerMore({
             {/* The shortcut, where there is a keyboard to press it on. */}
             {history.length > 0 && !compact && <kbd title="Up in an empty message box">↑</kbd>}
           </button>
+          {onMakeAgent && (
+            <button
+              type="button"
+              onClick={() => {
+                close();
+                onMakeAgent();
+              }}
+            >
+              <span className="composer-more-glyph" aria-hidden="true">
+                <AgentIcon />
+              </span>
+              <span>Make an agent</span>
+            </button>
+          )}
         </div>
       )}
       {open === "history" && <History id={menu} history={history} compact={compact} onBack={back} onPick={pick} />}
     </div>
   );
 }
+
+/** A rounded square with two eyes: a helper of one's own. */
+const AgentIcon = () => (
+  <Icon size={16} stroke={2}>
+    <rect x="4" y="5" width="16" height="14" rx="4" />
+    <path d="M9 11v1M15 11v1M12 2v3" />
+  </Icon>
+);
 
 /** A clock with an arrow going back round it: earlier messages. */
 const HistoryIcon = () => (

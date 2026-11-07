@@ -108,12 +108,20 @@ export default defineConfig({
       ACCESS_AUD: bindings.text("21dcccf4fbfa5991beb76a9ac48ff0c0de86d3c1a55597c82e141559e3ebcdc9"),
       // 32+ random bytes, base64. Each user's files are encrypted with a key derived from it: losing it loses the files.
       FILES_MASTER_KEY: bindings.secret(),
-      // DEV_TOOLS=true (when running pnpm dev) enables POST /api/dev/chats/:id/publish. Never set it for a deploy.
+      // DEV_TOOLS=true (when running pnpm dev) enables POST /api/dev/chats/:id/publish and /api/dev/agents/:id/run. Never
+      // set it for a deploy.
       DEV_TOOLS: bindings.text(process.env.DEV_TOOLS === "true" ? "true" : "false"),
       // The MCP servers every chat connects to: just a name and a URL each (see mcpServerList above). The agent learns
       // what a server offers from the server, and you name servers and tools in chat. "oauth": each user signs in, from
       // a link the agent gives. A Cloudflare MCP portal is one entry for every server behind it.
       MCP_SERVERS: bindings.json(mcpServerList()),
+      // How long a sign-in to an "oauth" server lasts, in days: set it to the grant session duration of the server's
+      // authorization (for a Cloudflare MCP portal, its Access application). Neither Access nor OAuth says when a refresh
+      // token runs out, so the app counts from the sign-in, and warns a few days before for servers scheduled runs use.
+      // Optional secrets: MCP_TOKENS_KEY (32+ random bytes, base64) encrypts stored sign-ins, else a key derived from
+      // FILES_MASTER_KEY does; PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY (scripts/vapid-keys.ts) and PUSH_SUBJECT
+      // (mailto: or https:) turn on Web Push. Without them nothing is pushed.
+      MCP_GRANT_DAYS: bindings.text("30"),
       // Live calls from published pages: 120 a minute per viewer and chat, counted by Cloudflare across the Worker's
       // isolates; and, counted apart, each viewer's writes of pages' saved values. The namespace is any number unique within the account.
       PAGE_CALLS: bindings.rateLimit({ namespace: "4201", simple: { limit: 120, period: 60 } }),
@@ -158,6 +166,8 @@ export default defineConfig({
     exports: {
       ChatAgent: exports.durableObject({ storage: "sqlite" }),
       UserDirectory: exports.durableObject({ storage: "sqlite" }),
+      // A watched read shared by everyone watching it (worker/agents/runs/source.ts): polls once for all of them.
+      Source: exports.durableObject({ storage: "sqlite" }),
       Sandbox: withSandbox ? exports.durableObject({ storage: "sqlite", container: sandbox }) : exports.durableObject({ storage: "sqlite" }),
     },
   },

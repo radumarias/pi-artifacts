@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatSummary } from "../../shared/protocol.ts";
+import { MAX_CHAT_TITLE, type ChatSummary } from "../../shared/protocol.ts";
+import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
-import { TrashIcon } from "../Icon.tsx";
-import { useStoredState } from "../layout.tsx";
+import { Icon } from "../Icon.tsx";
+import { isBoolean, useDismiss, useStoredState } from "../layout.tsx";
 import { useLatest, useVisible } from "../sidebar.ts";
+import { GROUPINGS, hasUnread, isGrouping, orderChats, type ChatGrouping } from "./chat-order.ts";
 
 /**
  * The user's chats, and a `load` that reads them again (the sidebar's socket calls it when they changed). The open
@@ -111,7 +113,8 @@ export function useChatFilter(chats: readonly ChatSummary[], openId: string | un
       const bar = chats.some(isShared);
       const filter = bar ? stored : "all";
       const { keep } = FILTERS[filter];
-      const hidden = chats.filter((chat) => (chat.mentioned || chat.unread) && !keep(chat) && chat.id !== openId);
+      // A closed chat waits for nothing until someone tags the user in it, which opens it again.
+      const hidden = chats.filter((chat) => (chat.mentioned || chat.unread) && !chat.closed && !keep(chat) && chat.id !== openId);
       return {
         bar,
         filter,
@@ -153,9 +156,47 @@ export function ChatFilterBar({ filter, setFilter, waiting }: ReturnType<typeof 
   );
 }
 
+/** How the list is ordered, remembered in this browser: unread chats on top, and how the rest are grouped. */
+export function useChatOrder() {
+  const [unreadFirst, setUnreadFirst] = useStoredState("layout.unreadFirst", true, isBoolean);
+  const [groupBy, setGroupBy] = useStoredState<ChatGrouping>("layout.chatGrouping", "none", isGrouping);
+  return { unreadFirst, setUnreadFirst, groupBy, setGroupBy };
+}
+
+/** The "Chats" heading, with what orders the list beside it. */
+export function ChatsHeading({ order }: { order: ReturnType<typeof useChatOrder> }) {
+  const [open, setOpen] = useState(false);
+  const box = useDismiss<HTMLDivElement>(open, setOpen);
+  return (
+    <div className="chats-heading" ref={box}>
+      <h3>Chats</h3>
+      <button type="button" className="icon-button chats-order" aria-expanded={open} title="Order the chats" aria-label="Order the chats" onClick={() => setOpen(!open)}>
+        <Icon size={14} box={16} stroke={1.6}>
+          <path d="M3 4.5h10M5 8h6M7 11.5h2" />
+        </Icon>
+      </button>
+      {open && (
+        <div className="row-menu" role="group" aria-label="Order the chats">
+          <label>
+            <input type="checkbox" checked={order.unreadFirst} onChange={(e) => order.setUnreadFirst(e.target.checked)} /> Unread first
+          </label>
+          {(Object.keys(GROUPINGS) as ChatGrouping[]).map((grouping) => (
+            <label key={grouping}>
+              <input type="radio" name="chat-grouping" checked={order.groupBy === grouping} onChange={() => order.setGroupBy(grouping)} /> {GROUPINGS[grouping]}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ChatListProps {
   chats: ChatSummary[];
   openId: string | undefined;
+  /** The signed-in user: someone a chat is shared with leaves it as themselves. */
+  uid: string;
+  order: ReturnType<typeof useChatOrder>;
   navigate: (path: string) => void;
   /** Ask to delete one of the user's own chats. */
   onDelete: (chatId: string) => void;
@@ -163,35 +204,152 @@ interface ChatListProps {
   empty?: string;
 }
 
-export function ChatList({ chats, openId, navigate, onDelete, empty }: ChatListProps) {
+/**
+ * The chats, pinned ones first, then (if the user wants) those with something unread, then the rest in the groups they
+ * picked (chat-order.ts). Each has its own menu of what the user changes for themselves: pin, rename, copy its link,
+ * mark it unread, close it, and leave a chat someone shared, or delete one of their own. Closed chats wait at the end.
+ */
+export function ChatList({ chats, openId, uid, order, navigate, onDelete, empty }: ChatListProps) {
+  const [showClosed, setShowClosed] = useState(false);
+  const { unreadFirst, groupBy } = order;
+  const { groups, closed } = useMemo(() => orderChats(chats, { unreadFirst, groupBy }, openId), [chats, unreadFirst, groupBy, openId]);
   if (chats.length === 0 && empty) return <p className="nav-empty">{empty}</p>;
+  const row = (chat: ChatSummary) => <ChatRow key={chat.id} chat={chat} open={chat.id === openId} uid={uid} navigate={navigate} onDelete={onDelete} />;
   return (
     <nav>
-      {chats.map((chat) => (
-        <div key={chat.id} className={chat.id === openId ? "chat-link active" : "chat-link"}>
-          <a
-            href={`/c/${chat.id}`}
-            className={chat.unread && chat.id !== openId ? "nav-item unread" : "nav-item"}
-            title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
-            onClick={(e) => {
-              e.preventDefault();
-              navigate(`/c/${chat.id}`);
-            }}
-          >
-            <span className="nav-title">
-              {chat.title}
-              {chat.sharedBy && <small> · {chat.sharedBy}</small>}
-            </span>
-            <ChatStatusIcon chat={chat} open={chat.id === openId} />
-          </a>
-          {/* Only the owner can delete a chat; someone it is shared with leaves it from the chat's People panel. */}
-          {!chat.sharedBy && (
-            <button type="button" className="chat-delete" title="Delete chat" aria-label={`Delete chat ${chat.title}`} onClick={() => onDelete(chat.id)}>
-              <TrashIcon />
+      {groups.map((group) => (
+        <div key={group.key} className="chat-group">
+          {group.label && <h4 className="nav-group">{group.label}</h4>}
+          {group.chats.map(row)}
+        </div>
+      ))}
+      {closed.length > 0 && (
+        <>
+          <button type="button" className="closed-toggle" aria-expanded={showClosed} onClick={() => setShowClosed(!showClosed)}>
+            {showClosed ? "Hide closed chats" : `Closed chats (${closed.length})`}
+          </button>
+          {showClosed && <div className="chat-group closed">{closed.map(row)}</div>}
+        </>
+      )}
+    </nav>
+  );
+}
+
+function ChatRow({ chat, open, uid, navigate, onDelete }: { chat: ChatSummary; open: boolean; uid: string } & Pick<ChatListProps, "navigate" | "onDelete">) {
+  const [menu, setMenu] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const box = useDismiss<HTMLDivElement>(menu, setMenu);
+  const change = (patch: Parameters<typeof api.changeChatRow>[1]) => {
+    setMenu(false);
+    // The sidebar's socket brings the list back changed.
+    api.changeChatRow(chat.id, patch).catch((e: unknown) => alert(`Could not change the chat: ${errorMessage(e)}`));
+  };
+  const copyLink = () => {
+    navigator.clipboard.writeText(`${location.origin}/c/${chat.id}`).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1_500);
+    });
+    setMenu(false);
+  };
+  const leave = async () => {
+    setMenu(false);
+    if (!confirm(`Leave "${chat.title}"? You lose it until someone adds you again.`)) return;
+    try {
+      await api.removeMember(chat.id, uid);
+      if (open) navigate("/");
+    } catch (e) {
+      alert(`Could not leave the chat: ${errorMessage(e)}`);
+    }
+  };
+  const unread = hasUnread(chat) && !open;
+  return (
+    <div ref={box} className={["chat-link", open && "active", menu && "menu-open"].filter(Boolean).join(" ")}>
+      {renaming ? (
+        <RenameChat chat={chat} onDone={(title) => (setRenaming(false), title !== undefined && change({ title }))} />
+      ) : (
+        <a
+          href={`/c/${chat.id}`}
+          className={chat.unread && !open ? "nav-item unread" : "nav-item"}
+          title={chat.sharedBy && `Shared by ${chat.sharedBy}`}
+          onClick={(e) => {
+            e.preventDefault();
+            navigate(`/c/${chat.id}`);
+          }}
+        >
+          {chat.pinnedAt && <span className="nav-pin" aria-label="Pinned" title="Pinned" />}
+          <span className="nav-title">
+            {chat.title}
+            {chat.sharedBy && <small> · {chat.sharedBy}</small>}
+          </span>
+          {copied ? <small className="nav-copied">Copied</small> : <ChatStatusIcon chat={chat} open={open} />}
+        </a>
+      )}
+      {!renaming && (
+        <button type="button" className="chat-more" title="More" aria-label={`More for ${chat.title}`} aria-expanded={menu} onClick={() => setMenu(!menu)}>
+          <Icon size={15} box={16} stroke={2.4}>
+            <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" />
+          </Icon>
+        </button>
+      )}
+      {menu && (
+        <div className="row-menu" role="menu">
+          <button type="button" role="menuitem" onClick={() => change({ pinned: !chat.pinnedAt })}>
+            {chat.pinnedAt ? "Unpin" : "Pin"}
+          </button>
+          <button type="button" role="menuitem" onClick={() => (setMenu(false), setRenaming(true))}>
+            Rename
+          </button>
+          <button type="button" role="menuitem" onClick={copyLink}>
+            Copy link
+          </button>
+          {!unread && !open && (
+            <button type="button" role="menuitem" onClick={() => change({ unread: true })}>
+              Mark unread
+            </button>
+          )}
+          <button type="button" role="menuitem" onClick={() => change({ closed: !chat.closed })} title={chat.closed ? undefined : "Hide it until someone tags you in it"}>
+            {chat.closed ? "Reopen" : "Close"}
+          </button>
+          {chat.sharedBy ? (
+            <button type="button" role="menuitem" className="danger-item" onClick={() => void leave()}>
+              Leave
+            </button>
+          ) : (
+            <button type="button" role="menuitem" className="danger-item" onClick={() => (setMenu(false), onDelete(chat.id))}>
+              Delete
             </button>
           )}
         </div>
-      ))}
-    </nav>
+      )}
+    </div>
+  );
+}
+
+/** The chat's name as an input, for the user's own name for it: Enter keeps it (empty goes back to the chat's own), Escape lets go. */
+function RenameChat({ chat, onDone }: { chat: ChatSummary; onDone: (title?: string) => void }) {
+  const [title, setTitle] = useState(chat.title);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.select(), []);
+  const save = () => onDone(title.trim() === chat.title ? undefined : title.trim());
+  return (
+    <input
+      ref={input}
+      className="chat-rename"
+      value={title}
+      maxLength={MAX_CHAT_TITLE}
+      aria-label="Your name for this chat"
+      onChange={(e) => setTitle(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          save();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onDone();
+        }
+      }}
+    />
   );
 }

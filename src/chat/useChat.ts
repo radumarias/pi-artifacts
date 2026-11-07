@@ -1,7 +1,7 @@
 import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentEvent, AgentState, EntryRecord, JsonObject, UsageState } from "@earendil-works/pi-durable";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { ChatAgentView } from "../../shared/agents.ts";
+import { CHAT_AGENT_KIND, type ChatAgentReplyData, type ChatAgentView } from "../../shared/agents.ts";
 import type { AttachmentInput } from "../../shared/attachments.ts";
 import type { MentionInput } from "../../shared/mentions.ts";
 import { modelKey } from "../../shared/models.ts";
@@ -57,6 +57,8 @@ export interface ChatState {
 
 /** How long an incoming message that went in is kept, at most, waiting to show in the transcript or the queue. */
 export const ARRIVING_MS = 10_000;
+/** The window event a chat's socket raises when a run of its home agent moved on (detail: the agent's id). */
+export const RUNS_EVENT = "pi-agent-runs";
 
 const initial: ChatState = { entries: [], tools: [], busy: false, queued: [], incoming: [] };
 
@@ -284,6 +286,90 @@ export function waitingOnModel(state: ChatState): boolean {
   return last?.type !== "text" || !last.text;
 }
 
+/** One agent's turn as the chat follows it live: its session from the turn's input on, as `reduce` keeps pi's. */
+export interface AgentLive {
+  turn: number;
+  state: ChatState;
+  /** When the turn started, by this clock (from the roster's elapsed time): for the time on its working line. */
+  startedAt?: number;
+  /** When the roster said the turn ended, by this clock: kept until its reply lands, or for ARRIVING_MS. */
+  endedAt?: number;
+  /** How it ended, once the roster says (a stopped turn posts no reply). */
+  ended?: NonNullable<ChatAgentView["ended"]>["status"];
+}
+
+/** The agents' turns followed live, by agent id. */
+export type AgentsLive = Readonly<Record<string, AgentLive>>;
+
+type AgentAction =
+  | (Omit<Extract<ChatServerMessage, { type: "agentEvents" }>, "events"> & { events: AgentEvent[]; at: number })
+  | { type: "agents"; agents: readonly ChatAgentView[]; at: number }
+  | { type: "expire"; at: number }
+  | { type: "reset" };
+
+const NO_LIVE: AgentsLive = {};
+
+/**
+ * Route the agents' live events to each one's own view (`reduce` per agent): a batch for a new turn starts that agent's
+ * view afresh. The roster's view says which turns run: one that started is timed from it; one no longer running is
+ * marked ended, and let go ARRIVING_MS later (its reply, which replaces it, usually lands well before; a stopped turn
+ * posts none).
+ */
+export function reduceAgents(live: AgentsLive, action: AgentAction): AgentsLive {
+  if (action.type === "reset") return NO_LIVE;
+  if (action.type === "agentEvents") {
+    const known = live[action.agent];
+    const same = known?.turn === action.turn;
+    const state = reduce(same ? known.state : initial, { type: "events", events: action.events, at: action.at, toolsElapsedMs: action.toolsElapsedMs });
+    return { ...live, [action.agent]: { ...(same && known), turn: action.turn, state } };
+  }
+  if (action.type === "expire") {
+    const kept = Object.entries(live).filter(([, agent]) => agent.endedAt === undefined || action.at - agent.endedAt < ARRIVING_MS);
+    return kept.length === Object.keys(live).length ? live : Object.fromEntries(kept);
+  }
+  let changed = false;
+  const next: Record<string, AgentLive> = {};
+  const running = new Map(action.agents.flatMap((agent) => (agent.running ? [[agent.id, agent.running] as const] : [])));
+  const views = new Map(action.agents.map((agent) => [agent.id, agent]));
+  for (const [id, agent] of Object.entries(live)) {
+    const run = running.get(id);
+    if (run?.turn === agent.turn) {
+      const startedAt = agent.startedAt ?? action.at - run.elapsedMs;
+      next[id] = agent.startedAt === startedAt && agent.endedAt === undefined ? agent : { ...agent, startedAt, endedAt: undefined };
+    } else {
+      const last = views.get(id)?.ended;
+      const ended = last?.turn === agent.turn ? last.status : agent.ended;
+      next[id] = agent.endedAt !== undefined && agent.ended === ended ? agent : { ...agent, endedAt: agent.endedAt ?? action.at, ended };
+    }
+    changed ||= next[id] !== agent;
+  }
+  // A turn the socket has not heard of yet: its start time, for when its events come.
+  for (const [id, run] of running) {
+    if (next[id]?.turn === run.turn) continue;
+    next[id] = { turn: run.turn, state: initial, startedAt: action.at - run.elapsedMs };
+    changed = true;
+  }
+  return changed ? next : live;
+}
+
+/**
+ * The agents' live turns to show, in the roster's order: not one whose reply is in the transcript by now (`entries`),
+ * which shows it instead.
+ */
+export function shownLive(live: AgentsLive, agents: readonly ChatAgentView[], entries: readonly EntryRecord[]): (AgentLive & { agent: ChatAgentView })[] {
+  if (!Object.keys(live).length) return [];
+  const replied = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== CHAT_AGENT_KIND) continue;
+    const data = entry.data as unknown as ChatAgentReplyData;
+    replied.add(`${data.agentId}:${data.turn}`);
+  }
+  return agents.flatMap((agent) => {
+    const turn = live[agent.id];
+    return turn && !replied.has(`${agent.id}:${turn.turn}`) ? [{ ...turn, agent }] : [];
+  });
+}
+
 /** Why the chat's socket stopped for good. */
 const STOPPED = { removed: "You are not in this chat.", deleted: "This chat was deleted." };
 
@@ -302,6 +388,14 @@ export function useChat(chatId: string) {
   const [hints, setHints] = useState<ReadonlySet<number>>(NO_HINTS);
   // The agents the owner brought into the chat besides pi, and whether each is working.
   const [agents, setAgents] = useState<ChatAgentView[]>(NO_AGENTS);
+  // What the agents working now do, each in its own session.
+  const [live, dispatchAgents] = useReducer(reduceAgents, NO_LIVE);
+  const ended = Object.values(live).reduce((first, agent) => Math.min(first, agent.endedAt ?? Infinity), Infinity);
+  useEffect(() => {
+    if (ended === Infinity) return;
+    const timer = setTimeout(() => dispatchAgents({ type: "expire", at: Date.now() }), Math.max(0, ended + ARRIVING_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [ended]);
   const socket = useRef<WebSocket | null>(null);
   // One that went in and never showed is let go after ARRIVING_MS (see ChatState.incoming).
   const arrived = state.incoming.reduce((first, message) => Math.min(first, message.arriving ?? Infinity), Infinity);
@@ -319,6 +413,7 @@ export function useChat(chatId: string) {
     setAuto(false);
     setHints(NO_HINTS);
     setAgents(NO_AGENTS);
+    dispatchAgents({ type: "reset" });
     let closed = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -351,7 +446,12 @@ export function useChat(chatId: string) {
         else if (message.type === "presence") setOnline(message.online);
         else if (message.type === "auto") setAuto(message.on);
         else if (message.type === "callHint") setHints((known) => new Set(known).add(message.entry));
-        else if (message.type === "agents") setAgents(message.agents);
+        else if (message.type === "agents") {
+          setAgents(message.agents);
+          dispatchAgents({ type: "agents", agents: message.agents, at: Date.now() });
+        } else if (message.type === "agentEvents") dispatchAgents({ ...message, events: message.events as AgentEvent[], at: Date.now() });
+        // For the runs list of the agent whose home this chat is: it reads them itself.
+        else if (message.type === "runs") window.dispatchEvent(new CustomEvent(RUNS_EVENT, { detail: message.agentId }));
         else if (message.type === "removed" || message.type === "deleted") {
           stop(STOPPED[message.type]);
           ws.close();
@@ -418,6 +518,8 @@ export function useChat(chatId: string) {
     abort: (agent?: string) => send(agent ? { type: "abort", agent } : { type: "abort" }),
     /** The chat's agents besides pi (its roster), as the chat last said. */
     agents,
+    /** The agents' turns followed live, by agent id (see shownLive). */
+    live,
     setModel,
     /** Whether the chat is on Auto: a router picks the model and effort for each message. */
     auto,

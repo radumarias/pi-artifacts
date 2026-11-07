@@ -11,6 +11,7 @@ import {
   askOf,
   assistantText,
   allowedTools,
+  runTools,
   CatchUp,
   handOffs,
   messageAskKey,
@@ -199,6 +200,10 @@ describe("askLine", () => {
   it("labels other agents' replies, and leaves out its own and empty ones", () => {
     expect(askLine(replied("a-builder", "builder", "Built the page.", 1), SELF, OWNER)).toBe("[builder · agent]: Built the page.");
     expect(askLine(replied(SELF, "research", "I found three sources.", 2), SELF, OWNER)).toBeUndefined();
+    // Its runs' replies are not in its own session: it reads them.
+    const fromRun = replied(SELF, "research", "West fell 30%.", 0);
+    (fromRun.data as unknown as ChatAgentReplyData).run = { dueAt: 1, why: "schedule" };
+    expect(askLine(fromRun, SELF, OWNER)).toBe("[you, in a run]: West fell 30%.");
     expect(askLine(replied("a-builder", "builder", "", 3), SELF, OWNER)).toBeUndefined();
   });
 
@@ -465,6 +470,11 @@ describe("allowedTools", () => {
     expect(allowedTools(tools, mcp, {}, true, signsIn)).toEqual([...appButReact, ...mcp.keys()]);
     // The list for shared chats does not narrow its owner's turns.
     expect(allowedTools(tools, mcp, { ...agent, sharedServers: [] }, true, signsIn)).toEqual(allowedTools(tools, mcp, agent, true, signsIn));
+  });
+
+  it("gives a run only reading tools: the app's and those of all its own servers, sign-in ones too", () => {
+    expect(runTools([...tools, "some_new_tool"], mcp, agent)).toEqual([...reads, "crm__list_deals", "mail__search"]);
+    expect(runTools(tools, mcp, {})).toEqual([...reads, "crm__list_deals", "mail__search", "vault__read"]);
   });
 
   it("gives anyone else's turn only the app's read tools and read tools of servers that do not sign in each user", () => {

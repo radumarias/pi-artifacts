@@ -1,3 +1,4 @@
+import { isJoinedVia, type ChatMemberVia, type JoinedVia } from "../shared/chat-kinds.ts";
 import { ID_PATTERN, UID_PATTERN, type ChatInvite, type Person } from "../shared/protocol.ts";
 import { randomHex, sha256Hex } from "../shared/util.ts";
 
@@ -8,6 +9,17 @@ export const MAX_OPEN_INVITES = 20;
 /** The part of a Durable Object's SQL API the tables here need; the tests put node:sqlite behind it. */
 export interface Sql {
   exec(query: string, ...bindings: (string | number | null)[]): { toArray(): Record<string, unknown>[]; rowsWritten: number };
+}
+
+/**
+ * Add the columns (name to type) a table made before lacks, reading the table's columns once; the names of those added.
+ * `table` and the columns are written in the code, never input.
+ */
+export function addColumns(sql: Sql, table: string, columns: Record<string, string>): string[] {
+  const have = new Set(sql.exec(`SELECT name FROM pragma_table_info('${table}')`).toArray().map((row) => row.name));
+  const added = Object.keys(columns).filter((column) => !have.has(column));
+  for (const column of added) sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${columns[column]}`);
+  return added;
 }
 
 /** An invite link's token: the chat it opens and a secret the chat keeps only the hash of. */
@@ -47,6 +59,8 @@ export class ChatMembers {
       CREATE TABLE IF NOT EXISTS chat_invites (secret_hash TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS chat_owner (uid TEXT PRIMARY KEY, name TEXT NOT NULL);
     `);
+    // Added later: how each member joined (JoinedVia), which narrowing the chat's kind reads. Members from before joined by invite.
+    addColumns(sql, "chat_members", { via: "TEXT NOT NULL DEFAULT 'invite'" });
   }
 
   /** The owner's name as they last showed it; their uid if they never did. */
@@ -65,10 +79,15 @@ export class ChatMembers {
   }
 
   list(): Person[] {
+    return this.listVia().map(({ uid, name }) => ({ uid, name }));
+  }
+
+  /** The members as they joined, each with how (JoinedVia). */
+  listVia(): ChatMemberVia[] {
     return this.#sql
-      .exec("SELECT uid, name FROM chat_members ORDER BY joined_at")
+      .exec("SELECT uid, name, via FROM chat_members ORDER BY joined_at")
       .toArray()
-      .map((row) => ({ uid: row.uid as string, name: row.name as string }));
+      .map((row) => ({ uid: row.uid as string, name: row.name as string, via: isJoinedVia(row.via) ? row.via : "invite" }));
   }
 
   has(uid: string): boolean {
@@ -124,6 +143,11 @@ export class ChatMembers {
     return this.#sql.exec("DELETE FROM chat_invites WHERE id = ?", id).rowsWritten > 0;
   }
 
+  /** Revoke every open invite: a chat made private lets nobody in by a link sent before. */
+  revokeInvites(): void {
+    this.#sql.exec("DELETE FROM chat_invites");
+  }
+
   /** What accept would answer now, without using the invite up. */
   async check(secret: string, person: Person, now = Date.now()): Promise<{ error: string } | null> {
     const secretHash = await sha256Hex(secret);
@@ -149,19 +173,24 @@ export class ChatMembers {
     const refused = this.#refusal(secretHash, now);
     if (refused) return refused;
     this.#sql.exec("DELETE FROM chat_invites WHERE secret_hash = ?", secretHash);
-    this.#insert(person, now);
+    this.#insert(person, "invite", now);
     return null;
   }
 
-  /** Add someone not yet a member, with no invite: the owner's second seat (secondSeat), which the owner adds for themselves. */
-  add(person: Person, now = Date.now()): { error: string } | null {
+  /**
+   * Add someone not yet a member, with no invite: the owner's second seat (secondSeat), which the owner adds for
+   * themselves; someone the owner adds directly (`added`); someone joining from the chat's page (`page`). Someone
+   * already in is left as they joined.
+   */
+  add(person: Person, via: Exclude<JoinedVia, "invite"> = "seat", now = Date.now()): { error: string } | null {
+    if (this.has(person.uid)) return null;
     const full = this.#full();
     if (full) return full;
-    this.#insert(person, now);
+    this.#insert(person, via, now);
     return null;
   }
 
-  #insert(person: Person, now: number): void {
-    this.#sql.exec("INSERT INTO chat_members (uid, name, joined_at) VALUES (?, ?, ?)", person.uid, person.name, now);
+  #insert(person: Person, via: JoinedVia, now: number): void {
+    this.#sql.exec("INSERT INTO chat_members (uid, name, joined_at, via) VALUES (?, ?, ?, ?)", person.uid, person.name, now, via);
   }
 }

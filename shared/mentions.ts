@@ -72,18 +72,76 @@ export function summonsAgent(text: string, mentions: readonly Mention[] = []): b
   return calledNames(text, [AGENT_NAME], mentions).length > 0;
 }
 
-/** The text split into plain runs and the "@pi"s in it (as typed: "@PI" stays so), for the transcript to show them as chips. */
-export function splitAgent(text: string): { text: string; call: boolean }[] {
-  const parts: { text: string; call: boolean }[] = [];
-  let plain = 0;
-  for (const match of text.matchAll(callPattern(AGENT_NAME, "gi"))) {
-    const at = match.index + match[1].length;
-    if (at > plain) parts.push({ text: text.slice(plain, at), call: false });
-    plain = at + AGENT_TOKEN.length;
-    parts.push({ text: text.slice(at, plain), call: true });
+/**
+ * The text split into plain runs and the calls in it: "@pi", and "@name" for each of `names` (the chat's other agents),
+ * as typed ("@PI" stays so), with the name each one calls, for the transcript to show them as chips.
+ */
+export function splitCalls(text: string, names: readonly string[] = []): { text: string; call?: string }[] {
+  const hits: { at: number; end: number; name: string }[] = [];
+  for (const name of [AGENT_NAME, ...names]) {
+    for (const match of text.matchAll(callPattern(name, "gi"))) {
+      const at = match.index + match[1].length;
+      hits.push({ at, end: at + name.length + 1, name });
+    }
   }
-  if (plain < text.length) parts.push({ text: text.slice(plain), call: false });
+  hits.sort((a, b) => a.at - b.at);
+  const parts: { text: string; call?: string }[] = [];
+  let plain = 0;
+  for (const hit of hits) {
+    if (hit.at < plain) continue;
+    if (hit.at > plain) parts.push({ text: text.slice(plain, hit.at) });
+    parts.push({ text: text.slice(hit.at, hit.end), call: hit.name });
+    plain = hit.end;
+  }
+  if (plain < text.length) parts.push({ text: text.slice(plain) });
   return parts;
+}
+
+/** An agent as the "@" picker offers it: its handle and job line, for matching; pi's only by its handle (`handleOnly`). */
+export interface AgentChoice {
+  name: string;
+  job: string;
+  handleOnly?: boolean;
+}
+
+/** How well an agent matches a picker query (lowercase): 4 its handle starts with it, 3 a job word does, 2 and 1 hold it. */
+function agentScore({ name, job, handleOnly }: AgentChoice, q: string): number {
+  if (!q) return 1;
+  if (name.startsWith(q)) return 4;
+  if (handleOnly) return name.includes(q) ? 2 : 0;
+  const words = job.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  if (words.some((word) => word.startsWith(q))) return 3;
+  if (name.includes(q)) return 2;
+  return job.toLowerCase().includes(q) ? 1 : 0;
+}
+
+/**
+ * The agents the "@" picker offers for `query`, best first: handles that start with it, then handles or job lines with a
+ * word that does, then those that hold it anywhere. An empty query offers them all, in the roster's order (pi first
+ * when it is among them). Case does not matter.
+ */
+export function matchAgents<T extends AgentChoice>(agents: readonly T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  return agents
+    .map((agent, order) => ({ agent, order, score: agentScore(agent, q) }))
+    .filter((hit) => hit.score > 0)
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .map(({ agent }) => agent);
+}
+
+/**
+ * What the "@" picker lists for `query`: the agents (matchAgents), then people, artifacts and files (matchMentions). A
+ * person whose name starts with the query comes before agents whose handles do not, so "@th" tags Thomas rather than
+ * calling an agent whose job line has "the".
+ */
+export function matchPicks<T extends AgentChoice>(agents: readonly T[], choices: readonly MentionChoice[], query: string): (T | MentionChoice)[] {
+  const q = query.trim().toLowerCase();
+  const found = matchAgents(agents, query);
+  const mentions = matchMentions(choices, query);
+  const named = (choice: MentionChoice) => choice.mention.kind === "person" && score(mentionLabel(choice.mention), q) === 4;
+  if (!q || !mentions.some(named) || found.some((agent) => agent.name.startsWith(q))) return [...found, ...mentions];
+  const people = mentions.filter((choice) => choice.mention.kind === "person");
+  return [...people, ...found, ...mentions.filter((choice) => choice.mention.kind !== "person")];
 }
 
 /** Mentions one message may carry. */

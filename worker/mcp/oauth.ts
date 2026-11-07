@@ -16,6 +16,11 @@ export interface McpAuthRecord {
   /** A sign-in in progress: its PKCE verifier and state. */
   verifier?: string;
   state?: string;
+  /**
+   * Which sign-in the tokens come from: new at each code exchange, gone with Disconnect. A refresh saves its tokens only
+   * while the record still holds this grant (`setTokensIf`). Records from before have none, which counts as one grant.
+   */
+  grant?: string;
 }
 
 /**
@@ -30,6 +35,11 @@ export type McpAuthChange =
    * user shares them, and another chat may have refreshed them since.
    */
   | { clearTokensIf: OAuthTokens }
+  /**
+   * A refresh's new tokens, saved only while the record holds tokens of the grant it refreshed: one that finishes after
+   * Disconnect or a new sign-in changes nothing.
+   */
+  | { setTokensIf: { grant: string | undefined; tokens: OAuthTokens } }
   /**
    * Start a sign-in for this redirect URL: drop any sign-in in progress, and
    * keep the client registered for the same URL with its tokens (they stay in
@@ -47,7 +57,10 @@ export function applyAuthChange(stored: McpAuthRecord, change: McpAuthChange): M
   if ("set" in change) return { ...stored, ...change.set };
   if ("restart" in change) {
     const redirectUrl = change.restart;
-    return stored.client && stored.redirectUrl === redirectUrl ? { client: stored.client, tokens: stored.tokens, redirectUrl } : { redirectUrl };
+    // The tokens stay in use, and with them their grant.
+    return stored.client && stored.redirectUrl === redirectUrl
+      ? { client: stored.client, tokens: stored.tokens, grant: stored.grant, redirectUrl }
+      : { redirectUrl };
   }
   if ("clear" in change) {
     if (change.clear === "all") return {};
@@ -55,9 +68,20 @@ export function applyAuthChange(stored: McpAuthRecord, change: McpAuthChange): M
     for (const key of change.clear) delete record[key];
     return record;
   }
+  if ("setTokensIf" in change) {
+    const { grant, tokens } = change.setTokensIf;
+    return stored.tokens && stored.grant === grant ? { ...stored, tokens } : stored;
+  }
   const { tokens, ...rest } = stored;
   return sameTokens(tokens, change.clearTokensIf) ? rest : stored;
 }
+
+/**
+ * A connection's next request, when the user signed in again since it opened: it was not sent, and a fresh connection
+ * sends it with the new sign-in (the hub retries what is not an McpFailure once, and worker/mcp/connect.ts lets this
+ * through as it is).
+ */
+export class SignInReplaced extends Error {}
 
 /** The callback path the authorization server sends the browser back to. */
 export const OAUTH_CALLBACK_PATH = "/api/mcp/oauth/callback";
@@ -93,6 +117,11 @@ export class McpOAuthClient implements OAuthClientProvider {
   readonly #newSignIn: boolean;
   /** The tokens this client last read or saved: the ones a failed refresh was about. */
   #readTokens: OAuthTokens | undefined;
+  /**
+   * The grant this client uses, from the first tokens it read: its refreshes save only into that grant. A connection
+   * open across a new sign-in fails its next request (not as a sign-in), and the hub connects afresh with the new grant.
+   */
+  #bound: { grant: string | undefined } | undefined;
 
   /** `newSignIn`: act as if no tokens were stored, so the SDK asks the user to sign in instead of reusing them. */
   constructor(store: McpAuthStore, server: string, options: { redirectUrl: string; interactive: boolean; newSignIn?: boolean }) {
@@ -133,13 +162,28 @@ export class McpOAuthClient implements OAuthClientProvider {
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    this.#readTokens = this.#newSignIn ? undefined : (await this.#store.get()).tokens;
-    return this.#readTokens;
+    if (this.#newSignIn) return (this.#readTokens = undefined);
+    const { tokens, grant } = await this.#store.get();
+    if (tokens) {
+      this.#bound ??= { grant };
+      if (this.#bound.grant !== grant) throw new SignInReplaced(`Signed in to ${this.#server} again since this connection opened.`);
+    }
+    this.#readTokens = tokens;
+    return tokens;
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     this.#readTokens = tokens;
-    await this.#store.update({ set: { tokens } });
+    if (this.#bound) {
+      // A refresh: into the grant it refreshed, if that is still the one stored.
+      await this.#store.update({ setTokensIf: { grant: this.#bound.grant, tokens } });
+    } else if (this.#interactive) {
+      // The code exchange of a sign-in: a new grant.
+      const grant = randomHex(16);
+      this.#bound = { grant };
+      await this.#store.update({ set: { tokens, grant } });
+    }
+    // Otherwise tokens this client never read a grant for: nothing to save them into.
   }
 
   redirectToAuthorization(url: URL): void {

@@ -5,6 +5,7 @@ import { Icon } from "../Icon.tsx";
 import { useDismiss } from "../layout.tsx";
 import { Compact, useLongPress } from "./gestures.ts";
 import { EmojiRow, type MessageReactions } from "./Reactions.tsx";
+import { BranchOff, EntryOf } from "./ChatKinds.tsx";
 
 /**
  * Put a message on the clipboard as rich text, as it shows (`html`), and as plain text (`text`, Markdown for the agent's
@@ -39,6 +40,7 @@ const ICONS = {
   more: <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth={2.4} />,
   markdown: <path d="M2.5 4.5h11v7h-11ZM4.5 9.5v-3l1.5 2 1.5-2v3M10.5 6.5v3M9.3 8.3l1.2 1.2 1.2-1.2" />,
   select: <path d="M3.5 3.5h9M3.5 6.5h9M3.5 9.5h5M11 9v4.5M9.5 13.5h3M9.5 9h3" />,
+  branch: <path d="M5 2.5v11M5 9.5c0-3 6-2 6-5.5M11 2.5v2" />,
 };
 
 function ActionIcon({ name }: { name: keyof typeof ICONS }) {
@@ -112,6 +114,9 @@ export function MessageActions({
     reactions?.toggle(emoji);
   };
   const copyLabel = copied === "yes" ? "Copied" : copied === "failed" ? "Could not copy" : "Copy";
+  // A message in the transcript (not one streaming in) can start a branch: a new chat carrying the conversation up to it.
+  const branchOff = useContext(BranchOff);
+  const entry = useContext(EntryOf);
   // What "…" holds, and the long-press menu with "Select text" too.
   const actions: MenuAction[] = [
     ...(onReply ? [{ icon: "reply", label: "Reply", run: onReply } as const] : []),
@@ -121,6 +126,7 @@ export function MessageActions({
           { icon: "markdown", label: "Copy as Markdown", run: () => copy(true) },
         ] as const)
       : []),
+    ...(branchOff && entry !== undefined ? [{ icon: "branch", label: "Branch off from here", run: () => branchOff(entry) } as const] : []),
   ];
   const status = copied && <span role="status">{copyLabel}</span>;
   if (compact) {

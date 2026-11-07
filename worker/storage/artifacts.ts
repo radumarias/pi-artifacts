@@ -10,6 +10,8 @@ const META_FILE = "artifact.json";
 const PUBLISH_TOKEN_TTL_S = 300;
 /** How long a read token for `git clone` lives. */
 const CLONE_TOKEN_TTL_S = 900;
+/** The longest a version's message is kept: its first line, cut to this. */
+export const MAX_VERSION_MESSAGE = 200;
 
 const repoName = (id: string) => `artifact-${id}`;
 const tagFor = (version: number) => `v${version}`;
@@ -121,7 +123,7 @@ export class ArtifactStore {
 
   /** Commit `version` after the ones `meta` has, push it, and cache it. Its message is cut to its first line. */
   async #addVersion(before: ArtifactMeta, title: string, version: ArtifactVersion, html: string, createdToken?: string): Promise<ArtifactMeta> {
-    const message = version.message?.trim().split("\n")[0].slice(0, 200) || undefined;
+    const message = version.message?.trim().split("\n")[0].slice(0, MAX_VERSION_MESSAGE) || undefined;
     const meta: ArtifactMeta = {
       ...before,
       title,

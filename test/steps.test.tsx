@@ -223,6 +223,16 @@ describe("runs of steps", () => {
     expect([1, 3, 5, 6].map((id) => keys(runs.byEntry.get(id)?.get(0)))).toEqual([["p"], ["q"], ["r"], ["s"]]);
   });
 
+  it("ends a run at a drafted agent's card", () => {
+    const chat = [
+      assistant(1, [call("p", "agent_propose", {})]),
+      result(2, "p", { toolName: "agent_propose", details: { agentId: "a".repeat(16), name: "research", version: 1 } }),
+      assistant(3, [call("q", "run_bash", {})]),
+    ] as never;
+    const runs = stepRuns(chat, new Set());
+    expect([1, 3].map((id) => keys(runs.byEntry.get(id)?.get(0)))).toEqual([["p"], ["q"]]);
+  });
+
   it("joins a streaming reply's first steps to the run before it", () => {
     const chat = [assistant(1, [call("a", "run_bash", {})]), result(2, "a")] as never;
     const runs = stepRuns(chat, new Set());

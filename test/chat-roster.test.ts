@@ -86,6 +86,7 @@ describe("ChatRoster: its agents", () => {
       job: "Helps with bob.",
       mirrored: -1,
       off: false,
+      shared: false,
     };
     expect(roster.get("id-bob")).toEqual(entry);
     expect(roster.list()).toEqual([entry]);
@@ -720,11 +721,44 @@ describe("ChatRoster: what everyone sees", () => {
         return names[uid];
       }),
     ).toStrictEqual([
-      { id: "id-bob", name: "bob", avatar: "B", color: "green", job: "Helps with bob.", ownerUid: "owner", ownerName: "Olga", busy: true, queued: 1 },
+      {
+        ...{ id: "id-bob", name: "bob", avatar: "B", color: "green", job: "Helps with bob.", ownerUid: "owner", ownerName: "Olga" },
+        ...{ busy: true, running: { turn: 1, calledBy: ann, hop: 0, elapsedMs: 0 }, queued: 1, next: { calledBy: ann, hop: 0 } },
+      },
       { id: "id-carol", name: "carol", avatar: "C", color: "blue", job: "Helps with carol.", ownerUid: "ann", ownerName: "Ann", off: true },
-      { id: "id-dave", name: "dave", avatar: "B", color: "blue", job: "Helps with dave.", ownerUid: "ann", ownerName: "Ann", queued: 2 },
+      { id: "id-dave", name: "dave", avatar: "B", color: "blue", job: "Helps with dave.", ownerUid: "ann", ownerName: "Ann", queued: 2, next: { calledBy: ann, hop: 0 } },
     ]);
     expect(asked.sort()).toEqual(["ann", "ann", "owner"]);
+  });
+
+  it("says how long the running turn has gone, and who gave the oldest waiting turn and its hop", () => {
+    const { roster, clock } = withAgents("bob");
+    const first = started(roster, ask("id-bob"));
+    roster.enqueue(ask("id-bob", { calledBy: { name: "research", agentId: "id-research" }, hop: 2, byOwner: false }));
+    roster.enqueue(ask("id-bob", { calledBy: bea }));
+    clock.now += 6_500;
+    const [view] = roster.views(() => "Olga");
+    expect(view.running).toEqual({ turn: first.id, calledBy: ann, hop: 0, elapsedMs: 6_500 });
+    expect(view).toMatchObject({ busy: true, queued: 2, next: { calledBy: { name: "research", agentId: "id-research" }, hop: 2 } });
+    expect(view).not.toHaveProperty("ended");
+    roster.end(first.id, "done");
+    const [after] = roster.views(() => "Olga");
+    expect(after).not.toHaveProperty("running");
+    expect(after.next?.hop).toBe(2);
+    // Its latest ended turn, and how it ended: the chat says a stopped turn stopped, as it posts no reply.
+    expect(after.ended).toEqual({ turn: first.id, status: "done" });
+    const stopped = roster.stopAll("id-bob");
+    expect(roster.views(() => "Olga")[0].ended).toEqual({ turn: Math.max(...stopped.map((turn) => turn.id)), status: "stopped" });
+  });
+
+  it("names each running turn's session, for the sockets to follow", () => {
+    const { roster } = withAgents("bob", "carol");
+    expect(roster.runningSessions()).toEqual([]);
+    const bobs = started(roster, ask("id-bob"));
+    roster.enqueue(ask("id-carol"));
+    expect(roster.runningSessions()).toEqual([{ agentId: "id-bob", session: "session-bob", turn: bobs.id }]);
+    roster.remove("id-bob");
+    expect(roster.runningSessions()).toEqual([]);
   });
 
   it("shows a renamed agent under its new name, and nothing for an empty roster", () => {

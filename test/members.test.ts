@@ -110,7 +110,7 @@ describe("the owner's second seat", () => {
     const members = new ChatMembers(memorySql());
     const seat = secondSeat(ann);
     expect(seat).toEqual({ uid: secondSeatUid("ann"), name: "ann@example.com (2)" });
-    expect(members.add(seat, T0)).toBeNull();
+    expect(members.add(seat, "seat", T0)).toBeNull();
     expect(members.list()).toEqual([seat]);
     expect(members.invites(T0)).toEqual([]);
     expect(members.remove(seat.uid)).toEqual(seat);
@@ -119,8 +119,8 @@ describe("the owner's second seat", () => {
 
   it("counts toward the members a chat can have", async () => {
     const members = new ChatMembers(memorySql());
-    for (let i = 0; i < 20; i++) expect(members.add({ uid: `m${i}`, name: `m${i}` }, T0 + i)).toBeNull();
-    expect(members.add(secondSeat(ann), T0 + 20)).toEqual({ error: expect.stringContaining("the most there can be") });
+    for (let i = 0; i < 20; i++) expect(members.add({ uid: `m${i}`, name: `m${i}` }, "added", T0 + i)).toBeNull();
+    expect(members.add(secondSeat(ann), "seat", T0 + 20)).toEqual({ error: expect.stringContaining("the most there can be") });
   });
 
   it("has a uid that is a valid uid and never anyone's own", () => {

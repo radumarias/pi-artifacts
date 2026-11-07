@@ -31,6 +31,8 @@
     "src/chat/history.ts",
     "src/chat/reveal.ts",
     "scripts/prices.ts",
+    "scripts/vapid-keys.ts",
+    "worker/push",
     "src/api.ts",
     "src/chat/Markdown.tsx",
     "src/chat/Thinking.tsx",
@@ -39,6 +41,9 @@
     "src/chat/gestures.ts",
     "src/chat/Steps.tsx",
     "src/chat/stepRuns.ts",
+    "src/chat/agentLines.ts",
+    "src/chat/Fold.tsx",
+    "src/chat/phrase.ts",
     "src/chat/Linkified.tsx",
     "src/files/highlight.ts",
     "src/files/preview.ts",
@@ -67,6 +72,10 @@
     "worker/artifacts/manifest.ts",
     "worker/auth/access.ts",
     "worker/members.ts",
+    "worker/chat-kind.ts",
+    "worker/chat-rows.ts",
+    "worker/branch.ts",
+    "src/chat/chat-order.ts",
     "worker/reactions.ts",
     "worker/queue.ts",
     "worker/chat-status.ts",
@@ -104,6 +113,8 @@
     "worker/artifacts/page-calls.ts",
     "worker/artifacts/page-features.ts",
     "worker/dictation.ts",
-    "src/chat/dictation-engine.ts"
+    "src/chat/dictation-engine.ts",
+    "src/agents/glance.ts",
+    "src/agents/nav.ts"
   ]
 }

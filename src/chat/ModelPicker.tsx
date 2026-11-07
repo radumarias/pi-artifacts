@@ -104,6 +104,7 @@ const AUTO_HINT = "Picks the model and effort for each message";
 /** A row of the list: a model, or Auto. */
 type Option = ModelInfo | AutoOption;
 const isAutoOption = (option: Option): option is AutoOption => option.id === AUTO_MODEL;
+const DEFAULT_AUTO = { ...AUTO_OPTION, hint: AUTO_HINT };
 
 /** One section of the list: Auto, favorites, recent picks, or a provider's models. Only a provider's opens and closes. */
 interface Section {
@@ -126,6 +127,11 @@ interface Props {
   attachingImages?: boolean;
   /** Ask for a model and effort; the chat answers with the effort the model takes, through its agent state. */
   onChange: (model: string, thinkingLevel?: ModelThinkingLevel) => void;
+  /**
+   * What Auto stands for where it is not the router (an agent's editor: the model of the chat it answers in), by name
+   * and with a line under it. `model` is then AUTO_MODEL while it is picked, with no model it last answered with.
+   */
+  autoLabel?: { name: string; hint: string };
 }
 
 /**
@@ -133,7 +139,7 @@ interface Props {
  * which its menu also sets. On Auto, "Auto" and the model it last picked. Memoized: the chat re-renders on every
  * streamed token.
  */
-export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, auto = false, disabled, attachingImages, onChange }: Props) {
+export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, auto = false, disabled, attachingImages, onChange, autoLabel }: Props) {
   const catalog = useCatalog();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -142,6 +148,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, aut
     setOpen(false);
     trigger.current?.focus();
   }, []);
+  const autoOption = useMemo(() => (autoLabel ? { ...AUTO_OPTION, ...autoLabel } : DEFAULT_AUTO), [autoLabel]);
   // A trigger turned off (the chat lost its socket) closes the menu: its picks would go nowhere.
   useEffect(() => {
     if (disabled) setOpen(false);
@@ -166,8 +173,9 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, aut
   const name = current?.name ?? model;
   const effort = efforts.length ? thinkingLevel : undefined;
   const full = current ? `${current.name} (${providerLabel(current.provider)})` : model;
-  // On Auto: the model, and effort, its last message was answered with.
+  // On Auto: the model, and effort, its last message was answered with; none where Auto is not the router.
   const last = choiceLabel(current, model, effort);
+  const lastPick = !autoLabel || model !== AUTO_MODEL;
   return (
     <div className="model-picker">
       <button
@@ -177,14 +185,14 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, aut
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={auto ? `Model: Auto, last ${last}` : effort ? `Model: ${name}, ${effortLabel(effort).toLowerCase()}` : `Model: ${name}`}
-        title={auto ? `Auto: ${AUTO_HINT.toLowerCase()}. Last: ${last}` : effort ? `${full} · ${effortLabel(effort)}` : full}
+        aria-label={auto ? `Model: ${autoOption.name}${lastPick ? `, last ${last}` : ""}` : effort ? `Model: ${name}, ${effortLabel(effort).toLowerCase()}` : `Model: ${name}`}
+        title={auto ? `${autoOption.name}: ${autoOption.hint.toLowerCase()}${lastPick ? `. Last: ${last}` : ""}` : effort ? `${full} · ${effortLabel(effort)}` : full}
         onClick={() => setOpen(!open)}
       >
         {/* A deployment's default can be a model the picker does not list. */}
-        <span className="model-trigger-name">{auto ? AUTO_OPTION.name : name}</span>
+        <span className="model-trigger-name">{auto ? autoOption.name : name}</span>
         {auto ? (
-          <span className="model-trigger-effort model-trigger-pick">{name}</span>
+          lastPick && <span className="model-trigger-effort model-trigger-pick">{name}</span>
         ) : (
           effort && <span className="model-trigger-effort">{EFFORT_LABELS[effort]}</span>
         )}
@@ -199,6 +207,7 @@ export const ModelPicker = memo(function ModelPicker({ model, thinkingLevel, aut
           onEffort={(level) => level !== thinkingLevel && onChange(model, level)}
           onClose={close}
           trigger={trigger}
+          autoOption={autoOption}
         />
       )}
       {!auto && current && !current.images && attachingImages && (
@@ -249,6 +258,7 @@ function ModelMenu({
   onEffort,
   onClose,
   trigger,
+  autoOption,
 }: {
   catalog: ModelCatalog;
   current: string;
@@ -258,6 +268,7 @@ function ModelMenu({
   onEffort: (level: ModelThinkingLevel) => void;
   onClose: () => void;
   trigger: RefObject<HTMLButtonElement | null>;
+  autoOption: AutoOption & { hint: string };
 }) {
   const id = useId();
   const [query, setQuery] = useState("");
@@ -299,8 +310,10 @@ function ModelMenu({
         open: !foldable || openGroups.includes(provider),
       }),
     );
-    const autoSection: Section = { key: "auto", models: [AUTO_OPTION], foldable: false, open: true };
-    if (words.length) return [...(words.every((word) => "auto".startsWith(word)) ? [autoSection] : []), ...groups.filter((group) => group.models.length)];
+    const autoSection: Section = { key: "auto", models: [autoOption], foldable: false, open: true };
+    // Each word starts a word of its name, as "au" finds Auto.
+    const autoWords = autoOption.name.toLowerCase().split(/\s+/);
+    if (words.length) return [...(words.every((word) => autoWords.some((each) => each.startsWith(word))) ? [autoSection] : []), ...groups.filter((group) => group.models.length)];
     const pinned = favorites.flatMap((key) => byId.get(key) ?? []);
     const lately = recent.filter((key) => !favorites.includes(key)).flatMap((key) => byId.get(key) ?? []);
     return [
@@ -309,7 +322,7 @@ function ModelMenu({
       ...(lately.length ? [{ key: "recent", label: "Recent", models: lately, foldable: false, open: true }] : []),
       ...groups,
     ];
-  }, [byId, byProvider, query, favorites, recent, openGroups]);
+  }, [byId, byProvider, query, favorites, recent, openGroups, autoOption]);
 
   // What the arrow keys move through: the models of every open section, in order; and each row's place among them.
   const { options, indexOf } = useMemo(() => {
@@ -425,7 +438,7 @@ function ModelMenu({
       </label>
       <div className="model-list" id={`${id}-list`} role="listbox" aria-label="Models" ref={list}>
         {sections.map((section) => (
-          <div key={section.key} role="group" aria-label={section.label ?? AUTO_OPTION.name} className="model-section">
+          <div key={section.key} role="group" aria-label={section.label ?? autoOption.name} className="model-section">
             {section.label === undefined ? null : section.foldable ? (
               <button type="button" className="model-group" aria-expanded={section.open} tabIndex={-1} onClick={() => toggleGroup(section)}>
                 <Icon size={14} stroke={2}>
@@ -459,7 +472,7 @@ function ModelMenu({
                     <span className="model-option-text">
                       <span className="model-option-name">{model.name}</span>
                       {auto ? (
-                        <small>{AUTO_HINT}</small>
+                        <small>{autoOption.hint}</small>
                       ) : (
                         <small
                           title={

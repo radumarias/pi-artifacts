@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { MentionNotice } from "../../shared/protocol.ts";
 import { Icon } from "../Icon.tsx";
 import { useStoredState } from "../layout.tsx";
-import { useVisible } from "../sidebar.ts";
+import { enablePush, pushAvailable, showNotification } from "../push.ts";
+import { useLatest, useVisible } from "../sidebar.ts";
 
 /** How long a tag shows in the app once the window is in view. */
 const TOAST_MS = 8_000;
@@ -24,8 +25,12 @@ const permissionStore = (() => {
   const set = (next: Permission) => {
     if (next === current) return;
     current = next;
+    // Allowed: this browser also gets pushes while the app is closed (src/push.ts).
+    if (next === "granted") void enablePush();
     for (const listener of listeners) listener();
   };
+  // Allowed before: the subscription is renewed (a new key, or one the browser dropped).
+  if (current === "granted") void enablePush();
   if (supported) {
     navigator.permissions
       ?.query({ name: "notifications" })
@@ -59,7 +64,10 @@ function useNotificationPermission(): [Permission, () => void] {
 export function useMentionNotices(chatId: string | undefined, navigate: (path: string) => void) {
   const [toasts, setToasts] = useState<MentionNotice[]>([]);
   const visible = useVisible();
-  const dismiss = useCallback((notice: MentionNotice) => setToasts((list) => list.filter((t) => t.chatId !== notice.chatId || t.at !== notice.at)), []);
+  const dismiss = useCallback(
+    (notice: MentionNotice) => setToasts((list) => list.filter((t) => t.chatId !== notice.chatId || t.at !== notice.at)),
+    [],
+  );
   /** Go to the chat a notice is from. */
   const open = useCallback(
     (notice: MentionNotice) => {
@@ -76,19 +84,12 @@ export function useMentionNotices(chatId: string | undefined, navigate: (path: s
       if (visible && notice.chatId === chatId) return;
       setToasts((list) => [...list.filter((t) => !(t.chatId === notice.chatId && t.at === notice.at)), notice].slice(-MAX_TOASTS));
       if (focused || !supported || Notification.permission !== "granted") return;
-      try {
-        const shown = new Notification(`${notice.from} mentioned you`, {
-          body: [notice.title, notice.text].filter(Boolean).join("\n"),
-          tag: `mention:${notice.chatId}:${notice.at}`,
-        });
-        shown.onclick = () => {
-          window.focus();
-          open(notice);
-          shown.close();
-        };
-      } catch {
-        // Some browsers (Android Chrome) show notifications only from a service worker: the app's own notice stays.
-      }
+      void showNotification(`${notice.from} ${notice.added ? "added you to a chat" : "mentioned you"}`, {
+        body: [notice.title, notice.text].filter(Boolean).join("\n"),
+        tag: `mention:${notice.chatId}:${notice.at}`,
+        url: `/c/${notice.chatId}`,
+        onClick: () => open(notice),
+      });
     },
     [chatId, visible, open],
   );
@@ -108,14 +109,26 @@ export function useMentionNotices(chatId: string | undefined, navigate: (path: s
 
 /**
  * The tags of the user, in a corner of the app: a click opens the chat. Above them, while the browser has not been
- * answered and the user has a shared chat (`asking`), a card asks to show tags as the system's notifications, so one
- * reaches them in another tab or app; "Not now" puts it off for a few days.
+ * answered and something could need the user while they are away (`asking`: tags in a shared chat, a sign-in that
+ * scheduled runs use), a card asks to show those as the system's notifications, so one reaches them in another tab or
+ * app, and with push while the app is closed; "Not now" puts it off for a few days.
  */
-export function MentionToasts({ toasts, dismiss, open, asking }: ReturnType<typeof useMentionNotices> & { asking: boolean }) {
+export function MentionToasts({
+  toasts,
+  dismiss,
+  open,
+  asking,
+}: ReturnType<typeof useMentionNotices> & { asking: { mentions: boolean; signIns: boolean } }) {
   const [permission, ask] = useNotificationPermission();
   const [askedAt, setAskedAt] = useStoredState<number>("notify.notNowAt", 0, (value): value is number => typeof value === "number");
   const [now] = useState(Date.now);
-  const askCard = asking && permission === "default" && now - askedAt > ASK_AGAIN_MS;
+  const askCard = (asking.mentions || asking.signIns) && permission === "default" && now - askedAt > ASK_AGAIN_MS;
+  // Asked only while the card shows: whether a notice also reaches the user while the app is closed.
+  const [push, loadPush] = useLatest(pushAvailable, false);
+  useEffect(() => {
+    if (askCard) loadPush();
+  }, [askCard, loadPush]);
+  const about = [asking.mentions && "someone mentions you", asking.signIns && "a sign-in needs you"].filter(Boolean).join(" or ");
   if (toasts.length === 0 && !askCard) return null;
   return (
     <div className="toasts">
@@ -123,8 +136,8 @@ export function MentionToasts({ toasts, dismiss, open, asking }: ReturnType<type
         <div className="toast notify-ask">
           <BellIcon />
           <div className="toast-body">
-            <strong>Get notified when someone mentions you</strong>
-            <span className="toast-text">Your browser shows it even while you are in another tab or app.</span>
+            <strong>Get notified when {about}</strong>
+            <span className="toast-text">Your browser shows it even while you are in another tab or app{push && ", or the app is closed"}.</span>
             <div className="notify-ask-actions">
               <button type="button" className="primary" onClick={ask}>
                 Turn on notifications
@@ -145,7 +158,7 @@ export function MentionToasts({ toasts, dismiss, open, asking }: ReturnType<type
                 <span className="toast-at" aria-hidden="true">
                   @
                 </span>
-                {notice.from} mentioned you
+                {notice.from} {notice.added ? "added you to a chat" : "mentioned you"}
               </strong>
               {notice.title && <small>{notice.title}</small>}
               {notice.text && <span className="toast-text">{notice.text}</span>}

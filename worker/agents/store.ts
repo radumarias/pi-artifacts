@@ -1,16 +1,20 @@
 import {
+  AGENT_ID_PATTERN,
   AgentError,
   checkAgent,
+  copyName,
   defaultAvatar,
   defaultColor,
   MAX_AGENT_PROPOSALS,
   MAX_AGENTS,
+  type AgentChanges,
   type AgentDefinition,
   type AgentInput,
   type AgentOrigin,
   type AgentResult,
 } from "../../shared/agents.ts";
-import { randomHex } from "../../shared/util.ts";
+import type { ExportedAgent } from "../../shared/data-export.ts";
+import { isObject, randomHex } from "../../shared/util.ts";
 import type { Sql } from "../members.ts";
 
 type AgentRow = {
@@ -68,6 +72,9 @@ export class AgentStore {
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, definition TEXT NOT NULL, origin TEXT NOT NULL, enabled INTEGER NOT NULL,
         version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, copied_from TEXT
+      );
+      CREATE TABLE IF NOT EXISTS agent_chats (
+        agent_id TEXT NOT NULL, chat_id TEXT NOT NULL, shared INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (agent_id, chat_id)
       );
     `);
   }
@@ -161,8 +168,9 @@ export class AgentStore {
     }
     if (existing.enabled === enabled) return existing;
     const now = Math.max(this.#now(), existing.updatedAt + 1);
+    // Turning it on confirms what the user saw of it: nothing shows as Assumed any more.
     this.#sql.exec(
-      `UPDATE agents SET enabled = ?, ${enabled ? "origin = 'user', " : ""}version = version + 1, updated_at = ? WHERE id = ?`,
+      `UPDATE agents SET enabled = ?, ${enabled ? "origin = 'user', definition = json_remove(definition, '$.assumed'), " : ""}version = version + 1, updated_at = ? WHERE id = ?`,
       enabled ? 1 : 0,
       now,
       id,
@@ -170,9 +178,72 @@ export class AgentStore {
     return this.get(id)!;
   }
 
-  /** Delete an agent; null when it was there. */
+  /** Delete an agent, and what the index says of the chats it is in; null when it was there. */
   delete(id: string): { error: string } | null {
     if (this.#sql.exec("DELETE FROM agents WHERE id = ?", id).rowsWritten === 0) return { error: "No such agent." };
+    this.#sql.exec("DELETE FROM agent_chats WHERE agent_id = ?", id);
     return null;
+  }
+
+  /**
+   * Save someone's own copy of an agent another person shared (`copiedFrom`), turned off, as their draft: under its
+   * name, or the first free "name-2"… when they have an agent of that name.
+   */
+  saveCopy(input: AgentChanges, copiedFrom: NonNullable<AgentDefinition["copiedFrom"]>): AgentResult {
+    const name = copyName(String(input.name ?? "").toLowerCase(), (candidate) => this.byName(candidate) !== null);
+    if (!name) return { error: `You have many agents named like "${input.name}"; rename one first.` };
+    return this.save({ ...input, name }, "user", false, { copiedFrom });
+  }
+
+  /**
+   * Bring in an agent from an export: under its own id when that is free, else a new one. Never over one of the
+   * user's: one they have by that name is kept, and its id returned with `skipped`, so a chat's roster can point at it.
+   */
+  import(agent: ExportedAgent): { id: string; skipped?: true } | { error: string } {
+    const named = this.byName(String(agent.name ?? ""));
+    if (named) return { id: named.id, skipped: true };
+    const from = agent.copiedFrom;
+    const copiedFrom =
+      isObject(from) && typeof from.owner === "string" && typeof from.id === "string" && typeof from.version === "number"
+        ? { owner: from.owner, id: from.id, version: from.version }
+        : undefined;
+    const fresh = this.save(agent, agent.origin === "agent" ? "agent" : "user", agent.enabled === true, { copiedFrom });
+    if ("error" in fresh) return fresh;
+    const id = typeof agent.id === "string" && AGENT_ID_PATTERN.test(agent.id) && !this.get(agent.id) ? agent.id : fresh.id;
+    if (id !== fresh.id) this.#sql.exec("UPDATE agents SET id = ? WHERE id = ?", id, fresh.id);
+    return { id };
+  }
+
+  /**
+   * A chat added the agent (`inChat`), or took it out: the index "used in M chats" and the delete's confirm read. The
+   * chat object writes it, as its roster changes.
+   */
+  noteChat(agentId: string, chatId: string, inChat: boolean, shared = false): void {
+    if (!inChat) {
+      this.#sql.exec("DELETE FROM agent_chats WHERE agent_id = ? AND chat_id = ?", agentId, chatId);
+      return;
+    }
+    // Only for an agent that is here: a chat that adds one deleted meanwhile leaves no row behind.
+    this.#sql.exec(
+      `INSERT INTO agent_chats (agent_id, chat_id, shared) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM agents WHERE id = ?)
+       ON CONFLICT (agent_id, chat_id) DO UPDATE SET shared = excluded.shared`,
+      agentId,
+      chatId,
+      shared ? 1 : 0,
+      agentId,
+    );
+  }
+
+  /** The chats an agent is in, by id, with whether it is shared in each. */
+  chatsOf(agentId: string): { chatId: string; shared: boolean }[] {
+    return this.#sql
+      .exec("SELECT chat_id, shared FROM agent_chats WHERE agent_id = ? ORDER BY chat_id", agentId)
+      .toArray()
+      .map((row) => ({ chatId: row.chat_id as string, shared: row.shared === 1 }));
+  }
+
+  /** A deleted chat holds no agent any more. */
+  forgetChat(chatId: string): void {
+    this.#sql.exec("DELETE FROM agent_chats WHERE chat_id = ?", chatId);
   }
 }

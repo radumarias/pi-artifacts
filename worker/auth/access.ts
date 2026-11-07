@@ -4,7 +4,7 @@
  * the signature against the team's published keys, plus issuer, audience and
  * expiry, before trusting who the user is.
  */
-import { fromBase64 } from "../../shared/util.ts";
+import { tryFromBase64url } from "../../shared/util.ts";
 
 export interface AccessClaims {
   /** Stable id of the user within the Access organization. */
@@ -111,11 +111,8 @@ function decodeJson(segment: string): unknown {
 }
 
 function base64UrlDecode(segment: string): Uint8Array<ArrayBuffer> {
-  const base64 = segment.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(segment.length / 4) * 4, "=");
-  try {
-    return fromBase64(base64);
-  } catch {
-    // atob's own error would make a garbled token a 500 instead of a rejected sign-in.
-    throw new AccessError("Malformed token.");
-  }
+  // A garbled token is a rejected sign-in, not a 500.
+  const bytes = tryFromBase64url(segment);
+  if (!bytes) throw new AccessError("Malformed token.");
+  return bytes;
 }

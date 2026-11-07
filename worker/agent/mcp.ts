@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
+import { itemsOf, type McpResultDetails } from "../../shared/items.ts";
 import { isReadOnly, MCP_DISCOVER_TOOL, MCP_TOOL_SEPARATOR, type ToolInfo } from "../../shared/protocol.ts";
 import type { McpHub } from "../mcp/hub.ts";
 import { clip, text } from "./output.ts";
@@ -68,9 +69,15 @@ export function mcpExtension(
           execute: async (args) => {
             const result = await hub.call(server, tool.name, args);
             const payload = result.payload ?? result.content;
+            // The records it holds, for the chips under the reply built on it (shared/items.ts): taken here, from what
+            // the server returned, never from what the model writes. The model does not read details.
+            const items = itemsOf(server, payload);
             // Compact JSON: the result stays in the conversation, which every later call sends again, and indenting
             // a table of rows adds a token or so per field.
-            return { output: text(clip(typeof payload === "string" ? payload : JSON.stringify(payload))) };
+            return {
+              output: text(clip(typeof payload === "string" ? payload : JSON.stringify(payload))),
+              ...(items.length && { details: { items } satisfies McpResultDetails }),
+            };
           },
         }),
       );

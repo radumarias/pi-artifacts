@@ -123,7 +123,10 @@ refresh. There is nothing specific to any one server:
 Where things live and who can use them:
 
 - **Tokens are per user,** in your `UserDirectory` Durable Object, which only requests carrying your verified identity
-  reach. All your chats share them.
+  reach. All your chats share them. Each record is encrypted with AES-GCM under a key of your own, derived from
+  `MCP_TOKENS_KEY` (or, without it, from `FILES_MASTER_KEY` under a label of its own) with your uid, and bound to the
+  server's name (`worker/mcp/sealed.ts`). A copy of the storage alone reads nothing. Records stored before this are
+  sealed the first time they are read.
 - **When a sign-in lapses,** the SDK refreshes it. If it can't, calls fail with `auth_required`, and the message
   carries the sign-in link.
 - **Two chats refreshing at once don't undo each other.** Each change to the stored record (new tokens, a cleared
@@ -135,15 +138,50 @@ Where things live and who can use them:
   tools out for them. Claude's artifacts instead use each viewer's own connectors.
 - **Removing a server** from the list also removes everyone's stored sign-in for it, tokens included. This happens the
   next time each user's directory loads.
-- **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then. To end the portal's own session, sign out on the portal's home
-  page.
+- **Signing out:** a new sign-in replaces your tokens once it finishes; starting one (anyone can link to the sign-in route) changes nothing until then.
+  **Sign-ins** in the account menu lists each such server with when you signed in, and **Disconnect** deletes the
+  stored record, tokens and registration. To end the portal's own session, sign out on the portal's home page.
 
 `test/mcp-oauth.test.ts` runs the whole flow against a stand-in portal:
 - a sign-in;
 - two users kept apart;
 - a forged `state` refused;
 - refresh on expiry;
-- `auth_required` when refresh fails, leaving an open sign-in untouched.
+- `auth_required` when refresh fails, leaving an open sign-in untouched;
+- the check before a scheduled run: `ok` after a refresh, `needs_sign_in` when the refresh is refused, `unavailable`
+  when the server does not answer.
+
+### Sign-ins with nobody present
+
+An agent's scheduled runs use your sign-ins while you are away (`worker/mcp/background.ts`, `worker/mcp/sign-ins.ts`):
+
+- **Before a run** the app refreshes each sign-in it needs (`UserDirectory.checkSignIns`): per server `ok`,
+  `needs_sign_in` or `unavailable`. A run with `needs_sign_in` does not start. You get a notice with the sign-in link in
+  the sidebar, as a browser notification, and as a push when the app is closed (once until you sign in). After the
+  sign-in callback, each chat with a run waiting hears it (`UserDirectory.onSignedIn` → `ChatAgent.signedIn`), so the
+  run can go again.
+- **How long a sign-in lasts** is not something Access or OAuth says, so the app counts it from the sign-in:
+  `MCP_GRANT_DAYS` (default 30) should match the grant session duration of the portal's Access application. Three days
+  before it ends (a tenth of a grant shorter than 30 days), you get one warning per sign-in. A sign-in a refresh cannot
+  renew ends there: it shows as signed out until you sign in again.
+- **Keep-alive:** sign-ins that runs use are refreshed about once a day, in case the authorization server ends a
+  session idle for 24 hours.
+- **Runs only read:** the helpers for the run code, `readOnlyTools` and `assertReadOnly`, offer a run only the tools a
+  server marks read-only and refuse any other call before it reaches the server.
+- **The refresh token is the real credential:** 2FA protects a new sign-in, not a refresh. Access checks its Allow
+  policy again on every refresh, so removing someone from it ends their runs' access at the next refresh.
+
+### Push notifications
+
+With the VAPID secrets set, the app also reaches people while it is closed (Web Push, `worker/push/`): RFC 8291
+payload encryption and an RFC 8292 VAPID token, with WebCrypto alone. Turning on notifications in the app subscribes
+the browser (a service worker, `public/sw.js`); a push goes out only when none of the user's apps is open, says only
+that something arrived (never its content), and opens the chat when clicked. Its topic (which the push service sees) is
+an HMAC of the notice's tag, not the tag. A subscription the browser replaces while the app is closed is handed to the
+Worker by the service worker. A subscription belongs to the user signed
+in when it was made: signing out ends it, and a browser where another user signs in next gets a new one. Endpoints are taken only at the known push
+services, and ones a push service reports gone are forgotten. Other code sends one with `UserDirectory.push({ title,
+body, url, tag })`. Without the secrets nothing is pushed and the rest works as before.
 
 Locally, `PI_MCP_SERVERS='[…]' pnpm dev` uses another list, for example with a local stand-in portal.
 
@@ -541,8 +579,10 @@ instructions, model and effort, and the MCP servers it may use.
 - **What an agent reads:** before each turn, its session gets one passive write with what was said in the chat since its
   last turn, one labelled message each (`[Ana · person]`, `[research · agent]`, `[Radu · person · your owner]`), its
   further lines indented and anything in it shaped like an owner's label marked as quoted; then the turn's input names
-  who asked and quotes the message. Its tool calls stay in its own session; only its final text is posted to the chat
-  (a `chat.agent` entry, with the pages it published), which pi also reads as context. The pages it publishes and the
+  who asked and quotes the message. While it works, everyone in the chat watches its steps live (the socket follows
+  its session for that turn only: `TurnFilter`, `worker/agents/live.ts`); then its final text is posted to the chat (a
+  `chat.agent` entry, with the pages it published and the records its MCP results held, as chips), which pi also reads
+  as context, and its tool calls stay in its own session. The pages it publishes and the
   files it saves are the chat's, as pi's are: the chat's traces read every session.
 - **Who decides its tools:** a turn its owner asked for may use the agent's servers (`servers`, all when unset). Any
   other turn (a member's message, a hand-off, pi naming it) gets only read-only tools of the servers it may use in
@@ -711,6 +751,14 @@ The project uses Cloudflare's [`cf` CLI](https://developers.cloudflare.com/cf/);
    [How file encryption works](#how-file-encryption-works)). Pass it as a secret:
    `cf deploy --secrets-file secrets.json` with `{"FILES_MASTER_KEY": "…"}`, then delete `secrets.json`. Later deploys
    keep the secret, so they need no `--secrets-file` unless it changes.
+
+   Optional secrets, in the same file:
+   - `MCP_TOKENS_KEY` (`openssl rand -base64 32`): encrypts stored MCP sign-ins. Without it they are encrypted with a
+     key derived from `FILES_MASTER_KEY`. Adding or changing it later makes stored sign-ins unreadable: they are
+     forgotten when next read, and everyone signs in to those servers again.
+   - `PUSH_VAPID_PUBLIC_KEY` and `PUSH_VAPID_PRIVATE_KEY` (from `node --experimental-strip-types scripts/vapid-keys.ts`),
+     and `PUSH_SUBJECT` (a `mailto:` or `https:` contact for the push services): push notifications. Changing the key
+     pair makes each browser subscribe again the next time the app opens.
 6. `pnpm run deploy` (`cf deploy`). This builds the sandbox image with Docker and needs the Workers Paid plan.
 
 A website that links to the app gets a "Back to <hostname>" link at the top of the sidebar, taken from the browser's

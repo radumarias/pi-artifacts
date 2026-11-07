@@ -4,14 +4,29 @@ import { DataDialog, type DataMode } from "./DataDialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { useDismiss } from "./layout.tsx";
 import { SystemPromptDialog, SystemPromptIcon } from "./SystemPrompt.tsx";
+import { KeyIcon, SignInsDialog } from "./SignIns.tsx";
+import { UnreadDot } from "./chat/ChatList.tsx";
+import type { McpSignInView } from "../shared/sign-ins.ts";
 
 /**
  * The sidebar footer: who is signed in, with an initial in a circle, as a button that opens a menu above it. The menu
- * holds the user's own system prompt, export and import of all their data, and Sign out. A long email ends in an ellipsis; its full text is in the button's tooltip.
+ * holds the user's own system prompt, their sign-ins to servers (when the app has servers each user signs in to), export
+ * and import of all their data, and Sign out. A long email ends in an ellipsis; its full text is in the button's tooltip.
  */
-export function AccountMenu({ label, onSignOut }: { label: string; onSignOut: () => void }) {
+export function AccountMenu({
+  label,
+  onSignOut,
+  signIns = [],
+  onSignInsChange = () => {},
+}: {
+  label: string;
+  onSignOut: () => void;
+  signIns?: McpSignInView[];
+  onSignInsChange?: (list: McpSignInView[]) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [listing, setListing] = useState(false);
   const [data, setData] = useState<DataMode | null>(null);
   const box = useDismiss<HTMLElement>(open, setOpen);
   return (
@@ -45,6 +60,19 @@ export function AccountMenu({ label, onSignOut }: { label: string; onSignOut: ()
             <SystemPromptIcon />
             System prompt
           </button>
+          {signIns.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setListing(true);
+              }}
+            >
+              <KeyIcon />
+              Sign-ins
+              {signIns.some((item) => item.notice) && <UnreadDot label="A sign-in needs you" />}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -83,6 +111,7 @@ export function AccountMenu({ label, onSignOut }: { label: string; onSignOut: ()
           </button>
         </div>
       )}
+      {listing && <SignInsDialog list={signIns} onChange={onSignInsChange} onClose={() => setListing(false)} />}
       {data && <DataDialog mode={data} onClose={() => setData(null)} />}
       {editing && (
         <SystemPromptDialog

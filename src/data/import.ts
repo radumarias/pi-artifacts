@@ -5,7 +5,7 @@ import { errorMessage, formatBytes, mapLimit, toBase64 } from "../../shared/util
 import { dataApi, type DraftJson } from "../api.ts";
 import type { Progress } from "./export.ts";
 
-export const KINDS = ["chats", "artifacts", "files", "skills"] as const;
+export const KINDS = ["chats", "artifacts", "files", "skills", "agents"] as const;
 type Kind = (typeof KINDS)[number];
 
 /** What an import did: how many of each kind went in, how many were here already, and what failed, with why. */
@@ -29,7 +29,7 @@ const counts = () => Object.fromEntries(KINDS.map((kind) => [kind, 0])) as Recor
 
 /**
  * Bring an export (shared/data-export.ts) into the signed-in user's account, a piece at a time: settings, skills,
- * files, then each chat followed by its artifacts, then what pages saved. It adds to what is here and never replaces
+ * agents, files, then each chat followed by its artifacts, then what pages saved. It adds to what is here and never replaces
  * anything, so after a failure the same zip is imported again and goes on where it stopped. Only an archive's own
  * failures throw (not an export, damaged); a piece that fails is reported and the rest go on.
  */
@@ -54,7 +54,12 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
 
   const report: ImportReport = { imported: counts(), skipped: counts(), failed: [], settings: [] };
   const fileItems = [...items.values()].filter((item) => item.name.startsWith(FILES));
-  const steps = { done: 0, total: 2 + manifest.account.skills.length + fileItems.length + manifest.chats.length + manifest.artifacts.length };
+  // A damaged entry is left out, as checkManifest checks only that there is a list.
+  const agents = (manifest.account.agents ?? []).filter((agent) => typeof agent === "object" && agent !== null);
+  const steps = {
+    done: 0,
+    total: 2 + manifest.account.skills.length + agents.length + fileItems.length + manifest.chats.length + manifest.artifacts.length,
+  };
   const step = (now: string) => onProgress({ ...steps, now });
   /** Run one step: its failure is reported under `what`, and the import goes on. Whether it went in. */
   const attempt = async (what: string, run: () => Promise<void>): Promise<boolean> => {
@@ -93,6 +98,16 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
     });
   }
 
+  // Before the chats, whose rosters point at them: each one's id here, by its id in the export.
+  const agentIds: Record<string, string> = {};
+  for (const agent of agents) {
+    await attempt(`Agent @${agent.name}`, async () => {
+      const { id, skipped } = await dataApi.importAgent(agent);
+      if (typeof agent.id === "string") agentIds[agent.id] = id;
+      report[skipped ? "skipped" : "imported"].agents++;
+    });
+  }
+
   await mapLimit(fileItems, PARALLEL, (item) => {
     const path = item.name.slice(FILES.length);
     return attempt(path, async () => {
@@ -108,7 +123,7 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
         report.skipped.chats++;
         return;
       }
-      await dataApi.importChatBegin(chat.id, { from: manifest.uid, artifacts: moved });
+      await dataApi.importChatBegin(chat.id, { from: manifest.uid, artifacts: moved, agents: agentIds });
       for (let n = 1; n <= chat.parts; n++) {
         const item = items.get(ARCHIVE.chatPart(chat.id, n));
         if (!item) throw new Error(`the zip lacks part ${n} of it`);

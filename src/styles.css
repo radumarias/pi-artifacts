@@ -214,19 +214,72 @@ body.resizing iframe { pointer-events: none; }
   background: var(--accent); color: var(--accent-text); font-size: 11px; font-weight: 700; line-height: 1;
 }
 .sidebar .nav-unread { flex: none; padding: 0; width: 8px; height: 8px; margin: 0 4px; border-radius: 50%; background: var(--accent); }
-/* A chat in the list, with its delete button: shown on hover or focus, and always on touch screens. */
+/* A chat in the list, with its "…" menu (ChatList.tsx): shown on hover or focus, and always on touch screens. */
 .chat-link { position: relative; display: flex; border-radius: 6px; }
 .chat-link > a { flex: 1; min-width: 0; }
-.chat-link:hover, .chat-link.active, .chat-link:focus-within { background: var(--surface-2); }
+.chat-link:hover, .chat-link.active, .chat-link:focus-within, .chat-link.menu-open { background: var(--surface-2); }
 /* The open chat: marked by a bar in the accent at its start, besides its background. */
 .chat-link.active { box-shadow: inset 3px 0 0 var(--accent); }
 .chat-link:hover > a, .chat-link > a:hover { background: none; }
-.chat-delete { flex: none; display: grid; place-items: center; padding: 0 6px; border: 0; background: none; color: var(--muted); opacity: 0; }
-.chat-link:hover .chat-delete, .chat-delete:focus-visible { opacity: 1; }
-.chat-delete:hover { color: var(--error); }
-@media (hover: none) { .chat-delete { opacity: 1; } }
+.chat-more { flex: none; display: grid; place-items: center; padding: 0 6px; border: 0; background: none; color: var(--muted); opacity: 0; }
+.chat-link:hover .chat-more, .chat-link.menu-open .chat-more, .chat-more:focus-visible { opacity: 1; }
+.chat-more:hover { color: var(--text); }
+@media (hover: none) { .chat-more { opacity: 1; } }
 /* With a mouse, the button shows over the chat's status icon on hover, so the icons line up with the other lists'. */
-@media (hover: hover) { .chat-delete { position: absolute; top: 0; right: 0; bottom: 0; border-radius: 0 6px 6px 0; background: var(--surface-2); } }
+@media (hover: hover) { .chat-more { position: absolute; top: 0; right: 0; bottom: 0; border-radius: 0 6px 6px 0; background: var(--surface-2); } }
+.sidebar nav .nav-pin { flex: none; width: 6px; height: 6px; padding: 0; border-radius: 1px; background: var(--muted); transform: rotate(45deg); }
+.sidebar nav .nav-copied { flex: none; padding: 0; color: var(--accent); font-size: 12px; }
+.chat-rename { flex: 1; min-width: 0; margin: 1px 0; padding: 4px 7px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+/* A small menu under a sidebar row, and under the chat list's order button. */
+.row-menu {
+  position: absolute; top: calc(100% + 2px); right: 0; z-index: 8; display: flex; flex-direction: column; min-width: 160px; padding: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop);
+}
+.row-menu > button { padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); text-align: left; font-size: 14px; }
+.row-menu > button:hover, .row-menu > button:focus-visible { background: var(--surface-2); }
+.row-menu > .danger-item { color: var(--error); }
+.row-menu > label { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 13.5px; cursor: pointer; }
+.row-menu > label:nth-of-type(2) { margin-top: 4px; padding-top: 9px; border-top: 1px solid var(--border); }
+.chats-heading { position: relative; display: flex; align-items: center; gap: 4px; }
+.chats-heading h3 { flex: 1; }
+.chats-order { width: 24px; height: 24px; padding: 0; color: var(--muted); }
+.chat-group + .chat-group { margin-top: 2px; }
+.closed-toggle { width: 100%; margin-top: 6px; padding: 5px 8px; border: 0; border-radius: 6px; background: none; color: var(--muted); text-align: left; font-size: 12.5px; }
+.closed-toggle:hover { background: var(--surface-2); color: var(--text); }
+.chat-group.closed .nav-title { color: var(--muted); }
+/* The chat's kind, beside its title (ChatKinds.tsx), and what its owner changes it with. */
+.kind-chip-box { position: relative; flex: none; }
+.kind-chip {
+  padding: 1px 9px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--muted);
+  font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer;
+}
+.kind-chip:hover, .kind-chip[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
+.kind-chip.kind-group, .kind-chip.kind-page { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); }
+.kind-chip.kind-off_record { border-style: dashed; color: var(--text); }
+.kind-panel {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 9; width: min(340px, calc(100vw - 32px)); padding: 8px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop);
+}
+.kind-choices { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.kind-choice { width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text); text-align: left; }
+.kind-choice:hover, .kind-choice:focus-visible { background: var(--surface-2); }
+.kind-choice.active { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
+.kind-lines { display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; color: var(--muted); }
+.kind-lines strong { color: var(--text); font-size: 14px; }
+.kind-panel > .kind-lines { padding: 4px 6px; }
+.kind-confirm { display: flex; flex-direction: column; gap: 6px; padding: 4px 6px; font-size: 13.5px; }
+.kind-confirm p { margin: 0; color: var(--muted); }
+.kind-loses { margin: 0; padding-left: 18px; }
+.kind-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.kind-panel .form-error { margin: 6px 6px 0; }
+/* Over the composer: someone tagged who is not in the chat. */
+.tag-card { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop); font-size: 14px; }
+.tag-card p { margin: 0; }
+.tag-card .tag-card-note { color: var(--muted); font-size: 13px; }
+.tag-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.tag-card-link { display: flex; gap: 8px; }
+.tag-card-link input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 13px; }
+.chat-notice.branch-line a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .confirm-dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop); }
 .confirm-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
 .confirm-dialog h2 { margin: 0 0 10px; font-size: 20px; }
@@ -364,8 +417,23 @@ body.resizing iframe { pointer-events: none; }
 /* Another agent's badge: its own colour (--tone) and up to three letters. */
 .avatar.agent.toned { background: var(--tone); color: var(--on-tint); font-size: calc(var(--size) * 0.4); letter-spacing: -0.02em; }
 /* Another agent's reply: its byline over its parts, indented like pi's. */
-.agent-reply { display: flex; flex-direction: column; gap: 4px; }
-.agent-reply > :not(.byline) { margin-left: var(--gutter); }
+/* An agent's reply, or one working now: its working line (badge, time, the step's phrase, its own Stop), then its steps as they come. */
+:is(.agent-reply, .agent-live) { display: flex; flex-direction: column; gap: 4px; }
+:is(.agent-reply, .agent-live) > :not(.byline) { margin-left: var(--gutter); }
+.working-line { align-items: center; }
+.working-line .working-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--working); font-variant-numeric: tabular-nums; }
+.working-stop { flex: none; margin-left: 4px; padding: 0 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 12px; line-height: 20px; }
+.working-stop:hover { background: var(--surface-2); }
+/* Who waits for a turn: a dashed line under the agents working, as a hand-off waits. */
+.agent-queue-line { margin-left: var(--gutter); padding: 4px 10px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 13px; }
+/* A long reply folds behind "Show more", fading out at the fold. */
+.fold.folded .fold-body { overflow: hidden; mask-image: linear-gradient(to bottom, #000 75%, transparent); }
+.fold-toggle { margin-top: 2px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; font-weight: 500; cursor: pointer; }
+.fold-toggle:hover { text-decoration: underline; }
+/* The records a reply is built on, each a chip that opens it. */
+.item-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.item-chip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 12.5px; line-height: 20px; text-decoration: none; }
+a.item-chip:hover { border-color: var(--accent); color: var(--accent); }
 /* Whether someone has the chat open: green while they do. On the agent's badge: rust at the top while it works. Its
    ring is the colour of what the badge sits on (--ring). */
 .presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid var(--ring, var(--bg)); border-radius: 50%; background: var(--border); }
@@ -495,6 +563,7 @@ button.reaction:hover { border-color: var(--muted); }
 /* The message a reply answers, at the top of the reply (and over the composer while writing one). */
 .reply-quote { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-bottom: 6px; padding: 2px 8px; border-left: 3px solid var(--tint, var(--muted)); border-radius: 4px; background: color-mix(in srgb, currentColor 7%, transparent); font-size: 13px; white-space: normal; }
 .reply-quote.agent { border-left-color: var(--accent); }
+.reply-quote.agent.toned { border-left-color: var(--tone, var(--accent)); }
 .reply-quote strong { font-weight: 600; }
 .replying { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .replying .reply-quote { flex: 1; min-width: 0; margin: 0; background: none; }
@@ -507,8 +576,36 @@ button.reaction:hover { border-color: var(--muted); }
 /* Everyone in a shared chat as badges in their colours (a dot for who has it open now), a rule, then the agent's. */
 /* The chat's name before it gives way (to an ellipsis) first; with many people the bar is cut too, so that the buttons
    after it stay on screen. */
-.people-bar { flex: 0 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; gap: 4px; margin-left: auto; padding: 3px; }
+.people-area { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.people-bar { flex: 0 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; gap: 4px; padding: 3px; }
 .people-bar .person { display: inline-flex; flex: none; }
+/* An agent's badge opens its menu. */
+.people-bar button.person { padding: 0; border: 0; border-radius: 30%; background: none; cursor: pointer; }
+.people-bar button.person:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.avatar.agent.off { opacity: 0.4; filter: grayscale(0.7); }
+.agents-button { flex: none; }
+/* An agent's menu and the owner's list of agents to add hang from the header's right edge, as the cost panel does. */
+.agent-menu { position: absolute; top: calc(100% + 4px); right: 16px; z-index: 6; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 24px)); max-height: min(70vh, 520px); overflow-y: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop); font-size: 14px; }
+.agent-menu-head { display: flex; align-items: center; gap: 8px; }
+.agent-menu-head .avatar { --size: 28px; }
+.agent-menu-head .icon-button { margin-left: auto; }
+.agent-menu p { margin: 0; }
+.agent-menu-job { color: var(--text); }
+.agent-menu-state, .agent-menu-empty { color: var(--muted); font-size: 13px; }
+.agent-menu .section-head { padding: 4px 0 0; }
+.agent-menu .danger { align-self: flex-start; }
+.agent-runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.agent-run { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.agent-run .sent-time { margin-left: auto; flex: none; opacity: 1; }
+.agent-run.failed > span:first-child { color: var(--error); }
+.agent-run.running > span:first-child { color: var(--working); }
+.agent-pick { display: flex; align-items: center; gap: 8px; }
+.agent-pick .avatar { --size: 26px; }
+.agent-pick-name { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.agent-pick-name small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-pick button { flex: none; padding: 2px 10px; font-size: 13px; }
+/* Whose an agent is: in the "@" list and its menu. */
+.owner-pill { flex: none; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11.5px; line-height: 18px; white-space: nowrap; }
 .people-bar .avatar { --size: 26px; }
 .people-bar .person:not(.online, .agent) .avatar { opacity: 0.7; }
 .people-divider { flex: none; width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
@@ -611,6 +708,7 @@ button.reaction:hover { border-color: var(--muted); }
 .thinking-dots i:nth-child(2) { animation-delay: 0.2s; }
 .thinking-dots i:nth-child(3) { animation-delay: 0.4s; }
 .thinking-time { margin-left: -2px; font-variant-numeric: tabular-nums; }
+.thinking-phrase { min-width: 0; margin-left: -4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A running step's icon (Spark in Steps.tsx): it turns a quarter at a time (the easing applies per step) while its two
    sets of rays grow and shrink in turn. */
 .thinking-spark {
@@ -694,9 +792,11 @@ button.reaction:hover { border-color: var(--muted); }
 .mention-icon { flex: none; display: inline-grid; place-items: center; width: 22px; color: var(--muted); }
 .mention-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-choice small { flex: none; margin-left: auto; color: var(--muted); }
+.mention-choice small.mention-job { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-empty { padding: 6px 8px; color: var(--muted); font-size: 14px; }
 /* A mention in a sent message: set off from the text around it. */
 .mention-chip.agent { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mention-chip.agent.toned { background: color-mix(in srgb, var(--tone) 16%, transparent); color: color-mix(in srgb, var(--tone) 80%, var(--text)); }
 .mention-chip, .bubble a.mention-chip { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 10%, transparent); color: inherit; font-weight: 500; text-decoration: none; }
 a.mention-chip:hover { text-decoration: underline; }
 /* A person tagged, in their colour; the viewer's own tag stands out. */
@@ -963,7 +1063,7 @@ a.mention-chip:hover { text-decoration: underline; }
   }
   .sidebar.drawer.open { translate: 0 0; visibility: visible; transition: translate 0.22s ease; }
   /* In the menu the sidebar scrolls as a whole: chats first, then artifacts, skills, the files and the account. */
-  .sidebar.drawer :is(.sidebar-scroll, .sidebar-pinned, .sidebar-pinned .artifact-list, .files-panel.open, .files-panel .files) { flex: none; overflow: visible; max-height: none; }
+  .sidebar.drawer :is(.sidebar-scroll, .sidebar-pinned, .sidebar-pinned .artifact-list, .sidebar-pinned .agent-list, .files-panel.open, .files-panel .files) { flex: none; overflow: visible; max-height: none; }
   .drawer-backdrop { position: fixed; inset: 0; z-index: 39; background: rgb(0 0 0 / 0.35); animation: thinking-in 0.2s ease-out; }
   .workspace.with-preview .main { display: none; }
   .chat-header { padding: 6px 10px 6px 12px; gap: 6px; }
@@ -981,8 +1081,10 @@ a.mention-chip:hover { text-decoration: underline; }
 /* Phones: badges and the gutter a little smaller; the people bar overlaps its badges to fit beside the name. */
 @media (max-width: 640px) {
   :root { --byline-avatar: 26px; --byline-gap: 8px; }
+  .kind-panel { position: fixed; top: calc(var(--header-h) + 6px); left: 16px; right: 16px; width: auto; }
   .people-bar { gap: 0; }
   .people-bar .person + .person { margin-left: -6px; }
+  .agent-menu { right: 12px; }
   .people-bar .avatar { --size: 24px; box-shadow: 0 0 0 2px var(--ring); }
   .people-divider { margin: 0 6px; }
   .chat-cost > button { padding: 5px 8px; font-size: 13px; }
@@ -1035,6 +1137,119 @@ a.mention-chip:hover { text-decoration: underline; }
 .skill summary { cursor: pointer; }
 .skill pre { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); padding: 8px 10px; border-radius: 8px; font-size: 12px; color: var(--text); max-height: 320px; overflow: auto; }
 .form-error { color: var(--error); }
+
+/* Agents (src/agents/): the sidebar's section, an agent's page with its tabs, and the draft card in a chat. */
+.sidebar-pinned .agent-list { flex: 0 1 auto; min-height: 0; max-height: min(30vh, 240px); overflow-y: auto; margin: 0 -14px; padding: 0 14px; }
+.sidebar nav a.agent-item { align-items: center; padding-block: 4px; }
+.sidebar nav .agent-item span, .sidebar nav .agent-new span { padding: 0; }
+.sidebar nav .agent-item .avatar { --size: 24px; }
+.sidebar nav .agent-item-text { display: flex; flex-direction: column; line-height: 1.25; }
+.sidebar nav .agent-item-name { display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
+.sidebar nav .agent-item-name small { color: var(--muted); font-weight: 400; }
+.sidebar nav .agent-item-job { color: var(--muted); font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.sidebar nav .agent-item .pill { padding: 0 6px; font-size: 11px; }
+.sidebar nav a.agent-item.off:not(.unread) .avatar { opacity: 0.55; }
+.sidebar nav .agent-new { color: var(--muted); }
+.agent-new-plus { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 1px dashed var(--border); border-radius: 30%; font-size: 15px; line-height: 1; }
+
+.agent-page { height: 100%; overflow-y: auto; padding: 28px 24px 48px; max-width: 900px; }
+.agent-back { display: inline-block; margin-bottom: 12px; color: var(--muted); font-size: 13px; text-decoration: none; }
+.agent-back:hover { color: var(--text); }
+.agent-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px; }
+.agent-head > .avatar { --size: 48px; }
+.agent-head-text { flex: 1 1 260px; min-width: 0; }
+.agent-head-text h2 { margin: 0; font-size: 28px; line-height: 1.1; overflow-wrap: anywhere; }
+.agent-head-text p { margin: 4px 0 0; color: var(--muted); }
+.agent-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agent-head-note { flex-basis: 100%; margin: 0; }
+.pill.agent-state.on { border-color: transparent; background: color-mix(in srgb, var(--live) 14%, var(--surface)); color: var(--live); }
+.pill.agent-state.draft { border-color: transparent; background: var(--working-soft); color: var(--working); }
+.pill.assumed { padding: 0 7px; border: 1px dashed var(--working); background: none; color: var(--working); font-size: 11px; }
+.agent-notice { margin: 12px 0 0; }
+.agent-tabs { display: flex; gap: 4px; margin-top: 18px; border-bottom: 1px solid var(--border); }
+.agent-tab { padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); font-weight: 500; }
+.agent-tab.active { border-bottom-color: var(--accent); color: var(--text); }
+
+.agent-form { display: flex; flex-direction: column; gap: 18px; margin-top: 20px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
+.agent-form > .skills-note { margin: 0; }
+.agent-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.agent-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13px; font-weight: 600; }
+.agent-label small { flex-basis: 100%; color: var(--muted); font-weight: 400; }
+.agent-form input:not([type="checkbox"], [type="radio"]), .agent-form textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; }
+.agent-form textarea { resize: vertical; line-height: 1.5; }
+.agent-assumed { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+.agent-assumed .link-button { font-size: 12px; }
+.agent-form-row { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: flex-end; }
+.agent-badge-edit { display: flex; align-items: center; gap: 10px; }
+.agent-badge-edit .avatar { --size: 36px; }
+.agent-form .agent-badge-edit input { width: 5.5em; }
+.agent-colors { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; }
+.agent-colors legend { margin-bottom: 6px; padding: 0; font-size: 13px; font-weight: 600; }
+.agent-color input { appearance: none; display: block; width: 26px; height: 26px; margin: 0; border-radius: 30%; background: var(--tone); cursor: pointer; }
+.agent-color input:checked { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--tone); }
+.agent-color input:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.agent-model { display: flex; }
+.agent-model .model-picker { margin: 0; }
+.agent-model .model-trigger { border: 1px solid var(--border); background: var(--bg); }
+.agent-servers { width: 100%; border-collapse: collapse; font-size: 14px; }
+.agent-servers th, .agent-servers td { padding: 8px 6px; border-top: 1px solid var(--border); text-align: left; vertical-align: top; }
+.agent-servers thead th { border-top: 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+.agent-servers td, .agent-servers thead th:not(:first-child) { width: 7.5em; text-align: center; }
+.agent-servers tbody th { font-weight: 400; }
+.agent-servers tbody th small { display: block; color: var(--muted); font-size: 12px; }
+.agent-servers .agent-server-name { font-weight: 600; overflow-wrap: anywhere; }
+.agent-servers small.agent-server-warn { margin-top: 4px; color: var(--working); }
+.agent-switch { justify-content: center; }
+.agent-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-foot { padding-top: 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+.agent-foot p { margin: 0; }
+.agent-chats { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.agent-chats li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.agent-chats a { color: var(--text); overflow-wrap: anywhere; }
+.agent-chats small { color: var(--muted); }
+.agent-shared-note { padding: 12px 14px; border-radius: var(--radius); background: var(--accent-soft); }
+.agent-shared-note p { margin: 0; }
+.agent-turns { margin-top: 8px; font-size: 13px; }
+.agent-turns summary { cursor: pointer; color: var(--muted); }
+.agent-turns ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.agent-turns li { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.agent-turns small { color: var(--muted); white-space: nowrap; }
+
+/* The draft card pi's agent_propose leaves in the chat: indented as the agent's other parts are. */
+.agent-card { margin: 4px 0 4px var(--gutter); padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
+.agent-card.compact { padding: 8px 12px; color: var(--muted); font-size: 14px; box-shadow: none; }
+.agent-card.compact p { margin: 0; }
+.agent-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.agent-card-head > .avatar { --size: 34px; }
+.agent-card-title { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.agent-card-title a { color: var(--text); text-decoration: none; }
+.agent-card-title a:hover { text-decoration: underline; }
+.agent-card-title span { color: var(--muted); font-size: 13px; }
+.agent-card-actions { display: flex; gap: 6px; }
+.agent-card-actions button { padding: 4px 10px; font-size: 13px; }
+.agent-card-when { margin: 12px 0 0; font-weight: 500; }
+.agent-card-steps { margin-top: 8px; font-size: 14px; }
+.agent-card-steps ol { margin: 0; padding-left: 22px; }
+.agent-card-steps li + li { margin-top: 4px; }
+.agent-card-steps li p { margin: 0; }
+.agent-card-steps details { margin-top: 6px; color: var(--muted); }
+.agent-card-steps summary { cursor: pointer; }
+.agent-glance { margin: 12px 0 0; padding: 0; border-top: 1px solid var(--border); font-size: 14px; }
+.agent-glance-row { display: grid; grid-template-columns: 5.5em minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.agent-glance-row dt { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.agent-glance-row dd { margin: 0; min-width: 0; }
+.agent-glance-value { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.agent-glance-row.assumed .agent-glance-value { text-decoration: underline dashed var(--working); text-underline-offset: 3px; }
+.agent-glance-row dd small { display: block; color: var(--muted); font-size: 12px; }
+.agent-glance-change { color: var(--accent); font-size: 13px; }
+@media (max-width: 640px) {
+  .agent-page { padding: 16px 14px 40px; }
+  .agent-form { padding: 14px; }
+  .agent-card { margin-left: 0; }
+  .agent-glance-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .agent-glance-row dt { grid-column: 1 / -1; }
+  .agent-servers td, .agent-servers thead th:not(:first-child) { width: 4.5em; }
+}
 
 
 /* Someone joined or left a shared chat: a quiet line between the messages. */
@@ -1105,3 +1320,20 @@ a.mention-chip:hover { text-decoration: underline; }
 .chip:hover { color: var(--text); background: var(--surface-2); }
 .chip:is(.active, [aria-pressed="true"]) { border-color: transparent; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .sidebar .chat-filter .nav-unread { position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; margin: 0; }
+
+/* Sign-ins to servers that sign in each user (src/SignIns.tsx): the sidebar's notices and the account menu's list. */
+.sign-in-notices { display: flex; flex-direction: column; gap: 6px; }
+.sign-in-notice { display: flex; align-items: flex-start; gap: 8px; padding: 10px 6px 10px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--accent-soft); }
+.sign-in-notice.needed { box-shadow: inset 3px 0 0 var(--accent); }
+.sign-in-notice > svg { flex: none; margin-top: 2px; color: var(--accent); }
+.sign-in-notice-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.sign-in-notice-body strong { font-size: 14px; }
+.sign-in-notice-body .button { align-self: flex-start; margin-top: 6px; padding: 4px 12px; }
+.sign-in-notice .icon-button { width: 24px; height: 24px; color: var(--muted); }
+.account-menu .nav-unread { margin-left: auto; }
+.sign-ins-dialog { width: min(520px, calc(100% - 32px)); }
+.sign-ins { margin: 0 0 12px; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.sign-ins li { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.sign-ins li:last-child { border-bottom: 1px solid var(--border); }
+.sign-in-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sign-in-text small { color: var(--muted); font-size: 13px; }

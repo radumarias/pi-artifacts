@@ -7,7 +7,7 @@ import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validatio
 import type { ToolInfo } from "../../shared/protocol.ts";
 import { deadline, errorMessage } from "../../shared/util.ts";
 import { McpFailure, type McpConnection, type RawToolResult } from "./hub.ts";
-import { signInPath } from "./oauth.ts";
+import { SignInReplaced, signInPath } from "./oauth.ts";
 import type { McpServerConfig } from "./servers.ts";
 
 const CALL_TIMEOUT_MS = 60_000;
@@ -21,7 +21,7 @@ const CONNECT_TIMEOUT_MS = 30_000;
  * The SDK reads a call's stream until the server ends it, even after the answer came, and a sign-in refresh has no
  * timeout of its own; a request left open keeps the chat object awake.
  */
-const REQUEST_TIMEOUT_MS = 90_000;
+export const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
  * The failure a page or the agent sees when the user has not signed in to a
@@ -39,7 +39,8 @@ export function signInRequired(server: string): McpFailure {
  * Anything else may have run (a write tool must not run twice) or is the server's own answer.
  */
 function callFailure(server: string, tool: string, error: unknown): unknown {
-  if (error instanceof McpFailure) return error;
+  // Its sign-in was replaced before the request went out: a fresh connection sends it with the new one.
+  if (error instanceof McpFailure || error instanceof SignInReplaced) return error;
   if (error instanceof StreamableHTTPError && error.code !== undefined && error.code >= 400 && error.code < 500) return error;
   if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
     return new McpFailure({ code: "server_unavailable", server, message: `${server} did not answer ${tool} within ${CALL_TIMEOUT_MS / 1000} s.` });
@@ -63,10 +64,22 @@ function callFailure(server: string, tool: string, error: unknown): unknown {
  * Every other request is aborted after `timeoutMs`, unless its answer was read to the end before then.
  */
 function forChatObject(url: URL, timeoutMs: number): FetchLike {
+  const within = fetchWithin(timeoutMs);
   return async (input, init) => {
     if (init?.method === "GET" && new URL(input).href === url.href && !new Headers(init.headers).has("last-event-id")) {
       return new Response(null, { status: 405 });
     }
+    return within(input, init);
+  };
+}
+
+/**
+ * `fetch`, with each request aborted after `timeoutMs` unless its answer was read to the end before then (an abort the
+ * caller asked for still works). Its timer goes once the answer is read, or given up on: a timer, too, keeps a Durable
+ * Object awake.
+ */
+export function fetchWithin(timeoutMs: number): FetchLike {
+  return async (input, init) => {
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(new Error(`no answer within ${timeoutMs / 1000} s`)), timeoutMs);
     const signal = init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
@@ -136,13 +149,12 @@ export async function connectStreamableHttp(
       throw error instanceof UnauthorizedError ? signInRequired(server.name) : error;
     }
   };
-  const client = new Client(
-    { name: "pi-artifacts", version: "0.1.0" },
-    { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
-  );
+  const client = new Client({ name: "pi-artifacts", version: "0.1.0" }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });
   const url = new URL(server.url);
   try {
-    const connecting = signedIn(() => client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: forChatObject(url, requestTimeoutMs) })));
+    const connecting = signedIn(() =>
+      client.connect(new StreamableHTTPClientTransport(url, { authProvider, fetch: forChatObject(url, requestTimeoutMs) })),
+    );
     await deadline(
       connecting,
       connectTimeoutMs,

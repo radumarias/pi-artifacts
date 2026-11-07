@@ -1,5 +1,5 @@
 import { createContext, useContext, type CSSProperties } from "react";
-import type { AgentColor } from "../../shared/agents.ts";
+import type { AgentColor, ChatAgentView } from "../../shared/agents.ts";
 import { AGENT_NAME } from "../../shared/mentions.ts";
 import { everyone, type ChatPeople } from "../../shared/protocol.ts";
 
@@ -30,6 +30,18 @@ export function useSharedChat(): ChatPeople | null {
   return useContext(SharedChat);
 }
 
+/** The chat's agents besides pi (its roster), for what names them: the "@name" chips, the badges of replies quoting them. */
+export const ChatAgents = createContext<readonly ChatAgentView[]>([]);
+
+export function useChatAgents(): readonly ChatAgentView[] {
+  return useContext(ChatAgents);
+}
+
+/** The style that gives an element an agent's colour as --tone. */
+export function toneStyle(color: AgentColor): CSSProperties {
+  return { "--tone": `var(--agent-${color})` } as CSSProperties;
+}
+
 /** A round badge with a person's first letter in their colour; `online` adds a dot for someone with the chat open. */
 export function Avatar({ name, tint, online }: { name: string; tint: number; online?: boolean }) {
   return (
@@ -46,14 +58,13 @@ export interface AgentBadge {
   color: AgentColor;
 }
 
-/** An agent's badge, pi's unless `badge` says another's: square-cornered where a person's is round. `working` adds a dot while it runs. */
-export function AgentAvatar({ working = false, badge }: { working?: boolean; badge?: AgentBadge }) {
+/**
+ * An agent's badge, pi's unless `badge` says another's: square-cornered where a person's is round. `working` adds a dot
+ * while it runs; `off`, for one its owner turned off, fades it.
+ */
+export function AgentAvatar({ working = false, off = false, badge }: { working?: boolean; off?: boolean; badge?: AgentBadge }) {
   return (
-    <span
-      className={badge ? "avatar agent toned" : "avatar agent"}
-      style={badge && ({ "--tone": `var(--agent-${badge.color})` } as CSSProperties)}
-      aria-hidden="true"
-    >
+    <span className={["avatar agent", badge && "toned", off && "off"].filter(Boolean).join(" ")} style={badge && toneStyle(badge.color)} aria-hidden="true">
       {badge ? badge.avatar : "π"}
       {working && <i className="presence working" />}
     </span>

@@ -1,5 +1,6 @@
 import { CURRENT_SQLITE_SCHEMA_VERSION } from "@earendil-works/pi-durable/storage/sqlite";
 import { CHAT_PART_BYTES, type ChatDumpCursor, type ChatDumpPage, type ChatDumpPart, type SqlCell, type SqlRow } from "../shared/data-export.ts";
+import { CHAT_AGENT_KIND, CHAT_TURN_KIND } from "../shared/agents.ts";
 import { fromBase64, toBase64 } from "../shared/util.ts";
 
 /** The part of a Durable Object's SQL API a dump needs; the tests put node:sqlite behind it. */
@@ -15,11 +16,13 @@ export interface DumpKv {
 }
 
 /**
- * What of a chat object's storage an export carries: its conversation (pi's tables, `pi_…`), its reactions and its
- * owner's name. Not its members and invites: they are people of the deployment it was made on, whose ids mean nothing
- * on another, so an imported chat starts with nobody in it but its owner. Nor the Lifecycle's jobs (`cf_agents_…`).
+ * What of a chat object's storage an export carries: its conversation (pi's tables, `pi_…`), its reactions, its
+ * owner's name and its agents' roster (their sessions are pi's). Not its members and invites: they are people of the
+ * deployment it was made on, whose ids mean nothing on another, so an imported chat starts with nobody in it but its
+ * owner. Nor the Lifecycle's jobs (`cf_agents_…`), nor the agents' turns (chat_agent_turns): work still to do, which
+ * would run as the importer, unasked.
  */
-const APP_TABLES = ["chat_reactions", "chat_owner"];
+const APP_TABLES = ["chat_reactions", "chat_owner", "chat_agents"];
 const PI_TABLE = /^pi_[a-z0-9_]+$/;
 const isCarried = (table: string) => PI_TABLE.test(table) || APP_TABLES.includes(table);
 
@@ -184,4 +187,39 @@ function fromCell(cell: SqlCell | undefined, remap: (text: string) => string): s
   if (typeof cell === "string") return remap(cell);
   if (typeof cell === "object" && typeof cell.b64 === "string") return fromBase64(cell.b64).buffer;
   throw new DumpError("A cell of the export is not one SQLite stores.");
+}
+
+/**
+ * After an import stored every part: the roster keeps only the agents the import brought into the importer's directory
+ * (`kept`, their ids here, which the parts were remapped to), each the importer's (`uid`) and shared with nobody, as the
+ * chat has nobody else in it. Returns the agents kept, and the newest entry of the conversation, from which pi's
+ * answers start hand-offs: none of the old ones does.
+ */
+export function importedRoster(sql: DumpSql, uid: string, kept: readonly string[]): { agents: string[]; through: number } {
+  const has = (table: string) => sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length > 0;
+  if (!has("chat_agents")) return { agents: [], through: -1 };
+  sql.exec("DELETE FROM chat_agents WHERE agent_id NOT IN (SELECT value FROM json_each(?))", JSON.stringify(kept));
+  sql.exec("UPDATE chat_agents SET owner_uid = ?, shared = 0", uid);
+  const agents = sql
+    .exec("SELECT agent_id FROM chat_agents ORDER BY agent_id")
+    .toArray()
+    .map((row) => String(row.agent_id));
+  const through = has("pi_entries") ? Number(sql.exec("SELECT COALESCE(MAX(id), -1) AS n FROM pi_entries").toArray()[0].n) : -1;
+  // The agents' sessions came along with the operations their turns ran ("turn:<id>"), but not the turns: new turns
+  // number on from the log's, so none takes an old one's id (and its finished answer).
+  if (has("chat_agent_turns") && has("pi_entries")) {
+    const last = Number(
+      sql
+        .exec(
+          "SELECT COALESCE(MAX(json_extract(record, '$.data.turn')), 0) AS n FROM pi_entries WHERE json_extract(record, '$.kind') IN (?, ?)",
+          CHAT_TURN_KIND,
+          CHAT_AGENT_KIND,
+        )
+        .toArray()[0].n,
+    );
+    const sequence = sql.exec("SELECT seq FROM sqlite_sequence WHERE name = 'chat_agent_turns'").toArray();
+    if (sequence.length) sql.exec("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'chat_agent_turns'", last);
+    else sql.exec("INSERT INTO sqlite_sequence (name, seq) VALUES ('chat_agent_turns', ?)", last);
+  }
+  return { agents, through };
 }

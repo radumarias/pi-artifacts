@@ -61,7 +61,7 @@ export function DataDialog({ mode, onClose }: { mode: DataMode; onClose: () => v
       <h2>{mode === "export" ? "Export your data" : "Import data"}</h2>
       {mode === "export" ? (
         <p className="prompt-about">
-          One zip with your chats, artifacts with every version, files, skills, system prompt and what pages saved for you. Import it here or on another
+          One zip with your chats, artifacts with every version, files, skills, agents, system prompt and what pages saved for you. Import it here or on another
           deployment, from this menu. Your sign-ins to MCP servers stay here, chats others shared with you stay with them, and the people in your shared chats
           are not part of it: an imported chat has only you in it.
         </p>
@@ -121,7 +121,7 @@ function ProgressBar({ progress }: { progress: Progress }) {
   );
 }
 
-const NOUNS: Record<(typeof KINDS)[number], string> = { chats: "chat", artifacts: "artifact", files: "file", skills: "skill" };
+const NOUNS: Record<(typeof KINDS)[number], string> = { chats: "chat", artifacts: "artifact", files: "file", skills: "skill", agents: "agent" };
 
 function ImportSummary({ report }: { report: ImportReport }) {
   const imported = KINDS.filter((kind) => report.imported[kind]).map((kind) => plural(report.imported[kind], NOUNS[kind]));

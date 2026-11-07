@@ -48,7 +48,7 @@ const refusal = (fields: Record<string, unknown>) => errorOf({ ...base, ...field
 function nestedIfs(depth: number, branch: "then" | "else" = "then"): unknown[] {
   let steps: unknown[] = [{ kind: "work", prompt: "the innermost step" }];
   for (let level = depth; level > 0; level--) {
-    steps = [{ kind: "if", condition: `level ${level}`, then: branch === "then" ? steps : [], ...(branch === "else" && { else: steps }) }];
+    steps = [{ kind: "if", condition: `level == ${level}`, then: branch === "then" ? steps : [], ...(branch === "else" && { else: steps }) }];
   }
   return steps;
 }
@@ -151,9 +151,9 @@ describe("checkAgent: the fields every agent has", () => {
         { kind: "look", ...read },
         {
           kind: "if",
-          condition: "any deal is late",
+          condition: "len(late_deals) > 0",
           then: [{ kind: "work", prompt: "Write it up." }],
-          else: [{ kind: "onlyIf", condition: "Monday" }],
+          else: [{ kind: "onlyIf", condition: 'today == "mon"' }],
         },
         { kind: "tell", to: ["ann"], via: { server: "mail", tool: "send" } },
       ],
@@ -270,17 +270,17 @@ describe("checkAgent: triggers", () => {
   });
 
   it("keeps a watch's read, interval and condition, with an empty input when it has none", () => {
-    const trigger = { kind: "watch", step: { server: " crm ", tool: "list_deals" }, everyMinutes: 60, when: "  a deal closes " };
+    const trigger = { kind: "watch", step: { server: " crm ", tool: "list_deals" }, everyMinutes: 60, when: "  deals.closed > 0 " };
     expect(agent({ trigger }).trigger).toEqual({
       kind: "watch",
       step: { kind: "look", server: "crm", tool: "list_deals", input: {} },
       everyMinutes: 60,
-      when: "a deal closes",
+      when: "deals.closed > 0",
     });
   });
 
   it("bounds a watch's interval to whole minutes from MIN_WATCH_MINUTES to MAX_WATCH_MINUTES", () => {
-    const watch = (everyMinutes: unknown) => ({ trigger: { kind: "watch", step: read, everyMinutes, when: "it changes" } });
+    const watch = (everyMinutes: unknown) => ({ trigger: { kind: "watch", step: read, everyMinutes, when: "deals.count != previous.count" } });
     expect(agent(watch(MIN_WATCH_MINUTES)).trigger).toMatchObject({ everyMinutes: 15 });
     expect(agent(watch(MAX_WATCH_MINUTES)).trigger).toMatchObject({ everyMinutes: 7 * 24 * 60 });
     for (const every of [MIN_WATCH_MINUTES - 1, MAX_WATCH_MINUTES + 1, 15.5, "60", undefined, Number.NaN, Infinity]) {
@@ -289,7 +289,7 @@ describe("checkAgent: triggers", () => {
   });
 
   it("needs a watch's read and its condition", () => {
-    const watch = (fields: Record<string, unknown>) => ({ trigger: { kind: "watch", step: read, everyMinutes: 60, when: "it changes", ...fields } });
+    const watch = (fields: Record<string, unknown>) => ({ trigger: { kind: "watch", step: read, everyMinutes: 60, when: "deals.count != previous.count", ...fields } });
     expect(refusal(watch({ step: undefined }))).toBe("A watch's step must be a read: {server, tool, input}.");
     expect(refusal(watch({ step: [read] }))).toBe("A watch's step must be a read: {server, tool, input}.");
     expect(refusal(watch({ step: { tool: "list_deals" } }))).toContain("server");
@@ -320,14 +320,24 @@ describe("checkAgent: scope", () => {
 });
 
 describe("checkAgent: workflows", () => {
+  it("refuses a condition that does not parse, saying what is wrong, and keeps a look's result name", () => {
+    expect(refusal({ workflow: [{ kind: "onlyIf", condition: "sales >" }] })).toBe("An onlyIf step's condition does not read: The condition ends too soon.");
+    expect(refusal({ trigger: { kind: "watch", step: { server: "crm", tool: "t" }, everyMinutes: 60, when: "a deal closes" } })).toMatch(
+      /^A watch's condition does not read: Unexpected "deal"/,
+    );
+    const workflow = [{ kind: "look", server: "crm", tool: "t", input: {}, as: "sales" }];
+    expect(checkAgent({ ...base, workflow }).workflow).toEqual(workflow);
+    expect(refusal({ workflow: [{ ...workflow[0], as: "1st" }] })).toContain('result name ("as")');
+  });
+
   it("keeps a step of every kind, with only the fields each kind has", () => {
     const workflow = [
       { kind: "look", server: "crm", tool: "list_deals", input: { stage: "open" }, note: "dropped" },
       { kind: "work", prompt: " Sum them up. ", skill: " pricing ", model: " fast/model " },
       { kind: "work", prompt: "No skill or model." },
-      { kind: "onlyIf", condition: " a deal is late " },
-      { kind: "if", condition: "over budget", then: [{ kind: "handOver", agent: "finance" }], else: [{ kind: "onlyIf", condition: "Friday" }] },
-      { kind: "if", condition: "no else", then: [] },
+      { kind: "onlyIf", condition: " deals.late > 0 " },
+      { kind: "if", condition: "spend > budget", then: [{ kind: "handOver", agent: "finance" }], else: [{ kind: "onlyIf", condition: 'day == "fri"' }] },
+      { kind: "if", condition: "true", then: [] },
       { kind: "do", server: "crm", tool: "update_deal", input: { id: 7 } },
       { kind: "tell", to: ["ann", " bob ", "ann"], via: "chat" },
       { kind: "tell", to: ["ann"], via: "notify" },
@@ -341,9 +351,9 @@ describe("checkAgent: workflows", () => {
       { kind: "look", server: "crm", tool: "list_deals", input: { stage: "open" } },
       { kind: "work", prompt: "Sum them up.", skill: "pricing", model: "fast/model" },
       { kind: "work", prompt: "No skill or model." },
-      { kind: "onlyIf", condition: "a deal is late" },
-      { kind: "if", condition: "over budget", then: [{ kind: "handOver", agent: "finance" }], else: [{ kind: "onlyIf", condition: "Friday" }] },
-      { kind: "if", condition: "no else", then: [] },
+      { kind: "onlyIf", condition: "deals.late > 0" },
+      { kind: "if", condition: "spend > budget", then: [{ kind: "handOver", agent: "finance" }], else: [{ kind: "onlyIf", condition: 'day == "fri"' }] },
+      { kind: "if", condition: "true", then: [] },
       { kind: "do", server: "crm", tool: "update_deal", input: { id: 7 } },
       { kind: "tell", to: ["ann", "bob"], via: "chat" },
       { kind: "tell", to: ["ann"], via: "notify" },
@@ -366,6 +376,17 @@ describe("checkAgent: workflows", () => {
     expect((look as { input: object }).input).not.toHaveProperty("skip");
     // A copy, not the caller's object.
     expect((look as { input: object }).input).not.toBe(input);
+  });
+
+  it("refuses a step, scope or watch that names a server outside the agent's servers, once it has some", () => {
+    const workflow = [{ kind: "look", ...read }, { kind: "if", condition: "1 > 0", then: [{ kind: "do", server: "mail", tool: "send", input: {} }] }];
+    expect(agent({ workflow }).workflow).toHaveLength(2);
+    expect(refusal({ servers: ["crm"], workflow })).toBe(
+      "A step names mail, which is not one of the agent's servers: add it to its servers, or change the step.",
+    );
+    expect(agent({ servers: ["crm", "mail"], workflow }).workflow).toHaveLength(2);
+    expect(refusal({ servers: ["mail"], scope: { list: { kind: "look", ...read }, each: true } })).toContain("names crm");
+    expect(refusal({ servers: ["mail"], trigger: { kind: "watch", step: { kind: "look", ...read }, everyMinutes: 60, when: "1 > 0" } })).toContain("names crm");
   });
 
   it("refuses a step of no known kind", () => {
@@ -415,7 +436,7 @@ describe("checkAgent: workflows", () => {
   });
 
   it(`takes at most MAX_WORKFLOW_STEPS (${MAX_WORKFLOW_STEPS}) steps in a list`, () => {
-    const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ kind: "onlyIf", condition: `check ${i}` }));
+    const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ kind: "onlyIf", condition: `x > ${i}` }));
     expect(agent({ workflow: steps(MAX_WORKFLOW_STEPS) }).workflow).toHaveLength(MAX_WORKFLOW_STEPS);
     expect(refusal({ workflow: steps(MAX_WORKFLOW_STEPS + 1) })).toBe(`A workflow has at most ${MAX_WORKFLOW_STEPS} steps.`);
     const branch = [{ kind: "if", condition: "c", then: steps(MAX_WORKFLOW_STEPS + 1) }];
@@ -437,7 +458,7 @@ describe("checkAgent: workflows", () => {
   });
 
   it("counts the steps inside an if's branches toward MAX_WORKFLOW_STEPS", () => {
-    const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ kind: "onlyIf", condition: `check ${i}` }));
+    const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ kind: "onlyIf", condition: `x > ${i}` }));
     const workflow = [{ kind: "if", condition: "c", then: steps(MAX_WORKFLOW_STEPS), else: steps(MAX_WORKFLOW_STEPS) }];
     expect(refusal({ workflow })).toBe(`A workflow has at most ${MAX_WORKFLOW_STEPS} steps.`);
   });

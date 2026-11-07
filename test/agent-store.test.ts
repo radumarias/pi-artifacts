@@ -4,6 +4,7 @@ import {
   isDraftAgent,
   MAX_AGENT_PROPOSALS,
   MAX_AGENTS,
+  type AgentChatUse,
   type AgentDefinition,
   type AgentInput,
   type AgentOrigin,
@@ -366,12 +367,13 @@ interface AgentDirectory {
   saveAgent(input: unknown, origin: AgentOrigin, enabled?: boolean, save?: AgentSave): Promise<AgentResult>;
   setAgentEnabled(id: string, enabled: boolean, version?: number): Promise<AgentResult>;
   deleteAgent(id: string): Promise<{ error: string } | null>;
+  agentChats(id: string): Promise<AgentChatUse[]>;
 }
 
 // The routes take a DurableObjectStub of UserDirectory, a class whose Workers types this test project does not load,
 // so they are imported by a path the type checker does not follow, and called with a directory of the methods they use.
 const routesModule = new URL("../worker/agents-routes.ts", import.meta.url).href;
-const { agentsRoute } = (await import(routesModule)) as { agentsRoute: (request: Request, directory: AgentDirectory) => Promise<Response | null> };
+const { agentsRoute } = (await import(routesModule)) as { agentsRoute: (request: Request, directory: AgentDirectory, dropFromChat: () => Promise<void>, servers: never[]) => Promise<Response | null> };
 
 /** A user's directory over an AgentStore, recording what the routes ask of it. */
 function directoryOver(store: AgentStore) {
@@ -388,6 +390,8 @@ function directoryOver(store: AgentStore) {
       return store.setEnabled(id, enabled, version);
     },
     deleteAgent: async (id) => (calls.push({ method: "deleteAgent", args: [id] }), store.delete(id)),
+    // The chats' titles are their ids here: the directory's chats table is not in this test.
+    agentChats: async (id) => (calls.push({ method: "agentChats", args: [id] }), store.chatsOf(id).map((use) => ({ ...use, title: use.chatId }))),
   };
   return { directory, calls };
 }
@@ -409,7 +413,7 @@ function routes() {
   const { directory, calls } = directoryOver(store);
   /** The route's answer, read as JSON; fails the test when the routes left the request to others. */
   const send = async (method: string, path: string, body?: { json?: unknown; text?: string; type?: string }) => {
-    const response = await agentsRoute(request(method, path, body), directory);
+    const response = await agentsRoute(request(method, path, body), directory, async () => {}, []);
     if (!response) throw new Error(`${method} ${path} was not routed`);
     expect(response.headers.get("content-type")).toMatch(/^application\/json/);
     return { status: response.status, body: (await response.json()) as Record<string, unknown> & AgentDefinition & { error?: string } };
@@ -610,7 +614,7 @@ describe("agentsRoute", () => {
     const { directory, calls } = directoryOver(store);
     const agent = saved(store.save(research, "user", undefined));
     const body = method === "GET" ? undefined : { json: research };
-    expect(await agentsRoute(request(method, path, body), directory)).toBeNull();
+    expect(await agentsRoute(request(method, path, body), directory, async () => {}, [])).toBeNull();
     expect(calls).toEqual([]);
     expect(store.list()).toEqual([agent]);
   });

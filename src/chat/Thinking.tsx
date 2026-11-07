@@ -35,10 +35,11 @@ export function nextWord(current?: string, random = Math.random): string {
 }
 
 /**
- * Three pulsing dots, a rotating status word with a shimmer, and the time since the run started. Screen readers hear
+ * Three pulsing dots, a rotating status word with a shimmer, the time since the run started, and what the run is on
+ * (`phrase`), when it said. Screen readers hear
  * "Working" once, not every word or second; with reduced motion the word stays put and styles.css stops the animations.
  */
-export function Thinking({ since }: { since: number }) {
+export function Thinking({ since, phrase }: { since: number; phrase?: string }) {
   const [word, setWord] = useState(() => nextWord());
   const elapsed = useElapsed(since);
   useEffect(() => {
@@ -60,6 +61,12 @@ export function Thinking({ since }: { since: number }) {
       <span className="thinking-time" aria-hidden="true">
         {formatElapsed(elapsed)}
       </span>
+      {/* What the run is doing, in its own words (phrase.ts): the step it is on. */}
+      {phrase && (
+        <span className="thinking-phrase" aria-hidden="true">
+          · {phrase}
+        </span>
+      )}
       <span className="sr-only">Working…</span>
     </div>
   );

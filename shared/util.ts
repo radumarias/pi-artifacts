@@ -75,6 +75,30 @@ export function fromBase64(base64: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 }
 
+/** base64url (RFC 4648 §5) of `bytes`, unpadded, as JWTs and Web Push use it. */
+export function toBase64url(bytes: Uint8Array): string {
+  return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** The bytes of base64url, padded or not; throws on anything else. */
+export function fromBase64url(value: string): Uint8Array<ArrayBuffer> {
+  const bytes = tryFromBase64url(value);
+  if (!bytes) throw new Error("Not valid base64url.");
+  return bytes;
+}
+
+/** The bytes of base64url, padded or not; undefined for anything else. */
+export function tryFromBase64url(value: string): Uint8Array<ArrayBuffer> | undefined {
+  const trimmed = value.replace(/=+$/, "");
+  if (!/^[A-Za-z0-9_-]*$/.test(trimmed) || trimmed.length % 4 === 1) return undefined;
+  const base64 = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+  try {
+    return fromBase64(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+  } catch {
+    return undefined;
+  }
+}
+
 /** `fn`'s result, computed once and shared; a failure is forgotten, so the next call tries again. */
 export function memoAsync<T>(fn: () => Promise<T>): () => Promise<T> {
   let value: Promise<T> | undefined;

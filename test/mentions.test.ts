@@ -4,7 +4,7 @@ import {
   keptMentions,
   matchMentions,
   parseMentions,
-  splitAgent,
+  splitCalls,
   splitMentions,
   summonsAgent,
   taggedPeople,
@@ -170,7 +170,7 @@ describe("calling the agent", () => {
   });
 
   it("splits the text around each call, for the transcript's chips", () => {
-    const parts = (text: string) => splitAgent(text).map((part) => (part.call ? `[${part.text}]` : part.text));
+    const parts = (text: string) => splitCalls(text).map((part) => (part.call !== undefined ? `[${part.text}]` : part.text));
     expect(parts("hi @pi and @PI.")).toEqual(["hi ", "[@pi]", " and ", "[@PI]", "."]);
     expect(parts("@pi")).toEqual(["[@pi]"]);
     expect(parts("no call")).toEqual(["no call"]);

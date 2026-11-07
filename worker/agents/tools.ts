@@ -9,6 +9,7 @@ import {
   type AgentProposedDetails,
   type AgentResult,
 } from "../../shared/agents.ts";
+import { CONDITIONS_HELP } from "../../shared/conditions.ts";
 import { text } from "../agent/output.ts";
 
 /** What the agent tools need from the chat (part of ChatScope). */
@@ -48,7 +49,12 @@ export function agentsExtension(scope: AgentsScope): Extension {
               type: "object",
               description:
                 'When it runs on its own: {kind: "schedule", at: "07:00", tz: "Europe/Bucharest", days?: ["mon", …]} or ' +
-                '{kind: "watch", step: {kind: "look", server, tool, input}, everyMinutes: 60, when: "a condition"}. Leave it out for an agent that only answers when called.',
+                '{kind: "watch", step: {kind: "look", server, tool, input, as?: NAME}, everyMinutes: 60, when: CONDITION}. ' +
+                "Leave it out for an agent that only answers when called. " +
+                `A watch runs when the value it reads moved and its when holds. ${CONDITIONS_HELP} In when, the value read is named by the step's as ` +
+                '(else its tool name, with other characters as _), and also watch; previous is the value it read before (null at first). ' +
+                'E.g. {kind: "watch", step: {kind: "look", server: SERVER, tool: "get_count", input: {...}, as: "count"}, everyMinutes: 30, ' +
+                'when: "count.total < 10 and (previous == null or previous.total >= 10)"}.',
             }),
           ),
           autonomy: Type.Optional(
