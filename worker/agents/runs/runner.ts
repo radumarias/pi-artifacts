@@ -12,16 +12,15 @@ import { nextRunAt } from "./schedule.ts";
 import { sourceName } from "./source.ts";
 import type { Sql } from "../../members.ts";
 
-/** What a run's alarm carries; `attempt` counts the tries of a due time whose definition could not be read. */
+/** What a run's alarm carries (`attempt`: from alarms set before retries became plain re-arms, and ignored). */
 export type RunAlarm = { agentId: string; dueAt: number; attempt?: number };
 /** What a watch's interval carries. */
 export type WatchAlarm = { agentId: string };
 
 /** The longest a watch's last value is kept, as JSON: a larger one is compared by a hash of it. */
 const MAX_KEPT_VALUE = 100_000;
-/** When a due time's definition could not be read: how long until it is tried again, and how often at most. */
+/** How long until a due time is tried again, when its run could not start (a failed read, a reset). */
 const RETRY_MS = 5 * 60_000;
-const MAX_ATTEMPTS = 12;
 
 /** What the runner needs besides the executor's host: alarms, the owner's definitions, and shared watches. */
 export interface RunnerHost extends RunHost {
@@ -30,6 +29,8 @@ export interface RunnerHost extends RunHost {
   /** An alarm every `seconds`: its schedule id. */
   alarmEvery(seconds: number, payload: WatchAlarm): Promise<string>;
   cancelAlarm(id: string): Promise<void>;
+  /** When a set alarm fires next (ms); null when it is no longer set (its job ran or was cancelled). */
+  alarmTime(id: string): Promise<number | null>;
   /** The owner's definition of an agent as it is now; null when it is gone. */
   definition(agentId: string): Promise<AgentDefinition | null>;
   /**
@@ -155,11 +156,13 @@ export class AgentRunner {
   }
 
   /**
-   * After a restart, for the agent whose home this is: when it has no schedule or watch set (an alarm whose job went
-   * before its next one was set), read its definition and set them.
+   * After a restart, for the agent whose home this is: when it has no schedule or watch set, or its row's alarm is no
+   * longer set (its job ran or went before the next one was set), read its definition and set them.
    */
   async reconcile(agentId: string): Promise<void> {
-    if (this.#row(agentId)) return;
+    const row = this.#row(agentId);
+    // A row whose alarm is still set is fine (a shared watch has none); one whose job went is set again.
+    if (row && (row.schedule_id === null || (await this.#host.alarmTime(row.schedule_id)) !== null)) return;
     const agent = await this.#host.definition(agentId);
     await this.apply(agentId, agent);
   }
@@ -178,17 +181,12 @@ export class AgentRunner {
   /**
    * A run's alarm came: the next run is set first (so a run that never ends does not stop the schedule), then this
    * one runs. An alarm for a time the agent no longer runs at (its definition changed since) runs nothing; one that
-   * fires twice runs once. When the definition cannot be read, the same time is tried again a few minutes later, and
-   * after that the schedule goes on from the trigger it was set from.
+   * fires twice runs once. Before anything else the same time is armed again a few minutes on (#retry), so a failed
+   * read or a reset before the next run is set tries it again; setting the next run replaces that alarm.
    */
-  async fired({ agentId, dueAt, attempt = 0 }: RunAlarm): Promise<RunEnd | null> {
-    let agent: AgentDefinition | null;
-    try {
-      agent = await this.#host.definition(agentId);
-    } catch (error) {
-      await this.#one(() => this.#retry(agentId, dueAt, attempt));
-      throw error;
-    }
+  async fired({ agentId, dueAt }: RunAlarm): Promise<RunEnd | null> {
+    await this.#one(() => this.#retry(agentId, dueAt));
+    const agent = await this.#host.definition(agentId);
     const due = await this.#one(async () => {
       const row = this.#row(agentId);
       const current = agent?.enabled && agent.trigger?.kind === "schedule" && row?.kind === "schedule" && row.key === triggerKey(agent);
@@ -205,21 +203,22 @@ export class AgentRunner {
     return this.executor.start({ agent, dueAt, why: "schedule" });
   }
 
-  /** A due time whose definition could not be read: try it again soon, or, after MAX_ATTEMPTS, set the next one. */
-  async #retry(agentId: string, dueAt: number, attempt: number): Promise<void> {
+  /**
+   * The due time `dueAt` came: arm it again RETRY_MS from now, until that would reach the next due time of the trigger
+   * the row was set from; then arm that one instead (this time is given up). Only for the row's own due time.
+   */
+  async #retry(agentId: string, dueAt: number): Promise<void> {
     const row = this.#row(agentId);
     if (row?.kind !== "schedule" || row.due_at !== dueAt) return;
     const now = this.#host.runs.now();
-    if (attempt + 1 < MAX_ATTEMPTS) {
-      const id = await this.#host.alarmAt(now + RETRY_MS, { agentId, dueAt, attempt: attempt + 1 });
-      this.#sql.exec("UPDATE agent_schedules SET schedule_id = ? WHERE agent_id = ?", id, agentId);
-      return;
-    }
-    // Given up on this one: the next, from the trigger the row was set from.
+    // Already armed ahead (the same alarm fired twice at once): one retry is enough.
+    const armed = row.schedule_id === null ? null : await this.#host.alarmTime(row.schedule_id);
+    if (armed !== null && armed > now) return;
     const next = nextRunAt(JSON.parse(row.key) as Extract<AgentTrigger, { kind: "schedule" }>, Math.max(dueAt, now));
-    if (next === null) return;
-    const id = await this.#host.alarmAt(next, { agentId, dueAt: next });
-    this.#sql.exec("UPDATE agent_schedules SET schedule_id = ?, due_at = ? WHERE agent_id = ?", id, next, agentId);
+    const again = next === null || now + RETRY_MS < next;
+    const at = again ? now + RETRY_MS : next;
+    const id = await this.#host.alarmAt(at, { agentId, dueAt: again ? dueAt : next });
+    this.#sql.exec("UPDATE agent_schedules SET schedule_id = ?, due_at = ? WHERE agent_id = ?", id, again ? dueAt : next, agentId);
   }
 
   /** A watch's interval came: read it, and run when its value moved and its condition holds. */

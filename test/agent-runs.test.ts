@@ -125,6 +125,10 @@ class FakeHome implements RunnerHost {
   async cancelAlarm(id: string) {
     this.alarms.delete(id);
   }
+  async alarmTime(id: string) {
+    const alarm = this.alarms.get(id);
+    return alarm ? (alarm.at ?? this.clock.now + alarm.every! * 1000) : null;
+  }
   async definition(agentId: string) {
     if (this.failDefinition) throw new Error("directory unreachable");
     return this.definitions.get(agentId) ?? null;
@@ -156,7 +160,8 @@ function home(definition = agent()) {
   return { host, runner, definition };
 }
 
-const runAlarm = (host: FakeHome) => [...host.alarms.values()].find((alarm) => alarm.at !== undefined)!;
+// The newest one-shot: a fired one stays in the fake's map, as the real Scheduler drops it only after its callback.
+const runAlarm = (host: FakeHome) => [...host.alarms.values()].findLast((alarm) => alarm.at !== undefined)!;
 
 describe("scheduled runs", () => {
   it("sets the next local time as a one-shot, and runs at it", async () => {
@@ -191,7 +196,8 @@ describe("scheduled runs", () => {
     expect(await runner.executor.start({ agent: definition, dueAt: SEVEN, why: "schedule" })).toEqual({ status: "sent", started: false });
     expect(host.works).toHaveLength(1);
     expect(host.delivered).toHaveLength(1);
-    expect(host.alarms.size).toBe(1);
+    // One alarm ahead: the next run (no retry left over from the second fire).
+    expect([...host.alarms.values()].filter((alarm) => alarm.at! > SEVEN)).toHaveLength(1);
   });
 
   it("makes no model call when a condition does not hold", async () => {
@@ -367,14 +373,32 @@ describe("scheduled runs", () => {
     host.failDefinition = true;
     await expect(runner.fired({ agentId: definition.id, dueAt: SEVEN })).rejects.toThrow("directory unreachable");
     // The same time, five minutes on: the schedule did not stop.
-    expect([...host.alarms.values()].at(-1)).toEqual({ at: SEVEN + 5 * 60_000, payload: { agentId: definition.id, dueAt: SEVEN, attempt: 1 } });
+    expect([...host.alarms.values()].at(-1)).toEqual({ at: SEVEN + 5 * 60_000, payload: { agentId: definition.id, dueAt: SEVEN } });
     host.failDefinition = false;
-    expect(await runner.fired({ agentId: definition.id, dueAt: SEVEN, attempt: 1 })).toEqual({ status: "sent", started: true });
+    expect(await runner.fired({ agentId: definition.id, dueAt: SEVEN })).toEqual({ status: "sent", started: true });
     expect(runner.nextRun(definition.id)).toBe(Date.parse("2026-11-05T05:00:00Z"));
+    // The retry alarm went with the next run set: only that one is left for this agent.
+    expect([...host.alarms.values()].filter((alarm) => alarm.payload.agentId === definition.id && alarm.at! > SEVEN)).toEqual([
+      { at: Date.parse("2026-11-05T05:00:00Z"), payload: { agentId: definition.id, dueAt: Date.parse("2026-11-05T05:00:00Z") } },
+    ]);
     // An object whose alarms went (no schedule row): reconcile sets them from the definition.
     const fresh = home(definition);
     await fresh.runner.reconcile(definition.id);
     expect(fresh.runner.nextRun(definition.id)).toBe(SEVEN);
+  });
+
+  it("sets the schedule again after a restart when the row's alarm is no longer set", async () => {
+    const { host, runner, definition } = home();
+    await runner.apply(definition.id, definition);
+    // Its alarm ran (or went) and a reset came before the next was set: the stale row is still there.
+    host.alarms.clear();
+    host.clock.now = SEVEN + 60_000;
+    await runner.reconcile(definition.id);
+    expect(runner.nextRun(definition.id)).toBe(Date.parse("2026-11-05T05:00:00Z"));
+    expect(host.alarms.size).toBe(1);
+    // With its alarm set, reconcile leaves it.
+    await runner.reconcile(definition.id);
+    expect(host.alarms.size).toBe(1);
   });
 
   it("ignores a definition older than the one its alarm was set from", async () => {

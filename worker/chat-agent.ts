@@ -3032,6 +3032,10 @@ export class ChatAgent extends DurableObject<Env> {
       cancelAlarm: async (id) => {
         await this.scheduler.cancel(id);
       },
+      alarmTime: async (id) => {
+        const alarm = await this.scheduler.get(id);
+        return alarm ? alarm.time * 1000 : null;
+      },
       definition: (agentId) => this.#directory.getAgent(agentId),
       sharedWatch: (step) => {
         const server = this.hub.server(step.server);
