@@ -154,7 +154,7 @@ import { publishedAlready, publishFindings, publishRebuilt, runMark } from "./ag
 import { compileWorkflow } from "./agents/runs/compile.ts";
 import { sourceName } from "./agents/runs/source.ts";
 import type { Value } from "../shared/conditions.ts";
-import { runRef, type AgentRunDetail, type AgentRunView, type RunDelivery, type RunRef } from "../shared/runs.ts";
+import { runRef, type AgentRunDetail, type AgentRunList, type RunDelivery, type RunRef } from "../shared/runs.ts";
 import { agentsExtension } from "./agents/tools.ts";
 import { agentInstructions, allowedTools, askOf, assistantText, attachedNote, MAX_ASK_CHARS, messageAskKey, runTools, speakersFor } from "./agents/turns.ts";
 import {
@@ -2846,7 +2846,7 @@ export class ChatAgent extends DurableObject<Env> {
   }
 
   /** An agent's runs, newest first, and when it runs next. */
-  runsFor(uid: string, agentId: string): { runs: AgentRunView[]; nextRunAt: number | null; homeChatId: string } | ChatRefusal {
+  runsFor(uid: string, agentId: string): AgentRunList | ChatRefusal {
     const refused = this.#ownRuns(uid, agentId);
     if (refused) return refused;
     return { runs: this.runs.list(agentId), nextRunAt: this.runner.nextRun(agentId), homeChatId: this.chatId };

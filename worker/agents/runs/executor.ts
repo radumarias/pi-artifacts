@@ -416,7 +416,7 @@ export class RunExecutor {
           const result = await this.#host.work(state.session, workPrompt(step, state.when, state.element), `${opId(state)}:work:${key}`);
           state.cost += result.cost;
           if (result.model) this.#usedModel(state, result.model);
-          const label = `${STEP_LABELS.work} ${firstLine(step.prompt)}${step.skill ? `, with ${step.skill}` : ""}`;
+          const label = `${STEP_LABELS.work}: ${firstLine(step.prompt)}${step.skill ? `, with ${step.skill}` : ""}`;
           if (result.status !== "done") {
             record(label, false, result.reason ?? "it ended without an answer", result.cost);
             throw new Error(`The work step ended without an answer: ${result.reason ?? "no reason given"}.`);

@@ -91,6 +91,13 @@ export interface AgentRunView {
   needsSignIn?: string[];
 }
 
+/** An agent's runs as its Runs tab reads them: newest first, when it runs next, and its own chat (null before one). */
+export interface AgentRunList {
+  runs: AgentRunView[];
+  nextRunAt: number | null;
+  homeChatId: string | null;
+}
+
 /** One run in full, for its detail page. */
 export interface AgentRunDetail extends AgentRunView {
   /** "Every day at 07:00 (Europe/Bucharest)", "when signups vs lastYear < -5% (checked every 60 minutes)". */

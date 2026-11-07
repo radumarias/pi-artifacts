@@ -10,13 +10,15 @@ export interface AgentPlace {
   field?: string;
   /** The chat it was opened from: a link back to it, and for someone else's agent the chat that shares it. */
   chat?: string;
+  /** A run's due time (epoch ms), on the Runs tab: that run's detail. */
+  run?: number;
 }
 
 export const NEW_AGENT = "new";
 
 /** The page's path for `place`. */
-export function agentPath({ id, tab, field, chat }: AgentPlace): string {
-  const query = new URLSearchParams({ ...(tab && { tab }), ...(field && { field }), ...(chat && { chat }) }).toString();
+export function agentPath({ id, tab, field, chat, run }: AgentPlace): string {
+  const query = new URLSearchParams({ ...(tab && { tab }), ...(field && { field }), ...(chat && { chat }), ...(run !== undefined && { run: String(run) }) }).toString();
   return `/agents/${id}${query ? `?${query}` : ""}`;
 }
 
@@ -26,7 +28,14 @@ export function agentPlace(url: URL): AgentPlace | null {
   if (!id || (id !== NEW_AGENT && !AGENT_ID_PATTERN.test(id))) return null;
   const param = (name: string) => url.searchParams.get(name) ?? undefined;
   const chat = param("chat");
-  return { id, tab: param("tab"), field: param("field"), chat: chat && ID_PATTERN.test(chat) ? chat : undefined };
+  const run = param("run");
+  return {
+    id,
+    tab: param("tab"),
+    field: param("field"),
+    chat: chat && ID_PATTERN.test(chat) ? chat : undefined,
+    ...(run && /^\d{1,16}$/.test(run) && { run: Number(run) }),
+  };
 }
 
 /**

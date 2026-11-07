@@ -43,7 +43,7 @@ export function DraftCard({ details, chatId, mine }: { details: AgentProposedDet
 
 function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
+  const [note, setNote] = useState<{ text: string; error?: boolean; run?: number } | null>(null);
   const state = stateLabel(agent);
   const steps = instructionSteps(agent.instructions);
   const rows = glanceRows(agent);
@@ -52,10 +52,10 @@ function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
   const when = [runs && `${runs.value}${runs.note ? ` (${runs.note})` : ""}`, scope && `for each item of ${scope.server} ${scope.tool}`]
     .filter(Boolean)
     .join(", ");
-  const open = (field?: string) => (event: MouseEvent) => {
+  const open = (field?: string, tab?: string, run?: number) => (event: MouseEvent) => {
     if (opensElsewhere(event)) return;
     event.preventDefault();
-    goTo(agentPath({ id: agent.id, field, chat: chatId }));
+    goTo(agentPath({ id: agent.id, field, tab, run, chat: chatId }));
   };
 
   const turnOn = async () => {
@@ -84,8 +84,8 @@ function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
     setBusy(true);
     setNote(null);
     try {
-      await api.testAgent(agent.id);
-      setNote({ text: "Testing it on today's data: nothing is sent or changed. Its result shows under its runs." });
+      const { dueAt } = await api.testAgent(agent.id);
+      setNote({ text: "Testing it on today's data: nothing is sent or changed.", run: dueAt });
     } catch (e) {
       if ((e as { status?: number }).status === 404) {
         untestable = true;
@@ -162,6 +162,14 @@ function Card({ agent, chatId }: { agent: AgentDefinition; chatId: string }) {
       {note && (
         <p className={note.error ? "form-error" : "skills-note"} role="status">
           {note.text}
+          {note.run !== undefined && (
+            <>
+              {" "}
+              <a href={agentPath({ id: agent.id, tab: "runs", chat: chatId, run: note.run })} onClick={open(undefined, "runs", note.run)}>
+                See the run
+              </a>
+            </>
+          )}
         </p>
       )}
     </article>

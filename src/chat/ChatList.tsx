@@ -4,6 +4,7 @@ import { errorMessage } from "../../shared/util.ts";
 import { api } from "../api.ts";
 import { Icon } from "../Icon.tsx";
 import { isBoolean, useDismiss, useStoredState } from "../layout.tsx";
+import { AgentAvatar } from "./people.tsx";
 import { useLatest, useVisible } from "../sidebar.ts";
 import { GROUPINGS, hasUnread, isGrouping, orderChats, type ChatGrouping } from "./chat-order.ts";
 
@@ -278,10 +279,21 @@ function ChatRow({ chat, open, uid, navigate, onDelete }: { chat: ChatSummary; o
           }}
         >
           {chat.pinnedAt && <span className="nav-pin" aria-label="Pinned" title="Pinned" />}
-          <span className="nav-title">
-            {chat.title}
-            {chat.sharedBy && <small> · {chat.sharedBy}</small>}
-          </span>
+          {chat.agent ? (
+            // An agent's own chat shows like a contact's: its badge, its name and its last post.
+            <span className="nav-title nav-contact">
+              <AgentAvatar badge={chat.agent} />
+              <span className="nav-contact-text">
+                <span>@{chat.agent.name}</span>
+                {chat.agent.preview && <small>{chat.agent.preview}</small>}
+              </span>
+            </span>
+          ) : (
+            <span className="nav-title">
+              {chat.title}
+              {chat.sharedBy && <small> · {chat.sharedBy}</small>}
+            </span>
+          )}
           {copied ? <small className="nav-copied">Copied</small> : <ChatStatusIcon chat={chat} open={open} />}
         </a>
       )}

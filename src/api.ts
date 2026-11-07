@@ -1,3 +1,4 @@
+import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { AgentChanges, AgentChatUse, AgentDefinition, AgentInput, AgentServerInfo, ChatAgents, ChatAgentView, SharedAgentView } from "../shared/agents.ts";
 import type {
   ArtifactVersionImport,
@@ -15,6 +16,7 @@ import type {
 } from "../shared/data-export.ts";
 import { formatCursor, NEXT_PART_HEADER, parseCursor } from "../shared/data-export.ts";
 import { DICTATION_ROUTE, DICTATION_TYPE } from "../shared/dictation.ts";
+import type { AgentRunDetail, AgentRunList } from "../shared/runs.ts";
 import type { MentionOptions } from "../shared/mentions.ts";
 import type { ChatKind } from "../shared/chat-kinds.ts";
 import type { ModelCatalog } from "../shared/models.ts";
@@ -261,7 +263,16 @@ export const api = {
   /** The user's own copy of an agent shared in a chat, with their changes: saved off, with where it came from. */
   copyAgent: (chatId: string, agentId: string, changes: AgentChanges & { version: number }) => request<AgentDefinition>(chatPath(chatId, `/agents/${agentId}/copy`), post(changes)),
   /** A dry run of an agent on today's data, nothing sent or changed. Throws with status 404 where testing is not there yet. */
-  testAgent: (id: string) => request<unknown>(`/api/agents/${id}/test`, post({})),
+  testAgent: (id: string) => request<{ dueAt: number; homeChatId: string }>(`/api/agents/${id}/test`, post({})),
+  /** An agent's runs, newest first, when it runs next, and its own chat (null before its first run). */
+  agentRuns: (id: string) => request<AgentRunList>(`/api/agents/${id}/runs`),
+  /** One run of an agent in full: its items and their steps, what it sent, what it used. */
+  agentRun: (id: string, dueAt: number) => request<AgentRunDetail>(`/api/agents/${id}/runs/${dueAt}`),
+  /** The entries of one item's session in a run, oldest first: the full trace. */
+  agentRunTrace: (id: string, dueAt: number, item: string) =>
+    request<{ entries: EntryRecord[] }>(`/api/agents/${id}/runs/${dueAt}/trace?${new URLSearchParams({ item })}`),
+  /** Its instructions compiled to a workflow again, saved: the definition as it is now. */
+  compileAgent: (id: string) => request<AgentDefinition>(`/api/agents/${id}/compile`, post({})),
   skills: () => request<SkillInfo[]>("/api/skills"),
   /** Save one of the user's skills, from its fields or from a SKILL.md file's text. */
   saveSkill: (skill: (SkillInput | { markdown: string }) & { enabled?: boolean }) => request<SkillInfo>("/api/skills", post(skill)),

@@ -1242,6 +1242,83 @@ a.mention-chip:hover { text-decoration: underline; }
 .agent-glance-row.assumed .agent-glance-value { text-decoration: underline dashed var(--working); text-underline-offset: 3px; }
 .agent-glance-row dd small { display: block; color: var(--muted); font-size: 12px; }
 .agent-glance-change { color: var(--accent); font-size: 13px; }
+/* Runs of an agent on its own (src/agents/RunsTab.tsx, WorkflowTab.tsx), its home chat in the sidebar, a run's post. */
+.sidebar nav .nav-contact { display: flex; align-items: center; gap: 8px; }
+.sidebar nav .nav-contact span { padding: 0; }
+.sidebar nav .nav-contact .avatar { --size: 24px; flex: none; }
+.sidebar nav .nav-contact-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sidebar nav .nav-contact-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar nav .nav-contact-text small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.run-marker { display: inline-block; margin-top: 6px; color: var(--muted); font-size: 12px; text-decoration: none; }
+.run-marker:hover { color: var(--accent); text-decoration: underline; }
+.agent-runs { margin-top: 20px; }
+.agent-runs-note { margin-top: 20px; }
+.agent-runs-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.agent-runs-when { display: flex; flex-direction: column; gap: 2px; }
+.agent-runs-when small { color: var(--muted); font-size: 13px; }
+.agent-runs-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.button-link { display: inline-flex; align-items: center; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 14px; text-decoration: none; }
+.button-link:hover { background: var(--surface-2); }
+.run-list { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.run-list li + li { border-top: 1px solid var(--border); }
+.run-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; color: var(--text); text-decoration: none; }
+.run-row:hover { background: var(--surface-2); }
+.run-pills { display: inline-flex; flex: none; flex-wrap: wrap; gap: 4px; }
+.run-row .run-pills { width: 10.5em; }
+.run-row-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.run-row-when { color: var(--muted); font-size: 13px; }
+.run-row-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-row-cost { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pill.run-state.on { border-color: transparent; background: color-mix(in srgb, var(--live) 14%, var(--surface)); color: var(--live); }
+.pill.run-state.draft { border-color: transparent; background: var(--working-soft); color: var(--working); }
+.pill.run-state.error { border-color: transparent; background: color-mix(in srgb, var(--error) 12%, var(--surface)); color: var(--error); }
+.pill.run-test { border-style: dashed; }
+.run-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.run-detail-head h3 { margin: 0; font-size: 18px; }
+.run-detail-head small { flex-basis: 100%; color: var(--muted); font-size: 13px; }
+.run-section { margin: 24px 0 8px; font-size: 14px; }
+.run-deliveries, .run-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.run-delivery, .run-item { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+.run-delivery-line, .run-item-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.run-delivery > small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
+.run-report { margin-top: 8px; max-width: 100%; }
+.run-item.not_today { background: var(--surface-2); }
+.run-steps { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.run-step { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.run-step-mark { flex: none; width: 1em; color: var(--live); text-align: center; }
+.run-step.stopped .run-step-mark { color: var(--muted); }
+.run-step-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.run-step-text small { overflow-wrap: anywhere; color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
+.run-step-time { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.run-step.running { color: var(--working); }
+.run-item .link-button { margin-top: 8px; font-size: 13px; }
+.run-trace { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.run-trace-input summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+.run-trace-input pre { max-height: 240px; overflow: auto; margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bg); font-size: 12px; white-space: pre-wrap; }
+.run-used { display: flex; flex-wrap: wrap; gap: 6px 24px; margin: 24px 0 0; color: var(--muted); font-size: 13px; }
+.run-used div { display: flex; gap: 6px; }
+.run-used dt { font-weight: 600; }
+.run-used dd { margin: 0; }
+.workflow-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.workflow-section legend { margin-bottom: 8px; padding: 0; }
+.workflow-when, .workflow-days { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.workflow-choice, .workflow-day { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.agent-field.grow { flex: 1 1 18em; }
+.workflow-json { font-family: var(--font-mono); font-size: 13px !important; }
+.workflow-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.workflow-step { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.workflow-step.over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.workflow-step > details > summary { display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.workflow-step > details > summary::-webkit-details-marker { display: none; }
+.workflow-step > details[open] > summary { border-bottom: 1px solid var(--border); }
+.workflow-step > details > :not(summary) { margin: 10px; }
+.workflow-step-handle { color: var(--muted); cursor: grab; letter-spacing: -2px; }
+.workflow-step-kind { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; }
+.workflow-step-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.workflow-step-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.workflow-step-actions button { padding: 4px 10px; font-size: 13px; }
+.workflow-branch { display: flex; flex-direction: column; gap: 8px; padding-left: 12px; border-left: 2px solid var(--border); }
+.workflow-add { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 640px) {
   .agent-page { padding: 16px 14px 40px; }
   .agent-form { padding: 14px; }
@@ -1249,6 +1326,9 @@ a.mention-chip:hover { text-decoration: underline; }
   .agent-glance-row { grid-template-columns: minmax(0, 1fr) auto; }
   .agent-glance-row dt { grid-column: 1 / -1; }
   .agent-servers td, .agent-servers thead th:not(:first-child) { width: 4.5em; }
+  .run-row { flex-wrap: wrap; gap: 6px 10px; }
+  .run-row .run-pills { width: auto; }
+  .run-row-text { flex-basis: 100%; order: 2; }
 }
 
 
