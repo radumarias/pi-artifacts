@@ -567,7 +567,6 @@ export function whenOf(agent: Pick<AgentDefinition, "trigger">): string {
   return `when ${trigger.when} (checked every ${trigger.everyMinutes} minutes)`;
 }
 
-/** The first line of a text with anything on it, cut to `max`. */
 /** A condition scope with no prototype: a result named "__proto__" or "constructor" is a name like any other. */
 function bareScope(): Record<string, Value> {
   return Object.create(null) as Record<string, Value>;

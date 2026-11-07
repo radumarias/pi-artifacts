@@ -103,7 +103,10 @@ function WorkflowForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<ReadonlySet<string>>(new Set());
+  // A new round for each Undo: the fields that keep text of their own (a JSON input) start again from the form.
+  const [round, setRound] = useState(0);
   useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
+  useEffect(() => () => onDirty?.(false), [onDirty]);
   const change = (next: Partial<Form>) => {
     setForm((current) => ({ ...current, ...next }));
     setDirty(true);
@@ -156,7 +159,7 @@ function WorkflowForm({
 
   const schedule = runsLabel(triggerOf(form));
   return (
-    <form className="agent-form workflow-form" onSubmit={submit} onInvalidCapture={openAround}>
+    <form key={round} className="agent-form workflow-form" onSubmit={submit} onInvalidCapture={openAround}>
       <fieldset className="workflow-section" disabled={readOnly}>
         <legend className="agent-label">When it runs on its own</legend>
         <div className="workflow-when" role="radiogroup" aria-label="When it runs">
@@ -261,6 +264,7 @@ function WorkflowForm({
                 setForm(formOf(agent));
                 setInvalid(new Set());
                 setDirty(false);
+                setRound((n) => n + 1);
               }}
             >
               Undo changes
@@ -380,10 +384,13 @@ function StepList({
   const keyMove = (index: number) => (event: KeyboardEvent) => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
     event.preventDefault();
+    // A step in an if's branch moves in its branch only, not the if around it too.
+    event.stopPropagation();
     const to = index + (event.key === "ArrowUp" ? -1 : 1);
     move(index, to);
-    // Focus follows the card it moved.
-    requestAnimationFrame(() => (event.currentTarget.parentElement?.children[to]?.querySelector("summary") as HTMLElement | null)?.focus());
+    // Focus follows the card it moved. The list is taken now: React clears currentTarget once the handler returns.
+    const list = event.currentTarget.closest("li")?.parentElement;
+    requestAnimationFrame(() => (list?.children[to]?.querySelector("summary") as HTMLElement | null)?.focus());
   };
   return (
     <>
@@ -394,6 +401,8 @@ function StepList({
             className={over === index ? "workflow-step over" : "workflow-step"}
             draggable={!readOnly}
             onDragStart={(event) => {
+              // Only this list moves it: the list of an if around it hears nothing of the drag.
+              event.stopPropagation();
               dragging.current = index;
               event.dataTransfer.effectAllowed = "move";
             }}
@@ -413,10 +422,10 @@ function StepList({
               dragging.current = null;
               setOver(null);
             }}
-            onKeyDown={readOnly ? undefined : keyMove(index)}
           >
             <details>
-              <summary title={readOnly ? undefined : "Drag, or Alt+Up and Alt+Down, to move it"}>
+              {/* On the card's head only: Alt+Up and Alt+Down in its fields stay the fields'. */}
+              <summary title={readOnly ? undefined : "Drag, or Alt+Up and Alt+Down, to move it"} onKeyDown={readOnly ? undefined : keyMove(index)}>
                 <span className="workflow-step-handle" aria-hidden="true">
                   ⋮⋮
                 </span>

@@ -26,11 +26,14 @@ function calledByLabel(calledBy: ChatAgentReplyData["calledBy"], run: ChatAgentR
  */
 export function AgentReply({
   data,
+  chatId,
   reactions,
   onReply,
   onOpen,
 }: {
   data: ChatAgentReplyData;
+  /** The chat it is in: the run's page leads back to it. */
+  chatId: string;
   reactions: MessageReactions | null;
   onReply?: () => void;
   onOpen: (artifact: PublishedDetails) => void;
@@ -39,7 +42,7 @@ export function AgentReply({
   const people = useSharedChat();
   // Whose agent it is: it works with their sign-ins and budget.
   const owner = people && everyone(people).find((person) => person.uid === data.ownerUid)?.name;
-  const runPath = data.run && agentPath({ id: data.agentId, tab: "runs", run: data.run.dueAt });
+  const runPath = data.run && agentPath({ id: data.agentId, tab: "runs", run: data.run.dueAt, chat: chatId });
   return (
     <div className="agent-reply" ref={content}>
       <AgentByline name={data.name} badge={data} note={["agent", owner && `${owner}'s`, calledByLabel(data.calledBy, data.run)].filter(Boolean).join(" · ")} />

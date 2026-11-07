@@ -7,7 +7,10 @@ import { api, keepAlive } from "./api.ts";
 /** One prompt changes a list several times in a row (bumped, working, named, done): read it once for those. */
 const LOAD_DELAY_MS = 150;
 const LISTS: readonly SidebarList[] = ["chats", "artifacts", "skills", "agents", "sign-ins"];
-/** The window event the sidebar's socket raises when a run of one of the user's agents moved on (detail: its id). */
+/**
+ * The window event the sidebar's socket raises when a run of one of the user's agents moved on (detail: its id), or,
+ * as it opens again, when any may have while it was closed (detail: null).
+ */
 export const RUNS_EVENT = "pi-agent-runs";
 
 /**
@@ -74,6 +77,7 @@ export function useSidebarSocket(
     };
     const load = (list: SidebarList) => later(list, () => current.current[list]?.());
     let closed = false;
+    let reopened = false;
     let attempt = 0;
     let ws: WebSocket | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -84,6 +88,9 @@ export function useSidebarSocket(
       ws.onopen = () => {
         attempt = 0;
         LISTS.forEach(load);
+        // Notices of runs sent while it was closed are lost: an open Runs tab reads again.
+        if (reopened) later("runs", () => dispatchEvent(new CustomEvent(RUNS_EVENT, { detail: null })));
+        reopened = true;
       };
       ws.onmessage = (event) => {
         if (LISTS.includes(event.data)) return load(event.data);

@@ -25,10 +25,11 @@ const POLL_MS = 3_000;
 
 /**
  * Read `load` while the page is in view: now, again when `key` changes or the page comes back into view, when the
- * sidebar's socket says this agent's runs changed, and POLL_MS after each read while `polling` says so (a step's
- * progress within an item has no notice of its own). Only the newest read's answer is kept.
+ * sidebar's socket says this agent's runs changed (or may have, as it opens again; never with no `agentId`), and
+ * POLL_MS after each read while `polling` says so (a step's progress within an item has no notice of its own). Only the
+ * newest read's answer is kept.
  */
-function useRead<T>(load: () => Promise<T>, agentId: string, key: string, polling: (value: T) => boolean = () => false) {
+function useRead<T>(load: () => Promise<T>, agentId: string | null, key: string, polling: (value: T) => boolean = () => false) {
   const [error, setError] = useState<string | null>(null);
   const [value, read] = useLatest<T | null>(load, null, (e) => setError(e && errorMessage(e)));
   const visible = useVisible();
@@ -36,7 +37,11 @@ function useRead<T>(load: () => Promise<T>, agentId: string, key: string, pollin
     if (visible) read();
   }, [key, visible, read]);
   useEffect(() => {
-    const changed = (event: Event) => (event as CustomEvent<string>).detail === agentId && read();
+    if (agentId === null) return;
+    const changed = (event: Event) => {
+      const changedId = (event as CustomEvent<string | null>).detail;
+      if (changedId === null || changedId === agentId) read();
+    };
     addEventListener(RUNS_EVENT, changed);
     return () => removeEventListener(RUNS_EVENT, changed);
   }, [agentId, read]);
@@ -135,6 +140,8 @@ function RunList({ agent, chat, navigate }: { agent: AgentDefinition; chat?: str
 
 /** A time ahead, as the runs list says it: "today at 7:00 AM", "Monday at 7:00 AM", or the date. */
 function aheadLabel(at: number, now: number): string {
+  // Due already (its alarm about to go off): not a weekday a week ahead.
+  if (at <= now) return "now";
   const time = new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   // In calendar days, so a change of clocks between now and then does not move it.
   const days = Math.round((calendarDay(at) - calendarDay(now)) / 86_400_000);
@@ -298,7 +305,7 @@ function RunItem({ agentId, dueAt, item, scoped }: { agentId: string; dueAt: num
       )}
       {opened && (
         <div hidden={!trace}>
-          <RunTrace agentId={agentId} dueAt={dueAt} item={item.item} />
+          <RunTrace agentId={agentId} dueAt={dueAt} item={item.item} live={item.status === "running"} />
         </div>
       )}
     </li>
@@ -307,10 +314,11 @@ function RunItem({ agentId, dueAt, item, scoped }: { agentId: string; dueAt: num
 
 /**
  * One item's session as it ran: what it was given, its steps (each as the chat shows a step) and what it answered. Read
- * again as the run moves on; the same props across the run page's reads render nothing new.
+ * again as the run moves on while the item is `live`, and once more as it ends; the same props across the run page's
+ * reads render nothing new.
  */
-const RunTrace = memo(function RunTrace({ agentId, dueAt, item }: { agentId: string; dueAt: number; item: string }) {
-  const { value, error } = useRead(() => api.agentRunTrace(agentId, dueAt, item), agentId, `${agentId}:${dueAt}:${item}`);
+const RunTrace = memo(function RunTrace({ agentId, dueAt, item, live }: { agentId: string; dueAt: number; item: string; live: boolean }) {
+  const { value, error } = useRead(() => api.agentRunTrace(agentId, dueAt, item), live ? agentId : null, `${agentId}:${dueAt}:${item}:${live}`);
   const entries = value?.entries;
   if (error && !entries) return <p className="form-error">Could not read its trace: {error}</p>;
   if (!entries) return <p className="skills-note">Reading its trace…</p>;
