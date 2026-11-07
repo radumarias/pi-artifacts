@@ -847,6 +847,23 @@ describe("AgentTurns: stop", () => {
     expect(await chat.turns.stop(idOf(A))).toBe(false);
   });
 
+  it("stops the turns of someone who left, and what their messages handed on, aborting what runs", async () => {
+    const chat = new FakeChat([A, B, C]);
+    const [mine] = chat.turns.call([idOf(A)], chat.say(MIA, "@atlas look"));
+    const [owners] = chat.turns.call([idOf(C)], chat.say(OWNER, "@cora too"));
+    await chat.flush();
+    chat.finish(mine.id, done("@bard and @pi, go on"));
+    await chat.flush();
+    const handOff = chat.latest(B);
+    expect(handOff).toMatchObject({ root: mine.id, status: "running" });
+
+    expect(await chat.turns.leave(MIA.uid)).toBe(true);
+    expect(chat.roster.turn(handOff.id)?.status).toBe("stopped");
+    expect(chat.roster.turn(owners.id)?.status).toBe("running");
+    expect(chat.aborts).toEqual([sessionOf(B)]);
+    expect(await chat.turns.leave(MIA.uid)).toBe(false);
+  });
+
   it("says when there was nothing to stop, and tells no one", async () => {
     const chat = new FakeChat([A]);
     expect(await chat.turns.stop()).toBe(false);

@@ -267,8 +267,17 @@ export class AgentTurns {
 
   /** Stop every agent's turns, or one agent's: running ones are aborted, waiting ones dropped. True when one was stopped. */
   async stop(agentId?: string): Promise<boolean> {
+    return this.#stopped(this.#host.roster.stopAll(agentId));
+  }
+
+  /** Someone left the chat: their turns stop, and those their messages handed on (ChatRoster.stopFor). True when one did. */
+  async leave(uid: string): Promise<boolean> {
+    return this.#stopped(this.#host.roster.stopFor(uid));
+  }
+
+  /** Abort the sessions of the turns just stopped that had started, and tell everyone. */
+  async #stopped(stopped: readonly AgentTurn[]): Promise<boolean> {
     const roster = this.#host.roster;
-    const stopped = roster.stopAll(agentId);
     const sessions = new Set(stopped.filter((turn) => turn.startedAt !== undefined).flatMap((turn) => roster.get(turn.agentId)?.session ?? []));
     await Promise.all([...sessions].map((session) => this.#host.abort(session).catch((error: unknown) => console.error("agent stop:", errorMessage(error)))));
     if (stopped.length) this.#host.changed();

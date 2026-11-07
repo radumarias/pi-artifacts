@@ -1758,7 +1758,7 @@ export class ChatAgent extends DurableObject<Env> {
     this.#tellShared();
     // The agent acts as the owner: a removed person's queued requests must not run after they are out.
     await this.#withdrawQueued(uid).catch((error: unknown) => console.error("withdraw queued:", errorMessage(error)));
-    if (this.roster.dropQueuedBy(uid)) this.#broadcastAgents();
+    await this.turns.leave(uid);
     if (this.#hasSidebar(uid)) await this.#index(uid).removeSharedChat(this.chatId, this.uid);
     return null;
   }

@@ -271,14 +271,19 @@ export class ChatRoster {
     return turnOf(row);
   }
 
-  /** Drop the turns waiting that someone asked for: they left the chat, and none of theirs is answered. Whether any went. */
-  dropQueuedBy(uid: string): boolean {
-    const dropped = this.#sql.exec(
-      "UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE status = 'queued' AND json_extract(called_by, '$.uid') = ?",
-      this.#now(),
-      uid,
-    );
-    return dropped.rowsWritten > 0;
+  /**
+   * Someone left the chat: stop every turn not ended that they asked for, or that their messages' turns handed on, and
+   * hand pi none of those chains' replies not delivered yet, so nothing of theirs runs as the owner after they are out.
+   * The ones stopped.
+   */
+  stopFor(uid: string): AgentTurn[] {
+    const asked = "json_extract(called_by, '$.uid') = ?";
+    const theirs = `(${asked} OR root IN (SELECT id FROM chat_agent_turns WHERE ${asked}))`;
+    this.#sql.exec(`UPDATE chat_agent_turns SET to_pi = 0 WHERE to_pi = 1 AND ${UNDELIVERED} AND ${theirs}`, uid, uid);
+    const rows = this.#sql
+      .exec(`UPDATE chat_agent_turns SET status = 'stopped', ended_at = ? WHERE ${OPEN} AND ${theirs} RETURNING *`, this.#now(), uid, uid)
+      .toArray() as TurnRow[];
+    return rows.map(turnOf);
   }
 
   /**

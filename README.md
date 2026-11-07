@@ -537,6 +537,7 @@ instructions, model and effort, and the MCP servers it may use.
   posts it then, once. An agent's reply naming another agent (or `@pi`) hands the work
   on, at most three hand-offs per person's message however many agents it named (`MAX_HOPS`), a hand-off to pi counted
   too; an agent never calls itself. One its owner turned off says so when it is called. Stop stops pi and every agent.
+  When someone leaves the chat or is removed, their agents' turns stop, with those their messages handed on.
 - **What an agent reads:** before each turn, its session gets one passive write with what was said in the chat since its
   last turn, one labelled message each (`[Ana · person]`, `[research · agent]`, `[Radu · person · your owner]`), its
   further lines indented and anything in it shaped like an owner's label marked as quoted; then the turn's input names

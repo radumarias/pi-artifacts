@@ -397,7 +397,7 @@ describe("ChatRoster: running turns", () => {
     const running = started(roster, ask("id-bob"));
     const waiting = roster.enqueue(ask("id-bob", { calledBy: bea }));
     for (let n = 0; n < KEPT_TURNS + 5; n++) roster.enqueue(ask("id-bob", { calledBy: zed }));
-    expect(roster.dropQueuedBy("zed")).toBe(true);
+    expect(roster.stopFor("zed")).toHaveLength(KEPT_TURNS + 5);
     // end takes a turn that has not started too, so this one prunes without ending the running turn.
     const last = roster.enqueue(ask("id-bob", { calledBy: zed }));
     expect(roster.end(last.id, "failed")?.status).toBe("failed");
@@ -557,26 +557,51 @@ describe("ChatRoster: chains, ask keys and who asked", () => {
     expect(roster.startNext("id-bob")?.id).toBe(setUp.id);
   });
 
-  it("drops only the waiting turns of the person who left, and says whether any went", () => {
+  it("stops the turns of the person who left, running or waiting, and only theirs", () => {
     const { roster, clock } = withAgents("bob", "carol");
     const running = started(roster, ask("id-bob"));
     const waiting = roster.enqueue(ask("id-bob"));
     const beas = roster.enqueue(ask("id-bob", { calledBy: bea }));
     // A hand-off from an agent that happens to share the person's name is no turn the person asked for.
-    const handOff = roster.enqueue(ask("id-bob", { hop: 1, root: running.id, calledBy: { name: "ann", agentId: "id-ann" }, byOwner: false }));
+    const handOff = roster.enqueue(ask("id-bob", { hop: 1, root: beas.id, calledBy: { name: "ann", agentId: "id-ann" }, byOwner: false }));
     const carols = roster.enqueue(ask("id-carol"));
     clock.now = T0 + 50;
 
-    expect(roster.dropQueuedBy("ann")).toBe(true);
+    expect(
+      roster
+        .stopFor("ann")
+        .map((turn) => turn.id)
+        .sort((a, b) => a - b),
+    ).toEqual([running.id, waiting.id, carols.id]);
     expect(roster.turn(waiting.id)).toEqual(expect.objectContaining({ status: "stopped", endedAt: T0 + 50 }));
-    expect(roster.turn(carols.id)?.status).toBe("stopped");
-    expect(roster.turn(running.id)?.status).toBe("running");
+    expect(roster.turn(running.id)).toEqual(expect.objectContaining({ status: "stopped", startedAt: T0 }));
     expect(roster.turn(beas.id)?.status).toBe("queued");
     expect(roster.turn(handOff.id)?.status).toBe("queued");
     expect(queuedOf(roster)).toEqual(new Map([["id-bob", 2]]));
 
-    expect(roster.dropQueuedBy("ann")).toBe(false);
-    expect(roster.dropQueuedBy("nobody")).toBe(false);
+    expect(roster.stopFor("ann")).toEqual([]);
+    expect(roster.stopFor("nobody")).toEqual([]);
+  });
+
+  it("stops what the person's messages handed on too, and hands pi none of their chains' replies", () => {
+    const { roster } = withAgents("bob", "carol", "dave");
+    const theirs = started(roster, ask("id-bob"));
+    const handOff = roster.enqueue({
+      agentId: "id-carol",
+      hop: 1,
+      root: theirs.id,
+      calledBy: { name: "bob", agentId: "id-bob" },
+      byOwner: false,
+      ask: "@bob: go",
+    });
+    roster.end(theirs.id, "done", { reply: replyTo(theirs, "@carol @pi go"), toPi: true });
+    const beas = started(roster, ask("id-dave", { calledBy: bea }));
+    roster.end(beas.id, "done", { reply: replyTo(beas, "@pi go"), toPi: true });
+
+    expect(roster.stopFor("ann").map((turn) => turn.id)).toEqual([handOff.id]);
+    expect(roster.outbox(theirs.id)?.toPi).toBe(false);
+    expect(roster.outbox(beas.id)?.toPi).toBe(true);
+    expect(roster.undelivered()).toEqual([theirs.id, beas.id]);
   });
 });
 
