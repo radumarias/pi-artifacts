@@ -257,7 +257,9 @@ describe("sign-ins with nobody present", () => {
     s.answer("needs_sign_in");
     s.at(T0 + DAY);
     await s.signIns.check(["Portal"]);
-    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    // chat1's agent reads Portal in a step (agentChanged says so with its run servers); chat2's does not.
+    s.signIns.setRunServers("chat1", [], ["Portal"]);
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
     expect(s.signIns.list()[0]).toMatchObject({ lapsed: true, notice: "needed", stepReads: true });
     expect(s.pushed[0]).toContain("An agent reads Portal in a step, so it cannot go on without it: change its steps or turn it off.");
     expect(s.pushed[0]).not.toContain("Disconnect");
@@ -269,7 +271,7 @@ describe("sign-ins with nobody present", () => {
     await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });
     expect(s.signIns.list()[0]!.stepReads).toBeUndefined();
     // An agent that reads it in a step waits after one that does not: the notice names the one that cannot go on.
-    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
     expect(s.signIns.list()[0]).toMatchObject({ stepReads: true, waiting: "@brief" });
   });
 
@@ -287,15 +289,15 @@ describe("sign-ins with nobody present", () => {
     expect(s.signIns.list()[0]).toMatchObject({ lapsed: true, stepReads: true });
     // Dismissed, then asked again by a wait that reads it only in its instructions: the run that reads it in a step
     // still waits behind it, so the notice says so.
-    s.signIns.setRunServers("chat1", []);
-    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    s.signIns.setRunServers("chat1", [], ["Portal"]);
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
     s.signIns.dismiss("Portal");
     await s.signIns.needed("Portal", { chatId: "chat2", what: "@digest" });
     expect(s.told.at(-1)).toMatchObject({ stepReads: true });
     expect(s.pushed.at(-1)).not.toContain("Disconnect");
     expect(s.signIns.list()[0]).toMatchObject({ notice: "needed", stepReads: true });
-    // Its own later wait without the step read takes it back.
-    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
+    // Its steps no longer read it: that takes it back.
+    s.signIns.setRunServers("chat1", [], []);
     expect(s.signIns.list()[0]!.stepReads).toBeUndefined();
   });
 
@@ -305,7 +307,8 @@ describe("sign-ins with nobody present", () => {
     s.answer("needs_sign_in");
     s.at(T0 + DAY);
     await s.signIns.check(["Portal"]);
-    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief", stepReads: true });
+    s.signIns.setRunServers("chat1", ["Portal"], ["Portal"]);
+    await s.signIns.needed("Portal", { chatId: "chat1", what: "@brief" });
     expect(s.signIns.list()[0]!.stepReads).toBe(true);
     // Its steps changed: the instructions' tools may still use Portal, so it waits on, but Disconnect lets it go.
     s.signIns.setRunServers("chat1", ["Portal"], []);

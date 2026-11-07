@@ -33,7 +33,7 @@ describe("the sidebar's sign-in notice", () => {
     const lapsed = row({ ...needed, lapsed: true });
     expect(lapsed).toContain("runs wait for it until you sign in again, or Disconnect");
     const step = row({ ...needed, lapsed: true, stepReads: true });
-    expect(step).toContain("an agent reads it in a step, and waits until you sign in again or change its steps");
+    expect(step).toContain("An agent reads Portal in a step, so it cannot go on without it: change its steps or turn it off.");
     expect(step).not.toContain("or Disconnect");
     // The button stays: it still removes the sign-in.
     expect(step).toContain(">Disconnect</button>");

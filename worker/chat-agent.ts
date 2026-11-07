@@ -3215,12 +3215,9 @@ export class ChatAgent extends DurableObject<Env> {
       signInNeeded: (agent, servers, quiet) => {
         const directory = this.#directory;
         const context = { chatId: this.chatId, what: `@${agent.name}`, ...(quiet && { quiet }) };
-        // A server it reads in a step it cannot go without: its notice offers no Disconnect.
-        const steps = stepServers(agent);
+        // Whether it reads one in a step (no Disconnect offered) the directory knows from setRunServers (agentChanged).
         const asking = servers.map((server) =>
-          directory
-            .notifySignInNeeded(server, { ...context, ...(steps.has(server) && { stepReads: true }) })
-            .catch((error: unknown) => console.error(`agent sign-in (${server}):`, errorMessage(error))),
+          directory.notifySignInNeeded(server, context).catch((error: unknown) => console.error(`agent sign-in (${server}):`, errorMessage(error))),
         );
         this.ctx.waitUntil(Promise.all(asking));
       },

@@ -36,8 +36,6 @@ export type SignInNeededContext = {
   chatId?: string;
   what?: string;
   quiet?: boolean;
-  /** The agent reads the server in a step: going on without it is no way out, so Disconnect is not offered for it. */
-  stepReads?: boolean;
 };
 
 /**
@@ -50,6 +48,8 @@ export type SignInNeededContext = {
  * - `mcp_run_servers`: the servers each chat's scheduled runs use. Only those are kept alive and warned about: a person
  *   in a chat signs in when the agent gives them the link, a run cannot.
  * - `mcp_waiting`: chats with runs waiting for a sign-in, told when it comes (`onSignedIn`).
+ * - `mcp_step_servers`: the servers each chat's agent reads in a step, as its definition is now: a run of it cannot go
+ *   on without one, so a notice for it while it waits or runs offers no Disconnect (`#stepReads`).
  * - `mcp_notices`: what the sidebar shows until the user signs in, or dismisses it.
  * - `mcp_known`: the servers the user has signed in to and not Disconnected, whatever became of the record since (a
  *   refused refresh clears its tokens, a refused client all of it): runs that may use one wait for its sign-in. Stamped
@@ -82,18 +82,17 @@ export class McpSignIns {
       CREATE TABLE IF NOT EXISTS mcp_run_servers (chat_id TEXT NOT NULL, server TEXT NOT NULL, PRIMARY KEY (chat_id, server));
       CREATE TABLE IF NOT EXISTS mcp_waiting (server TEXT NOT NULL, chat_id TEXT NOT NULL, PRIMARY KEY (server, chat_id));
       CREATE TABLE IF NOT EXISTS mcp_notices (server TEXT PRIMARY KEY, kind TEXT NOT NULL, what TEXT);
+      CREATE TABLE IF NOT EXISTS mcp_step_servers (chat_id TEXT NOT NULL, server TEXT NOT NULL, PRIMARY KEY (chat_id, server));
     `);
     if (!sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mcp_known'").toArray().length) {
       // Records from before the table count as known, lapsed or not (one never finished too: Disconnect forgets it).
       sql.exec("CREATE TABLE mcp_known (server TEXT PRIMARY KEY); INSERT INTO mcp_known (server) SELECT server FROM mcp_auth");
     }
-    // Whether that chat's agent reads the server in a step: it cannot go on without it, so Disconnect is no way out.
-    addColumns(sql, "mcp_waiting", { step_reads: "INTEGER NOT NULL DEFAULT 0" });
-    addColumns(sql, "mcp_run_servers", { step_reads: "INTEGER NOT NULL DEFAULT 0" });
+    // mcp_notices.step_reads, from code before, is no longer read: step reads come from mcp_step_servers.
     // Forget sign-ins to servers this deployment no longer has, tokens included.
     const configured = this.#oauthServers().map((server) => server.name);
     const notIn = configured.length ? ` WHERE server NOT IN (${configured.map(() => "?").join(", ")})` : "";
-    for (const table of ["mcp_auth", "mcp_run_servers", "mcp_waiting", "mcp_notices", "mcp_known"]) {
+    for (const table of ["mcp_auth", "mcp_run_servers", "mcp_waiting", "mcp_notices", "mcp_known", "mcp_step_servers"]) {
       sql.exec(`DELETE FROM ${table}${notIn}`, ...configured);
     }
   }
@@ -181,38 +180,36 @@ export class McpSignIns {
 
   /**
    * The servers a chat's scheduled runs use (worker/agents/runs): replaces that chat's list; an empty list clears it.
-   * Those are refreshed daily and warned about before their grant ends. `stepReads`, those its agent reads in a step,
-   * also say so for its runs waiting now: steps changed so it no longer reads one, its notice offers Disconnect again.
+   * Those are refreshed daily and warned about before their grant ends. `stepReads`, those its agent reads in a step
+   * (also when it is off, for its tests), say so for its notices: steps changed, a run waiting is offered Disconnect again.
    */
   setRunServers(chatId: string, servers: readonly string[], stepReads: readonly string[] = []): void {
     const oauth = new Set(this.#oauthServers().map((server) => server.name));
-    const steps = new Set(stepReads);
+    const steps = [...new Set(stepReads)].filter((server) => oauth.has(server)).sort();
+    if (this.#replace("mcp_step_servers", chatId, steps)) this.#host.changed();
     const next = [...new Set(servers)].filter((server) => oauth.has(server)).sort();
-    const key = (server: string, step: boolean) => `${server}${step ? " step" : ""}`;
-    const sql = this.#host.sql;
-    let waits = 0;
-    for (const row of sql.exec("SELECT server, step_reads FROM mcp_waiting WHERE chat_id = ?", chatId).toArray()) {
-      const server = row.server as string;
-      const step = steps.has(server) ? 1 : 0;
-      if (row.step_reads !== step) waits += sql.exec("UPDATE mcp_waiting SET step_reads = ? WHERE server = ? AND chat_id = ?", step, server, chatId).rowsWritten;
-    }
-    if (waits) this.#host.changed();
-    const now = sql
-      .exec("SELECT server, step_reads FROM mcp_run_servers WHERE chat_id = ? ORDER BY server", chatId)
-      .toArray()
-      .map((row) => key(row.server as string, Boolean(row.step_reads)));
-    if (now.join("\n") === next.map((server) => key(server, steps.has(server))).join("\n")) return;
-    sql.exec("DELETE FROM mcp_run_servers WHERE chat_id = ?", chatId);
-    for (const server of next) {
-      sql.exec("INSERT INTO mcp_run_servers (chat_id, server, step_reads) VALUES (?, ?, ?)", chatId, server, steps.has(server) ? 1 : 0);
-    }
+    if (!this.#replace("mcp_run_servers", chatId, next)) return;
     this.#host.changed();
     this.#schedule();
+  }
+
+  /** Replace one chat's servers in `table` (sorted); whether they changed. */
+  #replace(table: "mcp_run_servers" | "mcp_step_servers", chatId: string, servers: readonly string[]): boolean {
+    const sql = this.#host.sql;
+    const now = sql
+      .exec(`SELECT server FROM ${table} WHERE chat_id = ? ORDER BY server`, chatId)
+      .toArray()
+      .map((row) => row.server as string);
+    if (now.join("\n") === servers.join("\n")) return false;
+    sql.exec(`DELETE FROM ${table} WHERE chat_id = ?`, chatId);
+    for (const server of servers) sql.exec(`INSERT INTO ${table} (chat_id, server) VALUES (?, ?)`, chatId, server);
+    return true;
   }
 
   /** A chat was deleted: its runs use no server and wait for none. */
   forgetChat(chatId: string): void {
     this.#host.sql.exec("DELETE FROM mcp_waiting WHERE chat_id = ?", chatId);
+    this.#host.sql.exec("DELETE FROM mcp_step_servers WHERE chat_id = ?", chatId);
     if (this.#host.sql.exec("DELETE FROM mcp_run_servers WHERE chat_id = ?", chatId).rowsWritten) {
       this.#host.changed();
       this.#schedule();
@@ -252,23 +249,19 @@ export class McpSignIns {
   async needed(server: string, context: SignInNeededContext = {}): Promise<void> {
     if (!this.#oauthServers().some((s) => s.name === server)) return;
     const sql = this.#host.sql;
-    // As the chat's agent is now: a later wait of its own says whether it still reads the server in a step.
-    if (context.chatId) {
-      sql.exec(
-        "INSERT INTO mcp_waiting (server, chat_id, step_reads) VALUES (?, ?, ?) ON CONFLICT(server, chat_id) DO UPDATE SET step_reads = excluded.step_reads",
-        server,
-        context.chatId,
-        context.stepReads ? 1 : 0,
-      );
-    }
+    if (context.chatId) sql.exec("INSERT OR IGNORE INTO mcp_waiting (server, chat_id) VALUES (?, ?)", server, context.chatId);
     if (context.quiet) return;
     const what = context.what?.slice(0, 80);
     if (this.#setNotice(server, "needed", what)) {
       await this.#tell({ type: "sign-in", server, kind: "needed", link: signInPath(server), ...(what && { what }), at: this.#now() });
-    } else if (context.stepReads && what) {
+    } else if (what && context.chatId && this.#readsInStep(context.chatId, server)) {
       // Up already: it names the agent that reads it in a step, as its text says that one cannot go on without it.
       if (sql.exec("UPDATE mcp_notices SET what = ? WHERE server = ? AND what IS NOT ?", what, server, what).rowsWritten) this.#host.changed();
     }
+  }
+
+  #readsInStep(chatId: string, server: string): boolean {
+    return this.#host.sql.exec("SELECT 1 FROM mcp_step_servers WHERE chat_id = ? AND server = ?", chatId, server).toArray().length > 0;
   }
 
   /**
@@ -378,15 +371,15 @@ export class McpSignIns {
 
   /**
    * The servers an agent reads in a step, of the runs waiting for them or using them: going on without one is no way
-   * out for that agent, so Disconnect is not offered for it. Worked out from what waits, not kept on the notice.
+   * out for that agent, so Disconnect is not offered for it. Worked out from what waits and runs, not kept on the notice.
    */
   #stepReads(): Set<string> {
-    return new Set(
-      this.#host.sql
-        .exec("SELECT server FROM mcp_waiting WHERE step_reads = 1 UNION SELECT server FROM mcp_run_servers WHERE step_reads = 1")
-        .toArray()
-        .map((row) => row.server as string),
+    const rows = this.#host.sql.exec(
+      `SELECT DISTINCT s.server FROM mcp_step_servers s
+       WHERE EXISTS (SELECT 1 FROM mcp_waiting w WHERE w.chat_id = s.chat_id AND w.server = s.server)
+          OR EXISTS (SELECT 1 FROM mcp_run_servers r WHERE r.chat_id = s.chat_id AND r.server = s.server)`,
     );
+    return new Set(rows.toArray().map((row) => row.server as string));
   }
 
   /**

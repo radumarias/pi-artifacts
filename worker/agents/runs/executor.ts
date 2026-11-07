@@ -330,7 +330,7 @@ export class RunExecutor {
     if (newer === "going") return;
     const waits = runs.get(agentId, dueAt)?.status === "needs_sign_in";
     if (newer === "went" || waits) {
-      runs.skipWaiting(agentId, deferred.dueAt, `Skipped: a newer run ${waits && newer !== "went" ? "waits" : "went"} instead.`);
+      runs.skipWaiting(agentId, deferred.dueAt, `Skipped: a newer run ${newer === "went" ? "went" : "waits"} instead.`);
       this.#host.changed(agentId);
       return;
     }

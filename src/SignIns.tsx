@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { offersDisconnect, signInNoticeText, type McpSignInView, type SignInNotice } from "../shared/sign-ins.ts";
+import { offersDisconnect, readsInStepText, signInNoticeText, type McpSignInView, type SignInNotice } from "../shared/sign-ins.ts";
 import { errorMessage } from "../shared/util.ts";
 import { api } from "./api.ts";
 import { Icon } from "./Icon.tsx";
@@ -143,9 +143,11 @@ export function SignInsDialog({
                     ? `Signed in ${day(item.signedInAt)} · runs out about ${day(item.endsAt!)}`
                     : "Signed in"
                   : item.lapsed
-                    ? item.stepReads
-                      ? "Sign-in no longer works · an agent reads it in a step, and waits until you sign in again or change its steps"
-                      : "Sign-in no longer works · runs wait for it until you sign in again, or Disconnect"
+                    ? `Sign-in no longer works · ${
+                        offersDisconnect(item)
+                          ? "runs wait for it until you sign in again, or Disconnect"
+                          : readsInStepText("An agent", [item.server])
+                      }`
                     : "Not signed in"}
                 {item.usedByRuns && " · used by scheduled runs"}
               </small>
