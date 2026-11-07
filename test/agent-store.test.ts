@@ -588,7 +588,7 @@ describe("agentsRoute", () => {
     const agent = saved(store.save(research, "user", undefined));
     expect(await send("DELETE", `/api/agents/${agent.id}`)).toEqual({ status: 200, body: {} });
     expect(store.list()).toEqual([]);
-    expect(await send("DELETE", `/api/agents/${agent.id}`)).toEqual({ status: 400, body: { error: "No such agent." } });
+    expect(await send("DELETE", `/api/agents/${agent.id}`)).toEqual({ status: 404, body: { error: "No such agent." } });
   });
 
   it.each([

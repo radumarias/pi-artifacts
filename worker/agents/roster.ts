@@ -187,9 +187,8 @@ export class ChatRoster {
    */
   add(entry: Pick<RosterEntry, "agentId" | "ownerUid" | "name" | "session" | "avatar" | "color" | "job">): { error: string } | null {
     if (this.get(entry.agentId)) return null;
-    const n = this.#sql.exec("SELECT COUNT(*) AS n FROM chat_agents").toArray()[0].n as number;
-    if (n >= MAX_CHAT_AGENTS) return { error: `A chat holds at most ${MAX_CHAT_AGENTS} agents besides pi; remove one first.` };
-    if (this.byName(entry.name)) return { error: `This chat already has an agent named "${entry.name}".` };
+    const refused = this.refusal(entry.name);
+    if (refused) return refused;
     this.#sql.exec(
       "INSERT INTO chat_agents (agent_id, owner_uid, name, session, added_at, avatar, color, job) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       entry.agentId,
@@ -201,6 +200,17 @@ export class ChatRoster {
       entry.color,
       entry.job,
     );
+    return null;
+  }
+
+  /**
+   * Why a new agent named `name` cannot join, as `add` would refuse it: the chat holds MAX_CHAT_AGENTS, or another
+   * agent has the name here. Null when it can.
+   */
+  refusal(name: string): { error: string } | null {
+    const n = this.#sql.exec("SELECT COUNT(*) AS n FROM chat_agents").toArray()[0].n as number;
+    if (n >= MAX_CHAT_AGENTS) return { error: `A chat holds at most ${MAX_CHAT_AGENTS} agents besides pi; remove one first.` };
+    if (this.byName(name)) return { error: `This chat already has an agent named "${name}".` };
     return null;
   }
 

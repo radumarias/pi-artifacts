@@ -458,10 +458,10 @@ export class ChatAgent extends DurableObject<Env> {
     if (this.#gone) return;
     // The agents' turns that were running, or waiting, go on: cheap when there are none.
     this.turns.resume();
+    // An answer pi gave before the restart may not have been read for the agents it names, even once its run ended.
+    this.#scanPi();
     // The sidebars show the chat working: the object restarted mid-run. Follow the run it resumes, or tell them it is over.
     if (this.#status() !== "running") return;
-    // An answer pi gave before the restart may not have been read for the agents it names.
-    this.#scanPi();
     void this.refreshMcpTools();
     void this.refreshSkills();
     void this.refreshFiles();
@@ -1229,7 +1229,8 @@ export class ChatAgent extends DurableObject<Env> {
     // The agents of the roster it calls ("@research"), who take turns of their own (worker/agents/). A message that
     // calls only them is not pi's to answer, even in a chat nobody shares. Told for sure once the mentions are known.
     const repliesTo = quote && "agent" in quote ? quote.agentId : undefined;
-    const callsAgents = speakersFor(text, this.roster.list(), repliesTo).length > 0;
+    // With files, artifacts or people named, their "@name"s may hide what looks like a call now: pi may be summoned after all.
+    const callsAgents = mentionInputs.length === 0 && speakersFor(text, this.roster.list(), repliesTo).length > 0;
     const calling = (!shared && !callsAgents) || repliesToAgent || summonsAgent(text);
     const byOwner = author.uid === this.uid;
     // Someone else's own files they named come as attachments, copied to the owner's files, where the agent works. The
@@ -1340,7 +1341,8 @@ export class ChatAgent extends DurableObject<Env> {
       const files = attachedNote(attached?.attachments.map((attachment) => attachment.path) ?? []);
       this.turns.call(speakers, {
         calledBy: { name: author.name, uid: author.uid },
-        ask: `${askOf({ name: author.name, kind: "person", owner: byOwner }, written)}${files}`,
+        // The catch-up leaves the message out (askKey), so the input carries all of it a hand-off would.
+        ask: `${askOf({ name: author.name, kind: "person", owner: byOwner }, written, MAX_ASK_CHARS)}${files}`,
         askKey: messageAskKey({ uid: author.uid, sentAt }),
         byOwner,
       });
@@ -2006,6 +2008,9 @@ export class ChatAgent extends DurableObject<Env> {
     const agent = await this.#directory.getAgent(agentId);
     if (!agent) return refuse(404, "No such agent.");
     if (!agent.enabled) return refuse(409, `@${agent.name} is off: turn it on first.`);
+    // Before its session is made: a session made for an agent the roster refuses would stay, read by every traces read.
+    const early = this.roster.refusal(agent.name);
+    if (early) return refuse(409, early.error);
     const [session, newest] = await Promise.all([
       this.harness.sessions.create(),
       this.roster.hasAny() ? undefined : this.#root().then((root) => root.entries({ order: "descending" }, 1, undefined, BACKGROUND_CONTEXT)),
@@ -2133,18 +2138,19 @@ export class ChatAgent extends DurableObject<Env> {
         await this.harness.abort({ session });
       },
       turnEntries,
-      post: async (reply, forPi) => {
-        const root = await this.#root();
-        // Request ids, so a reply posted again after a restart is placed once.
-        const key = `${reply.agentId}:${reply.turn}`;
-        await root.submit({ type: "write", requestId: `agent-reply:${key}`, entry: { kind: CHAT_AGENT_KIND, data: reply } }, BACKGROUND_CONTEXT);
-        if (forPi && reply.text) {
-          const said: UserMessage = { role: "user", content: askOf({ name: reply.name, kind: "agent" }, reply.text), timestamp: Date.now() };
-          await root.submit({ type: "write", requestId: `agent-aside:${key}`, entry: { kind: CHAT_ASIDE_KIND, model: [said] } }, BACKGROUND_CONTEXT);
-        }
+      // Request ids, so a reply posted again after a restart is placed once.
+      post: async (reply) => {
+        const requestId = `agent-reply:${reply.agentId}:${reply.turn}`;
+        await (await this.#root()).submit({ type: "write", requestId, entry: { kind: CHAT_AGENT_KIND, data: reply } }, BACKGROUND_CONTEXT);
         // Unread in everyone's sidebar, as a person's message is. Only a view: a failure is logged.
         const author = { uid: `agent:${reply.agentId}`, name: reply.name };
         void this.#touchIndexes(reply.text || reply.name, author, [], reply.text).catch((error) => console.error("chat index:", errorMessage(error)));
+      },
+      tellPi: async (reply) => {
+        if (!reply.text) return;
+        const said: UserMessage = { role: "user", content: askOf({ name: reply.name, kind: "agent" }, reply.text), timestamp: Date.now() };
+        const requestId = `agent-aside:${reply.agentId}:${reply.turn}`;
+        await (await this.#root()).submit({ type: "write", requestId, entry: { kind: CHAT_ASIDE_KIND, model: [said] } }, BACKGROUND_CONTEXT);
       },
       handToPi: async (input, data) => {
         await this.#watchRuns().catch((error: unknown) => console.error("chat status:", errorMessage(error)));

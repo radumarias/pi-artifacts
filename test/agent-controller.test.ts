@@ -155,13 +155,20 @@ class FakeChat implements TurnHost {
     return this.pages.get(turn) ?? [];
   }
 
-  async post(reply: ChatAgentReplyData, forPi: boolean): Promise<void> {
+  async post(reply: ChatAgentReplyData): Promise<void> {
     this.calls.push(`post ${reply.name}`);
-    // Placed once, as the chat object's request ids for a reply and its copy for pi do.
-    if (forPi && reply.text && !this.asides.includes(reply.turn)) this.asides.push(reply.turn);
+    // Placed once, as the chat object's request id for a reply does.
     if (this.posts.some((post) => post.reply.turn === reply.turn)) return;
-    this.posts.push({ reply, forPi });
+    this.posts.push({ reply, forPi: false });
     this.#append({ kind: CHAT_AGENT_KIND, data: reply });
+  }
+
+  /** Marks the reply's post as read by pi too (`forPi`), once. */
+  async tellPi(reply: ChatAgentReplyData): Promise<void> {
+    this.calls.push(`tell pi ${reply.name}`);
+    const post = this.posts.find((posted) => posted.reply.turn === reply.turn);
+    if (post) post.forPi = true;
+    if (reply.text && !this.asides.includes(reply.turn)) this.asides.push(reply.turn);
   }
 
   async handToPi(input: string, data: ChatTurnData): Promise<void> {
@@ -387,12 +394,14 @@ describe("AgentTurns: a turn", () => {
     expect(Object.keys(reply)).not.toContain("failed");
   });
 
-  it("posts a failed reply when waiting on the turn fails", async () => {
+  it("posts a failed reply when waiting on the turn fails, and stops its run", async () => {
     const { chat, turn } = await called([A]);
     chat.fail(turn.id, new Error("the session is gone"));
     await chat.flush();
     expect(chat.replies()).toEqual([expect.objectContaining({ turn: turn.id, text: "", failed: "the session is gone" })]);
     expect(chat.roster.turn(turn.id)?.status).toBe("failed");
+    // Its run may still be going: it is stopped before the session is set up for anyone's next turn.
+    expect(chat.aborts).toEqual([sessionOf(A)]);
   });
 
   it("posts an unanswered turn as failed, with its reason or a default one, and hands nothing on", async () => {
@@ -996,9 +1005,9 @@ describe("AgentTurns: resume", () => {
     const { chat, turn } = await called([A]);
     const atPost: { status?: string; undelivered: number[] }[] = [];
     const post = chat.post.bind(chat);
-    vi.spyOn(chat, "post").mockImplementation(async (reply, forPi) => {
+    vi.spyOn(chat, "post").mockImplementation(async (reply) => {
       atPost.push({ status: chat.roster.turn(reply.turn)?.status, undelivered: chat.roster.undelivered() });
-      await post(reply, forPi);
+      await post(reply);
     });
     chat.finish(turn.id, done("Done."));
     await chat.flush();
@@ -1010,9 +1019,9 @@ describe("AgentTurns: resume", () => {
     const { chat, turn } = await called([A]);
     const posted = deferred<void>();
     const post = chat.post.bind(chat);
-    vi.spyOn(chat, "post").mockImplementationOnce(async (reply, forPi) => {
+    vi.spyOn(chat, "post").mockImplementationOnce(async (reply) => {
       await posted.promise;
-      await post(reply, forPi);
+      await post(reply);
     });
     chat.finish(turn.id, done("@pi build it"));
     await chat.flush();
@@ -1020,7 +1029,7 @@ describe("AgentTurns: resume", () => {
     posted.resolve();
     await chat.flush();
 
-    expect(chat.posts).toEqual([{ forPi: false, reply: expect.objectContaining({ turn: turn.id }) }]);
+    expect(chat.posts).toEqual([{ forPi: true, reply: expect.objectContaining({ turn: turn.id }) }]);
     expect(chat.asides).toEqual([turn.id]);
     expect(chat.toPi).toEqual([]);
     expect(chat.roster.outbox(turn.id)).toBeNull();

@@ -45,6 +45,10 @@ export async function agentsRoute(request: Request, directory: DurableObjectStub
     }
     return answer(await directory.setAgentEnabled(id, body.enabled, body.version as number | undefined));
   }
-  if (method === "DELETE") return answer(await directory.deleteAgent(id));
+  if (method === "DELETE") {
+    // Its only refusal is that there is no such agent, as GET answers it.
+    const refused = await directory.deleteAgent(id);
+    return refused ? json(refused, 404) : json({});
+  }
   return null;
 }

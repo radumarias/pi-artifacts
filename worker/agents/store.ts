@@ -120,7 +120,7 @@ export class AgentStore {
     // Strictly newer than the version it replaces, even within one millisecond: a chat compares them.
     const now = Math.max(this.#now(), (existing?.updatedAt ?? 0) + 1);
     const on = origin === "agent" ? false : (enabled ?? existing?.enabled ?? true);
-    const kept = existing?.copiedFrom ?? copiedFrom;
+    // A change keeps where the agent came from (its copied_from is never updated): `copiedFrom` is only for a new one.
     if (existing) {
       this.#sql.exec(
         "UPDATE agents SET name = ?, definition = ?, origin = ?, enabled = ?, version = version + 1, updated_at = ? WHERE id = ?",
@@ -144,7 +144,7 @@ export class AgentStore {
       on ? 1 : 0,
       now,
       now,
-      kept ? JSON.stringify(kept) : null,
+      copiedFrom ? JSON.stringify(copiedFrom) : null,
     );
     return this.get(newId)!;
   }

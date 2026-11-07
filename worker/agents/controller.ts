@@ -31,11 +31,10 @@ export interface TurnHost {
   abort(session: string): Promise<void>;
   /** The session's entries from the turn's input on (its chat.turn entry), oldest first: where its outputs are found. */
   turnEntries(session: string, turn: number): Promise<readonly EntryRecord[]>;
-  /**
-   * Post an agent's reply to the log, placed once however often it is posted; `forPi`: also as context pi reads (not
-   * when pi is handed a turn for it, whose input carries it).
-   */
-  post(reply: ChatAgentReplyData, forPi: boolean): Promise<void>;
+  /** Post an agent's reply to the log, placed once however often it is posted. */
+  post(reply: ChatAgentReplyData): Promise<void>;
+  /** Write an agent's reply as context pi reads, placed once however often (not when pi is handed a turn for it). */
+  tellPi(reply: ChatAgentReplyData): Promise<void>;
   /** Give pi a turn an agent named it for (`data.turn`, that agent's turn): placed once however often it is handed. */
   handToPi(input: string, data: ChatTurnData): Promise<void>;
   /** The roster's view changed (an agent started or ended a turn, or was dropped): tell everyone. */
@@ -158,6 +157,8 @@ export class AgentTurns {
         result = await this.#host.wait(entry.session, operationId(turn.id));
       } catch (error) {
         result = { status: "unanswered", reason: errorMessage(error) };
+        // The run may still be going: stop it before the next turn sets the session up for someone else's tools.
+        await this.#host.abort(entry.session).catch((abortError: unknown) => console.error("agent stop:", errorMessage(abortError)));
       }
       await this.#ended(entry, turn, result);
     } finally {
@@ -233,13 +234,14 @@ export class AgentTurns {
     if (!outbox || !turn) return;
     const { reply } = outbox;
     try {
-      await this.#host.post(reply, !outbox.toPi);
-      // Read again: a Stop meanwhile hands pi nothing, and pi reads the reply as context instead.
+      await this.#host.post(reply);
+      // Read again: a Stop meanwhile hands pi nothing, and pi reads the reply as context instead. A turn handed to pi
+      // carries the reply in its input.
       if (roster.outbox(id)?.toPi) {
         const calledBy = { name: reply.name, agentId: reply.agentId };
         const handed = { calledBy, hop: turn.hop + 1, ask: askOf({ name: reply.name, kind: "agent" }, reply.text, MAX_ASK_CHARS) };
         await this.#host.handToPi(turnInput(handed), { turn: id, calledBy, hop: handed.hop, root: turn.root });
-      } else if (outbox.toPi) await this.#host.post(reply, true);
+      } else await this.#host.tellPi(reply);
     } catch (error) {
       console.error("agent reply:", errorMessage(error));
     }
