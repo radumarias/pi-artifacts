@@ -106,7 +106,7 @@ import { newestFirst, type FileEntry } from "./storage/user-files.ts";
 import { connectStreamableHttp, signInRequired } from "./mcp/connect.ts";
 import { McpOAuthClient } from "./mcp/oauth.ts";
 import { McpFailure, McpHub } from "./mcp/hub.ts";
-import { mcpServers, sharesResults, watchableForAll, type McpServerConfig } from "./mcp/servers.ts";
+import { mcpServers, oauthServers, sharesResults, watchableForAll, type McpServerConfig } from "./mcp/servers.ts";
 import { CacheWarmer } from "./cache-warmer.ts";
 import { GeminiCompat } from "./gemini.ts";
 import { ChatMembers, formatInviteToken } from "./members.ts";
@@ -134,7 +134,7 @@ import {
   CHAT_TURN_KIND,
   inputOf,
   copiedFields,
-  serversNamed,
+  runServers,
   type AgentDefinition,
   type AgentStep,
   type AgentTurnView,
@@ -2842,7 +2842,7 @@ export class ChatAgent extends DurableObject<Env> {
     }
     await this.runner.apply(agentId, agent);
     // The sign-ins its runs read with are kept alive daily and warned about before they end (worker/mcp/sign-ins.ts).
-    const runs = agent?.enabled && agent.trigger ? serversNamed(agent, { reads: true }) : [];
+    const runs = agent?.enabled && agent.trigger ? runServers(agent, oauthServers(this.env).map((server) => server.name)) : [];
     await this.#directory.setRunServers(this.chatId, runs).catch((error: unknown) => console.error("agent sign-ins:", errorMessage(error)));
     if (agent?.enabled && agent.trigger && !agent.workflow?.length) this.ctx.waitUntil(this.#compile(agent).catch(() => {}));
   }
@@ -3041,6 +3041,7 @@ export class ChatAgent extends DurableObject<Env> {
           throw signInOr(error);
         }
       },
+      signInServers: () => oauthServers(this.env).map((server) => server.name),
       // Each sign-in refreshed now, as nobody is there to sign in (worker/mcp/sign-ins.ts).
       needsSignIn: async (servers) => {
         const checked = await this.#directory.checkSignIns(servers);

@@ -6,7 +6,9 @@
 
 import {
   AUTONOMY_LABELS,
+  hasWork,
   mayUseServer,
+  runServers,
   serversNamed,
   stepKey,
   walkSteps,
@@ -75,6 +77,8 @@ export interface RunHost {
   readonly runs: AgentRuns;
   /** A read-only call through the hub, as the agent's owner: the result's payload. Throws SignInNeeded for a sign-in. */
   read(server: string, tool: string, input: StepInput): Promise<Value>;
+  /** The servers that sign in each user (`auth: "oauth"`): a work step's tools may come from them. */
+  signInServers(): readonly string[];
   /** Which of these servers need their owner to sign in again before a run can read them. */
   needsSignIn(servers: readonly string[]): Promise<string[]>;
   /** Ask the owner to sign in to these servers again, for `agent`'s run: they are told, and this chat when they do. */
@@ -265,7 +269,7 @@ export class RunExecutor {
     if (!started && run.status !== "running") return { status: run.status, started: false };
     this.#host.changed(agent.id);
     try {
-      const missing = await this.#host.needsSignIn(reads);
+      const missing = await this.#host.needsSignIn(runServers(agent, this.#host.signInServers()));
       if (missing.length) return this.#waitForSignIn(agent, run, missing);
       const elements = await this.#elements(agent);
       const outcomes = await mapLimit(elements, RUN_CONCURRENCY, (element) => this.#item(agent, run, element, when));
@@ -579,11 +583,6 @@ function watchScope(name: string, value: Value, previous: Value | undefined): Re
   scope.watch = value;
   scope.previous = previous ?? null;
   return scope;
-}
-
-/** Whether a workflow calls the model at all: only then does an item's session have a reader. */
-function hasWork(steps: readonly AgentStep[]): boolean {
-  return [...walkSteps(steps)].some(({ step }) => step.kind === "work");
 }
 
 /** An item's text at each delivery it reached, where that differs from its final text. */

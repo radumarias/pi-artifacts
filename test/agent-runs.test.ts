@@ -79,6 +79,11 @@ class FakeHome implements RunnerHost {
   async needsSignIn(servers: readonly string[]) {
     return servers.filter((server) => this.signIn.has(server));
   }
+  /** The servers that sign in each user. */
+  readonly oauth: string[] = [];
+  signInServers() {
+    return this.oauth;
+  }
   readonly asked: string[] = [];
   signInNeeded(_agent: AgentDefinition, servers: readonly string[]) {
     this.asked.push(...servers);
@@ -279,6 +284,24 @@ describe("scheduled runs", () => {
     await host.settled();
     expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "sent" });
     expect(host.delivered).toHaveLength(1);
+  });
+
+  it("waits for a sign-in to a server only its work step's tools can come from", async () => {
+    // No step reads calendar, but the work step may use its tools: its sign-in is checked before the run.
+    const { host, runner, definition } = home(agent({ servers: ["crm", "calendar"] }));
+    host.oauth.push("calendar", "mail");
+    host.signIn.add("calendar").add("mail");
+    await runner.now(definition.id, false);
+    await host.settled();
+    expect(host.works).toHaveLength(0);
+    expect(host.runs.list(definition.id)[0]).toMatchObject({ status: "needs_sign_in", needsSignIn: ["calendar"] });
+    // Without a work step, only the servers its steps read.
+    const reads = home(agent({ servers: ["crm", "calendar"], workflow: [sales, { kind: "tell", to: ["owner"], via: "chat" }] }));
+    reads.host.oauth.push("calendar");
+    reads.host.signIn.add("calendar");
+    await reads.runner.now(reads.definition.id, false);
+    await reads.host.settled();
+    expect(reads.host.runs.list(reads.definition.id)[0]).toMatchObject({ status: "sent" });
   });
 
   it("finds a sign-in failure mid-run too", async () => {
