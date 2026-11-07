@@ -130,9 +130,13 @@ export class AgentRuns {
   readonly #sql: Sql;
   readonly #now: () => number;
 
-  constructor(sql: Sql, now: () => number = Date.now) {
+  /** Hears each run that ends (or waits for a sign-in), as its row then says; never a test's. */
+  readonly #onEnded: ((run: RunRecord) => void) | undefined;
+
+  constructor(sql: Sql, now: () => number = Date.now, onEnded?: (run: RunRecord) => void) {
     this.#sql = sql;
     this.#now = now;
+    this.#onEnded = onEnded;
     sql.exec(`
       CREATE TABLE IF NOT EXISTS agent_runs (
         agent_id TEXT NOT NULL, due_at INTEGER NOT NULL, item TEXT NOT NULL, why TEXT NOT NULL, status TEXT NOT NULL,
@@ -231,6 +235,8 @@ export class AgentRuns {
       agentId,
       dueAt,
     );
+    // Every way a run ends comes through here: its owner's feed hears of it (worker/users.ts runEnded).
+    if (change.status && status !== "running" && !run.test) this.#onEnded?.(this.get(agentId, dueAt)!);
   }
 
   /** Start an item of a run in its session, or find it: an item that ended is not run again. */

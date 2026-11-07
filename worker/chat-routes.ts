@@ -256,6 +256,8 @@ export async function discussRoute(storage: Storage, artifactId: string, signedI
     const refused = await exports.ChatAgent.getByName(chatAgentName(meta.ownerUid, chatId)).startPage(signedIn, page);
     if (refused) return json({ error: refused.error }, refused.status);
     await owner.linkPageChat(artifactId, chatId);
+    // Whoever follows the page hears it has a chat they may join.
+    await owner.pageChatStarted(artifactId, chatId, meta.title);
     return json({ chatId });
   }
   if (!existing) return json({ error: "Nobody discusses this page yet: its author starts the discussion from it." }, 404);

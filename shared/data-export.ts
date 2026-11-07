@@ -1,4 +1,5 @@
 import type { AgentDefinition, AgentInput, AgentOrigin } from "./agents.ts";
+import type { FollowKind } from "./feed.ts";
 import type { ModelSetting } from "./models.ts";
 import { ID_PATTERN, type ArtifactVersion } from "./protocol.ts";
 import type { SkillFileInfo } from "./skill-files.ts";
@@ -66,6 +67,17 @@ export interface ExportedPageValues {
   values: Record<string, string | null>;
 }
 
+/**
+ * A page or agent the user follows, as the app names it: an import follows it again where the importer may open it
+ * (the same deployment), with its owner told as when following it by hand; elsewhere it is skipped. Their feed stays.
+ */
+export interface ExportedFollow {
+  kind: FollowKind;
+  id: string;
+  /** For an agent: the chat it is shared in. */
+  chatId?: string;
+}
+
 export interface ExportedAccount {
   systemPrompt: string;
   model: ModelSetting | null;
@@ -73,6 +85,8 @@ export interface ExportedAccount {
   skills: ExportedSkill[];
   /** None in an export made before agents. */
   agents?: ExportedAgent[];
+  /** None in an export made before follows. */
+  follows?: ExportedFollow[];
   pageValues: ExportedPageValues[];
 }
 
@@ -225,7 +239,8 @@ export function checkManifest(value: unknown): ExportManifest | { error: string 
   }
   const lists = [manifest.chats, manifest.artifacts, manifest.files, manifest.sharedWithMe];
   if (typeof manifest.uid !== "string" || !manifest.account || !lists.every(Array.isArray)) return { error: "The export's manifest is damaged." };
-  if (manifest.account.agents !== undefined && !Array.isArray(manifest.account.agents)) return { error: "The export's manifest is damaged." };
+  const optional = [manifest.account.agents, manifest.account.follows];
+  if (optional.some((list) => list !== undefined && !Array.isArray(list))) return { error: "The export's manifest is damaged." };
   // Ids and skill names go into request paths: only ones this app makes.
   const ids = [...manifest.chats!.flatMap((chat) => [chat?.id]), ...manifest.artifacts!.flatMap((artifact) => [artifact?.id, artifact?.chatId])];
   const skills = Array.isArray(manifest.account.skills) ? manifest.account.skills : [];

@@ -6,6 +6,7 @@ import { useVisible } from "../sidebar.ts";
 import { ArtifactFrame } from "./ArtifactFrame.tsx";
 import { ArtifactSource } from "./ArtifactSource.tsx";
 import { ShowAs, ViewportPicker, ViewportStage, useViewport } from "./viewport.tsx";
+import { FollowButton } from "../feed/FeedNav.tsx";
 
 interface Props {
   artifactId: string;
@@ -141,6 +142,8 @@ export function ArtifactPanel({ artifactId, latestKnown, uid, onClose, fullPage 
           >
             Discuss
           </button>
+          {/* Someone else's page: its new versions, and a chat about it, can reach their feed. */}
+          {!meta.isOwner && <FollowButton kind="page" id={meta.id} />}
           {/* Only people in the chat that builds it are told which chat that is. */}
           {meta.chatId && (
             <a className="button primary" href={`/c/${meta.chatId}?artifact=${meta.id}`} title="Open the chat that builds this artifact, with it beside the chat">

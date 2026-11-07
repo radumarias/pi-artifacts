@@ -121,7 +121,7 @@ function ProgressBar({ progress }: { progress: Progress }) {
   );
 }
 
-const NOUNS: Record<(typeof KINDS)[number], string> = { chats: "chat", artifacts: "artifact", files: "file", skills: "skill", agents: "agent" };
+const NOUNS: Record<(typeof KINDS)[number], string> = { chats: "chat", artifacts: "artifact", files: "file", skills: "skill", agents: "agent", follows: "follow" };
 
 function ImportSummary({ report }: { report: ImportReport }) {
   const imported = KINDS.filter((kind) => report.imported[kind]).map((kind) => plural(report.imported[kind], NOUNS[kind]));

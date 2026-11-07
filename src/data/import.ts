@@ -1,11 +1,12 @@
 import { ARCHIVE, checkManifest, MAX_IMPORT_FILE_BYTES, type ExportedArtifact, type ExportedChat } from "../../shared/data-export.ts";
+import { followKey } from "../../shared/feed.ts";
 import type { ArtifactMeta } from "../../shared/protocol.ts";
 import { readZipFile, storedRange, zipDirectory, type ZipItem, type ZipSource } from "../../shared/unzip.ts";
-import { errorMessage, formatBytes, mapLimit, toBase64 } from "../../shared/util.ts";
-import { dataApi, type DraftJson } from "../api.ts";
+import { errorMessage, formatBytes, isObject, mapLimit, toBase64 } from "../../shared/util.ts";
+import { api, dataApi, type DraftJson } from "../api.ts";
 import type { Progress } from "./export.ts";
 
-export const KINDS = ["chats", "artifacts", "files", "skills", "agents"] as const;
+export const KINDS = ["chats", "artifacts", "files", "skills", "agents", "follows"] as const;
 type Kind = (typeof KINDS)[number];
 
 /** What an import did: how many of each kind went in, how many were here already, and what failed, with why. */
@@ -55,10 +56,11 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
   const report: ImportReport = { imported: counts(), skipped: counts(), failed: [], settings: [] };
   const fileItems = [...items.values()].filter((item) => item.name.startsWith(FILES));
   // A damaged entry is left out, as checkManifest checks only that there is a list.
-  const agents = (manifest.account.agents ?? []).filter((agent) => typeof agent === "object" && agent !== null);
+  const agents = (manifest.account.agents ?? []).filter(isObject);
+  const follows = (manifest.account.follows ?? []).filter(isObject);
   const steps = {
     done: 0,
-    total: 2 + manifest.account.skills.length + agents.length + fileItems.length + manifest.chats.length + manifest.artifacts.length,
+    total: 2 + manifest.account.skills.length + agents.length + fileItems.length + manifest.chats.length + manifest.artifacts.length + follows.length,
   };
   const step = (now: string) => onProgress({ ...steps, now });
   /** Run one step: its failure is reported under `what`, and the import goes on. Whether it went in. */
@@ -179,6 +181,25 @@ export async function importData(zip: Blob, onProgress: (progress: Progress) => 
     const values = manifest.account.pageValues.map((entry) => ({ ...entry, artifactId: newId(entry.artifactId) }));
     if (values.length) await dataApi.importPageValues(values);
   });
+
+  // Last, as following by hand checks: only what the importer may open here (the same deployment) is followed again.
+  const have = new Set(follows.length ? (await api.follows().catch(() => [])).map(followKey) : []);
+  await mapLimit(follows, PARALLEL, (follow) =>
+    attempt(`Follow of ${follow.kind} ${follow.id}`, async () => {
+      if (have.has(followKey(follow))) {
+        report.skipped.follows++;
+        return;
+      }
+      try {
+        await api.follow(follow.kind, follow.id, follow.chatId);
+        report.imported.follows++;
+      } catch (e) {
+        // Not here, or not theirs to open here: what an export from another deployment follows is skipped.
+        if (![400, 403, 404].includes((e as { status?: number }).status ?? 0)) throw e;
+        report.skipped.follows++;
+      }
+    }),
+  );
   onProgress({ ...steps, now: "Done" });
   return report;
 }

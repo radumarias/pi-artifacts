@@ -45,6 +45,8 @@ export interface RunDelivery {
   detail?: string;
   /** The page version a page step published. */
   version?: number;
+  /** When a report was posted (a chat's or a notification): what its owner answered after is an answer to it. */
+  sentAt?: number;
 }
 
 /** One item of a run: an element of its scope's list, or the run itself when it has no scope. */

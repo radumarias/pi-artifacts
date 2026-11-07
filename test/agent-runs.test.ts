@@ -47,7 +47,9 @@ function agent(over: Partial<AgentDefinition> = {}): AgentDefinition {
 class FakeHome implements RunnerHost {
   readonly clock = { now: T0 };
   readonly sql = memorySql();
-  readonly runs = new AgentRuns(this.sql, () => this.clock.now);
+  /** How each run ended, as the feed hears it: `<dueAt>:<status>`. */
+  readonly endings: string[] = [];
+  readonly runs = new AgentRuns(this.sql, () => this.clock.now, (run) => this.endings.push(`${run.dueAt}:${run.status}`));
   readonly definitions = new Map<string, AgentDefinition>();
   readonly values = new Map<string, Value | ((input: StepInput) => Value)>([["crm.weekly_sales", { total: 940, lastYear: 1000 }]]);
   readonly reads: { call: string; input: StepInput }[] = [];
@@ -529,6 +531,28 @@ describe("scheduled runs", () => {
     host.signIn.delete("crm");
     expect(await runner.signedIn("crm")).toBe(0);
     expect(host.runs.get(definition.id, T0 + 2)).toMatchObject({ status: "not_today", summary: "Skipped once you signed in: @brief was off." });
+  });
+
+  it("tells the feed how each run ended, again when a waiting one goes or is skipped, and never of a test", async () => {
+    const { host, runner, definition } = home();
+    host.signIn.add("crm");
+    for (const at of [T0, T0 + 1]) {
+      host.clock.now = at;
+      await runner.now(definition.id, false);
+      await host.settled();
+    }
+    expect(host.endings).toEqual([`${T0}:needs_sign_in`, `${T0 + 1}:needs_sign_in`]);
+    host.signIn.delete("crm");
+    await runner.signedIn("crm");
+    await host.settled();
+    expect(host.endings.slice(2).sort()).toEqual([`${T0 + 1}:sent`, `${T0}:not_today`].sort());
+    // The same due time again ends at once, and tells nothing new.
+    await runner.executor.start({ agent: definition, dueAt: T0 + 1, why: "manual" });
+    expect(host.endings).toHaveLength(4);
+    host.clock.now = T0 + 5;
+    await runner.now(definition.id, true);
+    await host.settled();
+    expect(host.endings).toHaveLength(4);
   });
 
   it("fails a run whose items acted when its only delivery failed", async () => {

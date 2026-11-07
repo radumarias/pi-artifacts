@@ -55,6 +55,7 @@
     "shared",
     "worker/mcp",
     "worker/agents",
+    "worker/feed",
     "worker/agent/mcp.ts",
     "worker/agent/output.ts",
     "worker/agent/attachments.ts",

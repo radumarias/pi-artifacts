@@ -461,9 +461,11 @@ piece and the zip is not bound by what one Worker request may hold.
 
 - **In it:** your own chats (each chat object's conversation, reactions and settings, `worker/chat-dump.ts`, and the
   pages its agent saved and did not publish), your artifacts with every version, your files, your skills with the files
-  of those imported as packages, your system prompt, model pick and built-in skills turned off, and what pages saved for
-  you (`pi.use("storage")`).
+  of those imported as packages, your system prompt, model pick and built-in skills turned off, what pages saved for
+  you (`pi.use("storage")`), and the pages and agents you follow. An import follows each again only where you may
+  open it, as following by hand checks (on the same deployment); the rest are skipped.
 - **Not in it:** your sign-ins to MCP servers (tokens, which belong to the deployment), what pages' model calls cost you,
+  your feed (it fills again from what you follow and what happens next),
   the chats others shared with you (listed by name only: they are their owners'), and the people in your shared chats
   and their invites: their ids mean nothing on another deployment, so an imported chat has only you in it. Their
   messages stay in its conversation, under their names. Work still running in a chat (a run, a queued message) is left

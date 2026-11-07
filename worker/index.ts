@@ -18,6 +18,8 @@ import { catalogSource, loadCatalog } from "./models.ts";
 import { skillsRoute } from "./skills-routes.ts";
 import { agentsRoute } from "./agents-routes.ts";
 import { runsRoute } from "./runs-routes.ts";
+import { feedRoute } from "./feed-routes.ts";
+import type { FeedInput } from "../shared/feed.ts";
 import { chatAgentName } from "./chat-agent.ts";
 import { newId, PathError, Storage } from "./storage/index.ts";
 
@@ -207,6 +209,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (agents) return agents;
   const runs = await runsRoute(request, uid, directory, env.DEV_TOOLS === "true");
   if (runs) return runs;
+  // The feed, and follows of others' pages and agents (worker/feed-routes.ts).
+  const feed = await feedRoute(request, uid, directory, storage);
+  if (feed) return feed;
 
   // A chat's Durable Object is named after its owner's verified uid; others reach it only once they joined by an invite.
   const chat = await chatRoute(request, directory, { uid, name: identity.email ?? uid }, (owner) => storage.userFiles(owner));
@@ -227,6 +232,15 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/dev/agents/propose" && method === "POST" && env.DEV_TOOLS === "true") {
     const saved = await directory.saveAgent(await readJson(request), "agent", false);
     return json(saved, "error" in saved ? 400 : 201);
+  }
+
+  // Add an item to the caller's own feed, to try the feed without runs or a model. Needs DEV_TOOLS=true.
+  if (path === "/api/dev/feed" && method === "POST" && env.DEV_TOOLS === "true") {
+    const item = await readJson<FeedInput>(request);
+    if (!item || typeof item.ref !== "string" || typeof item.title !== "string" || !item.open) {
+      return json({ error: "Expected a feed item (shared/feed.ts)." }, 400);
+    }
+    return json({ kept: await directory.addFeed({ ...item, ref: `dev:${item.ref}`, at: item.at || Date.now() }) });
   }
 
   const files = await filesRoute(request, () => storage.userFiles(uid));

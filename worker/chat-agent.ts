@@ -75,6 +75,8 @@ import { filesIndex } from "./agent/file-refs.ts";
 import { resolveMentions } from "./agent/mentions.ts";
 import { AGENT_REACTOR, isReactable, isReaction, type Reaction, type Reactions } from "../shared/reactions.ts";
 import { excerpt, replyLine, replyQuote } from "../shared/replies.ts";
+import { agentFrom, MAX_FEED_TEXT } from "../shared/feed.ts";
+import { followersAllowed } from "./feed/store.ts";
 import { peopleExtension, promptExtension, systemPromptExtension, withoutSystemPrompt, type UserPrompts } from "./agent/prompt.ts";
 import { skillClassifier, skillMessage, type SkillChoice, type SkillClassifier } from "./agent/skill-pick.ts";
 import { isActive, type SkillInfo } from "../shared/skills.ts";
@@ -84,7 +86,7 @@ import { autoCandidates, contextTokens, route, routeHistory, routersFrom, router
 import { callHinter, HINT_MS, HINT_THRESHOLD, worthAsking, type CallHinter } from "./agent/call-hint.ts";
 import { recordSpend } from "./agent/ledger.ts";
 import type { ModelRunner } from "./agent/workers-ai.ts";
-import { RunTracker } from "./chat-status.ts";
+import { asksUser, RunTracker } from "./chat-status.ts";
 import { mcpExtension, type McpToolInfo, type ServerCatalog } from "./agent/mcp.ts";
 import { deferredTools, MIN_TOOLS_TO_PICK, pickerId, pickFailure, pickTools, TOOL_PICK_MS, toolPicker, toolsToOffer, type PickableTool } from "./agent/tool-pick.ts";
 import { artifactExtension, filesExtension, filesIndexExtension, reactionsExtension, sandboxExtension, sandboxName, skillsExtension, type ChatScope } from "./agent/tools.ts";
@@ -149,7 +151,7 @@ import { isTurnEntry, TurnFilter } from "./agents/live.ts";
 import { ChatRoster, type AgentTurn, type RosterEntry } from "./agents/roster.ts";
 import { reportOf, SignInNeeded, whenOf, type DeliveryRequest } from "./agents/runs/executor.ts";
 import { AgentRunner, type RunAlarm, type RunnerHost, type WatchAlarm } from "./agents/runs/runner.ts";
-import { AgentRuns } from "./agents/runs/store.ts";
+import { AgentRuns, type RunRecord } from "./agents/runs/store.ts";
 import { reportContext, runInstructions, RUN_STEP_KIND, workSpend, type RunStepData } from "./agents/runs/report.ts";
 import { publishedAlready, publishFindings, publishRebuilt, readOnlyDeclaration, runMark } from "./agents/runs/page.ts";
 import { compileWorkflow } from "./agents/runs/compile.ts";
@@ -405,7 +407,7 @@ export class ChatAgent extends DurableObject<Env> {
     react: (by, entry, emoji, on) => this.react(by, entry, emoji, on),
   });
   /** The runs of the agent whose home this chat is, its schedules and watches (worker/agents/runs/). */
-  readonly runs = new AgentRuns(this.ctx.storage.sql);
+  readonly runs = new AgentRuns(this.ctx.storage.sql, Date.now, (run) => this.#runEnded(run));
   readonly runner = new AgentRunner(this.#runnerHost(), this.ctx.storage.sql);
   /** Shares the object's alarm with pi: runs at local times, watches on intervals. */
   readonly scheduler = new Scheduler({
@@ -1489,7 +1491,9 @@ export class ChatAgent extends DurableObject<Env> {
     // The sidebars are only a convenience: update them off the prompt's path, and let a failure be.
     // Only a tag whose "@name" is in the text: one sent without it would notify someone of nothing they can see.
     const tags = taggedPeople(keptMentions(text, mentions));
-    void this.#touchIndexes(title, author, tags, text).catch((error) => console.error("chat index:", errorMessage(error)));
+    void this.#touchIndexes(title, author, tags, text, `${author.uid}:${sentAt}`, { reached: speakers, sentAt }).catch((error) =>
+      console.error("chat index:", errorMessage(error)),
+    );
     return true;
   }
 
@@ -1644,21 +1648,39 @@ export class ChatAgent extends DurableObject<Env> {
    * name yet after the prompt, so the first prompt names it, and a small model then gives it a better title.
    * Members' sidebars get a new title at once, but in a busy chat the others' are bumped at most once a minute: each is
    * another object. The author's own always is, and so is everyone the message tagged (`tags`), who hears of it at once
-   * (a Tag). `titleFrom` names an unnamed chat: the message's text, or its files' names.
+   * (a Tag). `titleFrom` names an unnamed chat: the message's text, or its files' names. `key` names the message (the
+   * same one placed again tags nobody twice in the feed); `run`: it is a run's report, which its owner's feed has already.
+   * `reached`: the agents a person's message reached (called, replied to, or the chat's own), whose questions to its
+   * author asked before `sentAt` (when it was sent: the touch can arrive seconds later) it answers in their feed.
    */
-  async #touchIndexes(titleFrom: string, author: Person, tags: readonly string[], text: string): Promise<void> {
+  async #touchIndexes(
+    titleFrom: string,
+    author: Person,
+    tags: readonly string[],
+    text: string,
+    key: string,
+    { run = false, reached = [], sentAt }: { run?: boolean; reached?: readonly string[]; sentAt?: number } = {},
+  ): Promise<void> {
     const now = Date.now();
+    const answeredAt = sentAt ?? now;
     // Someone tagging themselves is told nothing; anyone else tagged is, owner or member.
     const tagged = new Set(tags.filter((uid) => uid !== author.uid));
-    const tag: Tag = { from: author.name, text: excerpt(text), at: now };
+    const tag: Tag = { from: author.name, text: excerpt(text), at: now, key, kind: this.kinds.kind(), ...(run && { run: true }) };
     const tagOf = (uid: string) => (tagged.has(uid) ? tag : undefined);
-    const { title, named } = await this.#directory.touchChat(this.chatId, titleFrom, author.uid !== this.uid, tagOf(this.uid));
+    // The owner's second seat writes as the owner: what waits on the owner here for a reply is answered by it too.
+    const byOwner = this.#account(author.uid) === this.uid;
+    const answers = byOwner ? reached : [];
+    const { title, named } = await this.#directory.touchChat(this.chatId, titleFrom, author.uid !== this.uid, tagOf(this.uid), answers, answeredAt);
     if (named && titleFrom) void this.#nameChat(titleFrom, title).catch((error: unknown) => console.error("chat title:", errorMessage(error)));
     const all = title !== this.#membersTouched.title || now - this.#membersTouched.at >= MEMBERS_TOUCH_MS;
     if (all) this.#membersTouched = { title, at: now };
     const members = this.#listingMembers().filter((member) => all || member.uid === author.uid || tagged.has(member.uid));
     await Promise.allSettled(
-      members.map((member) => this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, member.uid !== author.uid, tagOf(member.uid), named)),
+      members.map((member) => {
+        const answered = member.uid === author.uid ? reached : [];
+        const byOther = member.uid !== author.uid;
+        return this.#index(member.uid).touchSharedChat(this.chatId, this.uid, title, byOther, tagOf(member.uid), named, answered, answeredAt);
+      }),
     );
   }
 
@@ -2010,7 +2032,8 @@ export class ChatAgent extends DurableObject<Env> {
     if (!added) return this.peopleFor(by.uid);
     this.members.setOwnerName(by);
     this.#joined(person, by);
-    const tag: Tag = { from: by.name, text: "added you to this chat", at: Date.now(), added: true };
+    const at = Date.now();
+    const tag: Tag = { from: by.name, text: "added you to this chat", at, added: true, key: `added:${at}`, kind: this.kinds.kind() };
     void this.#index(uid).touchSharedChat(this.chatId, this.uid, title, true, tag).catch((error: unknown) => console.error("chat added:", errorMessage(error)));
     return this.peopleFor(by.uid);
   }
@@ -2113,7 +2136,15 @@ export class ChatAgent extends DurableObject<Env> {
    * discusses the page of its new version. A scope sets only its chatId, never its own onPublished.
    */
   async #onPublished(artifact: Omit<ArtifactSummary, "chatId">, chatId: string): Promise<void> {
-    await this.#directory.recordArtifact({ ...artifact, chatId });
+    // The chat it belongs to says its kind (the owner's row of it can lag): a version of an off-the-record chat reaches
+    // no follower. One that cannot be asked counts as off the record.
+    const kind =
+      chatId === this.chatId
+        ? this.kinds.kind()
+        : await exports.ChatAgent.getByName(chatAgentName(this.uid, chatId))
+            .chatKind()
+            .catch((): ChatKind => "off_record");
+    await this.#directory.recordArtifact({ ...artifact, chatId }, false, kind);
     void this.#tellPageChat(artifact).catch((error: unknown) => console.error("page chat:", errorMessage(error)));
   }
 
@@ -2699,7 +2730,41 @@ export class ChatAgent extends DurableObject<Env> {
   async #postAgentReply(reply: ChatAgentReplyData, requestId: string, tags: readonly string[] = []): Promise<void> {
     await (await this.#root()).submit({ type: "write", requestId, entry: { kind: CHAT_AGENT_KIND, data: reply } }, BACKGROUND_CONTEXT);
     const author = { uid: `agent:${reply.agentId}`, name: reply.name };
-    void this.#touchIndexes(reply.text || reply.name, author, tags, reply.text).catch((error) => console.error("chat index:", errorMessage(error)));
+    void this.#touchIndexes(reply.text || reply.name, author, tags, reply.text, requestId, { run: Boolean(reply.run) }).catch((error) =>
+      console.error("chat index:", errorMessage(error)),
+    );
+    this.#feedQuestion(reply, requestId);
+  }
+
+  /**
+   * An agent's reply that ends on a question to the person who called it: in that person's feed, as one that needs
+   * them, unless the chat is off the record. A run's report is its owner's run item instead (#runEnded).
+   */
+  #feedQuestion(reply: ChatAgentReplyData, requestId: string): void {
+    const asker = reply.calledBy.uid;
+    if (reply.run || reply.failed || !asker || reply.calledBy.agentId || !asksUser(reply.text) || !this.isInChat(asker)) return;
+    // The owner's second seat has no feed of its own: the owner's has it. Refused there when the chat is off the record.
+    const account = this.#account(asker);
+    const added = this.#index(account).addFeed({
+      kind: "question",
+      ref: `question:${this.chatId}:${requestId}`,
+      at: reply.endedAt,
+      title: `@${reply.name} asks you something`,
+      text: excerpt(reply.text, MAX_FEED_TEXT),
+      from: agentFrom({ id: reply.agentId, name: reply.name, avatar: reply.avatar, color: reply.color }),
+      open: { to: "chat", chatId: this.chatId },
+      chat: { id: this.chatId, kind: this.kinds.kind() },
+    });
+    this.ctx.waitUntil(added.catch((error: unknown) => console.error("feed:", errorMessage(error))));
+  }
+
+  /**
+   * Of `uids`, those who still follow `ownerUid`'s agent `agentId` from here: in this chat, with the agent on its roster
+   * and its owner sharing it in this chat, as opening it needs (sharedAgent). The agent's owner asks before a post of
+   * it reaches them.
+   */
+  followersIn(agentId: string, ownerUid: string, uids: readonly string[]): string[] {
+    return followersAllowed(this.roster.get(agentId), ownerUid, uids, (uid) => this.isInChat(uid));
   }
 
   /** A session's entries from the newest one `first` matches on, oldest first; none when no entry matches. */
@@ -3157,6 +3222,25 @@ export class ChatAgent extends DurableObject<Env> {
     return done;
   }
 
+  /**
+   * A run ended: its owner's feed hears how, with the report it posted here or as a notification (what the agent's
+   * followers may read, the directory decides: postsReachFollowers). Off the caller's path.
+   */
+  #runEnded(run: RunRecord): void {
+    if (run.status === "running") return;
+    const posted = run.status === "sent" ? run.detail.deliveries.find((delivery) => (delivery.kind === "chat" || delivery.kind === "notify") && delivery.status === "sent" && delivery.text) : undefined;
+    const ended = this.#directory.runEnded({
+      agentId: run.agentId,
+      dueAt: run.dueAt,
+      status: run.status,
+      ...(run.summary && { summary: run.summary }),
+      chatId: this.chatId,
+      chatKind: this.kinds.kind(),
+      ...(posted?.text && { post: posted.text, ...(posted.sentAt && { sentAt: posted.sentAt }), ...(asksUser(posted.text) && { asks: true }) }),
+    });
+    this.ctx.waitUntil(ended.catch((error: unknown) => console.error("feed:", errorMessage(error))));
+  }
+
   /** A run's report as a post of its agent's, carrying the run. */
   #runReply(request: DeliveryRequest): ChatAgentReplyData {
     const { agent, run } = request;
@@ -3202,12 +3286,14 @@ export class ChatAgent extends DurableObject<Env> {
       if (others.length === step.to.length)
         return { kind: "notify", to: step.to.join(", "), status: "refused", detail: "at Inform, an agent notifies only its owner" };
       // Posted here, tagging the owner: their sidebar's notice, and a browser notification when they allow one.
+      const sentAt = Date.now();
       await this.#placeRun(this.#runReply(request), context, `run-post:${agent.id}:${request.run.dueAt}:${request.key}`, this.roster.get(agent.id), [this.uid]);
       return {
         kind: "notify",
         to: "you",
         text: request.text,
         status: "sent",
+        sentAt,
         ...(others.length && { detail: `not ${others.join(", ")}: at Inform, an agent notifies only its owner` }),
       };
     }
@@ -3215,6 +3301,7 @@ export class ChatAgent extends DurableObject<Env> {
     // The owner's names ("owner", "me", "@agent") are one place: the report goes there once.
     const targets = [...new Set(step.to.map((to) => to.trim()).map((to) => (isOwner(to) ? "owner" : to)))];
     const chats = targets.every(isOwner) ? [] : (await this.#directory.listChats()).filter((chat) => !chat.sharedBy);
+    const sentAt = Date.now();
     const outcomes = await Promise.all(
       targets.map(async (target): Promise<{ sent: string } | { refused: string }> => {
         const requestId = `run-post:${agent.id}:${request.run.dueAt}:${request.key}:${target}`;
@@ -3235,6 +3322,7 @@ export class ChatAgent extends DurableObject<Env> {
       to: [...sent, ...refused].join(", ") || step.to.join(", "),
       text: request.text,
       status: sent.length ? "sent" : "refused",
+      ...(sent.length && { sentAt }),
       ...(refused.length && { detail: `not posted to ${refused.join(", ")}` }),
     };
   }
